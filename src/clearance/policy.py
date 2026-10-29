@@ -200,6 +200,9 @@ class Policy:
                 missing += 1
         service = args.get("service") if isinstance(args.get("service"), str) else None
         api_path = args.get("path") if isinstance(args.get("path"), str) else None
+        if tool == "repo.file.get" and (api_path is None or api_path.startswith("/") or ".." in api_path.split("/")
+                                        or "\\" in api_path):
+            missing += 1            # a repo-relative path, no traversal
         if tool == "app.api.get" and (api_path is None or not api_path.startswith("/") or ".." in api_path
                                       or "?" in api_path or "#" in api_path or "\\" in api_path):
             missing += 1            # a bad path is a bad argument
@@ -211,7 +214,7 @@ class Policy:
             "known": known,
             "missing_args": missing,
             "target_mismatch": bool(spec and spec.target == "lower" and env_tier_of(spec, args) == "upper"),
-            "has_repo": repo is not None and bool(spec and spec.writes_files),
+            "has_repo": repo is not None and bool(spec and (spec.writes_files or spec.reads_repo)),
             "repo_ok": repo_allowed(repo, repo_allow) if repo else True,
             "path_violations": len(path_violations(paths, deny_globs)) if paths else 0,
             "field_violations": _file_field_violations(files, field_deny or [], field_allow or []) if files else 0,
