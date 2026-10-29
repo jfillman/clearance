@@ -200,9 +200,11 @@ class Policy:
                 missing += 1
         service = args.get("service") if isinstance(args.get("service"), str) else None
         api_path = args.get("path") if isinstance(args.get("path"), str) else None
-        if tool == "repo.file.get" and (api_path is None or api_path.startswith("/") or ".." in api_path.split("/")
-                                        or "\\" in api_path):
-            missing += 1            # a repo-relative path, no traversal
+        if tool == "repo.file.get":
+            # A repo-relative path, no traversal; absent, empty or "." is the repo root.
+            if ("path" in args and not isinstance(args["path"], str)) or (api_path is not None and (
+                    api_path.startswith("/") or ".." in api_path.split("/") or "\\" in api_path)):
+                missing += 1
         if tool == "app.api.get" and (api_path is None or not api_path.startswith("/") or ".." in api_path
                                       or "?" in api_path or "#" in api_path or "\\" in api_path):
             missing += 1            # a bad path is a bad argument
