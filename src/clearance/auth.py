@@ -1,0 +1,184 @@
+"""Who is calling: authenticators that turn a bearer token into a Principal.
+
+Interim, until agent identity comes from ID-JAG (Hangar decision D19 picks the issuer): two kinds of caller, told
+apart by the token's issuer and each verified in full by its own authority.
+
+  WorkloadAuthenticator  a Kubernetes service-account token, checked by the API server's TokenReview for the
+                         `clearance` audience. Principal "<namespace>/<name>", kind "workload".
+  OIDCAuthenticator      a person's OIDC ID token (Dex in the lab), checked against the issuer's JWKS: signature,
+                         issuer, audience, expiry. Principal "user:<claim>", kind "user".
+  RoutingAuthenticator   reads the token's `iss` without trusting it, only to choose which of the two verifies it.
+  CachingAuthenticator   remembers a verified token for a short time (never past its expiry, never a failure), so a
+                         session's calls cost one TokenReview a minute rather than one each.
+
+Every failure is AuthError with no detail about the token: a caller learns it was refused, not why.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import ssl
+import threading
+import time
+import urllib.request
+from pathlib import Path
+from typing import Any, Callable, Mapping
+
+import jwt
+
+from .dispatch import AuthError, Authenticator, Principal
+from .tiers import Tier
+
+SA_DIR = Path("/var/run/secrets/kubernetes.io/serviceaccount")
+SA_PREFIX = "system:serviceaccount:"
+
+
+def _unverified_claims(token: str) -> dict[str, Any]:
+    try:
+        return jwt.decode(token, options={"verify_signature": False})
+    except jwt.PyJWTError as e:
+        raise AuthError("not a JWT") from e
+
+
+class WorkloadAuthenticator:
+    """A service-account token, verified by TokenReview. Clearance's own identity needs `create` on tokenreviews
+    (the system:auth-delegator ClusterRole). `opener` is injectable for tests; the token and CA files are re-read
+    every call, because the kubelet rotates the projected token."""
+
+    def __init__(self, audience: str = "clearance", api: str = "https://kubernetes.default.svc",
+                 token_file: Path = SA_DIR / "token", ca_file: Path = SA_DIR / "ca.crt",
+                 tier_ceiling: Tier = Tier.T1, opener: Callable[..., Any] | None = None, timeout: float = 10):
+        self.audience, self.api, self.token_file, self.ca_file = audience, api.rstrip("/"), token_file, ca_file
+        self.tier_ceiling, self.timeout, self._opener = tier_ceiling, timeout, opener
+
+    def _post(self, body: dict) -> dict:
+        req = urllib.request.Request(
+            f"{self.api}/apis/authentication.k8s.io/v1/tokenreviews", method="POST",
+            data=json.dumps(body).encode(),
+            headers={"Authorization": f"Bearer {self.token_file.read_text().strip()}",
+                     "Content-Type": "application/json", "Accept": "application/json"})
+        if self._opener is not None:
+            return self._opener(req, self.timeout)
+        ctx = ssl.create_default_context(cafile=str(self.ca_file))
+        with urllib.request.urlopen(req, context=ctx, timeout=self.timeout) as r:
+            return json.load(r)
+
+    def authenticate(self, token: str) -> Principal:
+        try:
+            review = self._post({"apiVersion": "authentication.k8s.io/v1", "kind": "TokenReview",
+                                 "spec": {"token": token, "audiences": [self.audience]}})
+        except Exception as e:  # noqa: BLE001 - the API server unreachable is a refusal, never a pass
+            raise AuthError("token review failed") from e
+        status = review.get("status") or {}
+        user = status.get("user") or {}
+        name = user.get("username", "")
+        if not status.get("authenticated") or self.audience not in (status.get("audiences") or []):
+            raise AuthError("token not authenticated for this audience")
+        if not name.startswith(SA_PREFIX) or name.count(":") != 3:
+            raise AuthError("not a service-account token")
+        ns, sa = name[len(SA_PREFIX):].split(":")
+        return Principal(f"{ns}/{sa}", "workload", self.tier_ceiling)
+
+
+class JWKS:
+    """An issuer's signing keys, fetched from its JWKS URL and refreshed when a token names a key not seen yet
+    (at most once a minute, so a stream of bad kids can't hammer the issuer)."""
+
+    def __init__(self, url: str, fetch: Callable[[str], dict] | None = None, min_refresh: float = 60,
+                 clock: Callable[[], float] = time.monotonic):
+        self.url, self.min_refresh, self.clock = url, min_refresh, clock
+        self._fetch = fetch or self._get
+        self._keys: dict[str, Any] = {}
+        self._fetched_at: float | None = None
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _get(url: str) -> dict:
+        with urllib.request.urlopen(url, timeout=10) as r:
+            return json.load(r)
+
+    def key(self, kid: str | None) -> Any:
+        with self._lock:
+            if kid not in self._keys and (self._fetched_at is None
+                                          or self.clock() - self._fetched_at >= self.min_refresh):
+                self._fetched_at = self.clock()
+                self._keys = {k.get("kid"): jwt.PyJWK(k).key for k in self._fetch(self.url).get("keys", [])
+                              if k.get("use", "sig") == "sig"}
+            if kid not in self._keys:
+                raise AuthError("unknown signing key")
+            return self._keys[kid]
+
+
+class OIDCAuthenticator:
+    """A person's ID token: signed by the issuer (RS256 or ES256 only, never `none` or HMAC), for this audience, not
+    expired. The principal is `user:` + the configured claim (email by default, which Dex sets from the connector)."""
+
+    ALGORITHMS = ("RS256", "ES256")
+
+    def __init__(self, issuer: str, audience: str, keys: JWKS, user_claim: str = "email",
+                 tier_ceiling: Tier = Tier.T1, leeway: float = 30):
+        self.issuer, self.audience, self.keys, self.user_claim = issuer, audience, keys, user_claim
+        self.tier_ceiling, self.leeway = tier_ceiling, leeway
+
+    def authenticate(self, token: str) -> Principal:
+        try:
+            header = jwt.get_unverified_header(token)
+            claims = jwt.decode(token, self.keys.key(header.get("kid")), algorithms=list(self.ALGORITHMS),
+                                audience=self.audience, issuer=self.issuer, leeway=self.leeway,
+                                options={"require": ["exp", "iat", "iss", "aud", "sub"]})
+        except AuthError:
+            raise
+        except jwt.PyJWTError as e:
+            raise AuthError("ID token rejected") from e
+        who = claims.get(self.user_claim)
+        if not isinstance(who, str) or not who:
+            raise AuthError(f"ID token has no {self.user_claim}")
+        if self.user_claim == "email" and claims.get("email_verified") is False:
+            raise AuthError("email not verified")
+        return Principal(f"user:{who}", "user", self.tier_ceiling)
+
+
+class RoutingAuthenticator:
+    """Choose the verifier by the token's (unverified) issuer: a listed issuer's OIDC verifier, else the workload one.
+    The choice is not trust: the chosen verifier checks everything, the issuer included."""
+
+    def __init__(self, oidc: Mapping[str, Authenticator], workload: Authenticator | None):
+        self.oidc, self.workload = dict(oidc), workload
+
+    def authenticate(self, token: str) -> Principal:
+        iss = _unverified_claims(token).get("iss")
+        verifier = self.oidc.get(iss) if isinstance(iss, str) else None
+        verifier = verifier or self.workload
+        if verifier is None:
+            raise AuthError("no verifier for this token")
+        return verifier.authenticate(token)
+
+
+class CachingAuthenticator:
+    """Remember a verified token by its hash for `ttl` seconds, never past its own `exp`. Failures are not cached.
+    Bounded: the oldest entries go first once `max_entries` is reached."""
+
+    def __init__(self, inner: Authenticator, ttl: float = 60, max_entries: int = 4096,
+                 clock: Callable[[], float] = time.time):
+        self.inner, self.ttl, self.max_entries, self.clock = inner, ttl, max_entries, clock
+        self._cache: dict[str, tuple[Principal, float]] = {}
+        self._lock = threading.Lock()
+
+    def authenticate(self, token: str) -> Principal:
+        key = hashlib.sha256(token.encode()).hexdigest()
+        now = self.clock()
+        with self._lock:
+            hit = self._cache.get(key)
+            if hit and hit[1] > now:
+                return hit[0]
+        principal = self.inner.authenticate(token)
+        exp = _unverified_claims(token).get("exp")
+        until = now + self.ttl
+        if isinstance(exp, (int, float)):
+            until = min(until, float(exp))
+        with self._lock:
+            if len(self._cache) >= self.max_entries:
+                for k in sorted(self._cache, key=lambda k: self._cache[k][1])[: self.max_entries // 4 or 1]:
+                    del self._cache[k]
+            self._cache[key] = (principal, until)
+        return principal
