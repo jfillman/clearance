@@ -21,7 +21,8 @@ Clearance installs alone: the core knows nothing about Airframe, Glidepath or an
 | Audit | `audit.py` | one record per decision, hash-chained; detects an edited, deleted or reordered record, and truncation against an anchored checkpoint |
 | Gateway | `dispatch.py`, `backends.py` | authenticate, decide, audit, spend, call, audit. Handlers are registered per tool; the run tree goes through an injected run backend |
 | Model access | `modelproxy.py` | model allowlist, network mode and token budget (the decision only) |
-| MCP surface | `server.py` | `tools_list`, `session_open` and `call` on the mcp SDK v2 |
+| MCP surface | `server.py` | `tools_list`, `session_open` and `call` on the mcp SDK v2, over stdio or streamable HTTP (`create_http_app`: bearer auth before any tool runs, the caller's own token per call, `GET /healthz`) |
+| Who is calling | `auth.py` | interim, until ID-JAG: service-account tokens by TokenReview for the `clearance` audience (principal `<namespace>/<name>`), people's OIDC ID tokens against the issuer's JWKS (RS256/ES256 only; principal `user:<email>`), routed by issuer and cached briefly (never past `exp`, never a failure) |
 
 ## Packs
 
