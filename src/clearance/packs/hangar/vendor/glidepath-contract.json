@@ -1340,7 +1340,7 @@
   ],
   "api": {
     "spec": "api/openapi.yaml",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "actions": [
       {
         "operationId": "whoami",
@@ -1460,6 +1460,20 @@
         "path": "/v1/apps/{app}/environments/{env}/rollback",
         "tier": "T2",
         "summary": "Propose a rollback of a Flight environment to an earlier release (the release Pipeline; a human merges)"
+      },
+      {
+        "operationId": "streamEvents",
+        "method": "GET",
+        "path": "/v1/events",
+        "tier": "T0",
+        "summary": "The CDEvents stream, as server-sent events"
+      },
+      {
+        "operationId": "listRecentEvents",
+        "method": "GET",
+        "path": "/v1/events/recent",
+        "tier": "T0",
+        "summary": "The buffered events, as JSON"
       }
     ]
   }
