@@ -6,6 +6,13 @@ env:
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    # A scratch Postgres for tests/test_pg.py (the durable store and evidence sink).
+    services:
+      postgres:
+        image: postgres:17
+        env: {POSTGRES_PASSWORD: test, POSTGRES_DB: clearance}
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
       # glidepath's cicd.yaml scope rules and contract, vendored under src/clearance/packs/hangar/vendor/
@@ -21,6 +28,7 @@ jobs:
       - run: pytest -q
         env:
           HANGAR_TECH: ${{ github.workspace }}/tech
+          CLEARANCE_TEST_DSN: postgresql://postgres:test@localhost:5432/clearance
       # The wheel must carry the schema and the pack's vendored contract (profile and the pack read them at import).
       - run: |
           pip wheel . --no-deps -w dist
