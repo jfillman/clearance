@@ -21,7 +21,7 @@ from clearance.server import create_server
 from clearance.session import SessionStore
 from clearance.tiers import CORE_TOOLS, TOOLS, Tier
 
-from conftest import ROOT, StaticAuth
+from conftest import AGENTS, ROOT, StaticAuth
 
 SRC = ROOT / "src"
 PKG = SRC / "clearance"
@@ -90,7 +90,7 @@ def test_importing_the_whole_core_loads_nothing_from_hangar():
 
 def _bare_gateway(clock, **kw):
     auth = StaticAuth({"alice": Principal("user:alice", "user", Tier.T1)})
-    return Gateway(profile.load_dir(ROOT / "agents"), SessionStore(), AuditLog(), auth, clock, **kw)
+    return Gateway(profile.load_dir(AGENTS), SessionStore(), AuditLog(), auth, clock, **kw)
 
 
 def test_a_gateway_with_no_packs_opens_a_session_and_calls_a_core_tool(clock):

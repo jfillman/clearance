@@ -1,0 +1,28 @@
+name: test
+on: [push, pull_request]
+env:
+  # glidepath ref the Hangar pack's contract drift test compares against (tests/test_cicd_scope.py).
+  GLIDEPATH_REF: main
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # glidepath's cicd.yaml scope rules and contract, vendored under src/clearance/packs/hangar/vendor/
+      - uses: actions/checkout@v4
+        with:
+          repository: jfillman/glidepath
+          ref: ${{ env.GLIDEPATH_REF }}
+          path: tech/glidepath
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e ".[test]"
+      - run: pytest -q
+        env:
+          HANGAR_TECH: ${{ github.workspace }}/tech
+      # The wheel must carry the schema and the pack's vendored contract (profile and the pack read them at import).
+      - run: |
+          pip wheel . --no-deps -w dist
+          python -m zipfile -l dist/*.whl | grep -q 'clearance/schemas/agent-definition.schema.json'
+          python -m zipfile -l dist/*.whl | grep -q 'clearance/packs/hangar/vendor/glidepath-contract.json'

@@ -11,7 +11,6 @@ from pathlib import Path
 import pytest
 import yaml
 
-from autopilot import airframe_plan as ap
 from clearance.packs import hangar
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -179,60 +178,4 @@ def test_merge_patch_rfc7386():
         {"a": {"c": 2, "d": 3}, "l": [2]}
 
 
-# ---- the planner's app-repo step (the gap the Autopilot design recorded) ---------------------
-SCAFFOLD_CICD = yaml.safe_load("""
-apiVersion: platform/v1
-kind: PipelineConfig
-build: {agent: python-3.12, unitTest: {enabled: false}}
-pipelines:
-  ci:
-    trigger: {source: git, event: push, branch: main}
-    steps: [{stage: build}, {stage: deploy, env: dev}]
-deploy:
-  environments: [{name: dev, tier: ground}]
-  strategy: rollout
-""")
-REG = ap.Registry("kind-dev", ("kind-prod",), "gitops-cluster-dev-tenants")
-SPEC = {"apiVersion": "airframe/v1", "kind": "AppSpec", "app": "parachute", "stack": "python",
-        "description": "Parachute service", "environments": {"ground": ["dev", "test"], "flight": []}}
-
-
-def planner_cicd_file(spec, base):
-    fc = next(f for f in ap.plan(spec, REG, base_cicd=base).step("app-repo").files if f.path == "cicd.yaml")
-    assert fc.op == "merge-patch"
-    return {"path": fc.path, "op": fc.op, "before": yaml.safe_dump(base), "content": fc.content}
-
-
-def planner_call(gw, spec, base):
-    return gw.call("alice", open_(gw), "repo.pr.open",
-                   {"repo": "jfillman/parachute", "branch": "agent/plan", "title": "plan",
-                    "files": [planner_cicd_file(spec, base)]})
-
-
-def test_planner_app_repo_cicd_patch_with_ground_envs_is_allowed(gw, backends):
-    r = planner_call(gw, SPEC, SCAFFOLD_CICD)
-    assert r.ok, r.as_dict()
-    assert backends.git.names() == ["git.open_pr"]
-
-
-def test_planner_cicd_patch_keeps_a_check_ride_already_in_the_file(gw):
-    # patch_cicd used to rewrite pipelines.ci.steps whole, so a check ride already in the file was lost (GP-SCOPE-002).
-    base = copy.deepcopy(SCAFFOLD_CICD)
-    base["pipelines"]["ci"]["steps"].append({"stage": "test", "env": "dev", "role": "check-ride"})
-    r = planner_call(gw, SPEC, base)
-    assert r.ok, r.as_dict()
-    steps = planner_cicd_file(SPEC, base)["content"]["pipelines"]["ci"]["steps"]
-    assert {"stage": "test", "env": "dev", "role": "check-ride"} in steps
-
-
-def test_planner_puts_flight_envs_in_a_human_step_not_the_agents(gw):
-    # It used to write Flight environments into the agent's patch (GP-SCOPE-003). Now the agent's half passes and the
-    # human-merge half is exactly what R021 would refuse an agent.
-    spec = {**SPEC, "environments": {"ground": ["dev", "test"], "flight": [{"name": "staging", "cluster": "kind-prod"}]}}
-    assert planner_call(gw, spec, SCAFFOLD_CICD).ok
-    human = ap.plan(spec, REG, base_cicd=SCAFFOLD_CICD).step("cicd-flight")
-    assert human.gate == "human-merge"
-    f = human.files[0]
-    r = gw.call("alice", open_(gw), "repo.pr.open", {"repo": "jfillman/parachute", "branch": "agent/plan", "title": "plan",
-                                                     "files": [{"path": f.path, "op": f.op, "before": yaml.safe_dump(f.before), "content": f.content}]})
-    assert not r.ok and "GP-SCOPE-003" in rules_of(r)
+# The planner's cicd.yaml patch is checked against R021 in autopilot (tests/test_cicd_scope.py there).
