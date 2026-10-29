@@ -13,7 +13,7 @@ Clearance installs alone: the core knows nothing about Airframe, Glidepath or an
 | Piece | Where | What it does |
 |---|---|---|
 | Tool tiers and tripwires | `tiers.py` | T0 read, T1 reversible write, T2 propose only (a human merges); T3 names are tripwires that are denied, audited and trip the session's breaker |
-| Path and repo scope | `scope.py` | traversal-safe path globs and repo allowlists; JSON-pointer field scope |
+| Path and repo scope | `scope.py` | traversal-safe path globs and repo allowlists (for every tool that writes files or reads a repo: `repo.pr.open*`, `repo.file.get`); JSON-pointer field scope |
 | Narrow-only limits | `limits.py` | requested limits, and a child run's limits, can only narrow what they inherit |
 | Agent definitions | `profile.py`, `schemas/agent-definition.schema.json` | durable, schema-validated; baseline deny paths cannot be removed |
 | Sessions and the run tree | `session.py`, `dispatch.py` (`expire`) | budgets, expiry, the breaker, parent-reserved child budgets; `Gateway.expire()` closes sessions past their deadline and deletes their runs (and their children's), each deletion a record in the same commit, a failed one recorded and retried next sweep (Hangar D20) |
