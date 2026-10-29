@@ -18,7 +18,8 @@ Clearance installs alone: the core knows nothing about Airframe, Glidepath or an
 | Agent definitions | `profile.py`, `schemas/agent-definition.schema.json` | durable, schema-validated; baseline deny paths cannot be removed |
 | Sessions and the run tree | `session.py` | budgets, expiry, the breaker, parent-reserved child budgets |
 | Policy | `policy.py`, `pack.py` | CEL deny rules with ids, an explicit order and fix hints, core plus each pack's; anything that fails to evaluate denies (R000) |
-| Audit | `audit.py` | one record per decision, hash-chained; detects an edited, deleted or reordered record, and truncation against an anchored checkpoint |
+| Audit | `audit.py` | one record per decision, hash-chained, in the draft evidence-record shape (schema version, boundary, coverage, each field tagged verified or claimed); detects an edited, deleted or reordered record, and truncation against an anchored checkpoint |
+| Durable store | `pg.py` (extra `pg`) | Postgres for sessions and evidence on one connection: an operation's records and the sessions it changed commit together; one writer (advisory lock); the chain is verified from genesis on start, so an edited row stops Clearance; each record's assurance state is kept beside it (`recorded-not-checkpointed` until the ledger exists) |
 | Gateway | `dispatch.py`, `backends.py` | authenticate, decide, audit, spend, call, audit. Handlers are registered per tool; the run tree goes through an injected run backend |
 | Model access | `modelproxy.py` | model allowlist, network mode and token budget (the decision only) |
 | MCP surface | `server.py` | `tools_list`, `session_open` and `call` on the mcp SDK v2, over stdio or streamable HTTP (`create_http_app`: bearer auth before any tool runs, the caller's own token per call, `GET /healthz`) |
@@ -52,7 +53,7 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[test]'
 .venv/bin/python -m pytest -q
 ```
 
-No cluster is needed. The Glidepath contract drift test reads a glidepath checkout under `HANGAR_TECH` and skips
+No cluster is needed. `tests/test_pg.py` needs a scratch Postgres in `CLEARANCE_TEST_DSN` (CI runs one) and skips without it. The Glidepath contract drift test reads a glidepath checkout under `HANGAR_TECH` and skips
 without one (CI clones it).
 
 ## History

@@ -7,6 +7,13 @@ writer cannot rewrite (WORM storage, the self-hosted Rekor) and comparing later.
 
 Arguments are never stored, only their hash, so a secret that slips into a tool call
 does not land in the log.
+
+Each record is written in the draft evidence-record shape (Clearance architecture ch. 09) so the
+records M3 writes need no migration when the schema freezes: `schema` names the version, `boundary`
+is `runtime` (the deployment gate writes the other kind), `coverage` says how the event was observed,
+and every field is tagged as `verified` (Clearance itself established it) or `claimed` (something
+else asserted it). The assurance state (whether a record's hash has reached a witnessed checkpoint)
+changes after the record is written, so it is kept beside the record, never inside the hash.
 """
 from __future__ import annotations
 
@@ -19,6 +26,20 @@ from pathlib import Path
 from typing import Any
 
 GENESIS = "0" * 64
+EVIDENCE_SCHEMA = "clearance.evidence/v0-draft"
+# What the gateway establishes itself for a runtime decision: the caller (authenticated), the session and run tree
+# it issued, the decision it made, and the hash of the arguments it saw.
+VERIFIED = frozenset({"ts", "task_id", "session", "parent", "principal", "agent", "tool", "tier", "decision",
+                      "rule", "target", "args_sha256", "result"})
+ENVELOPE = frozenset({"seq", "schema", "boundary", "coverage", "verified", "claimed", "prev_hash", "hash"})
+
+
+def evidence(event: dict[str, Any]) -> dict[str, Any]:
+    """The evidence envelope for a gateway event: version, boundary, coverage, and each field's tag."""
+    fields = sorted(k for k in event if k not in ENVELOPE)
+    return {"schema": EVIDENCE_SCHEMA, "boundary": "runtime",
+            "coverage": event.get("coverage", "authorized-and-verified"),
+            "verified": [k for k in fields if k in VERIFIED], "claimed": [k for k in fields if k not in VERIFIED]}
 
 
 def canonical(obj: Any) -> bytes:
@@ -59,9 +80,9 @@ class AuditLog:
         return self.records[-1]["hash"] if self.records else GENESIS
 
     def append(self, event: dict[str, Any]) -> dict[str, Any]:
-        if "hash" in event or "prev_hash" in event or "seq" in event:
-            raise ValueError("event must not set seq/prev_hash/hash")
-        rec = {"seq": len(self.records), **event, "prev_hash": self.head}
+        if ENVELOPE & set(event) - {"coverage"}:
+            raise ValueError(f"event must not set {sorted(ENVELOPE & set(event) - {'coverage'})}")
+        rec = {"seq": len(self.records), **event, **evidence(event), "prev_hash": self.head}
         rec["hash"] = sha256_hex(canonical(rec))
         self.records.append(rec)
         if self.path:

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "clearance"
-version = "0.2.0"
+version = "0.3.0"
 description = "Policy, audit and session gateway for AI agent workloads"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -12,7 +12,9 @@ dependencies = ["cel-python>=0.5", "jsonschema>=4.20", "pyyaml>=6", "mcp>=2", "p
 
 [project.optional-dependencies]
 serve = ["uvicorn>=0.30"]
-test = ["pytest>=8"]
+# The durable store and evidence sink (clearance.pg).
+pg = ["psycopg[binary]>=3.2"]
+test = ["pytest>=8", "psycopg[binary]>=3.2"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/clearance"]
