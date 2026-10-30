@@ -170,3 +170,19 @@ def test_cache_holds_a_success_until_ttl_or_exp_and_never_a_failure():
         with pytest.raises(AuthError):
             bad.authenticate(tok)
     assert bad.inner.n == 2
+
+
+def test_a_foreign_clusters_service_account_is_a_named_workload_and_only_if_allowed():
+    from clearance.auth import ForeignWorkloadAuthenticator
+    prod = "https://hangarplatform.dev/oidc/hangar-prod"
+    a = ForeignWorkloadAuthenticator("hangar-prod", prod, "clearance", JWKS("x", fetch=lambda u: {"keys": [jwk(KEY, "k1")]}),
+                                     allowed=("app-backstage-prod/backstage",))
+    sa = lambda sub, **o: id_token(iss=prod, sub=sub, email=None, email_verified=None, **o)  # noqa: E731
+    assert a.authenticate(sa("system:serviceaccount:app-backstage-prod:backstage")) == \
+        Principal("hangar-prod/app-backstage-prod/backstage", "workload", Tier.T1)
+    for bad, why in ((sa("system:serviceaccount:default:default"), "may not call"), (sa("user-xyz"), "service-account"),
+                     (sa("system:serviceaccount:app-backstage-prod:backstage", aud="other"), "rejected"),
+                     (id_token(sub="system:serviceaccount:app-backstage-prod:backstage"), "rejected"),
+                     (sa("system:serviceaccount:app-backstage-prod:backstage", key=OTHER, kid="k1"), "rejected")):
+        with pytest.raises(AuthError, match=why):
+            a.authenticate(bad)
