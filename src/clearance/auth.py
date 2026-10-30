@@ -22,7 +22,8 @@ import threading
 import time
 import urllib.request
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from fnmatch import fnmatchcase
+from typing import Any, Callable, Mapping, Sequence
 
 import jwt
 
@@ -111,14 +112,18 @@ class JWKS:
 
 class OIDCAuthenticator:
     """A person's ID token: signed by the issuer (RS256 or ES256 only, never `none` or HMAC), for this audience, not
-    expired. The principal is `user:` + the configured claim (email by default, which Dex sets from the connector)."""
+    expired. The principal is `user:` + the configured claim (email by default, which Dex sets from the connector).
+
+    `allowed` names who may sign in at all (globs on the claim's value): an issuer that federates a public identity
+    provider (Dex with a GitHub connector) authenticates anyone with an account there, so a valid token alone is not
+    a grant. Empty allows nobody."""
 
     ALGORITHMS = ("RS256", "ES256")
 
     def __init__(self, issuer: str, audience: str, keys: JWKS, user_claim: str = "email",
-                 tier_ceiling: Tier = Tier.T1, leeway: float = 30):
+                 tier_ceiling: Tier = Tier.T1, leeway: float = 30, allowed: Sequence[str] = ()):
         self.issuer, self.audience, self.keys, self.user_claim = issuer, audience, keys, user_claim
-        self.tier_ceiling, self.leeway = tier_ceiling, leeway
+        self.tier_ceiling, self.leeway, self.allowed = tier_ceiling, leeway, tuple(allowed)
 
     def authenticate(self, token: str) -> Principal:
         try:
@@ -135,6 +140,8 @@ class OIDCAuthenticator:
             raise AuthError(f"ID token has no {self.user_claim}")
         if self.user_claim == "email" and claims.get("email_verified") is False:
             raise AuthError("email not verified")
+        if not any(fnmatchcase(who, g) for g in self.allowed):
+            raise AuthError(f"{self.user_claim} is not allowed to sign in to this Clearance")
         return Principal(f"user:{who}", "user", self.tier_ceiling)
 
 
