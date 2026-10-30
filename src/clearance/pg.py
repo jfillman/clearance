@@ -12,9 +12,11 @@ Tables (created if missing; `migrate` is idempotent):
   clearance_evidence  seq, hash, prev_hash, the record (jsonb, exactly what was hashed), and its assurance state
                       beside it: recorded-not-checkpointed until a witnessed checkpoint covers it (the ledger).
   clearance_sessions  id, the session record (jsonb), expires_at and closed for the load query.
+  clearance_artifacts artifact.put's text, per task and name, bounded and expiring (PgArtifacts).
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
@@ -46,6 +48,16 @@ CREATE TABLE IF NOT EXISTS clearance_sessions (
 CREATE INDEX IF NOT EXISTS clearance_sessions_live ON clearance_sessions (closed, expires_at);
 CREATE INDEX IF NOT EXISTS clearance_evidence_receipt ON clearance_evidence
   ((record->'effect'->>'repo'), (record->'effect'->>'pr')) WHERE record ? 'effect';
+CREATE TABLE IF NOT EXISTS clearance_artifacts (
+  task_id    text        NOT NULL,
+  name       text        NOT NULL,
+  content    text        NOT NULL,
+  bytes      integer     NOT NULL,
+  expires_at timestamptz NOT NULL,
+  written_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (task_id, name)
+);
+CREATE INDEX IF NOT EXISTS clearance_artifacts_expiry ON clearance_artifacts (expires_at);
 """
 
 
@@ -163,6 +175,54 @@ class PgSessions:
             else:
                 self.state.conn.rollback()
             raise
+
+
+ARTIFACT_NAME = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
+
+
+class PgArtifacts:
+    """ArtifactBackend on clearance_artifacts: text a task's sessions keep for each other (a child's report, a plan),
+    keyed by task, so a whole run tree shares them and nothing else sees them. Bounded and expiring: each artifact at
+    most `max_bytes`, a task at most `max_count` and `max_total` bytes, gone `ttl` after its last write. A put with
+    an existing name replaces it. Writes join the call's transaction, so they commit with its evidence."""
+
+    def __init__(self, state: PgState, now=lambda: datetime.now(timezone.utc), ttl: timedelta = timedelta(days=7),
+                 max_bytes: int = 256 << 10, max_count: int = 32, max_total: int = 2 << 20):
+        self.state, self.now, self.ttl = state, now, ttl
+        self.max_bytes, self.max_count, self.max_total = max_bytes, max_count, max_total
+
+    def put(self, task_id: str, name: str, content: str) -> dict[str, Any]:
+        from .dispatch import Denied
+        if not isinstance(name, str) or not ARTIFACT_NAME.match(name):
+            raise Denied("ART-NAME", f"{name!r} is not an artifact name", "Use letters, digits, '.', '_' or '-'.")
+        if not isinstance(content, str):
+            raise Denied("ART-CONTENT", "an artifact's content is text", "Pass a string (JSON-encode structured data).")
+        size = len(content.encode())
+        if size > self.max_bytes:
+            raise Denied("ART-SIZE", f"{size} bytes is over the {self.max_bytes}-byte limit for one artifact",
+                         "Store a summary, or split it.")
+        now = self.now()
+        with self.state.conn.cursor() as cur:
+            cur.execute("DELETE FROM clearance_artifacts WHERE expires_at <= %s", (now,))
+            cur.execute("SELECT count(*), coalesce(sum(bytes), 0) FROM clearance_artifacts WHERE task_id = %s AND name <> %s",
+                        (task_id, name))
+            count, total = cur.fetchone()
+            if count + 1 > self.max_count or total + size > self.max_total:
+                raise Denied("ART-QUOTA", f"this task may keep {self.max_count} artifacts and {self.max_total} bytes",
+                             "Replace an existing artifact by its name instead of adding one.")
+            expires = now + self.ttl
+            cur.execute("INSERT INTO clearance_artifacts (task_id, name, content, bytes, expires_at) "
+                        "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (task_id, name) DO UPDATE SET "
+                        "content = EXCLUDED.content, bytes = EXCLUDED.bytes, expires_at = EXCLUDED.expires_at, "
+                        "written_at = now()", (task_id, name, content, size, expires))
+        return {"stored": name, "bytes": size, "expires_at": expires.isoformat()}
+
+    def get(self, task_id: str, name: str) -> str | None:
+        with self.state.conn.cursor() as cur:
+            cur.execute("SELECT content FROM clearance_artifacts WHERE task_id = %s AND name = %s AND expires_at > %s",
+                        (task_id, name, self.now()))
+            row = cur.fetchone()
+        return row[0] if row else None
 
 
 def open_durable(dsn: str, id_gen=None):

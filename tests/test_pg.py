@@ -2,12 +2,14 @@
 a restart keeps every grant and budget, a call's evidence and spend commit together, one writer only, and a row
 changed in the database stops Clearance from starting."""
 import os
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from clearance.dispatch import Gateway
 from clearance.packs.hangar import HANGAR
-from clearance.pg import PgAuditLog, PgState, WriterLocked, open_durable
+from clearance.dispatch import Denied
+from clearance.pg import PgArtifacts, PgAuditLog, PgState, WriterLocked, open_durable
 
 DSN = os.environ.get("CLEARANCE_TEST_DSN")
 pytestmark = pytest.mark.skipif(not DSN, reason="set CLEARANCE_TEST_DSN to a scratch Postgres")
@@ -19,7 +21,7 @@ PR = {"repo": "jfillman/flight-api", "branch": "agent/t-1", "title": "fix probe"
 def db():
     psycopg = pytest.importorskip("psycopg")
     with psycopg.connect(DSN, autocommit=True) as c:
-        c.execute("DROP TABLE IF EXISTS clearance_evidence, clearance_sessions")
+        c.execute("DROP TABLE IF EXISTS clearance_evidence, clearance_sessions, clearance_artifacts")
     yield DSN
 
 
@@ -112,4 +114,38 @@ def test_receipts_are_found_in_postgres_after_a_restart(db, defs, gw_parts, cloc
     found = g2.audit.receipts("jfillman/flight-api", 1, ("repo.pr.open",))
     assert [r["effect"]["commit"] for r in found] == [commit] and found[0]["session"] == sid
     assert g2.audit.receipts("jfillman/flight-api", 2, ("repo.pr.open",)) == []
+    state2.close()
+
+
+def test_artifacts_are_per_task_bounded_and_expire(db):
+    t = [datetime(2026, 10, 30, tzinfo=timezone.utc)]
+    state = PgState(db)
+    art = PgArtifacts(state, now=lambda: t[0], ttl=timedelta(hours=1), max_bytes=10, max_count=2, max_total=15)
+    assert art.put("t-1", "plan.md", "first")["bytes"] == 5
+    art.put("t-1", "plan.md", "second")                  # a put by name replaces
+    assert art.get("t-1", "plan.md") == "second" and art.get("t-2", "plan.md") is None
+    for name, content, rule in (("../x", "a", "ART-NAME"), ("big", "x" * 11, "ART-SIZE")):
+        with pytest.raises(Denied) as e:
+            art.put("t-1", name, content)
+        assert e.value.rule == rule
+    art.put("t-1", "b", "123456789")                     # 6 + 9 = 15 bytes, 2 artifacts: at both limits
+    with pytest.raises(Denied) as e:
+        art.put("t-1", "c", "x")
+    assert e.value.rule == "ART-QUOTA"
+    state.commit()
+    t[0] += timedelta(hours=1)
+    assert art.get("t-1", "plan.md") is None, "expired"
+    art.put("t-1", "c", "x")                             # expired ones no longer count
+    state.commit()
+    state.close()
+
+
+
+def test_an_artifact_survives_a_restart(db):
+    state = PgState(db)
+    PgArtifacts(state).put("t-9", "report.md", "all green")
+    state.commit()
+    state.close()
+    state2 = PgState(db)
+    assert PgArtifacts(state2).get("t-9", "report.md") == "all green"
     state2.close()
