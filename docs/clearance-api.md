@@ -1,6 +1,6 @@
 # clearance-api: Clearance's read API (spec, draft 2026-10-30)
 
-Status: **proposed**. AP-B2 follow-on (Hangar roadmap M3). Owner decision 2026-10-30: build after Tower's Agent
+Status: **proposed**, open questions decided 2026-10-30. AP-B2 follow-on (Hangar roadmap M3). Owner decision 2026-10-30: build after Tower's Agent
 requests; spec first.
 
 ## Why
@@ -42,7 +42,7 @@ All list endpoints are cursor-paginated (`limit`, max 200; `after`), newest firs
 | `GET /v1/sessions` | sessions: `agent`, `principal`, `task`, `state` (`live`, `recent`, `closed`, `expired`), `since` filters; each with limits, budget used, breaker, run, parent, expiry |
 | `GET /v1/sessions/{id}` | one session, with its children |
 | `GET /v1/tasks/{task_id}` | the run tree: every session in the task, parent links, totals |
-| `GET /v1/evidence` | records filtered by `task`, `session`, `agent`, `tool`, `principal`, `decision`, `rule`, `since`, `until`; cursor is `seq` |
+| `GET /v1/evidence` | records filtered by `task`, `session`, `agent`, `tool`, `principal`, `decision`, `rule`, `app`, `since`, `until`; cursor is `seq` |
 | `GET /v1/evidence/{seq}` | one record, with its hash and assurance state |
 | `GET /v1/evidence/verify` | the chain checked from genesis (or `from`/`to`): `ok`, `count`, `head`, first bad `seq` |
 | `GET /v1/receipts` | PR receipts (`repo`, `pr`): what Clearance's agents opened, the commit, the paths |
@@ -63,13 +63,21 @@ foreign workloads by public issuer (Tower). Roles are principal globs in config:
 
 | Role | Config | May |
 |---|---|---|
-| person | any authenticated `user:*` | their own sessions and evidence; sessions and evidence of agents whose `owner` group they are in (the deployment's Directory, as the inbox uses); the inbox as today |
+| person | any authenticated `user:*` | their own sessions and evidence; sessions and evidence of agents whose `owner` group they are in (the deployment's Directory, as the inbox uses); evidence records that target an app they own (below); the inbox as today |
 | `delegate` | `CLEARANCE_DELEGATES` (Tower) | everything a person may, for the person named in `X-Hangar-On-Behalf-Of` |
 | `notifier` | `CLEARANCE_API_NOTIFIERS` (Tower) | the inbox feed across everyone (for notifications), nothing else |
 | `auditor` | `CLEARANCE_API_AUDITORS` | every read, including definitions' full instructions and the chain check |
 
 A record's visibility is decided by its session's owner and agent, so a person never sees another team's agents'
-evidence through a filter. Reads are not themselves recorded as evidence (they change nothing); they are logged
+sessions through a filter.
+
+**App owners see what agents did to their app** (decided 2026-10-30). A person who owns an app in the catalog (the
+Component's `spec.owner`, directly or through a group) sees every evidence record whose target is that app: its
+repos (`<app>`, `gitops-<app>`), its Argo CD Applications, its Glidepath app. Records only, not the rest of the
+session that made them, so another team's agent's work elsewhere stays theirs. The gateway records `effect.app` on
+every record whose target maps to an app (`repo.*` by repo name, `argo.*` by the Application's app, `glidepath.*`
+by its `app` argument), indexed; older records are backfilled from `target`. Tower's per-app tabs use it for an
+"Agent activity" view (`GET /v1/evidence?app=<app>`). Reads are not themselves recorded as evidence (they change nothing); they are logged
 and counted.
 
 ## The contract
@@ -95,8 +103,12 @@ breaking change is `/v2`.
    a PR, on the API.
 3. **Events:** `/v1/events` (SSE); Tower subscribes instead of polling.
 
-## Open questions
+## Decided (2026-10-30)
 
-- Should a person see sessions of agents scoped to their apps (Glidepath `glidepath.apps`), not only their teams'
-  agents? Proposed: no in v1; owner group is the one rule, as the inbox.
-- A read replica for the API (CloudNativePG supports one) once there is load; v1 reads the primary.
+- **App-scoped visibility:** yes, at the record level: an app owner sees records that target their app, not
+  whole sessions of agents scoped to it (Who sees what, above).
+- **Read replica:** not in v1. The API reads the primary through its own DSN (`CLEARANCE_API_DSN`, the
+  `clearance_reader` role) with guardrails: `statement_timeout` 5 s, a pool of 5 connections per replica, page size
+  at most 200, and indexes for the hot filters (`session`, `task_id`, `tool`, `ts`, `effect.app`). Moving to a
+  replica is configuration: CloudNativePG publishes `<cluster>-ro`; add one instance and point the DSN at it.
+  Trigger: API p95 over 300 ms, or the gateway's write latency rising while Tower is busy (both on Prometheus).
