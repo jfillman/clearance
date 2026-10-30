@@ -1340,7 +1340,7 @@
   ],
   "api": {
     "spec": "api/openapi.yaml",
-    "version": "0.5.0",
+    "version": "0.6.0",
     "actions": [
       {
         "operationId": "whoami",
@@ -1418,6 +1418,20 @@
         "path": "/v1/live/taskruns",
         "tier": "T0",
         "summary": "The TaskRuns of the named PipelineRuns, right now"
+      },
+      {
+        "operationId": "listFleetReleases",
+        "method": "GET",
+        "path": "/v1/releases",
+        "tier": "T0",
+        "summary": "Every release record in the cluster, with its namespace and labels"
+      },
+      {
+        "operationId": "listFleetReleaseEvents",
+        "method": "GET",
+        "path": "/v1/releases/events",
+        "tier": "T0",
+        "summary": "The ReleaseStalled and ReleaseDrift Events about release records"
       },
       {
         "operationId": "listReleases",
