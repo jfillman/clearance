@@ -1340,7 +1340,7 @@
   ],
   "api": {
     "spec": "api/openapi.yaml",
-    "version": "0.4.0",
+    "version": "0.5.0",
     "actions": [
       {
         "operationId": "whoami",
@@ -1383,6 +1383,41 @@
         "path": "/v1/apps/{app}/runs/{result}/explain",
         "tier": "T0",
         "summary": "Why a run failed, classified against the contract's knownFailures"
+      },
+      {
+        "operationId": "listLiveRuns",
+        "method": "GET",
+        "path": "/v1/apps/{app}/live",
+        "tier": "T0",
+        "summary": "Every PipelineRun and TaskRun in the app's namespace right now, from the cluster"
+      },
+      {
+        "operationId": "getLiveLog",
+        "method": "GET",
+        "path": "/v1/apps/{app}/live/taskruns/{taskRun}/logs/{container}",
+        "tier": "T0",
+        "summary": "One container's log from a live TaskRun's pod, as plain text"
+      },
+      {
+        "operationId": "listFleetRuns",
+        "method": "GET",
+        "path": "/v1/runs",
+        "tier": "T0",
+        "summary": "Finished runs across every app, newest first, from Tekton Results"
+      },
+      {
+        "operationId": "listFleetLiveRuns",
+        "method": "GET",
+        "path": "/v1/live",
+        "tier": "T0",
+        "summary": "Every PipelineRun in the cluster right now"
+      },
+      {
+        "operationId": "listFleetLiveTaskRuns",
+        "method": "GET",
+        "path": "/v1/live/taskruns",
+        "tier": "T0",
+        "summary": "The TaskRuns of the named PipelineRuns, right now"
       },
       {
         "operationId": "listReleases",

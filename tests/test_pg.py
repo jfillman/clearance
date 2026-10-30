@@ -101,3 +101,15 @@ def test_a_failed_commit_rolls_back_the_operations_evidence(db, defs, gw_parts, 
     g.open_session("alice", "coding-agent")
     assert g.audit.records[-1]["prev_hash"] == head
     state.close()
+
+
+def test_receipts_are_found_in_postgres_after_a_restart(db, defs, gw_parts, clock):
+    state, g = gateway(db, defs, gw_parts, clock)
+    sid = g.open_session("alice", "coding-agent").data["session"]
+    commit = g.call("alice", sid, "repo.pr.open", PR).data["commit"]
+    state.close()
+    state2, g2 = gateway(db, defs, gw_parts, clock)
+    found = g2.audit.receipts("jfillman/flight-api", 1, ("repo.pr.open",))
+    assert [r["effect"]["commit"] for r in found] == [commit] and found[0]["session"] == sid
+    assert g2.audit.receipts("jfillman/flight-api", 2, ("repo.pr.open",)) == []
+    state2.close()

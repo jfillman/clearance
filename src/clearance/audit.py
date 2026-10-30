@@ -28,9 +28,10 @@ from typing import Any
 GENESIS = "0" * 64
 EVIDENCE_SCHEMA = "clearance.evidence/v0-draft"
 # What the gateway establishes itself for a runtime decision: the caller (authenticated), the session and run tree
-# it issued, the decision it made, and the hash of the arguments it saw.
+# it issued, the decision it made, the hash of the arguments it saw, and the effect of a write it made itself (the
+# receipt of a PR its own call opened: provenance.py).
 VERIFIED = frozenset({"ts", "task_id", "session", "parent", "principal", "agent", "tool", "tier", "decision",
-                      "rule", "target", "args_sha256", "result"})
+                      "rule", "target", "args_sha256", "result", "effect"})
 ENVELOPE = frozenset({"seq", "schema", "boundary", "coverage", "verified", "claimed", "prev_hash", "hash"})
 
 
@@ -95,6 +96,11 @@ class AuditLog:
 
     def checkpoint(self) -> Checkpoint:
         return Checkpoint(len(self.records), self.head)
+
+    def receipts(self, repo: str, pr: int, tools: tuple[str, ...]) -> list[dict[str, Any]]:
+        """The records whose effect is opening PR `pr` on `repo` (provenance.py)."""
+        return [r for r in self.records if r.get("tool") in tools and (r.get("effect") or {}).get("repo") == repo
+                and (r.get("effect") or {}).get("pr") == pr]
 
 
 def verify(records: list[dict[str, Any]]) -> tuple[bool, int | None]:
