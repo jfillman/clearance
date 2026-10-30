@@ -9,7 +9,7 @@ import pytest
 from clearance.dispatch import Gateway
 from clearance.packs.hangar import HANGAR
 from clearance.dispatch import Denied
-from clearance.pg import PgArtifacts, PgAuditLog, PgState, WriterLocked, open_durable
+from clearance.pg import PgArtifacts, PgAuditLog, PgInbox, PgState, WriterLocked, open_durable
 
 DSN = os.environ.get("CLEARANCE_TEST_DSN")
 pytestmark = pytest.mark.skipif(not DSN, reason="set CLEARANCE_TEST_DSN to a scratch Postgres")
@@ -21,7 +21,7 @@ PR = {"repo": "jfillman/flight-api", "branch": "agent/t-1", "title": "fix probe"
 def db():
     psycopg = pytest.importorskip("psycopg")
     with psycopg.connect(DSN, autocommit=True) as c:
-        c.execute("DROP TABLE IF EXISTS clearance_evidence, clearance_sessions, clearance_artifacts")
+        c.execute("DROP TABLE IF EXISTS clearance_evidence, clearance_sessions, clearance_artifacts, clearance_human_requests")
     yield DSN
 
 
@@ -148,4 +148,27 @@ def test_an_artifact_survives_a_restart(db):
     state.close()
     state2 = PgState(db)
     assert PgArtifacts(state2).get("t-9", "report.md") == "all green"
+    state2.close()
+
+
+def test_a_human_request_and_its_answer_survive_a_restart(db):
+    from clearance.inbox import HumanRequest
+    t = datetime(2026, 10, 30, 12, tzinfo=timezone.utc)
+    state = PgState(db)
+    box = PgInbox(state)
+    r = HumanRequest("h-0123456789ab", "t-1", "s-1", "orchestrator", "user:alice", "group:default/platform",
+                     "Roll back?", ["yes", "no"], t, t + timedelta(hours=1))
+    box.add(r)
+    box.add(HumanRequest("h-00000000000e", "t-1", "s-1", "orchestrator", "user:alice", None, "Old?", [],
+                         t - timedelta(hours=2), t - timedelta(hours=1)))
+    state.commit()
+    assert [x.id for x in box.pending(t)] == ["h-0123456789ab"] and box.count_pending("s-1", t) == 1
+    r.status, r.answer, r.answered_by, r.answered_at = "answered", "no", "user:bob", t
+    box.save(r)
+    state.commit()
+    state.close()
+    state2 = PgState(db)
+    back = PgInbox(state2).get("h-0123456789ab")
+    assert (back.answer, back.answered_by, back.options, back.expires_at) == ("no", "user:bob", ["yes", "no"], t + timedelta(hours=1))
+    assert PgInbox(state2).pending(t) == []
     state2.close()

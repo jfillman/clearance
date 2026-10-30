@@ -13,6 +13,7 @@ Tables (created if missing; `migrate` is idempotent):
                       beside it: recorded-not-checkpointed until a witnessed checkpoint covers it (the ledger).
   clearance_sessions  id, the session record (jsonb), expires_at and closed for the load query.
   clearance_artifacts artifact.put's text, per task and name, bounded and expiring (PgArtifacts).
+  clearance_human_requests  human.request's questions and their answers (PgInbox, inbox.py).
 """
 from __future__ import annotations
 
@@ -58,6 +59,15 @@ CREATE TABLE IF NOT EXISTS clearance_artifacts (
   PRIMARY KEY (task_id, name)
 );
 CREATE INDEX IF NOT EXISTS clearance_artifacts_expiry ON clearance_artifacts (expires_at);
+CREATE TABLE IF NOT EXISTS clearance_human_requests (
+  id         text        PRIMARY KEY,
+  session    text        NOT NULL,
+  status     text        NOT NULL,
+  expires_at timestamptz NOT NULL,
+  record     jsonb       NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS clearance_human_requests_pending ON clearance_human_requests (status, expires_at);
 """
 
 
@@ -223,6 +233,53 @@ class PgArtifacts:
                         (task_id, name, self.now()))
             row = cur.fetchone()
         return row[0] if row else None
+
+
+class PgInbox:
+    """InboxStore on clearance_human_requests. Writes join the operation's transaction (the request with the call
+    that asked it, the answer with its human.answer record)."""
+
+    def __init__(self, state: PgState):
+        self.state = state
+
+    @staticmethod
+    def _load(rec: dict[str, Any]):
+        from .inbox import HumanRequest
+        d = dict(rec)
+        for k in ("created_at", "expires_at", "answered_at"):
+            d[k] = datetime.fromisoformat(d[k]) if d.get(k) else None
+        return HumanRequest(**d)
+
+    def _put(self, r) -> None:
+        from dataclasses import asdict
+        rec = asdict(r)
+        for k in ("created_at", "expires_at", "answered_at"):
+            rec[k] = rec[k].isoformat() if rec[k] else None
+        with self.state.conn.cursor() as cur:
+            cur.execute("INSERT INTO clearance_human_requests (id, session, status, expires_at, record) "
+                        "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, "
+                        "record = EXCLUDED.record, updated_at = now()",
+                        (r.id, r.session, r.status, r.expires_at, Jsonb(rec)))
+
+    add = save = _put
+
+    def get(self, request_id: str):
+        with self.state.conn.cursor() as cur:
+            cur.execute("SELECT record FROM clearance_human_requests WHERE id = %s", (request_id,))
+            row = cur.fetchone()
+        return self._load(row[0]) if row else None
+
+    def pending(self, now: datetime) -> list:
+        with self.state.conn.cursor() as cur:
+            cur.execute("SELECT record FROM clearance_human_requests WHERE status = 'pending' AND expires_at > %s "
+                        "ORDER BY record->>'created_at'", (now,))
+            return [self._load(r[0]) for r in cur.fetchall()]
+
+    def count_pending(self, session: str, now: datetime) -> int:
+        with self.state.conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM clearance_human_requests WHERE session = %s AND status = 'pending' "
+                        "AND expires_at > %s", (session, now))
+            return cur.fetchone()[0]
 
 
 def open_durable(dsn: str, id_gen=None):
