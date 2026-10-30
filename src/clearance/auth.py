@@ -145,6 +145,40 @@ class OIDCAuthenticator:
         return Principal(f"user:{who}", "user", self.tier_ceiling)
 
 
+class ForeignWorkloadAuthenticator:
+    """A service-account token from ANOTHER cluster, verified against that cluster's public issuer (its JWKS), since
+    this cluster's TokenReview cannot. The principal is `<name>/<namespace>/<serviceaccount>` (e.g.
+    hangar-prod/app-backstage-prod/backstage), a workload, and only the service accounts its `allowed` globs name
+    (on `<namespace>/<serviceaccount>`) get in: an issuer signs a token for every pod of that cluster.
+    Used for delegates such as Tower's backend; route it by issuer like an OIDC verifier."""
+
+    ALGORITHMS = ("RS256", "ES256")
+
+    def __init__(self, name: str, issuer: str, audience: str, keys: JWKS, allowed: Sequence[str],
+                 tier_ceiling: Tier = Tier.T1, leeway: float = 30):
+        self.name, self.issuer, self.audience, self.keys = name, issuer, audience, keys
+        self.allowed, self.tier_ceiling, self.leeway = tuple(allowed), tier_ceiling, leeway
+
+    def authenticate(self, token: str) -> Principal:
+        try:
+            header = jwt.get_unverified_header(token)
+            claims = jwt.decode(token, self.keys.key(header.get("kid")), algorithms=list(self.ALGORITHMS),
+                                audience=self.audience, issuer=self.issuer, leeway=self.leeway,
+                                options={"require": ["exp", "iat", "iss", "aud", "sub"]})
+        except AuthError:
+            raise
+        except jwt.PyJWTError as e:
+            raise AuthError("workload token rejected") from e
+        sub = claims["sub"]
+        prefix = "system:serviceaccount:"
+        if not isinstance(sub, str) or not sub.startswith(prefix) or sub.count(":") != 3:
+            raise AuthError("not a service-account token")
+        ns_sa = sub[len(prefix):].replace(":", "/", 1)
+        if not any(fnmatchcase(ns_sa, g) for g in self.allowed):
+            raise AuthError(f"{self.name}/{ns_sa} may not call this Clearance")
+        return Principal(f"{self.name}/{ns_sa}", "workload", self.tier_ceiling)
+
+
 class RoutingAuthenticator:
     """Choose the verifier by the token's (unverified) issuer: a listed issuer's OIDC verifier, else the workload one.
     The choice is not trust: the chosen verifier checks everything, the issuer included."""
