@@ -10,6 +10,8 @@ clearance.packs.hangar for Glidepath and Airframe. A pack is data plus two optio
             pack's rules read, under `ctx`; the count is added to ctx.missing_args (R008)
   decide    (rule, context) -> Decision | None: a matched rule's decision, for a rule that
             reports structured problems instead of its own id; None leaves the default
+  app_of    (tool, args) -> str | None: the application a call acts on, recorded on its evidence as `app`
+            (clearance-api lets an app's owners read what agents did to it); None when it names none
 
 A pack holds policy only. What a tool does is a handler the deployment registers with the Gateway,
 so the same pack works whatever backs it. Packs are passed explicitly; nothing registers on import.
@@ -25,6 +27,7 @@ from .tiers import ToolSpec
 
 ContextFn = Callable[[str, "ToolSpec | None", dict[str, Any], Session, Any], "tuple[dict[str, Any], int]"]
 DecideFn = Callable[[Rule, dict[str, Any]], "Decision | None"]
+AppOfFn = Callable[[str, dict[str, Any]], "str | None"]
 
 
 @dataclass(frozen=True)
@@ -34,3 +37,4 @@ class Pack:
     rules: tuple[Rule, ...] = ()
     context: ContextFn | None = None
     decide: DecideFn | None = None
+    app_of: AppOfFn | None = None

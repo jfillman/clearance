@@ -1,6 +1,6 @@
 # clearance-api: Clearance's read API (spec, draft 2026-10-30)
 
-Status: **proposed**, open questions decided 2026-10-30. AP-B2 follow-on (Hangar roadmap M3). Owner decision 2026-10-30: build after Tower's Agent
+Status: **phase 1 built** (v0.13.0, `api.py`); open questions decided 2026-10-30. AP-B2 follow-on (Hangar roadmap M3). Owner decision 2026-10-30: build after Tower's Agent
 requests; spec first.
 
 ## Why
@@ -74,9 +74,11 @@ sessions through a filter.
 **App owners see what agents did to their app** (decided 2026-10-30). A person who owns an app in the catalog (the
 Component's `spec.owner`, directly or through a group) sees every evidence record whose target is that app: its
 repos (`<app>`, `gitops-<app>`), its Argo CD Applications, its Glidepath app. Records only, not the rest of the
-session that made them, so another team's agent's work elsewhere stays theirs. The gateway records `effect.app` on
-every record whose target maps to an app (`repo.*` by repo name, `argo.*` by the Application's app, `glidepath.*`
-by its `app` argument), indexed; older records are backfilled from `target`. Tower's per-app tabs use it for an
+session that made them, so another team's agent's work elsewhere stays theirs. The gateway records `app` on every
+record whose call names an application (the pack's `app_of`: on Hangar `glidepath.*`, `airframe.*` and
+`xr.request` by their `app` argument, `repo.*` by the repo, `<app>` or `gitops-<app>`; `argo.*` names an Argo CD
+Application, not an app, so none yet). Records are hashed into the chain, so older ones cannot be backfilled: app
+visibility starts with the release that records `app` (v0.13.0); the owner and team rules cover the rest. Tower's per-app tabs use it for an
 "Agent activity" view (`GET /v1/evidence?app=<app>`). Reads are not themselves recorded as evidence (they change nothing); they are logged
 and counted.
 
@@ -109,6 +111,6 @@ breaking change is `/v2`.
   whole sessions of agents scoped to it (Who sees what, above).
 - **Read replica:** not in v1. The API reads the primary through its own DSN (`CLEARANCE_API_DSN`, the
   `clearance_reader` role) with guardrails: `statement_timeout` 5 s, a pool of 5 connections per replica, page size
-  at most 200, and indexes for the hot filters (`session`, `task_id`, `tool`, `ts`, `effect.app`). Moving to a
+  at most 200, and indexes for the hot filters (`session`, `task_id`, `tool`, `ts`, `app`). Moving to a
   replica is configuration: CloudNativePG publishes `<cluster>-ro`; add one instance and point the DSN at it.
   Trigger: API p95 over 300 ms, or the gateway's write latency rising while Tower is busy (both on Prometheus).

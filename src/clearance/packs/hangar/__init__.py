@@ -127,4 +127,21 @@ def decide(rule: Rule, ctx: dict[str, Any]) -> Decision | None:
                     ctx["tool"]["tier"], probs)
 
 
-HANGAR = Pack("hangar", tools=TOOLS, rules=RULES, context=context, decide=decide)
+def app_of(tool: str, args: dict[str, Any]) -> str | None:
+    """The Hangar app a call acts on: glidepath.*, airframe.* and xr.request name it (`app`); repo.* by the repo,
+    whose own name or gitops-<app> / gitops-infra-<app> is the app's. argo.* names an Argo CD Application, not an
+    app, so it names none here."""
+    if tool.startswith(("glidepath.", "airframe.")) or tool == "xr.request":
+        app = args.get("app")
+        return app if isinstance(app, str) else None
+    repo = args.get("repo")
+    if tool.startswith("repo.") and isinstance(repo, str) and "/" in repo:
+        name = repo.rsplit("/", 1)[1]
+        for prefix in ("gitops-infra-", "gitops-"):
+            if name.startswith(prefix):
+                return name[len(prefix):]
+        return name
+    return None
+
+
+HANGAR = Pack("hangar", tools=TOOLS, rules=RULES, context=context, decide=decide, app_of=app_of)
