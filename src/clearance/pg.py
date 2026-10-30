@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS clearance_sessions (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS clearance_sessions_live ON clearance_sessions (closed, expires_at);
+CREATE INDEX IF NOT EXISTS clearance_evidence_receipt ON clearance_evidence
+  ((record->'effect'->>'repo'), (record->'effect'->>'pr')) WHERE record ? 'effect';
 """
 
 
@@ -115,6 +117,13 @@ class PgAuditLog:
 
     def checkpoint(self) -> Checkpoint:
         return Checkpoint(self._count, self._head)
+
+    def receipts(self, repo: str, pr: int, tools: tuple[str, ...]) -> list[dict[str, Any]]:
+        with self.state.conn.cursor() as cur:
+            cur.execute("SELECT record FROM clearance_evidence WHERE record->>'tool' = ANY(%s) "
+                        "AND record->'effect'->>'repo' = %s AND record->'effect'->>'pr' = %s ORDER BY seq",
+                        (list(tools), repo, str(pr)))
+            return [r[0] for r in cur.fetchall()]
 
     def assurance(self, seq: int) -> str | None:
         with self.state.conn.cursor() as cur:
