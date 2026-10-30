@@ -1201,6 +1201,13 @@
       "targets": [
         "k8s-rollout"
       ]
+    },
+    {
+      "name": "agent-gates",
+      "description": "Agent identity and scope - Clearance's record of the PR its agent opened: the same head commit and trailers, and only paths that agent may change (a person's PR passes as not-agent)",
+      "status": "real",
+      "class": "integrity",
+      "required": true
     }
   ],
   "states": {
