@@ -38,11 +38,21 @@ def oidc(fetches):
     def fetch(url):
         fetches.append(url)
         return {"keys": [jwk(KEY, "k1")]}
-    return OIDCAuthenticator(ISS, AUD, JWKS(f"{ISS}/keys", fetch=fetch))
+    return OIDCAuthenticator(ISS, AUD, JWKS(f"{ISS}/keys", fetch=fetch), allowed=("alice@example.com",))
 
 
 def test_a_valid_id_token_is_a_user(oidc):
     assert oidc.authenticate(id_token()) == Principal("user:alice@example.com", "user", Tier.T1)
+
+
+def test_a_valid_token_for_someone_not_allowed_is_refused(oidc):
+    with pytest.raises(AuthError, match="not allowed"):
+        oidc.authenticate(id_token(email="mallory@example.com"))
+    oidc.allowed = ("*@example.com",)
+    assert oidc.authenticate(id_token(email="mallory@example.com")).id == "user:mallory@example.com"
+    oidc.allowed = ()
+    with pytest.raises(AuthError, match="not allowed"):
+        oidc.authenticate(id_token())
 
 
 @pytest.mark.parametrize("bad", [
