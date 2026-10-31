@@ -18,9 +18,10 @@ from clearance.scope import BadPath, normalize
 
 from .vendor.cicd_scope import scope_problems
 
-# Glidepath's contract, vendored byte for byte from glidepath (contract/glidepath-contract.json) with
-# the code that reads it (vendor/cicd_scope.py); tests/test_cicd_scope.py fails if either drifts.
-CICD_SCOPE = json.loads((Path(__file__).resolve().parent / "vendor" / "glidepath-contract.json").read_text())["scope"]
+# The `scope` section of Glidepath's contract (contract/glidepath-contract.json), the only part Clearance reads, vendored
+# as vendor/glidepath-scope.json with the code that reads it (vendor/cicd_scope.py); tests/test_cicd_scope.py fails if
+# either drifts. Only this section: a glidepath-api change elsewhere in the contract never touches Clearance.
+CICD_SCOPE = json.loads((Path(__file__).resolve().parent / "vendor" / "glidepath-scope.json").read_text())
 
 
 def merge_patch(target: Any, patch: Any) -> Any:

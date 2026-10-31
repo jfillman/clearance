@@ -5,6 +5,7 @@ call path (Gateway.call -> policy -> backend), so an allowed change reaches the 
 denied one never does. The vendored files are checked against a glidepath checkout when there is one.
 """
 import copy
+import json
 import os
 from pathlib import Path
 
@@ -17,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 VENDOR = ROOT / "src" / "clearance" / "packs" / "hangar" / "vendor"
 # CI clones glidepath under HANGAR_TECH (.github/workflows/test.yaml, GLIDEPATH_REF); locally it is ~/tech.
 GLIDEPATH = Path(os.environ.get("HANGAR_TECH", "/Users/jerf/tech")) / "glidepath"
-VENDORED = {"cicd_scope.py": "tools/cicd_scope.py", "glidepath-contract.json": "contract/glidepath-contract.json"}
+VENDORED = {"cicd_scope.py": "tools/cicd_scope.py"}
 
 # glidepath's Scope BASE, verbatim
 BASE = yaml.safe_load("""
@@ -54,6 +55,18 @@ def test_vendored_file_matches_glidepath(vendored, upstream):
         pytest.skip(f"no glidepath checkout with {upstream} at {GLIDEPATH} (CI clones it; set HANGAR_TECH)")
     assert (VENDOR / vendored).read_bytes() == src.read_bytes(), (
         f"src/clearance/packs/hangar/vendor/{vendored} drifted from glidepath's {upstream} - copy it over byte for byte")
+
+
+def test_vendored_scope_matches_glidepaths_contract():
+    """Only the contract's `scope` section is vendored (the only part Clearance reads): it must equal glidepath's, as
+    parsed JSON, so a glidepath-api change elsewhere in the contract does not need a Clearance release."""
+    src = GLIDEPATH / "contract" / "glidepath-contract.json"
+    if not src.exists():
+        pytest.skip(f"no glidepath checkout at {GLIDEPATH} (CI clones it; set HANGAR_TECH)")
+    vendored = json.loads((VENDOR / "glidepath-scope.json").read_text())
+    assert vendored == json.loads(src.read_text())["scope"], (
+        "src/clearance/packs/hangar/vendor/glidepath-scope.json drifted from the scope section of glidepath's contract: "
+        "regenerate it (python3 -c 'import json;print(json.dumps(json.load(open(\"contract/glidepath-contract.json\"))[\"scope\"], indent=2))')")
 
 
 def test_policy_reads_the_vendored_contracts_scope_block():

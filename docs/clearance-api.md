@@ -186,7 +186,7 @@ and counted.
 
 `contract/clearance-api.json`, generated from the route table (`tools/gen_api_contract.py`, with a `--check` CI
 step, as glidepath does): every operation's method, path, parameters, roles and response schema. Tower's backend
-vendors it with a drift test, as Clearance vendors `glidepath-contract.json`. `/v1` changes are additive only; a
+vendors it with a drift test, as Clearance vendors the `scope` section of `glidepath-contract.json`. `/v1` changes are additive only; a
 breaking change is `/v2`.
 
 ## Hangar deployment (apron `55-autopilot/clearance`)
