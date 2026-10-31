@@ -68,6 +68,17 @@ CREATE TABLE IF NOT EXISTS clearance_human_requests (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS clearance_human_requests_pending ON clearance_human_requests (status, expires_at);
+CREATE TABLE IF NOT EXISTS clearance_events (
+  id          text        PRIMARY KEY,
+  received_at timestamptz NOT NULL,
+  source      text        NOT NULL,
+  app         text,
+  routing_key text,
+  record      jsonb       NOT NULL,
+  written_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS clearance_events_received ON clearance_events (received_at DESC);
+CREATE INDEX IF NOT EXISTS clearance_events_app ON clearance_events (app, received_at DESC);
 """
 
 
@@ -280,6 +291,30 @@ class PgInbox:
             cur.execute("SELECT count(*) FROM clearance_human_requests WHERE session = %s AND status = 'pending' "
                         "AND expires_at > %s", (session, now))
             return cur.fetchone()[0]
+
+
+class PgEvents:
+    """EventsStore on clearance_events (events.py): one row per event the trigger bridge handled, kept
+    events.RETENTION. A write joins the gateway operation's transaction (Gateway.record_event is durable). Every
+    PRUNE_EVERY writes, rows past retention are deleted."""
+
+    PRUNE_EVERY = 500
+
+    def __init__(self, state: PgState):
+        self.state = state
+        self._writes = 0
+
+    def record(self, ev) -> None:
+        from .events import RETENTION
+        with self.state.conn.cursor() as cur:
+            cur.execute("INSERT INTO clearance_events (id, received_at, source, app, routing_key, record) "
+                        "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (id) DO UPDATE SET record = EXCLUDED.record, "
+                        "written_at = now()",
+                        (ev.id, ev.received_at, ev.source, ev.app, ev.routing_key, Jsonb(ev.view())))
+            self._writes += 1
+            if self._writes % self.PRUNE_EVERY == 0:
+                cur.execute("DELETE FROM clearance_events WHERE received_at < %s",
+                            (datetime.now(timezone.utc) - RETENTION,))
 
 
 def open_durable(dsn: str, id_gen=None):

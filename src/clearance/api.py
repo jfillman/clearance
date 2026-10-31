@@ -71,6 +71,9 @@ ROUTES: tuple[dict[str, Any], ...] = (
     {"operationId": "listHumanRequests", "method": "GET", "path": "/v1/human/requests", "roles": ("person", "delegate", "notifier", "auditor"),
      "params": ["since"],
      "summary": "Pending human requests: a person's, those they may answer; a notifier's, every pending one (with owner and group), created since `since`"},
+    {"operationId": "listEvents", "method": "GET", "path": "/v1/events", "roles": PERSON_ROLES,
+     "params": ["app", "agent", "source", "key", "subject", "since", "until", "limit", "after"],
+     "summary": "The events the trigger bridge received, newest first, each with what it did per agent (launched, deduped, braked, refused): the history a trigger dry run, an agent's trigger statistics and an app's run marks read. Kept 30 days; the cursor is received_at"},
     {"operationId": "getContract", "method": "GET", "path": "/v1/contract", "roles": ("any",), "params": [],
      "summary": "This contract"},
 )
@@ -164,6 +167,7 @@ class ReadStore(Protocol):
     def counts(self, f: dict[str, Any], v: Viewer, by: str) -> list[dict[str, Any]]: ...
     def chain(self, batch: int) -> Iterable[list[dict[str, Any]]]: ...
     def human_pending(self, now: datetime, since: datetime | None) -> list[dict[str, Any]]: ...
+    def events(self, f: dict[str, Any], v: Viewer, limit: int, after: str | None) -> list[dict[str, Any]]: ...
     def ping(self) -> None: ...
 
 
@@ -328,6 +332,30 @@ class PgReadStore:
             sql += " AND record->>'created_at' > %s"; params.append(since.isoformat())
         return [r[0] for r in self.pool.run(sql + " ORDER BY record->>'created_at'", params)]
 
+    def events(self, f, v, limit, after):
+        """clearance_events (pg.py PgEvents): an app's events to its owners, an agent's to its team, all to an auditor."""
+        where, params = [], []
+        if not v.all:
+            where.append("(e.app = ANY(%s) OR EXISTS (SELECT 1 FROM jsonb_array_elements(e.record->'outcomes') o "
+                         "WHERE o->>'agent' = ANY(%s)))")
+            params += [list(v.apps), list(v.agents)]
+        for key, col in (("app", "e.app"), ("source", "e.source"), ("key", "e.routing_key"),
+                         ("subject", "e.record->'subject'->>'id'")):
+            if f.get(key):
+                where.append(f"{col} = %s"); params.append(f[key])
+        if f.get("agent"):
+            where.append("EXISTS (SELECT 1 FROM jsonb_array_elements(e.record->'outcomes') o WHERE o->>'agent' = %s)")
+            params.append(f["agent"])
+        if f.get("since"):
+            where.append("e.received_at >= %s"); params.append(f["since"])
+        if f.get("until"):
+            where.append("e.received_at < %s"); params.append(f["until"])
+        if after:
+            where.append("e.received_at < %s"); params.append(after)
+        sql = "SELECT e.record FROM clearance_events e" + (" WHERE " + " AND ".join(where) if where else "")
+        rows = self.pool.run(sql + " ORDER BY e.received_at DESC LIMIT %s", params + [limit])
+        return [r[0] for r in rows]
+
     def ping(self):
         self.pool.run("SELECT 1")
 
@@ -463,6 +491,19 @@ def create_api_app(store: ReadStore, access: Access, *, clock: Callable[[], date
             raise ApiError(400, "state is live, closed or expired")
         return page(store.sessions(f, v, limit, q.get("after")), limit, "created_at")
 
+    def list_events(req, v):
+        q, limit = req.query_params, _limit(req.query_params)
+        f = {k: q.get(k) for k in ("app", "agent", "source", "key", "subject", "since", "until") if q.get(k)}
+        for k in ("since", "until"):
+            if f.get(k):
+                try:
+                    datetime.fromisoformat(f[k].replace("Z", "+00:00"))
+                except ValueError:
+                    raise ApiError(400, f"{k} is an ISO time") from None
+        if f.get("app"):
+            f["app"] = f["app"].lower()
+        return page(store.events(f, v, limit, q.get("after")), limit, "received_at")
+
     def get_session(req, v):
         s = store.session(req.path_params["id"])
         if s is None or not visible(s, v):
@@ -577,7 +618,8 @@ def create_api_app(store: ReadStore, access: Access, *, clock: Callable[[], date
            "getTask": get_task, "listEvidence": list_evidence, "getEvidence": get_evidence, "verifyEvidence": verify,
            "listReceipts": receipts_or_verdicts(("repo.pr.open", "repo.pr.open_upper")),
            "listProvenance": receipts_or_verdicts(("provenance.verify",)), "listHumanRequests": human,
-           "countEvidence": count_evidence, "getPolicy": get_policy, "explainPolicy": explain_policy}
+           "countEvidence": count_evidence, "getPolicy": get_policy, "explainPolicy": explain_policy,
+           "listEvents": list_events}
     # /v1/evidence/verify must be matched before /v1/evidence/{seq}.
     order = sorted((r for r in ROUTES if r["operationId"] in fns), key=lambda r: "{" in r["path"])
     routes = [Route(r["path"], endpoint(r["operationId"], fns[r["operationId"]]), methods=["GET"]) for r in order]

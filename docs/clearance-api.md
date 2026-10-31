@@ -51,11 +51,12 @@ All list endpoints are cursor-paginated (`limit`, max 200; `after`), newest firs
 | `GET /v1/receipts` | PR receipts (`repo`, `pr`): what Clearance's agents opened, the commit, the paths |
 | `GET /v1/provenance` | the agent-gate verdicts recorded for a PR (`provenance.verify` records) |
 | `GET /v1/human/requests` | the inbox: for a person, what they may answer (as today); for a `notifier`, every pending request with who may answer it (owner and group), `since` for "new since" |
+| `GET /v1/events` | the trigger bridge's history (v0.15.0): every event it received, newest first, with what it did per agent (`launched`, `deduped`, `braked`, `refused`, `launch-failed`, with the session and run); filters `app`, `agent`, `source`, `key` (routing key), `subject` (the event's subject id, e.g. a PipelineRun name), `since`, `until`; cursor is `received_at`. Kept 30 days. The trigger dry run, an agent's trigger statistics and Tower's run marks read it |
 | `GET /v1/contract` | the API contract (below) |
 | `GET /healthz` | liveness; `GET /readyz` checks the database |
 
-Later (phase 3): `GET /v1/events`, server-sent events of new evidence records and inbox changes (the same shape as
-glidepath-api's `/v1/events`), so Tower stops polling.
+Later (phase 3): `GET /v1/stream`, server-sent events of new evidence records and inbox changes (the same shape as
+glidepath-api's `/v1/events`), so Tower stops polling. (`/v1/events` is the trigger bridge's history, above.)
 
 Never returned: tool arguments (only their digest is stored), artifact contents, tokens, model prompts.
 
@@ -106,7 +107,8 @@ breaking change is `/v2`.
    Tower's Agent requests poller switches to the feed (one call per minute, not one per user).
 2. **Tower's Clearance plugin:** sessions and run trees, an evidence explorer, agent definitions, gate verdicts on
    a PR, on the API.
-3. **Events:** `/v1/events` (SSE); Tower subscribes instead of polling.
+3. **Event history** (v0.15.0, done): `/v1/events`, what the trigger bridge received and did, kept 30 days; Gateway.record_event writes it from the bridge (autopilot event_bridge.py). Not evidence: not in the chain.
+4. **Stream:** `/v1/stream` (SSE); Tower subscribes instead of polling.
 
 ## Decided (2026-10-30)
 
