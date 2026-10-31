@@ -122,6 +122,54 @@
       "summary": "The whole chain checked from genesis: ok, count, head, the first bad seq"
     },
     {
+      "operationId": "countEvidence",
+      "method": "GET",
+      "path": "/v1/evidence/counts",
+      "roles": [
+        "person",
+        "delegate",
+        "auditor"
+      ],
+      "params": [
+        "by",
+        "decision",
+        "agent",
+        "tool",
+        "app",
+        "since",
+        "until"
+      ],
+      "summary": "Records you may see, counted by rule, tool, agent, app or decision (`by`), with the same filters as the list"
+    },
+    {
+      "operationId": "getPolicy",
+      "method": "GET",
+      "path": "/v1/policy",
+      "roles": [
+        "person",
+        "delegate",
+        "auditor"
+      ],
+      "params": [],
+      "summary": "The policy in force: the deny rules in evaluation order (id, name, CEL expression, message, hint, pack), the tool registry with tiers, the packs"
+    },
+    {
+      "operationId": "explainPolicy",
+      "method": "GET",
+      "path": "/v1/policy/explain",
+      "roles": [
+        "person",
+        "delegate",
+        "auditor"
+      ],
+      "params": [
+        "agent",
+        "tool",
+        "args"
+      ],
+      "summary": "Would this be allowed? A dry run of the real policy for an agent, a tool and its args (JSON) on a fresh session: the decision and each rule's verdict in order. Records nothing"
+    },
+    {
       "operationId": "listReceipts",
       "method": "GET",
       "path": "/v1/receipts",

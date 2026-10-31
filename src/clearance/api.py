@@ -17,6 +17,7 @@ entry per operation, with its parameters and the roles that may call it.
 """
 from __future__ import annotations
 
+import json
 import queue
 import threading
 from dataclasses import dataclass, field
@@ -26,6 +27,9 @@ from typing import Any, Callable, Iterable, Mapping, Protocol, Sequence
 
 from .audit import GENESIS, canonical, sha256_hex
 from .dispatch import AuthError, Authenticator
+from .policy import RULES
+from .session import Session
+from .tiers import Tier
 
 API_VERSION = "v1"
 MAX_LIMIT = 200
@@ -52,6 +56,14 @@ ROUTES: tuple[dict[str, Any], ...] = (
      "summary": "One evidence record with its hash"},
     {"operationId": "verifyEvidence", "method": "GET", "path": "/v1/evidence/verify", "roles": ("auditor",), "params": [],
      "summary": "The whole chain checked from genesis: ok, count, head, the first bad seq"},
+    {"operationId": "countEvidence", "method": "GET", "path": "/v1/evidence/counts", "roles": PERSON_ROLES,
+     "params": ["by", "decision", "agent", "tool", "app", "since", "until"],
+     "summary": "Records you may see, counted by rule, tool, agent, app or decision (`by`), with the same filters as the list"},
+    {"operationId": "getPolicy", "method": "GET", "path": "/v1/policy", "roles": PERSON_ROLES, "params": [],
+     "summary": "The policy in force: the deny rules in evaluation order (id, name, CEL expression, message, hint, pack), the tool registry with tiers, the packs"},
+    {"operationId": "explainPolicy", "method": "GET", "path": "/v1/policy/explain", "roles": PERSON_ROLES,
+     "params": ["agent", "tool", "args"],
+     "summary": "Would this be allowed? A dry run of the real policy for an agent, a tool and its args (JSON) on a fresh session: the decision and each rule's verdict in order. Records nothing"},
     {"operationId": "listReceipts", "method": "GET", "path": "/v1/receipts", "roles": PERSON_ROLES, "params": ["repo", "pr"],
      "summary": "PR receipts: what Clearance's agents opened on a repo (and PR), the commit, the paths"},
     {"operationId": "listProvenance", "method": "GET", "path": "/v1/provenance", "roles": PERSON_ROLES, "params": ["repo", "pr"],
@@ -149,6 +161,7 @@ class ReadStore(Protocol):
     def evidence(self, f: dict[str, Any], v: Viewer, limit: int, after: int | None) -> list[dict[str, Any]]: ...
     def evidence_one(self, seq: int, v: Viewer) -> dict[str, Any] | None: ...
     def by_pr(self, tools: Sequence[str], repo: str, pr: str | None, v: Viewer) -> list[dict[str, Any]]: ...
+    def counts(self, f: dict[str, Any], v: Viewer, by: str) -> list[dict[str, Any]]: ...
     def chain(self, batch: int) -> Iterable[list[dict[str, Any]]]: ...
     def human_pending(self, now: datetime, since: datetime | None) -> list[dict[str, Any]]: ...
     def ping(self) -> None: ...
@@ -271,6 +284,22 @@ class PgReadStore:
                              "ON s.id = e.record->>'session' WHERE e.seq = %s AND " + scope, [seq] + sp)
         return {**rows[0][0], "assurance": rows[0][1]} if rows else None
 
+    def counts(self, f, v, by):
+        where, params = [], []
+        scope, sp = self._evidence_scope(v)
+        where.append(scope); params += sp
+        for key in ("decision", "agent", "tool", "app"):
+            if f.get(key):
+                where.append(f"e.record->>'{key}' = %s"); params.append(f[key])
+        if f.get("since"):
+            where.append("e.record->>'ts' >= %s"); params.append(f["since"])
+        if f.get("until"):
+            where.append("e.record->>'ts' < %s"); params.append(f["until"])
+        rows = self.pool.run(f"SELECT e.record->>'{by}', count(*) FROM clearance_evidence e LEFT JOIN clearance_sessions s "
+                             "ON s.id = e.record->>'session' WHERE " + " AND ".join(where)
+                             + f" GROUP BY e.record->>'{by}' ORDER BY count(*) DESC, 1 LIMIT %s", params + [MAX_LIMIT])
+        return [{"key": r[0], "count": r[1]} for r in rows]
+
     def by_pr(self, tools, repo, pr, v):
         """Receipts (effect.repo/pr, the clearance_evidence_receipt index) and verdicts (target repo#pr) for a PR."""
         scope, sp = self._evidence_scope(v)
@@ -339,9 +368,48 @@ def _limit(q: Mapping[str, str]) -> int:
     return max(1, min(n, MAX_LIMIT))
 
 
+COUNT_BY = ("rule", "tool", "agent", "app", "decision")
+MAX_EXPLAIN_ARGS = 16 << 10
+
+
+def policy_view(policy: Any) -> dict[str, Any]:
+    """The policy as data: rules in evaluation order with their pack, the tool registry with tiers, the packs."""
+    core_ids = {r.id for r in RULES}
+    pack_of = {}
+    for p in policy.packs:
+        for r in p.rules:
+            pack_of[r.id] = p.name
+    return {
+        "rules": [{"id": r.id, "name": r.name, "expression": r.expr, "message": r.message, "hint": r.hint,
+                   "order": r.order, "pack": "core" if r.id in core_ids else pack_of.get(r.id, "unknown")}
+                  for r in policy.rules],
+        "tools": [{"name": s.name, "tier": s.tier.name, "summary": s.description, "required_args": list(s.required_args),
+                   "target": s.target, "propose_only": s.propose_only, "writes_files": s.writes_files,
+                   "github_cost": s.github_cost} for s in sorted(policy.tools.values(), key=lambda s: (int(s.tier), s.name))],
+        "packs": ["core", *(p.name for p in policy.packs)],
+    }
+
+
+def explain(policy: Any, definition: Any, person: str, tool: str, args: dict[str, Any], now: datetime) -> dict[str, Any]:
+    """A dry run: the real policy on a fresh session of `definition` for `person`, nothing recorded, nothing spent."""
+    from datetime import timedelta
+    session = Session(id="s-dry-run", principal=person, agent=definition.name, limits=definition.limits,
+                      created_at=now, expires_at=now + timedelta(minutes=definition.limits.ttl_minutes), task_id="t-dry-run")
+    ctx = policy.build_context(session, person, Tier.T1, tool, args, list(definition.deny_paths), list(definition.repos_allow),
+                               now, api_allow=list(definition.api_allow), agent_kind=definition.kind,
+                               field_deny=list(definition.field_deny), field_allow=list(definition.field_allow),
+                               definition=definition)
+    decision = policy.evaluate(ctx)
+    path = policy.trace(ctx)
+    first = next((i for i, r in enumerate(path) if r["matched"] or r["error"]), None)
+    return {"agent": definition.name, "tool": tool, "known_tool": tool in policy.tools, "decision": decision.as_dict(),
+            "path": path if first is None else path[: first + 1], "all_rules": path, "dry_run": True}
+
+
 def create_api_app(store: ReadStore, access: Access, *, clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
-                   gateway_url: str | None = None):
-    """The Starlette app for `clearance api`."""
+                   gateway_url: str | None = None, policy: Any = None):
+    """The Starlette app for `clearance api`. `policy` (a clearance.policy.Policy with the deployment's packs) serves
+    /v1/policy and the dry-run explainer; without it those answer 404."""
     from starlette.applications import Starlette
     from starlette.requests import Request
     from starlette.responses import JSONResponse
@@ -434,6 +502,41 @@ def create_api_app(store: ReadStore, access: Access, *, clock: Callable[[], date
     def verify(req, v):
         return verify_chain(store.chain(1000))
 
+    def count_evidence(req, v):
+        q = req.query_params
+        by = q.get("by") or "rule"
+        if by not in COUNT_BY:
+            raise ApiError(400, f"by is one of {', '.join(COUNT_BY)}")
+        f = {k: q.get(k) for k in ("decision", "agent", "tool", "app", "since", "until") if q.get(k)}
+        items = store.counts(f, v, by)
+        return {"by": by, "items": items, "total": sum(i["count"] for i in items)}
+
+    def get_policy(req, v):
+        if policy is None:
+            raise ApiError(404, "this deployment serves no policy")
+        return policy_view(policy)
+
+    def explain_policy(req, v):
+        if policy is None:
+            raise ApiError(404, "this deployment serves no policy")
+        q = req.query_params
+        d = access.definitions.get(q.get("agent") or "")
+        if d is None:
+            raise ApiError(404, "no such agent")
+        tool = q.get("tool") or ""
+        if not tool:
+            raise ApiError(400, "tool is required")
+        raw = q.get("args") or "{}"
+        if len(raw) > MAX_EXPLAIN_ARGS:
+            raise ApiError(400, "args too large")
+        try:
+            args = json.loads(raw)
+        except ValueError:
+            raise ApiError(400, "args is a JSON object") from None
+        if not isinstance(args, dict):
+            raise ApiError(400, "args is a JSON object")
+        return explain(policy, d, v.person or "user:dry-run", tool, args, clock())
+
     def receipts_or_verdicts(tools: tuple[str, ...]):
         def run(req, v):
             q = req.query_params
@@ -473,7 +576,8 @@ def create_api_app(store: ReadStore, access: Access, *, clock: Callable[[], date
     fns = {"listAgents": list_agents, "getAgent": get_agent, "listSessions": list_sessions, "getSession": get_session,
            "getTask": get_task, "listEvidence": list_evidence, "getEvidence": get_evidence, "verifyEvidence": verify,
            "listReceipts": receipts_or_verdicts(("repo.pr.open", "repo.pr.open_upper")),
-           "listProvenance": receipts_or_verdicts(("provenance.verify",)), "listHumanRequests": human}
+           "listProvenance": receipts_or_verdicts(("provenance.verify",)), "listHumanRequests": human,
+           "countEvidence": count_evidence, "getPolicy": get_policy, "explainPolicy": explain_policy}
     # /v1/evidence/verify must be matched before /v1/evidence/{seq}.
     order = sorted((r for r in ROUTES if r["operationId"] in fns), key=lambda r: "{" in r["path"])
     routes = [Route(r["path"], endpoint(r["operationId"], fns[r["operationId"]]), methods=["GET"]) for r in order]
