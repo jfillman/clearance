@@ -5,6 +5,7 @@ nav:
   - Home: index.md
   - The read API and the write path (clearance-api): clearance-api.md
   - The deployment gate (Clearances): gate.md
+  - The provenance App (design pass): provenance-app.md
 
 plugins:
   - techdocs-core

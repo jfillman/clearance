@@ -32,6 +32,12 @@ module table: [github.com/jfillman/clearance](https://github.com/jfillman/cleara
   same tables: agents, sessions, evidence, counts, PR receipts, the inbox feed, the policy as data, the event history
   ([clearance-api.md](clearance-api.md)).
 
+## On GitHub
+
+The verdicts on agent PRs reach GitHub through a CI check today (Hangar's `agent-gates-`). The
+[provenance App](provenance-app.md) is the proposed product surface: Clearance's own GitHub App posting its own check
+runs and gating GitHub Actions deployments (design pass, not built).
+
 ## Where it shows up
 
 In Hangar's portal: the **Clearance** pages (evidence, policy) and the **Autopilot** pages (runs, agents, new agent),
