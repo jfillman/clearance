@@ -169,6 +169,7 @@ class ReadStore(Protocol):
     def human_pending(self, now: datetime, since: datetime | None) -> list[dict[str, Any]]: ...
     def events(self, f: dict[str, Any], v: Viewer, limit: int, after: str | None) -> list[dict[str, Any]]: ...
     def holds(self, now: datetime) -> dict[str, dict[str, Any]]: ...
+    def definitions(self) -> list[dict[str, Any]]: ...
     def ping(self) -> None: ...
 
 
@@ -362,6 +363,11 @@ class PgReadStore:
         rows = self.pool.run("SELECT record FROM clearance_holds WHERE until > %s", [now])
         return {r[0]["agent"]: r[0] for r in rows}
 
+    def definitions(self):
+        """The cluster-pinned definitions the gateway loaded (pg.py PgDefinitions): rows for definitions.Definitions.apply_records."""
+        rows = self.pool.run("SELECT record FROM clearance_definitions ORDER BY state, name")
+        return [r[0] for r in rows]
+
     def ping(self):
         self.pool.run("SELECT 1")
 
@@ -380,7 +386,8 @@ def verify_chain(batches: Iterable[list[dict[str, Any]]]) -> dict[str, Any]:
 
 # -- the HTTP app -------------------------------------------------------------------------------------------------
 
-def _definition_view(d: Any, full: bool, hold: dict[str, Any] | None = None) -> dict[str, Any]:
+def _definition_view(d: Any, full: bool, hold: dict[str, Any] | None = None,
+                     source: Any = None) -> dict[str, Any]:
     lim = d.limits.as_dict()
     out = {"name": d.name, "kind": d.kind, "owner": getattr(d, "owner", None),
            "identity": {"type": d.identity_type, "serviceAccount": d.service_account},
@@ -390,7 +397,10 @@ def _definition_view(d: Any, full: bool, hold: dict[str, Any] | None = None) -> 
            "triggers": list(d.triggers), "runtime": {"framework": d.framework, "sandbox": d.sandbox, "image": d.image},
            "scopes": {k: v for k, v in (d.raw_profile or {}).items() if k in ("glidepath", "airframe")},
            # The active hold on its triggers (control.py), or None: by, via, reason, since, until.
-           "hold": hold}
+           "hold": hold,
+           # Where the definition came from (definitions.py): {kind: bundled} or {kind: cluster, repo, path, commit,
+           # namespace, xr, loaded_at, pin}. None when the deployment's definitions are a plain directory.
+           "source": source.view() if source is not None else None}
     if full:
         out["instructions"] = d.instructions
     return out
@@ -479,17 +489,25 @@ def create_api_app(store: ReadStore, access: Access, *, clock: Callable[[], date
         nxt = items[-1][cursor_key] if len(items) == limit and items else None
         return {"items": items, "next": nxt}
 
+    def source_of(name):
+        src = getattr(access.definitions, "source", None)
+        return src(name) if src else None
+
     def list_agents(req, v):
         full = v.all and req.query_params.get("full") == "1"
         holds = store.holds(clock())
-        return {"items": [_definition_view(d, full, holds.get(n)) for n, d in sorted(access.definitions.items())]}
+        # `rejected`: pins (Agent XRs) Clearance could not load, with the reason, for the teams that own them (and
+        # everyone: a rejected pin names no instructions, only where it points and why it failed).
+        rejected = [r.view() for r in getattr(access.definitions, "rejected", ())]
+        return {"items": [_definition_view(d, full, holds.get(n), source_of(n)) for n, d in sorted(access.definitions.items())],
+                "rejected": rejected}
 
     def get_agent(req, v):
         name = req.path_params["name"]
         d = access.definitions.get(name)
         if d is None:
             raise ApiError(404, "no such agent")
-        return _definition_view(d, v.all and req.query_params.get("full") == "1", store.holds(clock()).get(name))
+        return _definition_view(d, v.all and req.query_params.get("full") == "1", store.holds(clock()).get(name), source_of(name))
 
     def visible(s: dict[str, Any], v: Viewer) -> bool:
         return v.all or s.get("principal") == v.person or s.get("agent") in v.agents
