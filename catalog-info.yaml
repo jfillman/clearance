@@ -1,0 +1,16 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: clearance
+  description: >-
+    Policy, audit and session gateway for AI agent workloads: every tool call decided against the agent's
+    definition and its session's limits, recorded as hash-chained evidence, budgeted, then made. The runtime
+    boundary is built; the deployment gate is designed (docs/gate.md). Autopilot is its native consumer.
+  annotations:
+    github.com/project-slug: jfillman/clearance
+    backstage.io/techdocs-ref: dir:.
+spec:
+  type: service
+  owner: crossfader@gmail.com
+  lifecycle: experimental
+  system: hangar
