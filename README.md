@@ -76,4 +76,4 @@ mkdocs-techdocs-core && mkdocs serve`.
 
 ## Specs
 
-- [clearance-api](docs/clearance-api.md): the read API (sessions, evidence, agents, the inbox feed) as a separate read-only process. Phase 1 in v0.13.0; person controls (the write path) in v0.17.0; definitions pinned by `Agent` XRs in v0.18.0 (`definitions.py`); the deployment gate's core in v0.19.0 (`gate.py`, [docs/gate.md](docs/gate.md)).
+- [clearance-api](docs/clearance-api.md): the read API (sessions, evidence, agents, the inbox feed) as a separate read-only process. Phase 1 in v0.13.0; person controls (the write path) in v0.17.0; definitions pinned by `Agent` XRs in v0.18.0 (`definitions.py`); the deployment gate's core in v0.19.0 (`gate.py`, [docs/gate.md](docs/gate.md)); definition review and definition releases through the gate in v0.20.0 (`review.py`).

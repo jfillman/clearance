@@ -301,6 +301,18 @@
       "summary": "The deployment gate's baseline policy: the tier table, the people each tier needs, the outside groups, the TTL. A repo's clearance.yaml can only tighten it"
     },
     {
+      "operationId": "listRuntimes",
+      "method": "GET",
+      "path": "/v1/runtimes",
+      "roles": [
+        "person",
+        "delegate",
+        "auditor"
+      ],
+      "params": [],
+      "summary": "The deployment's runtime catalog (runtimes.py): the agent images a definition may run (kind runtime) or a code agent may build FROM (kind base), each pinned by digest, with its framework and status"
+    },
+    {
       "operationId": "getContract",
       "method": "GET",
       "path": "/v1/contract",

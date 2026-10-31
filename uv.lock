@@ -155,7 +155,7 @@ wheels = [
 
 [[package]]
 name = "clearance"
-version = "0.19.0"
+version = "0.20.0"0.19.0"
 source = { editable = "." }
 dependencies = [
     { name = "cel-python" },
