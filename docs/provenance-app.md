@@ -118,11 +118,19 @@ no bearer token). clearance-api gains the installation as a filter on the existi
 3. **Hosted.** Multi-tenant tenancy, KMS for the key, per-installation rate limits, the public App listing.
 4. **Hangar switches** from `agent-gates-` to the App.
 
+## Decided 2026-11-01
+
+| # | Question | Decision |
+|---|---|---|
+| 1 | Replace `agent-gates-` on Hangar | **Yes, after running both for a while.** The App's check runs report beside `agent-gates-` until their verdicts agree on real PRs, then `agent-gates-` retires (its onboarding template removed, the guardrail renamed to the App's check). |
+| 2 | Self-hosted or hosted first | **Self-hosted first, on Hangar**: a Hangar-registered App, Clearance's webhook endpoint on hangar-dev, one tenant. Hosted (tenancy, KMS, the public listing) is phase 3. |
+
+Questions 3 to 5 are still open.
+
 ## Open questions for the owner
 
-1. **Replace `agent-gates-` on Hangar** with the App (recommended, after a period of both), or keep both?
-2. **Hosted first or self-hosted first?** Recommended: self-hosted on Hangar first (no tenancy, no public endpoint),
-   hosted in phase 3.
+1. ~~Replace `agent-gates-` on Hangar~~ Decided: yes, after running both.
+2. ~~Hosted first or self-hosted first?~~ Decided: self-hosted on Hangar first.
 3. **Where a gated deployment's change comes from**: a `clearance register` CI step that renders what it deploys
    (recommended: the same strength as Hangar's), or the App classifying the PR's source diff (weaker, zero setup).
 4. **PR comments**: off by default, check runs only (recommended), or on for agent PRs like `agent-gates-`?
