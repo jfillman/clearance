@@ -37,7 +37,9 @@ problems. A pack holds policy only; what a tool does is a handler the deployment
 
 `clearance.packs.hangar` is the pack for Hangar: the `glidepath.*` and `airframe.*` tools, R021 (cicd.yaml field
 scope, from Glidepath's contract vendored byte for byte in `packs/hangar/vendor/`), R022 and R023 (per-agent app
-scope). Nothing in the core imports it; `tests/test_boundary.py` fails if anything does.
+scope). `glidepath.cicd.propose` is a PR tool like `repo.pr.open` (budgeted, receipted for the agent gates); the
+handler asks glidepath-api for the verdict on the change first. Nothing in the core imports the pack; `tests/test_boundary.py`
+fails if anything does.
 
 ```python
 from clearance.dispatch import Gateway

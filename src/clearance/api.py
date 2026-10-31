@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from fnmatch import fnmatchcase
 from typing import Any, Callable, Iterable, Mapping, Protocol, Sequence
 
+from . import provenance
 from .audit import GENESIS, canonical, sha256_hex
 from .dispatch import AuthError, Authenticator
 from .policy import RULES
@@ -644,7 +645,7 @@ def create_api_app(store: ReadStore, access: Access, *, clock: Callable[[], date
 
     fns = {"listAgents": list_agents, "getAgent": get_agent, "listSessions": list_sessions, "getSession": get_session,
            "getTask": get_task, "listEvidence": list_evidence, "getEvidence": get_evidence, "verifyEvidence": verify,
-           "listReceipts": receipts_or_verdicts(("repo.pr.open", "repo.pr.open_upper")),
+           "listReceipts": receipts_or_verdicts(provenance.PR_TOOLS),
            "listProvenance": receipts_or_verdicts(("provenance.verify",)), "listHumanRequests": human,
            "countEvidence": count_evidence, "getPolicy": get_policy, "explainPolicy": explain_policy,
            "listEvents": list_events}
