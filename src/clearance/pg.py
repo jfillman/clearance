@@ -85,6 +85,13 @@ CREATE TABLE IF NOT EXISTS clearance_holds (
   record     jsonb       NOT NULL,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS clearance_definitions (
+  name       text        NOT NULL,
+  state      text        NOT NULL,
+  record     jsonb       NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (name, state)
+);
 """
 
 
@@ -351,6 +358,26 @@ class PgHolds:
         with self.state.conn.cursor() as cur:
             cur.execute("SELECT record FROM clearance_holds ORDER BY agent")
             return [Hold.from_record(r[0]) for r in cur.fetchall()]
+
+
+class PgDefinitions:
+    """DefinitionsStore on clearance_definitions (definitions.py): the cluster-pinned set, replaced whole in the
+    loader's transaction (a few rows). The read API reads it (api.PgReadStore.definitions) instead of fetching."""
+
+    def __init__(self, state: PgState):
+        self.state = state
+
+    def replace(self, records: list) -> None:
+        with self.state.conn.cursor() as cur:
+            cur.execute("DELETE FROM clearance_definitions")
+            for r in records:
+                cur.execute("INSERT INTO clearance_definitions (name, state, record) VALUES (%s, %s, %s)",
+                            (r["name"], r["state"], Jsonb(r)))
+
+    def all(self) -> list:
+        with self.state.conn.cursor() as cur:
+            cur.execute("SELECT record FROM clearance_definitions ORDER BY state, name")
+            return [row[0] for row in cur.fetchall()]
 
 
 def open_durable(dsn: str, id_gen=None):
