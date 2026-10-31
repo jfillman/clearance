@@ -1357,7 +1357,7 @@
   ],
   "api": {
     "spec": "api/openapi.yaml",
-    "version": "0.7.0",
+    "version": "0.8.0",
     "actions": [
       {
         "operationId": "whoami",
@@ -1409,6 +1409,13 @@
         "summary": "Every PipelineRun and TaskRun in the app's namespace right now, from the cluster"
       },
       {
+        "operationId": "streamLiveRuns",
+        "method": "GET",
+        "path": "/v1/apps/{app}/live/stream",
+        "tier": "T0",
+        "summary": "The app's live runs as server-sent events, instead of polling GET /v1/apps/{app}/live"
+      },
+      {
         "operationId": "getLiveLog",
         "method": "GET",
         "path": "/v1/apps/{app}/live/taskruns/{taskRun}/logs/{container}",
@@ -1456,6 +1463,13 @@
         "path": "/v1/apps/{app}/releases",
         "tier": "T0",
         "summary": "Every release record of an app, all environments"
+      },
+      {
+        "operationId": "getReleaseRun",
+        "method": "GET",
+        "path": "/v1/apps/{app}/releases/runs/{name}",
+        "tier": "T0",
+        "summary": "One release run, followed from the moment promote or rollback answers with its name"
       },
       {
         "operationId": "getRelease",
