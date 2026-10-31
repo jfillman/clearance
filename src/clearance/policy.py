@@ -22,6 +22,7 @@ import yaml
 
 from .scope import diff_pointers, field_outside_allow, field_violations, path_violations, repo_allowed
 from .session import Session
+from .provenance import PR_TOOLS
 from .tiers import CORE_TOOLS, TRIPWIRES, Tier, ToolSpec, registry
 
 LOWER_ENVS = frozenset({"dev", "development", "sandbox", "scratch"})
@@ -244,7 +245,7 @@ class Policy:
                         "github_left": session.remaining("github_calls"),
                         "prs_left": session.remaining("open_prs")},
             "cost": {"github": spec.github_cost if spec else 0,
-                     "prs": 1 if tool in ("repo.pr.open", "repo.pr.open_upper") else 0},
+                     "prs": 1 if tool in PR_TOOLS else 0},
             "ctx": ctx,
         }
 

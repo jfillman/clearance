@@ -52,6 +52,21 @@ TOOLS: tuple[ToolSpec, ...] = (
              "targets: starts the rollback release run whose PR a human merges (dryRun starts nothing); retrying the "
              "same call starts no second run", ("app", "env", "cluster", "targetReleaseId", "reason"),
              target="upper", propose_only=True),
+    # cicd.yaml changes (spec phase 3; glidepath-api 0.7.0). validate is a read: the verdict the cicd-validate
+    # pull-request check will give a change, before any PR exists. propose is the PR: glidepath-api validates the
+    # change as an agent's (schema, conventions, GP-SCOPE) and the handler refuses with that rule when it fails; a
+    # clean one becomes one commit of cicd.yaml on the app repo, as the agents' App, which a human merges. It is a PR
+    # tool (provenance.PR_TOOLS): its receipt carries repo, pr, commit and the path it wrote, so the agent gates
+    # vouch for the PR exactly as for repo.pr.open. `repo` is the app's own (owner/<app>, or owner/gitops-infra-<app>
+    # for an InfraService), named so the definition's repos.allow applies as it does to every repo tool.
+    ToolSpec("glidepath.cicd.validate", Tier.T0, "What a cicd.yaml change (a JSON merge patch) would mean for an app: "
+             "valid or not, each finding with its rule and fix, every field it touches with its scope, the resulting "
+             "file (baseRef optional)", ("app", "patch")),
+    ToolSpec("glidepath.cicd.propose", Tier.T1, "Propose a cicd.yaml change: validated by glidepath-api as an agent's "
+             "change and refused with the GP rule when invalid, else opened as a pull request on the app's repo "
+             "(repo: owner/<app>) that a human merges; title required, body and branch optional",
+             ("app", "repo", "patch", "title"), github_cost=4, target="lower", reads_repo=True,
+             receipt=("pr", "commit", "branch")),
     # Airframe (autopilot.airframe_tools). Reads only: the contract bundle, the validator, the planner, and XRs, Argo CD
     # Applications and Rollouts through an allowlisted GET-only adapter (autopilot.airframe_api); scoped by profile.airframe.apps.
     ToolSpec("airframe.capabilities", Tier.T0, "What Airframe offers: chart fields, XR kinds, components and their outputs, "
