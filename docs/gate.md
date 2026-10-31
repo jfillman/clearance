@@ -160,13 +160,43 @@ covers from reaching a protected cluster. What each option actually protects aga
 | A push to the gitops repo after clearing (the tree changed) | Refused at admission: the object's spec is not the granted one | Prevented until someone syncs by hand; a manual sync in the Argo UI applies it | Prevented: the branch Argo watches moves only to granted commits |
 | A `kubectl apply` into prod | Refused (Argo's service account is matched; anyone else is refused by the same policy on protected namespaces) | Invisible | Invisible |
 | Argo auto-sync of an ungranted commit | Refused per object | Off by design (manual sync policy) | Not possible: the branch is the grant |
-| What Clearance must hold | A write of one CRD kind (`Clearance` grants) per protected cluster, through the same provider-kubernetes/Argo path as everything else, or a direct write like AgentRun (D3's departure, already accepted once) | An Argo CD API credential able to sync protected Applications | A git credential able to push to every gitops repo's protected branch |
+| What Clearance must hold | **Nothing on the protected cluster.** The grant is *pulled*: a small grant sync on the upper cluster reads clearance-api (as Tower on hangar-prod already does) and writes the `Clearance` objects itself; Clearance keeps no credential for any other cluster (see "A without a remote write" below) | An Argo CD API credential on the protected cluster: a remote write, which breaks the rule, unless a prod-side syncer pulls the granted revision and triggers the sync | A git credential able to push to every gitops repo's protected branch; no cluster write at all |
 | How an exception is caught | By construction: the admission refusal is the record (`deploy.exception` from the policy report, with the requester) | Not caught: nothing watches what was applied by hand | Not caught for `kubectl apply`; a push to the watched branch is impossible, so there is nothing to catch |
 | Blast radius of a mistake in the mechanism | A Kyverno `ValidatingPolicy` with `failurePolicy: Fail` on protected namespaces: a CEL error refuses every matching admission cluster-wide (the lesson of the fail-closed webhooks: `has()`-guard every `matchConditions` expression, match only Argo's service account and the protected namespaces, keep Kyverno itself out of scope). A broken grant publish blocks syncs, not running workloads | A stuck controller means no syncs; a bad one syncs the wrong revision | A bad fast-forward moves prod; recovery is a revert commit |
 | Spec equality | Needs care: compare the server-side-dry-run-normalised rendered object (defaults, mutating webhooks, Argo's tracking labels), not the raw manifest | Not needed | Not needed |
 | Effort | The CRD, the publisher in the gateway, the policy, the normaliser, the report-to-exception bridge; the most new code | A controller calling Argo's sync API; the least new code | The fast-forward step in the check; small, but a second branch per gitops repo and Argo repointed |
 
-Why A is still the recommendation: it is the only option whose promise matches the board's ("a push after clearing
+#### A without a remote write: the grant is pulled
+
+Hangar's rule is that nothing on the control plane writes to a protected cluster: durable changes reach it as commits
+that its own Argo CD pulls, and Clearance's one Kubernetes write (AgentRun) is on the control-plane cluster only. The
+first draft of A said "Clearance publishes each grant to the target cluster", which would break that rule. It does
+not have to. Grants travel the way everything else reaches an upper cluster: the cluster **pulls** them.
+
+- **The grant lives in Clearance** (Postgres, `deploy.clear` evidence, in phase 2 a signed attestation), and
+  clearance-api serves it: `GET /v1/clearances?cluster=<name>&state=cleared`.
+- **A grant sync runs on the protected cluster** (`clearance-grant-sync`, part of the cluster repo's Autopilot layer
+  for upper clusters). Every 30 s it reads clearance-api as its own identity, the same foreign-workload path Tower's
+  backend on hangar-prod uses today (verified against the cluster's public issuer, read-only), verifies each grant's
+  attestation against Clearance's public key, and creates, updates or removes the local `Clearance` objects. It is the
+  only identity that may write that kind: a second admission rule refuses everyone else.
+- **The admission policy reads only local objects.** Kyverno's ValidatingPolicy on protected namespaces matches Argo's
+  service account and admits an object when its normalised spec is in the local grant. No network call at admission
+  time, nothing to time out.
+- **Exceptions flow outward, not inward.** The sync reads the policy reports and posts them to the gateway as
+  `deploy.exception` (an API call with its own identity, like `/v1/provenance` from the agent gates), so the record
+  is complete without Clearance ever reaching into the cluster.
+- **Failure mode.** clearance-api unreachable: grants stop updating, so *new* changes cannot land until it is back
+  (fail closed at the gate, nothing running is touched); existing grants stay. A broken sync is the same. This is the
+  cost of a hard gate and the behaviour the design wants.
+
+Where the credentials sit, then: the upper cluster holds a read token for clearance-api (it already does), Clearance
+holds nothing for the upper cluster, and the only writer on the upper cluster is still Argo CD plus one in-cluster
+sync writing one kind. Option B, read the same way, would need a prod-side syncer to trigger the Argo sync for the
+granted revision; a control-plane call to prod's Argo API would be the remote write the rule forbids. Option C never
+touches the cluster.
+
+Why A is still the recommendation: pulled, it writes nothing to the cluster from outside; it is the only option whose promise matches the board's ("a push after clearing
 produces a new tree that no grant covers, so the sync is refused at admission"), the only one that sees
 `kubectl apply`, and the one whose record is produced by the thing that enforces. Its two costs are real: Clearance
 writes to the cluster (as it already does for AgentRun, narrowly), and spec equality is engineering, not a lookup.
