@@ -141,10 +141,11 @@ and the policy in force per environment `GET /v1/clearance-policy?app&env` (the 
 
 ## Decided 2026-10-31
 
-The owner answered four of the five questions below; the first stays open and is expanded here.
+The owner answered all five questions below (the first on 2026-10-31 after the expansion that follows the table).
 
 | # | Question | Decision |
 |---|---|---|
+| 1 | Phase 2 enforcement | **A, grant-match admission, with the grant pulled** by a sync on the protected cluster ("A without a remote write" below). Clearance keeps no credential for any other cluster; the upper cluster reads clearance-api as Tower already does. B and C are not pursued. |
 | 2 | Hand-flown sign-off | **The gate replaces it.** Tier 2's rule ("one owner, not the proposer") is Hand-flown's rule, so the `clearance-gate-` check becomes the thing Tower shows and the release guardrail waits on; the `hangar/release-signoff` status retires when the check ships (phase 1). One rule, one record. |
 | 3 | Where `clearance.yaml` lives | **In each gitops repo**, beside the environments it governs, tighten-only; the platform baseline (the tier table above) lives in the catalog like `releaseSigning`, never in `cicd.yaml`. |
 | 4 | The outside group for tier 3 | **`group:default/admins`** for now, because it exists; a `security` group when there are people to put in it. The requirement reads "one from the owner group, one from the outside group, neither the proposer"; a person in both counts once. |
@@ -208,9 +209,9 @@ A middle path worth considering: ship **B first as phase 2a** (weeks, not months
 environments go manual, the gateway syncs on `deploy.clear`), and **A as phase 2b** once the normaliser exists,
 keeping B's manual sync policy as defence in depth. The record is the same either way.
 
-## Open questions for the owner
+## Open questions for the owner (all decided 2026-10-31; kept for the record)
 
-1. Phase 2 enforcement: A (grant-match admission, recommended), B or C, or B then A. **Open** (see "Question 1, expanded").
+1. ~~Phase 2 enforcement: A (grant-match admission, recommended), B or C, or B then A.~~ Decided: A, pulled (see "Question 1, expanded").
 2. ~~Does the gate **replace** Tower's Hand-flown sign-off (one rule, one record), or run beside it for a release?~~ Decided: replace.
 3. ~~Where `clearance.yaml` lives~~ Decided: each gitops repo. Was: in each gitops repo beside the environments it governs (recommended: it changes with
    the environment, it is tier 3 itself, and the platform baseline lives in the catalog like `releaseSigning`), or
