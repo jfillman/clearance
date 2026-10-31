@@ -6,6 +6,7 @@ Kubernetes path; the backends' own checks are the second wall.
 from __future__ import annotations
 
 import fnmatch
+import json
 import posixpath
 import re
 from typing import Any
@@ -30,6 +31,9 @@ _GP_ARGS = {
     # Goes in the body, not a path; glidepath-api caps it at 256 and checks it against the rollback plan.
     "targetReleaseId": re.compile(r"^[\x21-\x7e]{1,256}$"),
 }
+# glidepath.cicd.*: a branch, tag or commit (glidepath-api's baseRef pattern, GitHub's branch names); a patch's size.
+_GP_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$")
+_GP_PATCH_BYTES = 256 << 10
 
 
 def glidepath_bad_args(args: dict[str, Any]) -> int:
@@ -44,6 +48,17 @@ def glidepath_bad_args(args: dict[str, Any]) -> int:
         bad += 1
     if "reason" in args and not (isinstance(args["reason"], str) and 1 <= len(args["reason"].strip()) <= 1024):
         bad += 1
+    # glidepath.cicd.validate / propose: the patch is an object (RFC 7386; {} is a legal no-op the handler refuses),
+    # bounded like a file; title and body are the PR's; baseRef and branch are git names glidepath-api and GitHub accept.
+    if "patch" in args and not (isinstance(args["patch"], dict) and len(json.dumps(args["patch"])) <= _GP_PATCH_BYTES):
+        bad += 1
+    if "title" in args and not (isinstance(args["title"], str) and 1 <= len(args["title"].strip()) <= 200):
+        bad += 1
+    if "body" in args and not (isinstance(args["body"], str) and len(args["body"]) <= 4000):
+        bad += 1
+    for k in ("baseRef", "branch"):
+        if k in args and not (isinstance(args[k], str) and _GP_REF.fullmatch(args[k]) and ".." not in args[k]):
+            bad += 1
     return bad
 
 

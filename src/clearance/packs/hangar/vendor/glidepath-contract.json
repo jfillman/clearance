@@ -1347,7 +1347,7 @@
   ],
   "api": {
     "spec": "api/openapi.yaml",
-    "version": "0.6.0",
+    "version": "0.7.0",
     "actions": [
       {
         "operationId": "whoami",
@@ -1516,6 +1516,13 @@
         "path": "/v1/apps/{app}/environments/{env}/rollback",
         "tier": "T2",
         "summary": "Propose a rollback of a Flight environment to an earlier release (the release Pipeline; a human merges)"
+      },
+      {
+        "operationId": "validateCicd",
+        "method": "POST",
+        "path": "/v1/apps/{app}/cicd/validations",
+        "tier": "T0",
+        "summary": "What a change to the app's cicd.yaml would mean (writes nothing)"
       },
       {
         "operationId": "streamEvents",
