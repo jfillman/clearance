@@ -83,7 +83,7 @@ definition PR. `GET /v1/agents` and `/v1/agents/{name}` carry the active hold as
 
 Not yet: replay a past event, launch a run by hand, open the definition PRs (A3).
 
-## Definitions from the cluster (v0.17.0)
+## Definitions from the cluster (v0.18.0)
 
 Autopilot M4: an agent definition no longer has to ship in the gateway's image. An **`Agent` XR** (airframe
 `xrds/agent.yaml`, in the app's `tenants/<app>/xr-requests/`) pins one commit of a definition file in the app's own

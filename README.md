@@ -69,4 +69,4 @@ D16); its history came with it. Design: Hangar's `docs/autopilot/design.md`, sec
 
 ## Specs
 
-- [clearance-api](docs/clearance-api.md): the read API (sessions, evidence, agents, the inbox feed) as a separate read-only process. Phase 1 in v0.13.0; person controls (the write path) in v0.16.0; definitions pinned by `Agent` XRs in v0.17.0 (`definitions.py`).
+- [clearance-api](docs/clearance-api.md): the read API (sessions, evidence, agents, the inbox feed) as a separate read-only process. Phase 1 in v0.13.0; person controls (the write path) in v0.17.0; definitions pinned by `Agent` XRs in v0.18.0 (`definitions.py`).
