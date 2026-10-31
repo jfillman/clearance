@@ -215,6 +215,28 @@
       "summary": "Pending human requests: a person's, those they may answer; a notifier's, every pending one (with owner and group), created since `since`"
     },
     {
+      "operationId": "listEvents",
+      "method": "GET",
+      "path": "/v1/events",
+      "roles": [
+        "person",
+        "delegate",
+        "auditor"
+      ],
+      "params": [
+        "app",
+        "agent",
+        "source",
+        "key",
+        "subject",
+        "since",
+        "until",
+        "limit",
+        "after"
+      ],
+      "summary": "The events the trigger bridge received, newest first, each with what it did per agent (launched, deduped, braked, refused): the history a trigger dry run, an agent's trigger statistics and an app's run marks read. Kept 30 days; the cursor is received_at"
+    },
+    {
       "operationId": "getContract",
       "method": "GET",
       "path": "/v1/contract",
