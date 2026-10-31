@@ -31,7 +31,9 @@ from typing import Any, Iterable, Mapping
 from .profile import AgentDefinition
 from .scope import BadPath, normalize, path_violations, repo_allowed
 
-PR_TOOLS = ("repo.pr.open", "repo.pr.open_upper")
+# Every tool whose receipt is a pull request: the core PR tools, and the Hangar pack's glidepath.cicd.propose (one
+# commit of cicd.yaml, validated by glidepath-api first). policy.py's PR budget and api.py's listReceipts use it too.
+PR_TOOLS = ("repo.pr.open", "repo.pr.open_upper", "glidepath.cicd.propose")
 TRAILER_KEYS = ("task", "session", "run", "agent")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
