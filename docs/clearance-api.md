@@ -60,6 +60,29 @@ glidepath-api's `/v1/events`), so Tower stops polling. (`/v1/events` is the trig
 
 Never returned: tool arguments (only their digest is stored), artifact contents, tokens, model prompts.
 
+## Person controls: the write path (v0.16.0)
+
+Decided 2026-10-31: people write through the **delegate model**, the same one the human inbox uses. A person
+calls the gateway with their own sign-in, or Tower's backend calls as itself and names them in
+`X-Hangar-On-Behalf-Of`. Clearance decides who may act: the agent's owner group (the definition's `owner`, resolved
+by the catalog directory), a platform admin (`CLEARANCE_ADMINS`, principal globs), and for a session, the person whose
+session it is. Every control is an evidence record naming the person and the delegate. These are gateway routes
+(`clearance.hangar-dev.local`), not clearance-api's: the read API never writes.
+
+| Route | Does | Record |
+|---|---|---|
+| `POST /v1/sessions/{id}/freeze` `{reason}` | trips the session's breaker (and its children's): every further call is refused, the run stays for a person to read | `session.freeze` |
+| `POST /v1/sessions/{id}/end` `{reason}` | closes the session and its children; the budget is settled; the run's pod ends with its AgentRun's TTL | `session.end` |
+| `POST /v1/agents/{name}/hold` `{reason, hours}` | holds the agent's triggers: `open_triggered` refuses with **R024** until `until` (24 h by default, 336 at most; renewing replaces the hold) | `trigger.hold` |
+| `DELETE /v1/agents/{name}/hold` | lifts a hold early | `trigger.release` |
+
+A hold is an emergency brake, not a policy: anything meant to last ("turn this agent off", "weekdays only") is a
+definition PR. `GET /v1/agents` and `/v1/agents/{name}` carry the active hold as `hold` (`by`, `via`, `reason`,
+`since`, `until`), or `null`. Refusals carry a `rule` (`CT-FORBIDDEN` 403, `CT-UNKNOWN` 404, `CT-CLOSED` /
+`CT-TRIPPED` 409, `CT-REASON` / `CT-HOURS` 400, `CT-NOHOLD` 404, `CT-OFF` 404 when the deployment keeps no holds).
+
+Not yet: replay a past event, launch a run by hand, open the definition PRs (A3).
+
 ## Who sees what
 
 Callers authenticate exactly as at the gateway: service-account tokens (TokenReview), people's OIDC ID tokens, and
