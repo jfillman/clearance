@@ -169,6 +169,7 @@ class ReadStore(Protocol):
     def chain(self, batch: int) -> Iterable[list[dict[str, Any]]]: ...
     def human_pending(self, now: datetime, since: datetime | None) -> list[dict[str, Any]]: ...
     def events(self, f: dict[str, Any], v: Viewer, limit: int, after: str | None) -> list[dict[str, Any]]: ...
+    def holds(self, now: datetime) -> dict[str, dict[str, Any]]: ...
     def ping(self) -> None: ...
 
 
@@ -357,6 +358,11 @@ class PgReadStore:
         rows = self.pool.run(sql + " ORDER BY e.received_at DESC LIMIT %s", params + [limit])
         return [r[0] for r in rows]
 
+    def holds(self, now):
+        """The active holds on agents' triggers (pg.py PgHolds), by agent."""
+        rows = self.pool.run("SELECT record FROM clearance_holds WHERE until > %s", [now])
+        return {r[0]["agent"]: r[0] for r in rows}
+
     def ping(self):
         self.pool.run("SELECT 1")
 
@@ -375,7 +381,7 @@ def verify_chain(batches: Iterable[list[dict[str, Any]]]) -> dict[str, Any]:
 
 # -- the HTTP app -------------------------------------------------------------------------------------------------
 
-def _definition_view(d: Any, full: bool) -> dict[str, Any]:
+def _definition_view(d: Any, full: bool, hold: dict[str, Any] | None = None) -> dict[str, Any]:
     lim = d.limits.as_dict()
     out = {"name": d.name, "kind": d.kind, "owner": getattr(d, "owner", None),
            "identity": {"type": d.identity_type, "serviceAccount": d.service_account},
@@ -383,7 +389,9 @@ def _definition_view(d: Any, full: bool) -> dict[str, Any]:
            "limits": {k: lim[k] for k in ("ttl_minutes", "tool_calls", "github_calls", "open_prs", "model_tokens", "children")},
            "network": lim["network"], "compute": lim["compute"], "repos": {"allow": list(d.repos_allow)},
            "triggers": list(d.triggers), "runtime": {"framework": d.framework, "sandbox": d.sandbox, "image": d.image},
-           "scopes": {k: v for k, v in (d.raw_profile or {}).items() if k in ("glidepath", "airframe")}}
+           "scopes": {k: v for k, v in (d.raw_profile or {}).items() if k in ("glidepath", "airframe")},
+           # The active hold on its triggers (control.py), or None: by, via, reason, since, until.
+           "hold": hold}
     if full:
         out["instructions"] = d.instructions
     return out
@@ -474,13 +482,15 @@ def create_api_app(store: ReadStore, access: Access, *, clock: Callable[[], date
 
     def list_agents(req, v):
         full = v.all and req.query_params.get("full") == "1"
-        return {"items": [_definition_view(d, full) for _, d in sorted(access.definitions.items())]}
+        holds = store.holds(clock())
+        return {"items": [_definition_view(d, full, holds.get(n)) for n, d in sorted(access.definitions.items())]}
 
     def get_agent(req, v):
-        d = access.definitions.get(req.path_params["name"])
+        name = req.path_params["name"]
+        d = access.definitions.get(name)
         if d is None:
             raise ApiError(404, "no such agent")
-        return _definition_view(d, v.all and req.query_params.get("full") == "1")
+        return _definition_view(d, v.all and req.query_params.get("full") == "1", store.holds(clock()).get(name))
 
     def visible(s: dict[str, Any], v: Viewer) -> bool:
         return v.all or s.get("principal") == v.person or s.get("agent") in v.agents

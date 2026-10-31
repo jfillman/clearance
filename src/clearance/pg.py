@@ -79,6 +79,12 @@ CREATE TABLE IF NOT EXISTS clearance_events (
 );
 CREATE INDEX IF NOT EXISTS clearance_events_received ON clearance_events (received_at DESC);
 CREATE INDEX IF NOT EXISTS clearance_events_app ON clearance_events (app, received_at DESC);
+CREATE TABLE IF NOT EXISTS clearance_holds (
+  agent      text        PRIMARY KEY,
+  until      timestamptz NOT NULL,
+  record     jsonb       NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
 """
 
 
@@ -315,6 +321,36 @@ class PgEvents:
             if self._writes % self.PRUNE_EVERY == 0:
                 cur.execute("DELETE FROM clearance_events WHERE received_at < %s",
                             (datetime.now(timezone.utc) - RETENTION,))
+
+
+class PgHolds:
+    """HoldStore on clearance_holds (control.py): one row per held agent, written in the control's transaction."""
+
+    def __init__(self, state: PgState):
+        self.state = state
+
+    def get(self, agent: str):
+        from .control import Hold
+        with self.state.conn.cursor() as cur:
+            cur.execute("SELECT record FROM clearance_holds WHERE agent = %s", (agent,))
+            row = cur.fetchone()
+        return Hold.from_record(row[0]) if row else None
+
+    def put(self, hold) -> None:
+        with self.state.conn.cursor() as cur:
+            cur.execute("INSERT INTO clearance_holds (agent, until, record) VALUES (%s, %s, %s) "
+                        "ON CONFLICT (agent) DO UPDATE SET until = EXCLUDED.until, record = EXCLUDED.record, "
+                        "updated_at = now()", (hold.agent, hold.until, Jsonb(hold.view())))
+
+    def delete(self, agent: str) -> None:
+        with self.state.conn.cursor() as cur:
+            cur.execute("DELETE FROM clearance_holds WHERE agent = %s", (agent,))
+
+    def all(self) -> list:
+        from .control import Hold
+        with self.state.conn.cursor() as cur:
+            cur.execute("SELECT record FROM clearance_holds ORDER BY agent")
+            return [Hold.from_record(r[0]) for r in cur.fetchall()]
 
 
 def open_durable(dsn: str, id_gen=None):
