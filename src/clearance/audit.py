@@ -31,7 +31,7 @@ EVIDENCE_SCHEMA = "clearance.evidence/v0-draft"
 # it issued, the decision it made, the hash of the arguments it saw, and the effect of a write it made itself (the
 # receipt of a PR its own call opened: provenance.py).
 VERIFIED = frozenset({"ts", "task_id", "session", "parent", "principal", "agent", "tool", "tier", "decision",
-                      "rule", "target", "args_sha256", "result", "effect"})
+                      "rule", "target", "args_sha256", "result", "effect", "app"})
 ENVELOPE = frozenset({"seq", "schema", "boundary", "coverage", "verified", "claimed", "prev_hash", "hash"})
 
 
