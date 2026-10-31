@@ -139,14 +139,53 @@ and the policy in force per environment `GET /v1/clearance-policy?app&env` (the 
 3. **Later**: AgentRun claims gated at admission (roadmap phase 5, the native entry point); the gate as an AuthZEN PDP
    behind a proxy (D17) if Hangar ever runs one.
 
+## Decided 2026-10-31
+
+The owner answered four of the five questions below; the first stays open and is expanded here.
+
+| # | Question | Decision |
+|---|---|---|
+| 2 | Hand-flown sign-off | **The gate replaces it.** Tier 2's rule ("one owner, not the proposer") is Hand-flown's rule, so the `clearance-gate-` check becomes the thing Tower shows and the release guardrail waits on; the `hangar/release-signoff` status retires when the check ships (phase 1). One rule, one record. |
+| 3 | Where `clearance.yaml` lives | **In each gitops repo**, beside the environments it governs, tighten-only; the platform baseline (the tier table above) lives in the catalog like `releaseSigning`, never in `cicd.yaml`. |
+| 4 | The outside group for tier 3 | **`group:default/admins`** for now, because it exists; a `security` group when there are people to put in it. The requirement reads "one from the owner group, one from the outside group, neither the proposer"; a person in both counts once. |
+| 5 | Holding TTL | **7 days, with the PR.** A new push is a new change: the check re-registers it (new tree digest), the old grant request expires as `deploy.expire`, and the people are asked again. |
+
+### Question 1, expanded: how the hard gate enforces (phase 2)
+
+The soft gate (phase 1) is the same whichever option is chosen; the question is what stops a change that no grant
+covers from reaching a protected cluster. What each option actually protects against, on Hangar as it is:
+
+| | A. Grant-match admission | B. Sync by grant (Argo) | C. Protected branch |
+|---|---|---|---|
+| A push to the gitops repo after clearing (the tree changed) | Refused at admission: the object's spec is not the granted one | Prevented until someone syncs by hand; a manual sync in the Argo UI applies it | Prevented: the branch Argo watches moves only to granted commits |
+| A `kubectl apply` into prod | Refused (Argo's service account is matched; anyone else is refused by the same policy on protected namespaces) | Invisible | Invisible |
+| Argo auto-sync of an ungranted commit | Refused per object | Off by design (manual sync policy) | Not possible: the branch is the grant |
+| What Clearance must hold | A write of one CRD kind (`Clearance` grants) per protected cluster, through the same provider-kubernetes/Argo path as everything else, or a direct write like AgentRun (D3's departure, already accepted once) | An Argo CD API credential able to sync protected Applications | A git credential able to push to every gitops repo's protected branch |
+| How an exception is caught | By construction: the admission refusal is the record (`deploy.exception` from the policy report, with the requester) | Not caught: nothing watches what was applied by hand | Not caught for `kubectl apply`; a push to the watched branch is impossible, so there is nothing to catch |
+| Blast radius of a mistake in the mechanism | A Kyverno `ValidatingPolicy` with `failurePolicy: Fail` on protected namespaces: a CEL error refuses every matching admission cluster-wide (the lesson of the fail-closed webhooks: `has()`-guard every `matchConditions` expression, match only Argo's service account and the protected namespaces, keep Kyverno itself out of scope). A broken grant publish blocks syncs, not running workloads | A stuck controller means no syncs; a bad one syncs the wrong revision | A bad fast-forward moves prod; recovery is a revert commit |
+| Spec equality | Needs care: compare the server-side-dry-run-normalised rendered object (defaults, mutating webhooks, Argo's tracking labels), not the raw manifest | Not needed | Not needed |
+| Effort | The CRD, the publisher in the gateway, the policy, the normaliser, the report-to-exception bridge; the most new code | A controller calling Argo's sync API; the least new code | The fast-forward step in the check; small, but a second branch per gitops repo and Argo repointed |
+
+Why A is still the recommendation: it is the only option whose promise matches the board's ("a push after clearing
+produces a new tree that no grant covers, so the sync is refused at admission"), the only one that sees
+`kubectl apply`, and the one whose record is produced by the thing that enforces. Its two costs are real: Clearance
+writes to the cluster (as it already does for AgentRun, narrowly), and spec equality is engineering, not a lookup.
+B is a good interim if phase 2 must land quickly: it needs no admission policy and Argo shows what waits, but it
+protects only against auto-sync, and it hands Clearance an Argo credential. C is the cheapest to reason about and the
+weakest: it moves the trust to whoever can push the protected branch, and Clearance becomes that someone.
+
+A middle path worth considering: ship **B first as phase 2a** (weeks, not months: Applications of protected
+environments go manual, the gateway syncs on `deploy.clear`), and **A as phase 2b** once the normaliser exists,
+keeping B's manual sync policy as defence in depth. The record is the same either way.
+
 ## Open questions for the owner
 
-1. Phase 2 enforcement: A (grant-match admission, recommended), B or C.
-2. Does the gate **replace** Tower's Hand-flown sign-off (one rule, one record), or run beside it for a release?
-3. Where `clearance.yaml` lives: in each gitops repo beside the environments it governs (recommended: it changes with
+1. Phase 2 enforcement: A (grant-match admission, recommended), B or C, or B then A. **Open** (see "Question 1, expanded").
+2. ~~Does the gate **replace** Tower's Hand-flown sign-off (one rule, one record), or run beside it for a release?~~ Decided: replace.
+3. ~~Where `clearance.yaml` lives~~ Decided: each gitops repo. Was: in each gitops repo beside the environments it governs (recommended: it changes with
    the environment, it is tier 3 itself, and the platform baseline lives in the catalog like `releaseSigning`), or
    centrally in the platform's catalog only.
-4. The outside group for tier 3: `group:default/admins` today (it exists), or new `platform-leads` / `security`
+4. ~~The outside group for tier 3~~ Decided: `group:default/admins`. Was: `group:default/admins` today (it exists), or new `platform-leads` / `security`
    groups.
-5. Holding TTL: with the PR (7 days) or shorter (the board shows an hour); and whether a new push re-asks (recommended:
+5. ~~Holding TTL~~ Decided: 7 days with the PR, a new push re-asks. Was: with the PR (7 days) or shorter (the board shows an hour); and whether a new push re-asks (recommended:
    yes, a new head is a new change).
