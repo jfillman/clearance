@@ -60,7 +60,7 @@ glidepath-api's `/v1/events`), so Tower stops polling. (`/v1/events` is the trig
 
 Never returned: tool arguments (only their digest is stored), artifact contents, tokens, model prompts.
 
-## Person controls: the write path (v0.16.0)
+## Person controls: the write path (v0.17.0)
 
 Decided 2026-10-31: people write through the **delegate model**, the same one the human inbox uses. A person
 calls the gateway with their own sign-in, or Tower's backend calls as itself and names them in
