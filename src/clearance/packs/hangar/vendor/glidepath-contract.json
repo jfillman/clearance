@@ -1208,6 +1208,16 @@
       "status": "real",
       "class": "integrity",
       "required": true
+    },
+    {
+      "name": "clearance-gate",
+      "description": "Clearance's deployment gate - the release classified by what its rendered manifests change (tier 0-3) and cleared by policy or by the app's owners (and an outside group for tier 3), never the proposer",
+      "status": "real",
+      "class": "process",
+      "required": false,
+      "targets": [
+        "k8s-rollout"
+      ]
     }
   ],
   "states": {

@@ -110,6 +110,22 @@ loaded_at, pin}`; and a top-level `rejected`: the pins Clearance could not load,
 `reason`, so the team sees why. `GET /v1/agents/{name}` carries `source` too. Whether a pin loaded is **this** record,
 never the XR's status: Clearance writes no XR status (its one Kubernetes write stays AgentRun).
 
+## The deployment gate (v0.19.0)
+
+The second boundary ([gate.md](gate.md)). Writes are gateway routes: `POST /v1/clearances` registers or re-evaluates a
+change (a **verifier's** token, like `/v1/provenance`: the `clearance-gate-` check), `POST /v1/clearances/{id}/clear`
+and `POST /v1/clearances/{id}/deny` `{reason}` are people's, through the delegate model. Refusals carry `DG-*` rules
+(`DG-PROPOSER` 403, `DG-TWICE` 409, `DG-FILLED` 409, `DG-FORBIDDEN` 403, `DG-STATE` 409, `DG-REASON` 400,
+`DG-UNKNOWN` 404, `DG-OFF` 404; `DG-POLICY` and `DG-PROVENANCE` deny the change by policy).
+
+Reads here: `GET /v1/clearances` (filters `app`, `env`, `state` holding|cleared|denied|expired|superseded, `repo`, `pr`,
+`tier`, `since`; cursor `updated_at`), `GET /v1/clearances/counts?by=state|tier|app|env|cleared_by`,
+`GET /v1/clearances/{id}` (objects, paths, every reason, requirement, approvals, checks), `GET /v1/clearance-policy`
+(the baseline a repo's `clearance.yaml` may only tighten). A person sees changes on apps they own and changes whose
+owner group or outside group is one of theirs: the people who may clear them. Every step is evidence in the
+`deployment` boundary (`deploy.request`, `deploy.clear`, `deploy.deny`, `deploy.expire`), listed by the evidence
+routes like any other record.
+
 ## Who sees what
 
 Callers authenticate exactly as at the gateway: service-account tokens (TokenReview), people's OIDC ID tokens, and

@@ -75,6 +75,16 @@ ROUTES: tuple[dict[str, Any], ...] = (
     {"operationId": "listEvents", "method": "GET", "path": "/v1/events", "roles": PERSON_ROLES,
      "params": ["app", "agent", "source", "key", "subject", "since", "until", "limit", "after"],
      "summary": "The events the trigger bridge received, newest first, each with what it did per agent (launched, deduped, braked, refused): the history a trigger dry run, an agent's trigger statistics and an app's run marks read. Kept 30 days; the cursor is received_at"},
+    {"operationId": "listClearances", "method": "GET", "path": "/v1/clearances", "roles": PERSON_ROLES,
+     "params": ["app", "env", "state", "repo", "pr", "tier", "since", "limit", "after"],
+     "summary": "The deployment gate's changes (gate.py), newest first: tier and why, state (holding, cleared, denied, expired, superseded), the requirement and the approvals so far, what the grant binds to. A person sees their apps' changes and the ones their groups may clear; the cursor is updated_at"},
+    {"operationId": "countClearances", "method": "GET", "path": "/v1/clearances/counts", "roles": PERSON_ROLES,
+     "params": ["app", "env", "state", "since", "by"],
+     "summary": "Changes counted by state, tier, app, env or cleared_by (the C1 stats: holding, cleared by policy and by people, denied)"},
+    {"operationId": "getClearance", "method": "GET", "path": "/v1/clearances/{id}", "roles": PERSON_ROLES, "params": [],
+     "summary": "One change: the objects and paths it touches, every reason for its tier, the requirement, the approvals, the checks as last reported"},
+    {"operationId": "getClearancePolicy", "method": "GET", "path": "/v1/clearance-policy", "roles": PERSON_ROLES, "params": [],
+     "summary": "The deployment gate's baseline policy: the tier table, the people each tier needs, the outside groups, the TTL. A repo's clearance.yaml can only tighten it"},
     {"operationId": "getContract", "method": "GET", "path": "/v1/contract", "roles": ("any",), "params": [],
      "summary": "This contract"},
 )
@@ -108,6 +118,7 @@ class Viewer:
     via: str | None = None            # the delegate, when a delegate asked
     agents: frozenset[str] = field(default_factory=frozenset)   # agents of the person's teams
     apps: frozenset[str] = field(default_factory=frozenset)     # apps the person owns
+    groups: frozenset[str] = field(default_factory=frozenset)   # the person's groups (the gate: who may clear what)
 
     @property
     def all(self) -> bool:
@@ -153,7 +164,7 @@ class Access:
         groups = self.directory.groups(person) if self.directory else set()
         agents = frozenset(n for n, d in self.definitions.items() if getattr(d, "owner", None) in groups)
         apps = frozenset(a.lower() for a in (self.ownership.apps(person) if self.ownership else set()))
-        return Viewer("person", person=person, via=via, agents=agents, apps=apps)
+        return Viewer("person", person=person, via=via, agents=agents, apps=apps, groups=frozenset(groups))
 
 
 # -- the store -------------------------------------------------------------------------------------------------------
@@ -171,6 +182,9 @@ class ReadStore(Protocol):
     def events(self, f: dict[str, Any], v: Viewer, limit: int, after: str | None) -> list[dict[str, Any]]: ...
     def holds(self, now: datetime) -> dict[str, dict[str, Any]]: ...
     def definitions(self) -> list[dict[str, Any]]: ...
+    def changes(self, f: dict[str, Any], v: Viewer, limit: int, after: str | None) -> list[dict[str, Any]]: ...
+    def change(self, change_id: str) -> dict[str, Any] | None: ...
+    def change_counts(self, f: dict[str, Any], v: Viewer, by: str) -> list[dict[str, Any]]: ...
     def ping(self) -> None: ...
 
 
@@ -369,6 +383,54 @@ class PgReadStore:
         rows = self.pool.run("SELECT record FROM clearance_definitions ORDER BY state, name")
         return [r[0] for r in rows]
 
+    def _change_scope(self, v: Viewer) -> tuple[str, list[Any]]:
+        """A person sees changes on apps they own, and changes whose owner group or outside groups include one of
+        theirs (the people who may clear them); an auditor sees all."""
+        if v.all:
+            return "TRUE", []
+        return ("(c.app = ANY(%s) OR c.record->>'owner' = ANY(%s) "
+                "OR EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(c.record->'requirement'->'outsideGroups', '[]'::jsonb)) g "
+                "WHERE g = ANY(%s)))", [list(v.apps), list(v.groups), list(v.groups)])
+
+    def changes(self, f, v, limit, after):
+        where, params = [], []
+        scope, sp = self._change_scope(v)
+        where.append(scope); params += sp
+        for key, col in (("app", "c.app"), ("env", "c.env"), ("state", "c.state"), ("repo", "c.repo")):
+            if f.get(key):
+                where.append(f"{col} = %s"); params.append(f[key])
+        if f.get("pr"):
+            where.append("c.pr = %s"); params.append(int(f["pr"]))
+        if f.get("tier") is not None and f.get("tier") != "":
+            where.append("(c.record->>'tier')::int = %s"); params.append(int(f["tier"]))
+        if f.get("since"):
+            where.append("c.record->>'updated_at' >= %s"); params.append(f["since"])
+        if after:
+            where.append("c.record->>'updated_at' < %s"); params.append(after)
+        params.append(limit)
+        rows = self.pool.run("SELECT c.record FROM clearance_changes c WHERE " + " AND ".join(where)
+                             + " ORDER BY c.record->>'updated_at' DESC LIMIT %s", params)
+        return [r[0] for r in rows]
+
+    def change(self, change_id):
+        rows = self.pool.run("SELECT record FROM clearance_changes WHERE id = %s", [change_id])
+        return rows[0][0] if rows else None
+
+    def change_counts(self, f, v, by):
+        col = {"state": "c.state", "tier": "c.record->>'tier'", "app": "c.app", "env": "c.env",
+               "cleared_by": "c.record->>'cleared_by'"}[by]
+        where, params = [], []
+        scope, sp = self._change_scope(v)
+        where.append(scope); params += sp
+        for key, c in (("app", "c.app"), ("env", "c.env"), ("state", "c.state")):
+            if f.get(key):
+                where.append(f"{c} = %s"); params.append(f[key])
+        if f.get("since"):
+            where.append("c.record->>'updated_at' >= %s"); params.append(f["since"])
+        rows = self.pool.run(f"SELECT {col}, count(*) FROM clearance_changes c WHERE " + " AND ".join(where)
+                             + f" GROUP BY {col} ORDER BY count(*) DESC", params)
+        return [{"key": r[0], "count": r[1]} for r in rows]
+
     def ping(self):
         self.pool.run("SELECT 1")
 
@@ -454,9 +516,10 @@ def explain(policy: Any, definition: Any, person: str, tool: str, args: dict[str
 
 
 def create_api_app(store: ReadStore, access: Access, *, clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
-                   gateway_url: str | None = None, policy: Any = None):
+                   gateway_url: str | None = None, policy: Any = None, gate_policy: Any = None):
     """The Starlette app for `clearance api`. `policy` (a clearance.policy.Policy with the deployment's packs) serves
-    /v1/policy and the dry-run explainer; without it those answer 404."""
+    /v1/policy and the dry-run explainer; without it those answer 404. `gate_policy` (a gate.GatePolicy, the same
+    baseline the gateway classifies with) serves /v1/clearance-policy; without it that answers 404."""
     from starlette.applications import Starlette
     from starlette.requests import Request
     from starlette.responses import JSONResponse
@@ -643,7 +706,59 @@ def create_api_app(store: ReadStore, access: Access, *, clock: Callable[[], date
         except Exception as e:  # noqa: BLE001
             return JSONResponse({"ok": False, "error": type(e).__name__}, status_code=503)
 
+    CHANGE_STATES = ("holding", "cleared", "denied", "expired", "superseded")
+    CHANGE_COUNT_BY = ("state", "tier", "app", "env", "cleared_by")
+
+    def change_visible(c: dict[str, Any], v: Viewer) -> bool:
+        if v.all:
+            return True
+        req = c.get("requirement") or {}
+        return (c.get("app") in v.apps or c.get("owner") in v.groups
+                or any(g in v.groups for g in (req.get("outsideGroups") or [])))
+
+    def list_clearances(req, v):
+        q, limit = req.query_params, _limit(req.query_params)
+        f = {k: q.get(k) for k in ("app", "env", "state", "repo", "pr", "tier", "since") if q.get(k)}
+        if f.get("state") and f["state"] not in CHANGE_STATES:
+            raise ApiError(400, f"state is one of {', '.join(CHANGE_STATES)}")
+        for k in ("pr", "tier"):
+            if f.get(k) and not f[k].isdigit():
+                raise ApiError(400, f"{k} is a number")
+        if f.get("since"):
+            try:
+                datetime.fromisoformat(f["since"].replace("Z", "+00:00"))
+            except ValueError:
+                raise ApiError(400, "since is an ISO time") from None
+        for k in ("app", "repo"):
+            if f.get(k):
+                f[k] = f[k].lower()
+        return page(store.changes(f, v, limit, q.get("after")), limit, "updated_at")
+
+    def get_clearance(req, v):
+        c = store.change(req.path_params["id"])
+        if c is None or not change_visible(c, v):
+            raise ApiError(404, "no such change")
+        return c
+
+    def count_clearances(req, v):
+        q = req.query_params
+        by = q.get("by") or "state"
+        if by not in CHANGE_COUNT_BY:
+            raise ApiError(400, f"by is one of {', '.join(CHANGE_COUNT_BY)}")
+        f = {k: q.get(k) for k in ("app", "env", "state", "since") if q.get(k)}
+        if f.get("app"):
+            f["app"] = f["app"].lower()
+        items = store.change_counts(f, v, by)
+        return {"by": by, "items": items, "total": sum(i["count"] for i in items)}
+
+    def get_clearance_policy(req, v):
+        if gate_policy is None:
+            raise ApiError(404, "this deployment runs no deployment gate")
+        return gate_policy.view()
+
     fns = {"listAgents": list_agents, "getAgent": get_agent, "listSessions": list_sessions, "getSession": get_session,
+           "listClearances": list_clearances, "getClearance": get_clearance, "countClearances": count_clearances,
+           "getClearancePolicy": get_clearance_policy,
            "getTask": get_task, "listEvidence": list_evidence, "getEvidence": get_evidence, "verifyEvidence": verify,
            "listReceipts": receipts_or_verdicts(provenance.PR_TOOLS),
            "listProvenance": receipts_or_verdicts(("provenance.verify",)), "listHumanRequests": human,

@@ -85,6 +85,21 @@ CREATE TABLE IF NOT EXISTS clearance_holds (
   record     jsonb       NOT NULL,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS clearance_changes (
+  id         text        PRIMARY KEY,
+  app        text        NOT NULL,
+  env        text        NOT NULL,
+  state      text        NOT NULL,
+  repo       text        NOT NULL,
+  pr         integer     NOT NULL,
+  head       text        NOT NULL,
+  expires_at timestamptz NOT NULL,
+  record     jsonb       NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS clearance_changes_pr ON clearance_changes (repo, pr);
+CREATE INDEX IF NOT EXISTS clearance_changes_state ON clearance_changes (state, expires_at);
+CREATE INDEX IF NOT EXISTS clearance_changes_app ON clearance_changes (app, env, updated_at DESC);
 CREATE TABLE IF NOT EXISTS clearance_definitions (
   name       text        NOT NULL,
   state      text        NOT NULL,
@@ -143,8 +158,8 @@ class PgAuditLog:
             return [r[0] for r in cur.fetchall()]
 
     def append(self, event: dict[str, Any]) -> dict[str, Any]:
-        if ENVELOPE & set(event) - {"coverage"}:
-            raise ValueError(f"event must not set {sorted(ENVELOPE & set(event) - {'coverage'})}")
+        if ENVELOPE & set(event) - {"coverage", "boundary"}:
+            raise ValueError(f"event must not set {sorted(ENVELOPE & set(event) - {'coverage', 'boundary'})}")
         rec = {"seq": self._count, **event, **evidence(event), "prev_hash": self._head}
         rec["hash"] = sha256_hex(canonical(rec))
         with self.state.conn.cursor() as cur:
@@ -358,6 +373,42 @@ class PgHolds:
         with self.state.conn.cursor() as cur:
             cur.execute("SELECT record FROM clearance_holds ORDER BY agent")
             return [Hold.from_record(r[0]) for r in cur.fetchall()]
+
+
+class PgChanges:
+    """gate.ChangeStore on clearance_changes: one row per change, written in the gate operation's transaction (the
+    change with its deploy.* record). clearance-api reads the same rows (api.PgReadStore.changes)."""
+
+    def __init__(self, state: PgState):
+        self.state = state
+
+    @staticmethod
+    def _load(rec):
+        from .gate import Change
+        return Change.from_record(rec)
+
+    def put(self, c) -> None:
+        with self.state.conn.cursor() as cur:
+            cur.execute("INSERT INTO clearance_changes (id, app, env, state, repo, pr, head, expires_at, record) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, "
+                        "expires_at = EXCLUDED.expires_at, record = EXCLUDED.record, updated_at = now()",
+                        (c.id, c.app, c.env, c.state, c.repo, c.pr, c.head, c.expires_at, Jsonb(c.view())))
+
+    def get(self, change_id: str):
+        with self.state.conn.cursor() as cur:
+            cur.execute("SELECT record FROM clearance_changes WHERE id = %s", (change_id,))
+            row = cur.fetchone()
+        return self._load(row[0]) if row else None
+
+    def for_pr(self, repo: str, pr: int) -> list:
+        with self.state.conn.cursor() as cur:
+            cur.execute("SELECT record FROM clearance_changes WHERE repo = %s AND pr = %s ORDER BY record->>'created_at'", (repo, pr))
+            return [self._load(r[0]) for r in cur.fetchall()]
+
+    def holding(self, now: datetime) -> list:
+        with self.state.conn.cursor() as cur:
+            cur.execute("SELECT record FROM clearance_changes WHERE state = 'holding' ORDER BY record->>'created_at'")
+            return [self._load(r[0]) for r in cur.fetchall()]
 
 
 class PgDefinitions:

@@ -209,6 +209,38 @@ A middle path worth considering: ship **B first as phase 2a** (weeks, not months
 environments go manual, the gateway syncs on `deploy.clear`), and **A as phase 2b** once the normaliser exists,
 keeping B's manual sync policy as defence in depth. The record is the same either way.
 
+## Built, phase 1a (v0.19.0): the gate's core
+
+What exists in Clearance now; the check, the release guardrail and the screens follow (1b, 1c).
+
+- **`gate.py`**: `GatePolicy` (the baseline tier table: tier-3 kinds, field tokens and paths, non-runtime paths, the
+  Flight registries, the 400-line cap, the outside groups, the 7-day TTL, approvers per tier) and `tightened()`, which
+  applies a repo's `clearance.yaml` (add kinds, paths and field tokens to tiers 2 and 3; raise the people required;
+  shorten the TTL; anything else, or anything looser, is `DG-POLICY` and the change is denied). `ChangeRequest`: what
+  the check posts (app, env, cluster, repo, PR, head, base, proposer and its kind from the agent gates, the owner
+  group when the check knows it, the tree digest, the changed paths and lines, each touched object with the JSON
+  pointers of its changed fields and its new images, the checks' results, the repo's `clearance.yaml`). `classify()`:
+  the tier as the maximum over paths and objects (`kind:Secret`, `field:secretKeyRef`, `path:clearance.yaml`,
+  `image-bump`, `image:not-flight-registry`, `metadata-only`, `non-runtime`, `lines>400`, `checks:ci,render`,
+  `provenance:agent`), then the decision: tiers 0 and 1 clear by policy, 2 and 3 hold for a `Requirement`
+  (owner-group people, outside-group people), an unknown proposer is denied (`DG-PROVENANCE`). `Change`: the record,
+  with `role_for()` (owner first, then outside; `DG-PROPOSER`, `DG-TWICE`, `DG-FILLED`, `DG-FORBIDDEN`, `DG-STATE`).
+- **Gateway**: `register_change` (a verifier's call; idempotent by repo, PR and head; a holding change is re-evaluated
+  with the new check results and clears by policy once they hold; a new head supersedes the heads still holding),
+  `clear_change` and `deny_change` (the delegate model; the owner group is the request's, or the catalog's through
+  `AppOwners`, or the outside group when nobody knows), `expire_changes` in the expiry sweep. Records in the
+  **deployment boundary**: `deploy.request` (the verifier; result = the tier and why), `deploy.clear` (`policy`, or the
+  person with their role and delegate), `deploy.deny` (`DG-PROVENANCE`, `DG-POLICY`, or a person's `DG-DENIED` with the
+  reason), `deploy.expire` (TTL, or `superseded by <head>`). Each carries `app`, the target `repo#pr@head` and a
+  claimed `change` summary (id, env, tier, tree digest, state).
+- **Routes**: gateway `POST /v1/clearances` (verifiers), `POST /v1/clearances/{id}/clear`, `POST /v1/clearances/{id}/deny`
+  `{reason}`; clearance-api `GET /v1/clearances` (app, env, state, repo, pr, tier, since; a person sees their apps'
+  changes and the ones their groups may clear), `GET /v1/clearances/counts?by=state|tier|app|env|cleared_by`,
+  `GET /v1/clearances/{id}`, `GET /v1/clearance-policy`. Postgres `clearance_changes`.
+- Not yet: the `clearance-gate-` check (1b: it renders the tree, diffs objects, posts here; the PaC check is red while
+  holding and re-run after people clear), the release guardrail, the C1 page and T1 panels, the PR mark, retiring
+  `hangar/release-signoff`, `deploy.exception` and the pulled grants (phase 2).
+
 ## Open questions for the owner (all decided 2026-10-31; kept for the record)
 
 1. ~~Phase 2 enforcement: A (grant-match admission, recommended), B or C, or B then A.~~ Decided: A, pulled (see "Question 1, expanded").
