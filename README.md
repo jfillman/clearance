@@ -67,6 +67,12 @@ without one (CI clones it).
 This code was the `clearance` package inside https://github.com/jfillman/autopilot until 2026-10-29 (Hangar decision
 D16); its history came with it. Design: Hangar's `docs/autopilot/design.md`, section 0.1.
 
+## Docs
+
+The TechDocs site is `mkdocs.yml` over `docs/` (home, clearance-api, the deployment gate), published in Hangar's
+portal from `catalog-info.yaml` (`backstage.io/techdocs-ref: dir:.`). Preview locally with `pip install
+mkdocs-techdocs-core && mkdocs serve`.
+
 ## Specs
 
 - [clearance-api](docs/clearance-api.md): the read API (sessions, evidence, agents, the inbox feed) as a separate read-only process. Phase 1 in v0.13.0; person controls (the write path) in v0.17.0; definitions pinned by `Agent` XRs in v0.18.0 (`definitions.py`).

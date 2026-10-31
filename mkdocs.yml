@@ -1,0 +1,10 @@
+site_name: 'Clearance'
+site_description: 'Policy, audit and session gateway for AI agent workloads: every tool call decided, recorded and budgeted'
+
+nav:
+  - Home: index.md
+  - The read API and the write path (clearance-api): clearance-api.md
+  - The deployment gate (Clearances): gate.md
+
+plugins:
+  - techdocs-core
