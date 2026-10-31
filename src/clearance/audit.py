@@ -36,9 +36,10 @@ ENVELOPE = frozenset({"seq", "schema", "boundary", "coverage", "verified", "clai
 
 
 def evidence(event: dict[str, Any]) -> dict[str, Any]:
-    """The evidence envelope for a gateway event: version, boundary, coverage, and each field's tag."""
+    """The evidence envelope for a gateway event: version, boundary (runtime, or deployment for the gate's deploy.*
+    records, gate.py), coverage, and each field's tag."""
     fields = sorted(k for k in event if k not in ENVELOPE)
-    return {"schema": EVIDENCE_SCHEMA, "boundary": "runtime",
+    return {"schema": EVIDENCE_SCHEMA, "boundary": event.get("boundary", "runtime"),
             "coverage": event.get("coverage", "authorized-and-verified"),
             "verified": [k for k in fields if k in VERIFIED], "claimed": [k for k in fields if k not in VERIFIED]}
 
@@ -81,8 +82,8 @@ class AuditLog:
         return self.records[-1]["hash"] if self.records else GENESIS
 
     def append(self, event: dict[str, Any]) -> dict[str, Any]:
-        if ENVELOPE & set(event) - {"coverage"}:
-            raise ValueError(f"event must not set {sorted(ENVELOPE & set(event) - {'coverage'})}")
+        if ENVELOPE & set(event) - {"coverage", "boundary"}:
+            raise ValueError(f"event must not set {sorted(ENVELOPE & set(event) - {'coverage', 'boundary'})}")
         rec = {"seq": len(self.records), **event, **evidence(event), "prev_hash": self.head}
         rec["hash"] = sha256_hex(canonical(rec))
         self.records.append(rec)

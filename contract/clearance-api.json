@@ -237,6 +237,70 @@
       "summary": "The events the trigger bridge received, newest first, each with what it did per agent (launched, deduped, braked, refused): the history a trigger dry run, an agent's trigger statistics and an app's run marks read. Kept 30 days; the cursor is received_at"
     },
     {
+      "operationId": "listClearances",
+      "method": "GET",
+      "path": "/v1/clearances",
+      "roles": [
+        "person",
+        "delegate",
+        "auditor"
+      ],
+      "params": [
+        "app",
+        "env",
+        "state",
+        "repo",
+        "pr",
+        "tier",
+        "since",
+        "limit",
+        "after"
+      ],
+      "summary": "The deployment gate's changes (gate.py), newest first: tier and why, state (holding, cleared, denied, expired, superseded), the requirement and the approvals so far, what the grant binds to. A person sees their apps' changes and the ones their groups may clear; the cursor is updated_at"
+    },
+    {
+      "operationId": "countClearances",
+      "method": "GET",
+      "path": "/v1/clearances/counts",
+      "roles": [
+        "person",
+        "delegate",
+        "auditor"
+      ],
+      "params": [
+        "app",
+        "env",
+        "state",
+        "since",
+        "by"
+      ],
+      "summary": "Changes counted by state, tier, app, env or cleared_by (the C1 stats: holding, cleared by policy and by people, denied)"
+    },
+    {
+      "operationId": "getClearance",
+      "method": "GET",
+      "path": "/v1/clearances/{id}",
+      "roles": [
+        "person",
+        "delegate",
+        "auditor"
+      ],
+      "params": [],
+      "summary": "One change: the objects and paths it touches, every reason for its tier, the requirement, the approvals, the checks as last reported"
+    },
+    {
+      "operationId": "getClearancePolicy",
+      "method": "GET",
+      "path": "/v1/clearance-policy",
+      "roles": [
+        "person",
+        "delegate",
+        "auditor"
+      ],
+      "params": [],
+      "summary": "The deployment gate's baseline policy: the tier table, the people each tier needs, the outside groups, the TTL. A repo's clearance.yaml can only tighten it"
+    },
+    {
       "operationId": "getContract",
       "method": "GET",
       "path": "/v1/contract",
