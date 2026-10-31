@@ -83,6 +83,33 @@ definition PR. `GET /v1/agents` and `/v1/agents/{name}` carry the active hold as
 
 Not yet: replay a past event, launch a run by hand, open the definition PRs (A3).
 
+## Definitions from the cluster (v0.18.0)
+
+Autopilot M4: an agent definition no longer has to ship in the gateway's image. An **`Agent` XR** (airframe
+`xrds/agent.yaml`, in the app's `tenants/<app>/xr-requests/`) pins one commit of a definition file in the app's own
+repository (`agents/<name>.yaml`). The gateway's loader (autopilot `agent_xrs.py`) lists the XRs, fetches each pinned
+file through the agents' GitHub App (the broker allows an onboarded app's own repositories only), and hands the
+documents to `definitions.py`, which decides whether a pin becomes a definition:
+
+- the file passes the schema, its `name` is the XR's name, its `owner` is the XR's `spec.owner`, and a workload identity
+  is `autopilot-runs/<name>`;
+- the name is not a bundled platform definition's (the image's `agents/` keep their names; a pin can never replace one);
+- one name, one pin (two XRs naming the same agent load neither).
+
+The live set is `definitions.Definitions`, the Mapping the gateway and this API hold: bundled first, cluster second.
+Every change is evidence, once per change and never per poll: `definition.load` (a new or re-pinned definition, result
+`loaded <repo>@<commit> <path>` or `re-pinned …`), `definition.unload` (a pin removed), `definition.reject` (decision
+`deny`, rule `DF-PIN`, the reason as result). The principal is `pin:<namespace>/<name>`. The gateway persists the set
+(`clearance_definitions`) and this API refreshes from it, so it never fetches anything.
+
+A running session resolves its definition by name on every call, so a re-pin to a **tighter** definition applies to
+runs in flight (lowering authority is immediate); raising it is the reviewed pin.
+
+`GET /v1/agents` carries, per agent, `source`: `{kind: bundled}` or `{kind: cluster, repo, path, commit, namespace, xr,
+loaded_at, pin}`; and a top-level `rejected`: the pins Clearance could not load, each with `name`, `source` and
+`reason`, so the team sees why. `GET /v1/agents/{name}` carries `source` too. Whether a pin loaded is **this** record,
+never the XR's status: Clearance writes no XR status (its one Kubernetes write stays AgentRun).
+
 ## Who sees what
 
 Callers authenticate exactly as at the gateway: service-account tokens (TokenReview), people's OIDC ID tokens, and
