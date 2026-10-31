@@ -191,3 +191,36 @@ def test_a_malformed_definition_release_is_refused():
         gate.ChangeRequest.from_dict(release(None, None))
     with pytest.raises(gate.BadChange):
         gate.ChangeRequest.from_dict({**release(doc(), doc()), "definition": {"name": "Bad Name"}})
+
+
+def test_the_runtime_catalog_allows_its_images_and_is_listed(defs, clock):
+    from clearance import api, runtimes
+    cat = runtimes.load([
+        {"name": "generic", "image": IMG, "kind": "runtime", "framework": "generic", "summary": "the loop"},
+        {"name": "base-python", "image": "ghcr.io/jfillman/autopilot-agent-base-python@sha256:" + "d" * 64, "kind": "base", "summary": "FROM"},
+        {"name": "langgraph", "kind": "runtime", "framework": "langgraph", "status": "planned"},
+    ])
+    assert runtimes.allowed_images(cat) == (IMG,)
+    for bad in ([{"name": "x", "image": "ghcr.io/a/b:latest"}], [{"name": "x", "image": IMG}, {"name": "x", "image": IMG}],
+                [{"name": "x", "kind": "odd", "image": IMG}]):
+        with pytest.raises(ValueError):
+            runtimes.load(bad)
+    g = Gateway(defs, SessionStore(), AuditLog(), Auth(), clock, packs=(HANGAR,), verifiers=("app-*-cicd/pipeline-runner",), runtimes=cat)
+    assert g.review_definition("ci", {"doc": doc()})["ok"] is True
+    other = doc(); other["runtime"]["image"] = "ghcr.io/jfillman/autopilot-agent-base-python@sha256:" + "d" * 64
+    assert [p["rule"] for p in g.review_definition("ci", {"doc": other})["problems"]] == ["DF-IMAGE"]   # a base is not runnable
+
+    class A:
+        def authenticate(self, token):
+            return Principal("aud/x", "workload", Tier.T1)
+
+    class S:
+        def holds(self, now):
+            return {}
+
+        def definitions(self):
+            return []
+
+    app = api.create_api_app(S(), api.Access(A(), defs, auditors=("aud/*",)), runtimes=cat)
+    items = TestClient(app).get("/v1/runtimes", headers={"Authorization": "Bearer t"}).json()["items"]
+    assert [(r["name"], r["kind"], r["status"]) for r in items] == [("generic", "runtime", "available"), ("base-python", "base", "available"), ("langgraph", "runtime", "planned")]

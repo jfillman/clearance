@@ -147,6 +147,11 @@ recorded):
 
 Answer: `{ok, problems: [{rule, path, message, hint}], tier, changes: [{field, change, tier}]}` (no tier when not ok).
 
+**The runtime catalog** (`runtimes.py`): the deployment hands Clearance the agent images it offers, each `{name, image (by
+digest), kind runtime|base, framework, summary, status available|planned}`. An available `runtime` image is allowed
+for `runtime.image` (beside the deployment's extra globs, for images built for an agent's own repo); a `base` image is a
+FROM image for code agents, never run as is. clearance-api lists it at `GET /v1/runtimes` for the New agent picker.
+
 The release is a deployment-gate change: `POST /v1/clearances` with `definition: {name, path, old, new}` (the pin PR's
 check). Its tier comes from `classify`; a new document with problems is denied (`DG-DEFINITION`); tiers 0 and 1 clear
 by policy, 2 and 3 wait for the owner group (and an outside group), on the same Clearances page and records.
