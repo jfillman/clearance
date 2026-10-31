@@ -1,6 +1,6 @@
 # clearance-api: Clearance's read API (spec, draft 2026-10-30)
 
-Status: **phase 1 built** (v0.13.0, `api.py`); open questions decided 2026-10-30. AP-B2 follow-on (Hangar roadmap M3). Owner decision 2026-10-30: build after Tower's Agent
+Status: **phase 1 built** (v0.13.0, `api.py`; policy, explain and counts in v0.14.0); open questions decided 2026-10-30. AP-B2 follow-on (Hangar roadmap M3). Owner decision 2026-10-30: build after Tower's Agent
 requests; spec first.
 
 ## Why
@@ -45,6 +45,9 @@ All list endpoints are cursor-paginated (`limit`, max 200; `after`), newest firs
 | `GET /v1/evidence` | records filtered by `task`, `session`, `agent`, `tool`, `principal`, `decision`, `rule`, `app`, `since`, `until`; cursor is `seq` |
 | `GET /v1/evidence/{seq}` | one record, with its hash and assurance state |
 | `GET /v1/evidence/verify` | the chain checked from genesis (or `from`/`to`): `ok`, `count`, `head`, first bad `seq` |
+| `GET /v1/evidence/counts` | records you may see counted by `by` (rule, tool, agent, app, decision), same filters as the list: the 7-day hits on the Policy page |
+| `GET /v1/policy` | the policy in force: deny rules in evaluation order (id, name, CEL, message, hint, pack), the tool registry with tiers, the packs |
+| `GET /v1/policy/explain` | "would this be allowed?": `agent`, `tool`, `args` (JSON); the real policy on a fresh session of that definition, the decision and every rule's verdict in order (the path). Records nothing, spends nothing |
 | `GET /v1/receipts` | PR receipts (`repo`, `pr`): what Clearance's agents opened, the commit, the paths |
 | `GET /v1/provenance` | the agent-gate verdicts recorded for a PR (`provenance.verify` records) |
 | `GET /v1/human/requests` | the inbox: for a person, what they may answer (as today); for a `notifier`, every pending request with who may answer it (owner and group), `since` for "new since" |

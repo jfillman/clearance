@@ -265,6 +265,22 @@ class Policy:
             return Decision(False, _ERROR.id, _ERROR.name, f"{_ERROR.message}: {type(e).__name__}", _ERROR.hint)
         return Decision(True, None, None, "allowed", "", context["tool"]["tier"])
 
+    def trace(self, context: dict[str, Any]) -> list[dict[str, Any]]:
+        """Every rule's verdict on this context, in evaluation order: the path a call takes through the policy. The
+        decision is still evaluate()'s (first match wins); this shows which others would have matched too. An
+        expression that fails to evaluate is reported as `error` (evaluate() denies on it, R000)."""
+        act = {k: celpy.json_to_cel(v) for k, v in context.items()}
+        out = []
+        for rule in self.rules:
+            try:
+                result = self._programs[rule.id].evaluate(act)
+                matched = None if isinstance(result, Exception) else bool(result)
+            except Exception:  # noqa: BLE001 - the explainer reports, evaluate() decides
+                matched = None
+            out.append({"id": rule.id, "name": rule.name, "order": rule.order,
+                        "matched": matched, "error": matched is None})
+        return out
+
 
 # Core rules and tools only, no packs: what a deployment with no packs runs, and what the module-level
 # helpers below use. A Gateway builds its own Policy from the packs it was given.
