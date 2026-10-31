@@ -126,6 +126,31 @@ owner group or outside group is one of theirs: the people who may clear them. Ev
 `deployment` boundary (`deploy.request`, `deploy.clear`, `deploy.deny`, `deploy.expire`), listed by the evidence
 routes like any other record.
 
+## Reviewing a definition, and its release (v0.20.0)
+
+`review.py`, for the agent release flow (decided 2026-10-31): a definition is reviewed YAML in a repo, a pin makes
+one commit live, and a CI check asks Clearance two questions on the gateway's `POST /v1/definitions/review`
+`{doc, old?, name?, owner?, path?}` (a verifier's token, a person's, or a delegate naming one; stateless, nothing
+recorded):
+
+- **validate**: would Clearance load it, and could its agent use what it lists? `DF-SCHEMA`, `DF-NAME` (file and pin
+  name), `DF-OWNER`, `DF-IDENTITY` (`autopilot-runs/<name>`), `DF-TOOL` (unregistered), `DF-TRIPWIRE`, `DF-CEILING`
+  (a tool above the ceiling: R007 would deny every call), `DF-REPOS` (a repo tool with no allowlist: R014), `DF-MODEL`
+  (not a route of this deployment), `DF-IMAGE` (not pinned by digest, or outside the deployment's `runtime_images`
+  globs).
+- **classify** `old` to `doc`: tier **0** no change in authority (instructions, framework label); **1** narrows only
+  (fewer tools, lower ceiling, smaller limits, fewer repos, apps, models or triggers, smaller network or compute, the
+  agent removed); **2** spends more or runs more (larger limits, a new trigger or higher cap, a new model or runtime
+  image, larger compute, a new read tool); **3** touches more (a higher ceiling, a new writing tool, a new repo, app
+  or API, wider network, fewer denied paths, sidecars, a different identity or owner, a new agent with a writing
+  tool). Each reason names the field and the change.
+
+Answer: `{ok, problems: [{rule, path, message, hint}], tier, changes: [{field, change, tier}]}` (no tier when not ok).
+
+The release is a deployment-gate change: `POST /v1/clearances` with `definition: {name, path, old, new}` (the pin PR's
+check). Its tier comes from `classify`; a new document with problems is denied (`DG-DEFINITION`); tiers 0 and 1 clear
+by policy, 2 and 3 wait for the owner group (and an outside group), on the same Clearances page and records.
+
 ## Who sees what
 
 Callers authenticate exactly as at the gateway: service-account tokens (TokenReview), people's OIDC ID tokens, and

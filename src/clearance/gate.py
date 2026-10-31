@@ -193,6 +193,9 @@ class ChangeRequest:
     checks: Mapping[str, str]        # ci, provenance, render, admission: what each says now
     policy: Mapping[str, Any] | None = None   # the repo's clearance.yaml at head, if any
     agent: str | None = None         # the agent that proposed it, when known
+    # An agent definition's release (review.py): {name, path, old, new}, the definition before and after the pin
+    # moves; old None = a new agent, new None = removed. The tier comes from review.classify, not from objects.
+    definition: Mapping[str, Any] | None = None
 
     @property
     def id(self) -> str:
@@ -267,8 +270,18 @@ class ChangeRequest:
         agent = d.get("agent")
         if agent is not None and (not isinstance(agent, str) or not NAME.match(agent)):
             raise BadChange("agent is an agent name")
+        definition = d.get("definition")
+        if definition is not None:
+            if not isinstance(definition, Mapping) or not isinstance(definition.get("name"), str) or not NAME.match(definition["name"]):
+                raise BadChange("definition is {name, path, old, new}")
+            for k in ("old", "new"):
+                if definition.get(k) is not None and not isinstance(definition[k], Mapping):
+                    raise BadChange(f"definition.{k} is the definition document or null")
+            if definition.get("old") is None and definition.get("new") is None:
+                raise BadChange("definition needs old or new")
         return cls(app, env, cluster, repo, pr, head, base, proposer, kind, owner, protected, tree, tuple(paths), lines,
-                   tuple(objects), dict(checks), dict(policy) if policy is not None else None, agent)
+                   tuple(objects), dict(checks), dict(policy) if policy is not None else None, agent,
+                   dict(definition) if definition is not None else None)
 
 
 # -- classification ---------------------------------------------------------------------------------------------
@@ -335,11 +348,35 @@ def _object_tier(ch: ObjectChange, pol: GatePolicy) -> Reason:
     return Reason(ch.subject, f"kind:{ch.kind}", 2)
 
 
-def classify(req: ChangeRequest, baseline: GatePolicy) -> Classification:
+def classify(req: ChangeRequest, baseline: GatePolicy, tools: Mapping[str, Any] | None = None,
+             problems: Sequence[Any] = ()) -> Classification:
     """The tier, why, and what follows: cleared by policy, held for people, or denied. Raises GateError (DG-POLICY)
-    when the repo's clearance.yaml tries to loosen the baseline."""
+    when the repo's clearance.yaml tries to loosen the baseline. An agent definition's release (req.definition) is
+    tiered by review.classify over the two documents (`tools`: the registry); `problems` are review.validate's for
+    the new document, any of which denies it (DG-DEFINITION)."""
     pol = baseline.tightened(req.policy)
     reasons: list[Reason] = []
+    if req.definition is not None:
+        from . import review
+        name = req.definition["name"]
+        if problems:
+            reasons = [Reason(f"agent {name}", f"{p.rule}:{p.path}", 3) for p in problems]
+            return Classification(3, tuple(reasons), "deny", "DG-DEFINITION",
+                                  "the new definition would not load or could not use what it lists: " + "; ".join(p.message for p in problems)[:400],
+                                  None, pol)
+        tier, changes = review.classify(req.definition.get("old"), req.definition.get("new"), tools or {})
+        reasons = [Reason(f"agent {name}: {ch.field}", ch.change, ch.tier) for ch in changes]
+        if req.proposer_kind == "unknown":
+            reasons.append(Reason("the PR", "provenance:unknown", 3))
+            return Classification(max(tier, 2), tuple(reasons), "deny", "DG-PROVENANCE",
+                                  "the PR looks like an agent's but Clearance has no record of opening it", None, pol)
+        if req.proposer_kind == "agent" and tier == 0:
+            reasons.append(Reason("the PR", "provenance:agent", 1)); tier = 1
+        if tier <= 1:
+            return Classification(tier, tuple(reasons), "clear", None, f"tier {tier}: cleared by policy ({'no change in authority' if tier == 0 else 'narrows only'})", None, pol)
+        a = pol.approvers.get(tier, {"owner": 1, "outside": 1})
+        requirement = Requirement(int(a.get("owner", 1)), int(a.get("outside", 0)), req.owner, pol.outside_groups)
+        return Classification(tier, tuple(reasons), "hold", None, f"tier {tier}: holding for {requirement.words()}", requirement, pol)
     for p in req.paths:
         if _globs(p, pol.tier3_paths):
             reasons.append(Reason(p, "path:" + p.rsplit("/", 1)[-1], 3))
