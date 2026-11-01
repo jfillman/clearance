@@ -119,7 +119,7 @@ def test_clearance_yaml_tightens_and_never_loosens():
 
 
 @pytest.mark.parametrize("bad, msg", [
-    ({**change(), "head": "short"}, "head"), ({**change(), "pr": 0}, "pr"), ({**change(), "owner": "team"}, "owner"),
+    ({**change(), "head": "short"}, "head"), ({**change(), "pr": -1}, "pr"), ({**change(), "owner": "team"}, "owner"),
     ({**change(), "treeDigest": "x"}, "treeDigest"), ({**change(), "proposerKind": "robot"}, "proposerKind"),
     ({**change(), "objects": [{"kind": "Secret"}]}, "objects[]"), ({**change(), "checks": {"ci": 1}}, "checks"),
     ({**change(), "policy": "no"}, "policy"), ("nope", "JSON object"),

@@ -216,8 +216,10 @@ class ChangeRequest:
         repo, head = s("repo", REPO).lower(), s("head", SHA)
         base = s("base", SHA, required=False)
         pr = d.get("pr")
-        if not isinstance(pr, int) or isinstance(pr, bool) or pr < 1:
-            raise BadChange("pr is a positive integer")
+        # pr 0: no pull request (a deployment of a pushed commit, registered by `clearance register` in the
+        # customer's own CI before a GitHub Actions deployment; github_app.py answers that deployment by repo+head).
+        if not isinstance(pr, int) or isinstance(pr, bool) or pr < 0:
+            raise BadChange("pr is a non-negative integer (0: no pull request)")
         proposer = s("proposer", PRINCIPAL)
         kind = s("proposerKind", required=False, default="person")
         if kind not in PROPOSER_KINDS:
@@ -444,10 +446,14 @@ class Change:
     deny_reason: str | None = None
     denied_by: str | None = None
     superseded_by: str | None = None
+    # GitHub Actions deployments waiting on this change (github_app.py, a custom deployment protection rule):
+    # {run_id, environment, installation, callback_url, requested_at, answer: None|approved|rejected, answered_at,
+    #  delivered, delivered_at}. answer stays None while the change holds; deliveries are retried until GitHub takes them.
+    deployments: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def target(self) -> str:
-        return f"{self.repo}#{self.pr}@{self.head[:7]}"
+        return f"{self.repo}#{self.pr}@{self.head[:7]}" if self.pr else f"{self.repo}@{self.head[:7]}"
 
     def requirement_obj(self) -> Requirement | None:
         r = self.requirement
@@ -490,6 +496,8 @@ class ChangeStore(Protocol):
     def put(self, c: Change) -> None: ...
     def for_pr(self, repo: str, pr: int) -> list[Change]: ...
     def holding(self, now: datetime) -> list[Change]: ...
+    def for_head(self, repo: str, head: str) -> list[Change]: ...
+    def undelivered(self) -> list[Change]: ...
 
 
 class MemoryChanges:
@@ -508,8 +516,34 @@ class MemoryChanges:
     def holding(self, now: datetime) -> list[Change]:
         return [c for c in self._c.values() if c.state == "holding"]
 
+    def for_head(self, repo: str, head: str) -> list[Change]:
+        return sorted((c for c in self._c.values() if c.repo == repo and c.head == head), key=lambda c: c.created_at)
+
+    def undelivered(self) -> list[Change]:
+        return [c for c in self._c.values() if any(d.get("answer") and not d.get("delivered") for d in c.deployments)]
+
     def all(self) -> list[Change]:
         return list(self._c.values())
+
+
+def deployment_answer(state: str) -> str | None:
+    """What a waiting GitHub deployment is told for a change in `state`: approved once cleared, rejected once it can
+    never be (denied, expired, superseded), nothing while it holds."""
+    if state == "cleared":
+        return "approved"
+    return None if state == "holding" else "rejected"
+
+
+def answer_deployments(c: Change, now: datetime) -> int:
+    """Settle the deployments waiting on `c` from its state; returns how many were answered now."""
+    answer, n = deployment_answer(c.state), 0
+    if answer is None:
+        return 0
+    for d in c.deployments:
+        if d.get("answer") is None:
+            d.update(answer=answer, answered_at=now.isoformat(), delivered=False)
+            n += 1
+    return n
 
 
 def check_reason(reason: Any) -> str:

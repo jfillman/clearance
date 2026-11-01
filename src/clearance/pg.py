@@ -410,6 +410,18 @@ class PgChanges:
             cur.execute("SELECT record FROM clearance_changes WHERE state = 'holding' ORDER BY record->>'created_at'")
             return [self._load(r[0]) for r in cur.fetchall()]
 
+    def for_head(self, repo: str, head: str) -> list:
+        with self.state.conn.cursor() as cur:
+            cur.execute("SELECT record FROM clearance_changes WHERE repo = %s AND head = %s ORDER BY record->>'created_at'", (repo, head))
+            return [self._load(r[0]) for r in cur.fetchall()]
+
+    def undelivered(self) -> list:
+        # Deployments answered but not yet taken by GitHub (github_app.py retries them); a JSONB containment test.
+        with self.state.conn.cursor() as cur:
+            cur.execute("SELECT record FROM clearance_changes WHERE record->'deployments' @> '[{\"delivered\": false}]'::jsonb")
+            return [c for c in (self._load(r[0]) for r in cur.fetchall())
+                    if any(d.get("answer") and not d.get("delivered") for d in c.deployments)]
+
 
 class PgDefinitions:
     """DefinitionsStore on clearance_definitions (definitions.py): the cluster-pinned set, replaced whole in the

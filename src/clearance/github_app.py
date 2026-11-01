@@ -14,6 +14,13 @@ comments only on an agent PR that fails a check, the way Glidepath's agent-gates
 
 The webhook answers at once and the work is queued (GitHub gives a delivery 10 seconds); a failed check is retried by
 GitHub's "Re-run" (check_run rerequested) or the next push. Nothing here knows Hangar.
+
+Phase 2 (docs/provenance-app.md): the App is also a **custom deployment protection rule**. A GitHub Actions job that
+deploys to an environment protected by the App waits until Clearance answers: approved when the deployment gate has
+cleared the change registered for that commit and environment, rejected when it was denied, expired or superseded,
+or when nothing was registered. A change that holds for people keeps the deployment waiting (with a status report
+saying who must clear it) and is answered the moment they decide. Answers are retried until GitHub takes them.
+That needs two more permissions (deployments write, actions read) and the deployment_protection_rule event.
 """
 from __future__ import annotations
 
@@ -46,6 +53,9 @@ COMMENT_MODES = ("off", "agent-failures")
 TRAILER = re.compile(r"^Hangar-(Task|Session|Run|Agent): *([^ ]+) *$")
 MAX_PAGES = 30
 MAX_ANNOTATIONS = 50
+SWEEP = "_sweep"                    # an internal queue item: deliver every answered deployment GitHub has not taken
+SWEEP_SECONDS = 60.0
+CALLBACK = re.compile(r"^/repos/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/actions/runs/([0-9]+)/deployment_protection_rule$")
 
 Opener = Callable[[urllib.request.Request, float], tuple[int, bytes]]
 
@@ -92,6 +102,10 @@ class GitHubApp:
         self.cfg, self.gateway, self._open, self.clock = cfg, gateway, opener, clock
         self._queue: "queue.Queue[tuple[str, dict[str, Any]] | None]" = queue.Queue(maxsize=1000)
         self._thread: threading.Thread | None = None
+        self._sweeper: threading.Thread | None = None
+        self._stopping = threading.Event()
+        if hasattr(gateway, "deployment_listeners"):
+            gateway.deployment_listeners.append(self.poke)
 
     # -- the webhook ------------------------------------------------------------------------------------------
     def secret(self) -> bytes:
@@ -120,14 +134,30 @@ class GitHubApp:
             return action in PR_ACTIONS
         if event in ("check_run", "check_suite"):
             return action == "rerequested"
+        if event == "deployment_protection_rule":
+            return action == "requested"
         return event in ("installation", "installation_repositories")
+
+    def poke(self) -> None:
+        """Ask the worker to deliver answered deployments (the gateway calls this when people decide a change)."""
+        try:
+            self._queue.put_nowait((SWEEP, {}))
+        except queue.Full:
+            pass                         # the periodic sweep delivers it
 
     def start(self) -> "GitHubApp":
         self._thread = threading.Thread(target=self._loop, name="clearance-github-app", daemon=True)
         self._thread.start()
+        self._sweeper = threading.Thread(target=self._tick, name="clearance-github-app-sweep", daemon=True)
+        self._sweeper.start()
         return self
 
+    def _tick(self) -> None:
+        while not self._stopping.wait(SWEEP_SECONDS):
+            self.poke()
+
     def stop(self) -> None:
+        self._stopping.set()
         self._queue.put(None)
         if self._thread:
             self._thread.join(timeout=30)
@@ -144,8 +174,12 @@ class GitHubApp:
 
     # -- the work ---------------------------------------------------------------------------------------------
     def handle(self, event: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
-        """Process one delivery; returns the check runs posted (for tests and logs)."""
+        """Process one delivery; returns the check runs posted, or the deployment answers (for tests and logs)."""
+        if event == SWEEP:
+            return self.deliver_answers()
         installation = (payload.get("installation") or {}).get("id")
+        if event == "deployment_protection_rule":
+            return self.protect(int(installation), payload)
         if event in ("installation", "installation_repositories"):
             repos = [r.get("full_name") for r in (payload.get("repositories") or payload.get("repositories_added") or [])]
             self.gateway.record_app_installation(str(installation), payload.get("action", ""),
@@ -182,6 +216,68 @@ class GitHubApp:
             self._comment(token, repo, pr, verdict)
         return runs
 
+    # -- deployments (phase 2) -------------------------------------------------------------------------------------
+    def _callback(self, url: str) -> tuple[str, int] | None:
+        """The repo and run of GitHub's callback URL, only when it is GitHub's own API: the App's token never goes
+        anywhere a payload names."""
+        if not isinstance(url, str) or not url.startswith(self.cfg.api + "/"):
+            return None
+        m = CALLBACK.match(url[len(self.cfg.api):])
+        return (m.group(1).lower(), int(m.group(2))) if m else None
+
+    def protect(self, installation: int, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        environment = payload.get("environment") or ""
+        sha = ((payload.get("deployment") or {}).get("sha") or "").lower()
+        url = payload.get("deployment_callback_url") or ""
+        cb = self._callback(url)
+        repo = ((payload.get("repository") or {}).get("full_name") or "").lower()
+        if not environment or not re.match(r"^[0-9a-f]{40}$", sha) or cb is None or cb[0] != repo:
+            log.warning("github app: deployment_protection_rule without a usable environment, sha or callback")
+            return []
+        out = self.gateway.deployment_requested(str(installation), repo, sha, environment, cb[1], url)
+        if out.get("answer") is None:
+            # Waiting on people: a status report (no state) so the run page says who must clear it. Best effort: the
+            # answer itself is delivered (and retried) when people decide.
+            try:
+                self._review(self.deployment_token(installation, repo), repo, cb[1], environment, None, out["comment"])
+            except GitHubAppError as e:
+                log.warning("github app: status report for run %s not posted: %s", cb[1], e)
+            return [{"run": cb[1], "environment": environment, "answer": None}]
+        if out.get("change") is None:
+            token = self.deployment_token(installation, repo)
+            self._review(token, repo, cb[1], environment, "rejected", out["comment"])
+            return [{"run": cb[1], "environment": environment, "answer": "rejected"}]
+        return self.deliver_answers()
+
+    def deliver_answers(self) -> list[dict[str, Any]]:
+        """Deliver every answered deployment GitHub has not taken yet; a failure stays for the next sweep."""
+        done = []
+        for d in self.gateway.undelivered_deployments():
+            try:
+                cb = self._callback(d.get("callback_url", ""))
+                if cb is None:
+                    continue
+                token = self.deployment_token(int(d["installation"]), d["repo"])
+                self._review(token, d["repo"], cb[1], d["environment"], d["answer"], d["comment"])
+            except GitHubAppError as e:
+                log.warning("github app: deployment answer for run %s not delivered: %s", d.get("run_id"), e)
+                continue
+            self.gateway.deployment_delivered(d["change"], d["run_id"], d["environment"])
+            done.append({"run": d["run_id"], "environment": d["environment"], "answer": d["answer"]})
+        return done
+
+    def deployment_token(self, installation: int, repo: str) -> str:
+        return self._token(installation, repo, {"deployments": "write", "actions": "read", "metadata": "read"})
+
+    def _review(self, token: str, repo: str, run: int, environment: str, state: str | None, comment: str) -> None:
+        """POST .../actions/runs/{run}/deployment_protection_rule: approved or rejected, or (no state) a status report."""
+        body: dict[str, Any] = {"environment_name": environment, "comment": comment[:1024]}
+        if state:
+            body["state"] = state
+        status, doc = self._call("POST", f"/repos/{repo}/actions/runs/{run}/deployment_protection_rule", token, body)
+        if status not in (200, 201, 204):
+            raise GitHubAppError(f"deployment review {repo} run {run}: {status} {str(doc.get('message', ''))[:200]}")
+
     # -- GitHub ---------------------------------------------------------------------------------------------------
     def app_jwt(self) -> str:
         now = int(self.clock())
@@ -208,6 +304,9 @@ class GitHubApp:
         perms = {"checks": "write", "contents": "read", "pull_requests": "read", "metadata": "read"}
         if self.cfg.comments != "off":
             perms["issues"] = "write"
+        return self._token(installation, repo, perms)
+
+    def _token(self, installation: int, repo: str, perms: dict[str, str]) -> str:
         status, doc = self._call("POST", f"/app/installations/{installation}/access_tokens", self.app_jwt(),
                                  {"repositories": [repo.split("/", 1)[1]], "permissions": perms}, scheme="Bearer")
         if status != 201 or not doc.get("token"):

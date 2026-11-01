@@ -153,7 +153,31 @@ no bearer token). clearance-api gains the installation as a filter on the existi
   hangar-dev gateway (gateway-v0.3.18, apron `autopilot.githubApp`). First verdicts: both checks `not-agent` on a
   person's PR (gitops-hangar-dev#93), evidence `provenance.verify` and `app.installation` as `app:177375213`. It runs
   beside `agent-gates-` until their verdicts agree on agent PRs (decision 1).
-- Not yet: phase 2's deployment protection rule and `clearance register`.
+- Not yet: `clearance register` (phase 2b).
+
+## Built, phase 2a (v0.22.0): the deployment protection rule
+
+- **The event**: `deployment_protection_rule` (requested). The App answers on GitHub's callback
+  (`POST /repos/{repo}/actions/runs/{run}/deployment_protection_rule`) with a token for that one repository asking only
+  for deployments write, actions read and metadata read. The callback URL is used only when it is GitHub's own API
+  for the same repository.
+- **The match**: the deployment gate's change for the deploying repository, the deployed commit and the environment
+  (the GitHub environment's name, lowercased, equals the change's `env`). A change may now have `pr: 0` (a pushed
+  commit, no pull request).
+- **The answer**: cleared, **approved**; denied, expired or superseded, **rejected**; no change at all, **rejected**
+  (`DG-UNREGISTERED`), so a protected environment never deploys an unregistered commit; holding, the deployment
+  **waits**, with a status report on the run naming who must clear it, and is answered the moment people clear or deny
+  it, or it expires (`Gateway.deployment_listeners` pokes the App's worker).
+- **Delivery**: each waiting deployment is kept on its change (`deployments`); an answer stays undelivered until GitHub
+  takes it, retried on every poke and every 60 seconds, so a GitHub outage or a restart loses nothing.
+- **Records**: `deploy.request` (principal `app:<installation>`, `DG-UNREGISTERED` when nothing matched) and
+  `deploy.answer` once GitHub took the answer, beside the change's own `deploy.clear`, `deploy.deny` and `deploy.expire`.
+- **Turning it on**: the App needs the two new permissions and the event (the manifest has them; an existing App is
+  updated in its settings, and each installation accepts the new permissions), then an environment adds the App under
+  *Deployment protection rules*.
+- **Phase 2b, not built**: `clearance register`, the CI step that renders what a workflow deploys and registers it
+  (`POST /v1/clearances`), with a GitHub Actions OIDC token as its verifier identity. Until then a change is
+  registered by a verifier Clearance already accepts (on Hangar, Glidepath's `clearance-gate-` check).
 
 
 ## Open questions for the owner (all decided 2026-11-01; kept for the record)
