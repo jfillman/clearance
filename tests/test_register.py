@@ -210,3 +210,22 @@ def test_a_token_file_replaces_the_oidc_token(tmp_path):
                   poster=lambda u, t, b: (seen.append(t) or (200, {"state": "cleared"})),
                   token_fetcher=lambda *a: pytest.fail("fetched"))
     assert seen == ["file-token"]
+
+
+def test_post_names_itself_and_reports_a_refusal_from_in_front_of_clearance(monkeypatch):
+    """Cloudflare's browser integrity check refuses Python's default User-Agent (403, error 1010) before Clearance
+    sees the request; the CLI sends its own, and a non-JSON refusal is reported as not from Clearance."""
+    import io
+    import urllib.error
+    import urllib.request
+    from clearance import register as reg
+    seen = {}
+
+    def refuse(req, timeout):
+        seen["ua"] = req.get_header("User-agent")
+        raise urllib.error.HTTPError(req.full_url, 403, "Forbidden", {}, io.BytesIO(b"error code: 1010"))
+
+    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+    status, out = reg.post("https://clearance.example", "t", {})
+    assert seen["ua"].startswith("clearance-register") and status == 403
+    assert out["error"] == "not from Clearance: error code: 1010"

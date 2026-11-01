@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "clearance"
-version = "0.24.0"
+version = "0.24.1"
 description = "Policy, audit and session gateway for AI agent workloads"
 readme = "README.md"
 requires-python = ">=3.11"

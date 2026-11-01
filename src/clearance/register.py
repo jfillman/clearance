@@ -213,17 +213,30 @@ def build_body(args: argparse.Namespace, env: dict[str, str]) -> dict[str, Any]:
     return body
 
 
+def user_agent() -> str:
+    """Our own User-Agent: an edge in front of Clearance (Cloudflare's browser integrity check on Hangar) refuses
+    Python's default `Python-urllib/x.y` with a 403 (error 1010) that never reaches Clearance."""
+    try:
+        from importlib.metadata import version
+        return f"clearance-register/{version('clearance')}"
+    except Exception:  # noqa: BLE001 - a version is a courtesy
+        return "clearance-register"
+
+
 def post(url: str, token: str, body: dict[str, Any], timeout: float = 30) -> tuple[int, dict[str, Any]]:
     req = urllib.request.Request(url.rstrip("/") + "/v1/clearances", data=json.dumps(body).encode(), method="POST",
-                                 headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+                                 headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json",
+                                          "User-Agent": user_agent()})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 - the operator's Clearance
             return r.status, json.load(r)
     except urllib.error.HTTPError as e:
+        raw = e.read(64 << 10)
         try:
-            return e.code, json.loads(e.read(64 << 10))
+            return e.code, json.loads(raw)
         except ValueError:
-            return e.code, {}
+            # Not Clearance's JSON: something in front of it answered (a proxy, a WAF). Say what it said.
+            return e.code, {"error": f"not from Clearance: {raw[:200].decode(errors='replace').strip() or '(empty body)'}"}
 
 
 def parser() -> argparse.ArgumentParser:
