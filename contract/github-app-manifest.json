@@ -1,5 +1,5 @@
 {
-  "name": "Clearance",
+  "name": "Hangar Clearance",
   "url": "https://hangarplatform.dev/clearance/",
   "description": "Clearance's own checks on pull requests: is this PR the one Clearance's agent opened (agent-identity), and does it stay inside that agent's scope (agent-scope)? Read-only on code.",
   "hook_attributes": { "url": "https://CLEARANCE_HOST/v1/github/webhook", "active": true },
