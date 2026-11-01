@@ -454,7 +454,8 @@ def verify_chain(batches: Iterable[list[dict[str, Any]]]) -> dict[str, Any]:
 def _definition_view(d: Any, full: bool, hold: dict[str, Any] | None = None,
                      source: Any = None) -> dict[str, Any]:
     lim = d.limits.as_dict()
-    out = {"name": d.name, "kind": d.kind, "owner": getattr(d, "owner", None),
+    out = {"name": d.name, "description": getattr(d, "description", "") or None, "kind": d.kind,
+           "runsIn": getattr(d, "runs_in", "cluster" if d.image else "client"), "owner": getattr(d, "owner", None),
            "identity": {"type": d.identity_type, "serviceAccount": d.service_account},
            "tierCeiling": lim["tier_ceiling"], "tools": lim["tools"], "models": lim["models"],
            "limits": {k: lim[k] for k in ("ttl_minutes", "tool_calls", "github_calls", "open_prs", "model_tokens", "children")},
