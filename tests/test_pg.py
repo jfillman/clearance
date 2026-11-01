@@ -172,3 +172,37 @@ def test_a_human_request_and_its_answer_survive_a_restart(db):
     assert (back.answer, back.answered_by, back.options, back.expires_at) == ("no", "user:bob", ["yes", "no"], t + timedelta(hours=1))
     assert PgInbox(state2).pending(t) == []
     state2.close()
+
+
+def test_changes_find_a_head_and_the_answers_github_has_not_taken(db):
+    """The deployment protection rule's two lookups on clearance_changes: by repo and head, and the changes with an
+    answered deployment not yet delivered (a JSONB containment query), round-tripping the deployments list."""
+    import psycopg
+    from clearance import gate
+    from clearance.pg import PgChanges
+    with psycopg.connect(db, autocommit=True) as c:
+        c.execute("DROP TABLE IF EXISTS clearance_changes")
+    state, _, _ = open_durable(db)
+    store = PgChanges(state)
+    now = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    body = {"app": "gate-api", "env": "prod", "cluster": "hangar-prod", "repo": "jfillman/gitops-gate-api", "pr": 0,
+            "head": "a" * 40, "proposer": "user:dana", "treeDigest": "c" * 64}
+    req = gate.ChangeRequest.from_dict(body)
+    ch = gate.Change.open(req, gate.classify(req, gate.GatePolicy()), now, "ci")
+    ch.deployments.append({"run_id": 5, "environment": "prod", "installation": "9", "callback_url": "u",
+                           "requested_at": now.isoformat(), "answer": None, "delivered": False})
+    store.put(ch)
+    state.conn.commit()
+    assert [c.id for c in store.for_head("jfillman/gitops-gate-api", "a" * 40)] == [ch.id]
+    assert store.undelivered() == [], "a waiting deployment has nothing to deliver"
+    ch.state = "cleared"
+    assert gate.answer_deployments(ch, now) == 1
+    store.put(ch)
+    state.conn.commit()
+    got = store.undelivered()
+    assert [c.id for c in got] == [ch.id] and got[0].deployments[0]["answer"] == "approved"
+    got[0].deployments[0]["delivered"] = True
+    store.put(got[0])
+    state.conn.commit()
+    assert store.undelivered() == []
+    state.close()

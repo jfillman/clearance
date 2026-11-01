@@ -123,8 +123,10 @@ Reads here: `GET /v1/clearances` (filters `app`, `env`, `state` holding|cleared|
 `GET /v1/clearances/{id}` (objects, paths, every reason, requirement, approvals, checks), `GET /v1/clearance-policy`
 (the baseline a repo's `clearance.yaml` may only tighten). A person sees changes on apps they own and changes whose
 owner group or outside group is one of theirs: the people who may clear them. Every step is evidence in the
-`deployment` boundary (`deploy.request`, `deploy.clear`, `deploy.deny`, `deploy.expire`), listed by the evidence
-routes like any other record.
+`deployment` boundary (`deploy.request`, `deploy.clear`, `deploy.deny`, `deploy.expire`, and `deploy.answer` when
+the GitHub App's answer reached a waiting GitHub Actions deployment), listed by the evidence routes like any other
+record. Since v0.22.0 a change carries `deployments`, the GitHub Actions deployments waiting on it (run, environment,
+answer, delivered; [provenance-app.md](provenance-app.md) phase 2a), and may have `pr: 0`, a pushed commit with no PR.
 
 ## Reviewing a definition, and its release (v0.20.0)
 
