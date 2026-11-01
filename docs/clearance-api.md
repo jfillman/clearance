@@ -38,7 +38,7 @@ All list endpoints are cursor-paginated (`limit`, max 200; `after`), newest firs
 
 | Endpoint | Returns |
 |---|---|
-| `GET /v1/agents`, `/v1/agents/{name}` | definitions: kind, identity, owner, tier ceiling, tools, repos/apps scope, limits, triggers (never instructions' full text by default; `?full=1` for auditors) |
+| `GET /v1/agents`, `/v1/agents/{name}` | definitions: `description` (one line, what it is for), `runsIn` (`cluster`: a runtime image runs it as an AgentRun; `client`: no image, a person's MCP client is the loop and Clearance enforces the envelope), kind, identity, owner, tier ceiling, tools, repos/apps scope, limits, triggers (never instructions' full text by default; `?full=1` for auditors) |
 | `GET /v1/sessions` | sessions: `agent`, `principal`, `task`, `state` (`live`, `recent`, `closed`, `expired`), `since` filters; each with limits, budget used, breaker, run, parent, expiry |
 | `GET /v1/sessions/{id}` | one session, with its children |
 | `GET /v1/tasks/{task_id}` | the run tree: every session in the task, parent links, totals |
@@ -74,6 +74,7 @@ session it is. Every control is an evidence record naming the person and the del
 | `POST /v1/sessions/{id}/freeze` `{reason}` | trips the session's breaker (and its children's): every further call is refused, the run stays for a person to read | `session.freeze` |
 | `POST /v1/sessions/{id}/end` `{reason}` | closes the session and its children; the budget is settled; the run's pod ends with its AgentRun's TTL | `session.end` |
 | `POST /v1/agents/{name}/hold` `{reason, hours}` | holds the agent's triggers: `open_triggered` refuses with **R024** until `until` (24 h by default, 336 at most; renewing replaces the hold) | `trigger.hold` |
+| `POST /v1/agents/{name}/runs` `{input?}` (v0.23.0) | starts an in-cluster run of a **task** agent with a runtime image, as the person: a session opened in their name, then the AgentRun with `input` (at most 2000 characters) as its task. The agent's owner group or a platform admin; **R001** for an agent that runs in the client or is not a task agent, **R024** while held. 201 `{agent, session, task_id, run, by, via}` | `session.open`, `run.launch` |
 | `DELETE /v1/agents/{name}/hold` | lifts a hold early | `trigger.release` |
 
 A hold is an emergency brake, not a policy: anything meant to last ("turn this agent off", "weekdays only") is a

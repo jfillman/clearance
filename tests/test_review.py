@@ -22,6 +22,7 @@ IMG = "ghcr.io/jfillman/autopilot-agent-runtime@sha256:" + "a" * 64
 
 BASE = yaml.safe_load(f"""
 name: gate-triage
+description: Explains why a gate-api pipeline run failed.
 owner: group:default/team-gate
 kind: event
 identity: {{type: workload, serviceAccount: autopilot-runs/gate-triage}}

@@ -23,7 +23,7 @@ definition, answered here without state and without a Hangar import:
                        Every reason names the field and the change, so the gate can say "why this tier".
 
 Errors carry DF-* rules: DF-SCHEMA, DF-NAME, DF-OWNER, DF-IDENTITY, DF-TOOL, DF-TRIPWIRE, DF-CEILING (R007),
-DF-REPOS (R014), DF-MODEL, DF-IMAGE.
+DF-REPOS (R014), DF-MODEL, DF-IMAGE, DF-DESCRIPTION.
 """
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from .definitions import RUN_IDENTITY_NAMESPACE
 from .limits import ComputeClass, Network
-from .profile import DefinitionError, parse
+from .profile import PLACEHOLDER_DIGEST, DefinitionError, parse
 from .tiers import TRIPWIRES, Tier, ToolSpec
 
 DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")
@@ -71,6 +71,14 @@ def validate(doc: Any, tools: Mapping[str, ToolSpec], *, name: str | None = None
     digest-pinned image)."""
     if not isinstance(doc, Mapping):
         return [Problem("DF-SCHEMA", "", "the file is not a YAML mapping (an agent definition)")]
+    desc = doc.get("description")
+    if not isinstance(desc, str) or not desc.strip():
+        return [Problem("DF-DESCRIPTION", "description", "the definition has no description",
+                        "Add one line saying what the agent is for: `description: Explains why a Glidepath run failed.`")]
+    img = (doc.get("runtime") or {}).get("image") if isinstance(doc.get("runtime"), Mapping) else None
+    if isinstance(img, str) and PLACEHOLDER_DIGEST.search(img):
+        return [Problem("DF-IMAGE", "runtime.image", f"{img} is a placeholder digest",
+                        "Pick a runtime from the catalog (GET /v1/runtimes), or leave runtime.image out: the agent then runs in a person's MCP client.")]
     try:
         d = parse(dict(doc))
     except DefinitionError as e:
