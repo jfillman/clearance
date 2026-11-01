@@ -141,6 +141,23 @@ def test_artifacts_are_per_task_bounded_and_expire(db):
 
 
 
+def test_a_runs_result_is_kept_until_it_expires_and_read_by_the_api(db):
+    from clearance.api import PgReadStore, Pool
+    from clearance.pg import PgResults
+    t = datetime(2026, 11, 1, 22, tzinfo=timezone.utc)
+    state = PgState(db)
+    rec = {"session": "s-r1", "task_id": "t-r1", "status": "done", "final_text": "Python and Go.",
+           "expires_at": (t + timedelta(days=30)).isoformat()}
+    PgResults(state).put(rec, t)
+    PgResults(state).put({**rec, "final_text": "again"}, t)           # a result is written once
+    state.commit()
+    assert PgResults(state).get("s-r1", t)["final_text"] == "Python and Go."
+    assert PgResults(state).get("s-r1", t + timedelta(days=31)) is None
+    state.close()
+    store = PgReadStore(Pool(db))
+    assert store.result("s-r1", t)["status"] == "done" and store.result("s-r1", t + timedelta(days=31)) is None
+
+
 def test_an_artifact_survives_a_restart(db):
     state = PgState(db)
     PgArtifacts(state).put("t-9", "report.md", "all green")

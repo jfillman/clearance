@@ -47,7 +47,9 @@ ROUTES: tuple[dict[str, Any], ...] = (
      "params": ["agent", "principal", "task", "state", "limit", "after"],
      "summary": "Sessions you may see, newest first: limits, budget used, breaker, run, parent, expiry; state is live, closed or expired"},
     {"operationId": "getSession", "method": "GET", "path": "/v1/sessions/{id}", "roles": PERSON_ROLES, "params": [],
-     "summary": "One session"},
+     "summary": "One session: with input (what an in-cluster run was asked) and outcome (how it ended) once it has them"},
+    {"operationId": "getSessionResult", "method": "GET", "path": "/v1/sessions/{id}/result", "roles": PERSON_ROLES,
+     "params": [], "summary": "A finished in-cluster run's answer (results.py), kept 30 days: status, final_text, turns, tool_calls [{tool, ok, rule}], reason; 404 when there is none or it expired"},
     {"operationId": "getTask", "method": "GET", "path": "/v1/tasks/{task_id}", "roles": PERSON_ROLES, "params": [],
      "summary": "A run tree: every session of the task, with parent links and totals"},
     {"operationId": "listEvidence", "method": "GET", "path": "/v1/evidence", "roles": PERSON_ROLES,
@@ -175,6 +177,7 @@ class ReadStore(Protocol):
     def sessions(self, f: dict[str, Any], v: Viewer, limit: int, after: str | None) -> list[dict[str, Any]]: ...
     def session(self, sid: str) -> dict[str, Any] | None: ...
     def task(self, task_id: str) -> list[dict[str, Any]]: ...
+    def result(self, sid: str, now: datetime) -> dict[str, Any] | None: ...
     def evidence(self, f: dict[str, Any], v: Viewer, limit: int, after: int | None) -> list[dict[str, Any]]: ...
     def evidence_one(self, seq: int, v: Viewer) -> dict[str, Any] | None: ...
     def by_pr(self, tools: Sequence[str], repo: str, pr: str | None, v: Viewer) -> list[dict[str, Any]]: ...
@@ -268,6 +271,10 @@ class PgReadStore:
     def session(self, sid):
         rows = self.pool.run("SELECT record FROM clearance_sessions WHERE id = %s", [sid])
         return _session_view(rows[0][0], self.now()) if rows else None
+
+    def result(self, sid, now):
+        rows = self.pool.run("SELECT record FROM clearance_results WHERE session = %s AND expires_at > %s", [sid, now])
+        return rows[0][0] if rows else None
 
     def task(self, task_id):
         now = self.now()
@@ -520,7 +527,7 @@ def explain(policy: Any, definition: Any, person: str, tool: str, args: dict[str
 
 def create_api_app(store: ReadStore, access: Access, *, clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
                    gateway_url: str | None = None, policy: Any = None, gate_policy: Any = None,
-                   runtimes: Sequence[Any] = ()):
+                   runtimes: Sequence[Any] = (), custom_images: Sequence[str] = ()):
     """The Starlette app for `clearance api`. `policy` (a clearance.policy.Policy with the deployment's packs) serves
     /v1/policy and the dry-run explainer; without it those answer 404. `gate_policy` (a gate.GatePolicy, the same
     baseline the gateway classifies with) serves /v1/clearance-policy; without it that answers 404."""
@@ -605,6 +612,15 @@ def create_api_app(store: ReadStore, access: Access, *, clock: Callable[[], date
         if s is None or not visible(s, v):
             raise ApiError(404, "no such session")
         return s
+
+    def get_session_result(req, v):
+        s = store.session(req.path_params["id"])
+        if s is None or not visible(s, v):
+            raise ApiError(404, "no such session")
+        r = store.result(s["id"], clock())
+        if r is None:
+            raise ApiError(404, "this run kept no result, or it expired" if s.get("outcome") else "the run has not finished")
+        return r
 
     def get_task(req, v):
         sessions = [s for s in store.task(req.path_params["task_id"]) if visible(s, v)]
@@ -756,14 +772,16 @@ def create_api_app(store: ReadStore, access: Access, *, clock: Callable[[], date
         return {"by": by, "items": items, "total": sum(i["count"] for i in items)}
 
     def list_runtimes(req, v):
-        return {"items": [r.view() for r in runtimes]}
+        # custom_images: the globs an image built for an agent's own repo must match (the gateway's RUNTIME_IMAGES_EXTRA
+        # on Hangar); empty = only the catalog's runtimes are allowed.
+        return {"items": [r.view() for r in runtimes], "custom_images": list(custom_images)}
 
     def get_clearance_policy(req, v):
         if gate_policy is None:
             raise ApiError(404, "this deployment runs no deployment gate")
         return gate_policy.view()
 
-    fns = {"listAgents": list_agents, "getAgent": get_agent, "listSessions": list_sessions, "getSession": get_session,
+    fns = {"listAgents": list_agents, "getAgent": get_agent, "listSessions": list_sessions, "getSession": get_session, "getSessionResult": get_session_result,
            "listClearances": list_clearances, "getClearance": get_clearance, "countClearances": count_clearances,
            "getClearancePolicy": get_clearance_policy, "listRuntimes": list_runtimes,
            "getTask": get_task, "listEvidence": list_evidence, "getEvidence": get_evidence, "verifyEvidence": verify,

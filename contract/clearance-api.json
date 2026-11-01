@@ -60,7 +60,19 @@
         "auditor"
       ],
       "params": [],
-      "summary": "One session"
+      "summary": "One session: with input (what an in-cluster run was asked) and outcome (how it ended) once it has them"
+    },
+    {
+      "operationId": "getSessionResult",
+      "method": "GET",
+      "path": "/v1/sessions/{id}/result",
+      "roles": [
+        "person",
+        "delegate",
+        "auditor"
+      ],
+      "params": [],
+      "summary": "A finished in-cluster run's answer (results.py), kept 30 days: status, final_text, turns, tool_calls [{tool, ok, rule}], reason; 404 when there is none or it expired"
     },
     {
       "operationId": "getTask",

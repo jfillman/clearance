@@ -40,7 +40,8 @@ All list endpoints are cursor-paginated (`limit`, max 200; `after`), newest firs
 |---|---|
 | `GET /v1/agents`, `/v1/agents/{name}` | definitions: `description` (one line, what it is for), `runsIn` (`cluster`: a runtime image runs it as an AgentRun; `client`: no image, a person's MCP client is the loop and Clearance enforces the envelope), kind, identity, owner, tier ceiling, tools, repos/apps scope, limits, triggers (never instructions' full text by default; `?full=1` for auditors) |
 | `GET /v1/sessions` | sessions: `agent`, `principal`, `task`, `state` (`live`, `recent`, `closed`, `expired`), `since` filters; each with limits, budget used, breaker, run, parent, expiry |
-| `GET /v1/sessions/{id}` | one session, with its children |
+| `GET /v1/sessions/{id}` | one session, with its children; `input` (v0.25.0: what an in-cluster run was asked, `{prompt, started_by}`) and `outcome` once it ended: `{status, finished_at, turns, tool_calls, not_ok, reason, result, via}`, where status is the runtime's `done`, `budget`, `expired` or `error`, or `no-result` (the run ended without handing one back; `run_phase` says how) or `expired` (the deadline came first), and `result` is the kept answer's `{bytes, sha256, truncated, expires_at}` |
+| `GET /v1/sessions/{id}/result` (v0.25.0) | a finished in-cluster run's answer, kept **30 days**: `{status, final_text (at most 16 KiB, `truncated` if cut), turns, tool_calls: [{tool, ok, rule}], reason, written_at, expires_at}`; 404 before the run finishes, when it kept none, or after it expired. Scoped like the session |
 | `GET /v1/tasks/{task_id}` | the run tree: every session in the task, parent links, totals |
 | `GET /v1/evidence` | records filtered by `task`, `session`, `agent`, `tool`, `principal`, `decision`, `rule`, `app`, `since`, `until`; cursor is `seq` |
 | `GET /v1/evidence/{seq}` | one record, with its hash and assurance state |
@@ -155,7 +156,8 @@ Answer: `{ok, problems: [{rule, path, message, hint}], tier, changes: [{field, c
 **The runtime catalog** (`runtimes.py`): the deployment hands Clearance the agent images it offers, each `{name, image (by
 digest), kind runtime|base, framework, summary, status available|planned}`. An available `runtime` image is allowed
 for `runtime.image` (beside the deployment's extra globs, for images built for an agent's own repo); a `base` image is a
-FROM image for code agents, never run as is. clearance-api lists it at `GET /v1/runtimes` for the New agent picker.
+FROM image for code agents, never run as is. clearance-api lists it at `GET /v1/runtimes` for the New agent picker,
+with `custom_images` (v0.25.0): the globs an image built for an agent's own repo must match (empty = catalog runtimes only).
 
 The release is a deployment-gate change: `POST /v1/clearances` with `definition: {name, path, old, new}` (the pin PR's
 check). Its tier comes from `classify`; a new document with problems is denied (`DG-DEFINITION`); tiers 0 and 1 clear
