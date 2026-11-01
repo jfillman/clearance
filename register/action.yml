@@ -1,0 +1,72 @@
+# Clearance register: tell Clearance's deployment gate what this workflow is about to deploy (docs/provenance-app.md,
+# phase 2b). Run it in a job before the deploy job; the Clearance GitHub App, a deployment protection rule on the
+# environment, then approves the deploy job when the change is cleared, keeps it waiting while people decide, and
+# rejects it when it is denied. The calling job needs `permissions: id-token: write` (Clearance accepts the
+# workflow's own OIDC token, for its own repository only).
+name: Clearance register
+description: Register a deployment with Clearance's deployment gate, authenticated by the workflow's OIDC token.
+inputs:
+  url:
+    description: Clearance's gateway URL (it must accept POST /v1/clearances from GitHub's runners)
+    required: true
+  app:
+    description: The application's name in Clearance
+    required: true
+  env:
+    description: The GitHub environment the deploy job targets (matched lowercased)
+    required: true
+  cluster:
+    description: The cluster the environment runs on
+    required: true
+  after:
+    description: Directory of rendered manifests at this commit
+    required: true
+  before:
+    description: Directory of rendered manifests before this commit (empty or missing means everything is added)
+    required: false
+    default: ""
+  audience:
+    description: The OIDC token's audience Clearance expects
+    required: false
+    default: clearance
+  args:
+    description: Further `clearance register` flags (for example --check ci=pass --owner group:default/team-shop)
+    required: false
+    default: ""
+outputs:
+  result:
+    description: "The change's id, state and tier, as `clearance register` printed it"
+    value: ${{ steps.register.outputs.result }}
+runs:
+  using: composite
+  steps:
+    - name: Install clearance at this action's ref
+      shell: bash
+      env:
+        ACTION_REF: ${{ github.action_ref }}
+      run: python3 -m pip install --quiet --disable-pip-version-check "clearance @ git+https://github.com/jfillman/clearance@${ACTION_REF:-main}"
+    - name: Register the change
+      id: register
+      shell: bash
+      env:
+        CLEARANCE_URL: ${{ inputs.url }}
+        IN_APP: ${{ inputs.app }}
+        IN_ENV: ${{ inputs.env }}
+        IN_CLUSTER: ${{ inputs.cluster }}
+        IN_BEFORE: ${{ inputs.before }}
+        IN_AFTER: ${{ inputs.after }}
+        IN_AUDIENCE: ${{ inputs.audience }}
+        IN_ARGS: ${{ inputs.args }}
+      run: |
+        set +e
+        before=()
+        if [ -n "$IN_BEFORE" ]; then before=(--before "$IN_BEFORE"); fi
+        # shellcheck disable=SC2086 - IN_ARGS is a list of flags
+        out=$(clearance register --app "$IN_APP" --env "$IN_ENV" --cluster "$IN_CLUSTER" --after "$IN_AFTER" \
+          "${before[@]}" --audience "$IN_AUDIENCE" $IN_ARGS)
+        code=$?
+        echo "$out"
+        echo "result=$(echo "$out" | head -1)" >> "$GITHUB_OUTPUT"
+        # 3 = holding for people: not a failure here; the protection rule keeps the deploy job waiting.
+        if [ "$code" -eq 3 ]; then exit 0; fi
+        exit $code

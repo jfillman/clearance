@@ -175,9 +175,30 @@ no bearer token). clearance-api gains the installation as a filter on the existi
 - **Turning it on**: the App needs the two new permissions and the event (the manifest has them; an existing App is
   updated in its settings, and each installation accepts the new permissions), then an environment adds the App under
   *Deployment protection rules*.
-- **Phase 2b, not built**: `clearance register`, the CI step that renders what a workflow deploys and registers it
-  (`POST /v1/clearances`), with a GitHub Actions OIDC token as its verifier identity. Until then a change is
-  registered by a verifier Clearance already accepts (on Hangar, Glidepath's `clearance-gate-` check).
+- **Registering the change** without Glidepath: phase 2b, below.
+
+## Built, phase 2b (v0.23.0): `clearance register`
+
+The customer's own CI registers what it is about to deploy, so the protection rule has a change to answer.
+
+- **The identity**: the workflow's GitHub Actions OIDC ID token (`permissions: id-token: write`), verified against
+  GitHub's JWKS (RS256, the configured audience, default `clearance`, not expired; `auth.GitHubActionsAuthenticator`).
+  The principal is `github:<sub>`, for example `github:repo:acme/shop:environment:prod`; it registers only when
+  `CLEARANCE_VERIFIERS` lists it (a glob such as `github:repo:acme/*`).
+- **Its own repository only**: the token's `repository` claim travels with the principal, and `POST /v1/clearances`
+  refuses a change for any other repository (`DG-REPO`, 403). A workflow cannot clear the way for another repo.
+- **The change**: `clearance register` (`src/clearance/register.py`, the `clearance` console script) diffs two
+  directories of rendered manifests, `--before` and `--after`: each object added, removed or changed, a changed
+  object's differing leaves as JSON pointers, the images it runs, a digest; the tree digest of `--after`; the repo,
+  commit and PR (0 for a push) from the Actions environment and event. The gate's own validation runs before
+  anything is sent; `--dry-run` prints the body.
+- **The exit code**: 0 cleared, 3 holding for people (the deploy job then waits on the protection rule), 1 denied or
+  refused, 2 a usage error. It never waits itself: the protection rule does.
+- **The GitHub Action**: `jfillman/clearance/register@<ref>` (`register/action.yml`) installs clearance at its own
+  ref and runs the command; holding is not a failure there. See `register/README.md`.
+- **On Hangar**: the gateway needs `CLEARANCE_GITHUB_OIDC_AUDIENCE` set (autopilot) and `POST /v1/clearances` reachable
+  from GitHub's runners (the apron route and the Cloudflare tunnel's path list).
+- **Elsewhere**: `--token-file` takes any bearer Clearance accepts as a verifier.
 
 
 ## Open questions for the owner (all decided 2026-11-01; kept for the record)

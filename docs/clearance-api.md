@@ -126,7 +126,9 @@ Reads here: `GET /v1/clearances` (filters `app`, `env`, `state` holding|cleared|
 owner group or outside group is one of theirs: the people who may clear them. Every step is evidence in the
 `deployment` boundary (`deploy.request`, `deploy.clear`, `deploy.deny`, `deploy.expire`, and `deploy.answer` when
 the GitHub App's answer reached a waiting GitHub Actions deployment), listed by the evidence routes like any other
-record. Since v0.22.0 a change carries `deployments`, the GitHub Actions deployments waiting on it (run, environment,
+record. Since v0.23.0 a GitHub Actions workflow may register too, with its own OIDC ID token (principal `github:<sub>`,
+listed in the verifiers), for its own repository only: any other repo is refused with `DG-REPO` (403); `clearance
+register` builds the body ([provenance-app.md](provenance-app.md) phase 2b). Since v0.22.0 a change carries `deployments`, the GitHub Actions deployments waiting on it (run, environment,
 answer, delivered; [provenance-app.md](provenance-app.md) phase 2a), and may have `pr: 0`, a pushed commit with no PR.
 
 ## Reviewing a definition, and its release (v0.20.0)
