@@ -184,7 +184,9 @@ The customer's own CI registers what it is about to deploy, so the protection ru
 - **The identity**: the workflow's GitHub Actions OIDC ID token (`permissions: id-token: write`), verified against
   GitHub's JWKS (RS256, the configured audience, default `clearance`, not expired; `auth.GitHubActionsAuthenticator`).
   The principal is `github:<sub>`, for example `github:repo:acme/shop:environment:prod`; it registers only when
-  `CLEARANCE_VERIFIERS` lists it (a glob such as `github:repo:acme/*`).
+  `CLEARANCE_VERIFIERS` lists it (a glob such as `github:repo:acme/*`). Newer repositories' tokens carry GitHub's
+  immutable-ID subject (`repo:acme@123/shop@456:...`); since v0.24.2 the ids are dropped for matching and naming, so
+  globs stay by name, and the raw subject and ids are kept as the principal's attributes.
 - **Its own repository only**: the token's `repository` claim travels with the principal, and `POST /v1/clearances`
   refuses a change for any other repository (`DG-REPO`, 403). A workflow cannot clear the way for another repo.
 - **The change**: `clearance register` (`src/clearance/register.py`, the `clearance` console script) diffs two

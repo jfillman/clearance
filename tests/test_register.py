@@ -84,6 +84,21 @@ def test_allowed_narrows_which_workflows_get_in(key):
         a.authenticate(token(key))
 
 
+def test_the_immutable_id_subject_matches_by_name(key):
+    """Newer repositories' tokens carry GitHub's immutable-ID subject (repo:owner@<id>/name@<id>:...); allow-lists and
+    verifier globs are written by name, so the ids are dropped for matching and kept on the principal."""
+    raw = "repo:jfillman@7268337/clearance-deploy-scratch@1441488947:ref:refs/heads/main"
+    a, _ = auth(key, allowed=("repo:jfillman/clearance-deploy-scratch:*",))
+    p = a.authenticate(token(key, sub=raw, repository_id="1441488947", repository_owner_id="7268337"))
+    assert p.id == "github:repo:jfillman/clearance-deploy-scratch:ref:refs/heads/main"
+    assert p.attrs["sub"] == raw and p.attrs["repository_id"] == "1441488947"
+    from clearance.auth import canonical_sub
+    assert canonical_sub("repo:acme/shop:environment:prod") == "repo:acme/shop:environment:prod"
+    assert canonical_sub("repo:acme@1/shop@2") == "repo:acme/shop"
+    with pytest.raises(AuthError):
+        auth(key, allowed=("repo:jfillman/other:*",))[0].authenticate(token(key, sub=raw))
+
+
 # -- the gate binds the token to its repository ----------------------------------------------------------------------
 class Auth:
     table = {"wf": Principal(f"github:repo:{REPO}:environment:prod", "workload", Tier.T1, {"repository": REPO})}

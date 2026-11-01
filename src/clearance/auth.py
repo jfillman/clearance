@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import ssl
 import threading
 import time
@@ -185,6 +186,17 @@ class ForeignWorkloadAuthenticator:
 GITHUB_ACTIONS_ISSUER = "https://token.actions.githubusercontent.com"
 
 
+_IMMUTABLE_REPO = re.compile(r"^repo:([^/@:]+)(?:@\d+)?/([^/@:]+)(?:@\d+)?(:.*)?$")
+
+
+def canonical_sub(sub: str) -> str:
+    """A workflow token's `sub` by name: GitHub's immutable-ID form (`repo:owner@<id>/name@<id>:ref:...`, the default
+    for newer repositories) without the `@<id>` parts, so allow-lists and verifier globs are written by name
+    (`repo:acme/shop:*`). The ids stay on the principal's attributes (sub, repository_id, repository_owner_id)."""
+    m = _IMMUTABLE_REPO.match(sub)
+    return f"repo:{m.group(1)}/{m.group(2)}{m.group(3) or ''}" if m else sub
+
+
 class GitHubActionsAuthenticator:
     """A GitHub Actions workflow's OIDC ID token (`clearance register` in a customer's CI): signed by GitHub (RS256),
     for this audience, not expired. The principal is `github:` + the token's `sub` (for example
@@ -209,12 +221,16 @@ class GitHubActionsAuthenticator:
             raise
         except jwt.PyJWTError as e:
             raise AuthError("GitHub Actions token rejected") from e
-        sub, repo = claims.get("sub"), claims.get("repository")
-        if not isinstance(sub, str) or not sub.startswith("repo:") or not isinstance(repo, str) or not repo:
+        raw, repo = claims.get("sub"), claims.get("repository")
+        if not isinstance(raw, str) or not raw.startswith("repo:") or not isinstance(repo, str) or not repo:
             raise AuthError("not a GitHub Actions repository token")
+        sub = canonical_sub(raw)
         if not any(fnmatchcase(sub, g) for g in self.allowed):
             raise AuthError("this workflow may not call this Clearance")
-        attrs = {"repository": repo.lower()}
+        attrs = {"repository": repo.lower(), "sub": raw}
+        for k in ("repository_id", "repository_owner_id"):
+            if isinstance(claims.get(k), str):
+                attrs[k] = claims[k]
         for k in ("environment", "ref", "sha", "workflow_ref", "run_id", "actor"):
             if isinstance(claims.get(k), str):
                 attrs[k] = claims[k]
