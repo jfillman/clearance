@@ -148,8 +148,12 @@ no bearer token). clearance-api gains the installation as a filter on the existi
   and `Clearance` is taken (reserved for the account `clearance`), so the manifest names Hangar's `Hangar Clearance`;
   a customer registering their own names it after themselves (`<Org> Clearance`). The check runs keep their names
   (`Clearance / agent-identity`, `Clearance / agent-scope`) whatever the App is called: Clearance sets them, not GitHub.
-- Not yet: Hangar's deployment (the App registered, its key and webhook secret, a public route for GitHub's webhooks),
-  phase 2's deployment protection rule and `clearance register`.
+- **Live on Hangar, 2026-11-01**: `Hangar Clearance` (app 5561694), installed on 25 Hangar repos, webhooks through
+  `clearance-webhook.hangarplatform.dev` (a Cloudflare tunnel that forwards only `POST /v1/github/webhook`) to the
+  hangar-dev gateway (gateway-v0.3.18, apron `autopilot.githubApp`). First verdicts: both checks `not-agent` on a
+  person's PR (gitops-hangar-dev#93), evidence `provenance.verify` and `app.installation` as `app:177375213`. It runs
+  beside `agent-gates-` until their verdicts agree on agent PRs (decision 1).
+- Not yet: phase 2's deployment protection rule and `clearance register`.
 
 
 ## Open questions for the owner (all decided 2026-11-01; kept for the record)
