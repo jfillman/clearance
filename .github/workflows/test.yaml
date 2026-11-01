@@ -29,8 +29,9 @@ jobs:
         env:
           HANGAR_TECH: ${{ github.workspace }}/tech
           CLEARANCE_TEST_DSN: postgresql://postgres:test@localhost:5432/clearance
-      # The wheel must carry the schema and the pack's vendored contract (profile and the pack read them at import).
+      # The wheel must carry the schema and the pack's vendored Glidepath scope (profile and the pack read them at
+      # import; v0.20.3 vendors only the contract's scope section, as glidepath-scope.json).
       - run: |
           pip wheel . --no-deps -w dist
           python -m zipfile -l dist/*.whl | grep -q 'clearance/schemas/agent-definition.schema.json'
-          python -m zipfile -l dist/*.whl | grep -q 'clearance/packs/hangar/vendor/glidepath-contract.json'
+          python -m zipfile -l dist/*.whl | grep -q 'clearance/packs/hangar/vendor/glidepath-scope.json'
