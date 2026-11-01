@@ -37,6 +37,31 @@ TOOLS: tuple[ToolSpec, ...] = (
     ToolSpec("glidepath.run.cancel", Tier.T1, "Cancel a running PipelineRun (its finally tasks still run)", ("app", "pipelinerun"),
              target="lower"),
     ToolSpec("glidepath.contract", Tier.T0, "Glidepath's contract: cicd.yaml fields and agent scope, gates, states, knownFailures", ()),
+    # What is happening now (glidepath-api 0.8.0+): runs.list reads Tekton Results, which holds finished runs only, so a
+    # run in flight, and a step's log while it runs, are read live. live.watch is the stream (GET .../live/stream) as one
+    # call: it follows one PipelineRun and returns when it finishes or timeoutSeconds (1-120, default 60) passes, with
+    # the changes it saw, so an agent that started a run can wait for it without polling.
+    ToolSpec("glidepath.live.list", Tier.T0, "An app's PipelineRuns in the cluster now (running, and finished within the "
+             "hour), each with its TaskRuns and their step containers", ("app",)),
+    ToolSpec("glidepath.live.watch", Tier.T0, "Follow one live PipelineRun until it finishes or timeoutSeconds (1-120, "
+             "default 60) passes; returns its state then and every task change seen", ("app", "pipelinerun")),
+    ToolSpec("glidepath.live.logs.get", Tier.T0, "Read a running TaskRun's step log (container: step-<name>, from "
+             "glidepath.live.list)", ("app", "taskRun", "container")),
+    # A release run promote or rollback started (glidepath-api 0.8.0): its tasks in order, the PR and change request.
+    ToolSpec("glidepath.releaseRun.get", Tier.T0, "Where a promote or rollback release run is: its tasks, the PR it "
+             "opened and the change request (name: the pipelineRun promote or rollback returned)", ("app", "name")),
+    # Supply-chain evidence and tests (glidepath-api phase 2).
+    ToolSpec("glidepath.evidence.get", Tier.T0, "An app image's supply-chain evidence: its attestations (build "
+             "provenance, SBOM, scans, promotion) and whether each verifies (image: ghcr.io/<owner>/<app>...)",
+             ("app", "image")),
+    ToolSpec("glidepath.tests.list", Tier.T0, "An app's Testkube test runs, newest first (limit 1-200 optional)", ("app",)),
+    ToolSpec("glidepath.tests.report", Tier.T0, "One test run's JUnit report (id from glidepath.tests.list)", ("app", "id")),
+    # Events (glidepath-api phase 5): the app's recent CDEvents from glidepath-api's buffer (best-effort, 24 h).
+    ToolSpec("glidepath.events.recent", Tier.T0, "An app's recent CDEvents, oldest first (type: a CDEvent type prefix; "
+             "since: an event id or RFC 3339 time; limit optional)", ("app",)),
+    # Preview environments (glidepath-api 0.10.0): read only; a preview starts and ends with its PR's preview label.
+    ToolSpec("glidepath.previews.list", Tier.T0, "An app's preview environments, one per PR labelled preview: the PR, "
+             "image, Argo CD sync and health, and the port-forward that reaches it", ("app",)),
     # Glidepath releases (spec phase 4). Two reads, then two propose-only writes: each starts the app's release
     # Pipeline, whose open-release-pr step opens the gitops PR with the platform's GitHub App; a human merges it.
     # Neither Clearance nor glidepath-api holds a GitHub identity that can merge, push or approve.

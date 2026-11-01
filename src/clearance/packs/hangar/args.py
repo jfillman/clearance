@@ -28,6 +28,15 @@ _GP_ARGS = {
     "sourceCluster": re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$"),
     "sourceImageRepo": re.compile(r"^[a-z0-9][a-z0-9._/:-]{0,254}$"),
     "sourceImageTag": re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$"),
+    # Live and release-run reads (glidepath-api 0.8.0): a step container, a release run's name.
+    "container": re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
+    "name": re.compile(r"^(promote|rollback)-[a-z0-9-]{1,56}$"),
+    # Evidence: an image of the app (glidepath-api refuses any other); tests: a Testkube execution id.
+    "image": re.compile(r"^ghcr\.io/[a-z0-9._/-]{1,255}(:[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?(@sha256:[0-9a-f]{64})?$"),
+    "id": re.compile(r"^[A-Za-z0-9_-]{1,128}$"),
+    # Events: a CDEvent type prefix and a resume point (an event id or an RFC 3339 time).
+    "type": re.compile(r"^[a-z0-9.]{1,256}$"),
+    "since": re.compile(r"^[0-9A-Za-z:.+_-]{1,64}$"),
     # Goes in the body, not a path; glidepath-api caps it at 256 and checks it against the rollback plan.
     "targetReleaseId": re.compile(r"^[\x21-\x7e]{1,256}$"),
 }
@@ -41,7 +50,7 @@ def glidepath_bad_args(args: dict[str, Any]) -> int:
     for k, pat in _GP_ARGS.items():
         if k in args and not (isinstance(args[k], str) and pat.fullmatch(args[k])):
             bad += 1
-    for k, hi in (("sinceHours", 744), ("limit", 1000)):
+    for k, hi in (("sinceHours", 744), ("limit", 1000), ("timeoutSeconds", 120)):
         if k in args and not (isinstance(args[k], int) and not isinstance(args[k], bool) and 1 <= args[k] <= hi):
             bad += 1
     if "dryRun" in args and not isinstance(args["dryRun"], bool):
