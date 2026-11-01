@@ -14,6 +14,7 @@ Tables (created if missing; `migrate` is idempotent):
   clearance_sessions  id, the session record (jsonb), expires_at and closed for the load query.
   clearance_artifacts artifact.put's text, per task and name, bounded and expiring (PgArtifacts).
   clearance_human_requests  human.request's questions and their answers (PgInbox, inbox.py).
+  clearance_results   a finished run's answer, per session, kept results.RETENTION (PgResults, results.py).
 """
 from __future__ import annotations
 
@@ -98,6 +99,14 @@ CREATE TABLE IF NOT EXISTS clearance_changes (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS clearance_changes_pr ON clearance_changes (repo, pr);
+CREATE TABLE IF NOT EXISTS clearance_results (
+  session    text        PRIMARY KEY,
+  task_id    text        NOT NULL,
+  record     jsonb       NOT NULL,
+  expires_at timestamptz NOT NULL,
+  written_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS clearance_results_expiry ON clearance_results (expires_at);
 CREATE INDEX IF NOT EXISTS clearance_changes_state ON clearance_changes (state, expires_at);
 CREATE INDEX IF NOT EXISTS clearance_changes_app ON clearance_changes (app, env, updated_at DESC);
 CREATE TABLE IF NOT EXISTS clearance_definitions (
@@ -270,6 +279,28 @@ class PgArtifacts:
         with self.state.conn.cursor() as cur:
             cur.execute("SELECT content FROM clearance_artifacts WHERE task_id = %s AND name = %s AND expires_at > %s",
                         (task_id, name, self.now()))
+            row = cur.fetchone()
+        return row[0] if row else None
+
+
+class PgResults:
+    """ResultStore on clearance_results: a finished run's answer, by session, until it expires (results.py). A put
+    joins the run.finish call's transaction, so the answer commits with its evidence record and the closed session;
+    each put first deletes what has expired."""
+
+    def __init__(self, state: PgState):
+        self.state = state
+
+    def put(self, record: dict[str, Any], now: datetime) -> None:
+        with self.state.conn.cursor() as cur:
+            cur.execute("DELETE FROM clearance_results WHERE expires_at <= %s", (now,))
+            cur.execute("INSERT INTO clearance_results (session, task_id, record, expires_at) VALUES (%s, %s, %s, %s) "
+                        "ON CONFLICT (session) DO NOTHING",
+                        (record["session"], record["task_id"], Jsonb(record), datetime.fromisoformat(record["expires_at"])))
+
+    def get(self, session_id: str, now: datetime) -> dict[str, Any] | None:
+        with self.state.conn.cursor() as cur:
+            cur.execute("SELECT record FROM clearance_results WHERE session = %s AND expires_at > %s", (session_id, now))
             row = cur.fetchone()
         return row[0] if row else None
 
