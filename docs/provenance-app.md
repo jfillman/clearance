@@ -78,7 +78,7 @@ holds the same evidence as Hangar's.
 
 | | Hosted (Clearance as a service) | Self-hosted |
 |---|---|---|
-| The App | one public App, `clearance-provenance`, registered by us | registered by the customer from a manifest we ship (GitHub's App manifest flow: one click, their own key and secret) |
+| The App | one public App, `clearance-provenance` (free on GitHub as of 2026-10-31; `Clearance` is taken), registered by us | registered by the customer from a manifest we ship (GitHub's App manifest flow: one click, their own key and secret) |
 | Tenancy | each installation is a tenant: its repos, its agents' receipts, its evidence chain, keyed by installation id and its account | one tenant, the customer's |
 | Secrets | the App's private key in a KMS, never on disk; webhook secret per App | the customer's, in their secret store |
 | Webhooks | a public endpoint we run, signature-checked, rate-limited per installation | their Clearance's endpoint, which must be reachable from GitHub (or a relay they run) |
@@ -144,7 +144,10 @@ no bearer token). clearance-api gains the installation as a filter on the existi
 - **Route**: `POST /v1/github/webhook` on the gateway (`create_http_app(github_app=)`), signature-authenticated, 404
   when no App is configured.
 - **Registration**: `contract/github-app-manifest.json`, the App manifest for GitHub's manifest flow (replace
-  `CLEARANCE_HOST`): private, the permissions and events above.
+  `CLEARANCE_HOST`): private, the permissions and events above. A GitHub App's name is unique across all of GitHub
+  and `Clearance` is taken (reserved for the account `clearance`), so the manifest names Hangar's `Hangar Clearance`;
+  a customer registering their own names it after themselves (`<Org> Clearance`). The check runs keep their names
+  (`Clearance / agent-identity`, `Clearance / agent-scope`) whatever the App is called: Clearance sets them, not GitHub.
 - Not yet: Hangar's deployment (the App registered, its key and webhook secret, a public route for GitHub's webhooks),
   phase 2's deployment protection rule and `clearance register`.
 
