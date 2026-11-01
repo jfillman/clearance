@@ -7,6 +7,9 @@ apart by the token's issuer and each verified in full by its own authority.
                          `clearance` audience. Principal "<namespace>/<name>", kind "workload".
   OIDCAuthenticator      a person's OIDC ID token (Dex in the lab), checked against the issuer's JWKS: signature,
                          issuer, audience, expiry. Principal "user:<claim>", kind "user".
+  GitHubActionsAuthenticator  a GitHub Actions OIDC ID token (a workflow's `id-token: write`), checked against
+                         GitHub's JWKS. Principal "github:<sub>", kind "workload", with the token's `repository`
+                         as a verified attribute (the gate binds such a caller to its own repository).
   RoutingAuthenticator   reads the token's `iss` without trusting it, only to choose which of the two verifies it.
   CachingAuthenticator   remembers a verified token for a short time (never past its expiry, never a failure), so a
                          session's calls cost one TokenReview a minute rather than one each.
@@ -177,6 +180,45 @@ class ForeignWorkloadAuthenticator:
         if not any(fnmatchcase(ns_sa, g) for g in self.allowed):
             raise AuthError(f"{self.name}/{ns_sa} may not call this Clearance")
         return Principal(f"{self.name}/{ns_sa}", "workload", self.tier_ceiling)
+
+
+GITHUB_ACTIONS_ISSUER = "https://token.actions.githubusercontent.com"
+
+
+class GitHubActionsAuthenticator:
+    """A GitHub Actions workflow's OIDC ID token (`clearance register` in a customer's CI): signed by GitHub (RS256),
+    for this audience, not expired. The principal is `github:` + the token's `sub` (for example
+    `github:repo:acme/shop:environment:prod` or `github:repo:acme/shop:ref:refs/heads/main`), a workload; who may do
+    what is still the gateway's lists (CLEARANCE_VERIFIERS globs on that id). `allowed` (globs on `sub`) narrows
+    which workflows get in at all; empty allows none. The `repository` claim travels as a verified attribute."""
+
+    ALGORITHMS = ("RS256",)
+
+    def __init__(self, audience: str, keys: JWKS, allowed: Sequence[str] = ("repo:*",),
+                 issuer: str = GITHUB_ACTIONS_ISSUER, tier_ceiling: Tier = Tier.T1, leeway: float = 30):
+        self.issuer, self.audience, self.keys, self.allowed = issuer, audience, keys, tuple(allowed)
+        self.tier_ceiling, self.leeway = tier_ceiling, leeway
+
+    def authenticate(self, token: str) -> Principal:
+        try:
+            header = jwt.get_unverified_header(token)
+            claims = jwt.decode(token, self.keys.key(header.get("kid")), algorithms=list(self.ALGORITHMS),
+                                audience=self.audience, issuer=self.issuer, leeway=self.leeway,
+                                options={"require": ["exp", "iat", "iss", "aud", "sub"]})
+        except AuthError:
+            raise
+        except jwt.PyJWTError as e:
+            raise AuthError("GitHub Actions token rejected") from e
+        sub, repo = claims.get("sub"), claims.get("repository")
+        if not isinstance(sub, str) or not sub.startswith("repo:") or not isinstance(repo, str) or not repo:
+            raise AuthError("not a GitHub Actions repository token")
+        if not any(fnmatchcase(sub, g) for g in self.allowed):
+            raise AuthError("this workflow may not call this Clearance")
+        attrs = {"repository": repo.lower()}
+        for k in ("environment", "ref", "sha", "workflow_ref", "run_id", "actor"):
+            if isinstance(claims.get(k), str):
+                attrs[k] = claims[k]
+        return Principal(f"github:{sub}", "workload", self.tier_ceiling, attrs)
 
 
 class RoutingAuthenticator:
