@@ -1,0 +1,10 @@
+{
+  "name": "Clearance",
+  "url": "https://hangarplatform.dev/clearance/",
+  "description": "Clearance's own checks on pull requests: is this PR the one Clearance's agent opened (agent-identity), and does it stay inside that agent's scope (agent-scope)? Read-only on code.",
+  "hook_attributes": { "url": "https://CLEARANCE_HOST/v1/github/webhook", "active": true },
+  "redirect_url": "https://CLEARANCE_HOST/",
+  "public": false,
+  "default_permissions": { "checks": "write", "contents": "read", "pull_requests": "read", "metadata": "read" },
+  "default_events": ["pull_request", "check_run", "check_suite"]
+}

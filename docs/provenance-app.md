@@ -125,14 +125,36 @@ no bearer token). clearance-api gains the installation as a filter on the existi
 | 1 | Replace `agent-gates-` on Hangar | **Yes, after running both for a while.** The App's check runs report beside `agent-gates-` until their verdicts agree on real PRs, then `agent-gates-` retires (its onboarding template removed, the guardrail renamed to the App's check). |
 | 2 | Self-hosted or hosted first | **Self-hosted first, on Hangar**: a Hangar-registered App, Clearance's webhook endpoint on hangar-dev, one tenant. Hosted (tenancy, KMS, the public listing) is phase 3. |
 
-Questions 3 to 5 are still open.
+| 3 | Where a gated deployment's change comes from | **Both.** A `clearance register` step in the customer's deploy workflow (it renders and diffs what it applies, the same strength as Hangar's check) is preferred; without one, the App classifies the PR's source diff and the change is marked **source-only** so people know its tier is coarse. |
+| 4 | PR comments | **Off by default**, a per-installation setting with **"failures on agent PRs"** as the option (Hangar uses it while both checks run, so the comparison is visible). Turning it on adds `issues: write` to the App's token. |
+| 5 | Names | **As proposed**: the App is **Clearance** (slug `clearance`); the checks are `Clearance / agent-identity` and `Clearance / agent-scope`; the deployment rule is **Clearance deployment gate**; records name `app:<installation id>`. |
 
-## Open questions for the owner
+## Built, phase 1 (v0.21.0): the check runs
+
+- **`github_app.py`**: `verify_signature` (HMAC-SHA256 of the raw body, constant-time), `GitHubApp.accept` (401 bad
+  signature, 202 queued, 200 ignored; never works inline), a worker thread, `handle` for `pull_request` (opened,
+  synchronize, reopened, edited, ready_for_review), `check_run` / `check_suite` rerequested (only the App's own
+  checks) and `installation` / `installation_repositories`. The App's JWT (RS256, 9 minutes), an installation token
+  for the one repository (`checks: write`, `contents`/`pull_requests`/`metadata: read`; `issues: write` only with
+  comments on), `gather` (head, author, every changed path and a rename's old name, the head commit's `Hangar-*`
+  trailers: what `agent-gates-` sends), two check runs with the rule, the hint, the evidence record and one annotation
+  per out-of-scope path, and the optional comment (upserted by a marker).
+- **Gateway**: `provenance_from_app(installation, request)` (the same `provenance.verify`, recorded with principal
+  `app:<id>`), `record_app_installation` (`app.installation` records). The `/v1/provenance` path is unchanged.
+- **Route**: `POST /v1/github/webhook` on the gateway (`create_http_app(github_app=)`), signature-authenticated, 404
+  when no App is configured.
+- **Registration**: `contract/github-app-manifest.json`, the App manifest for GitHub's manifest flow (replace
+  `CLEARANCE_HOST`): private, the permissions and events above.
+- Not yet: Hangar's deployment (the App registered, its key and webhook secret, a public route for GitHub's webhooks),
+  phase 2's deployment protection rule and `clearance register`.
+
+
+## Open questions for the owner (all decided 2026-11-01; kept for the record)
 
 1. ~~Replace `agent-gates-` on Hangar~~ Decided: yes, after running both.
 2. ~~Hosted first or self-hosted first?~~ Decided: self-hosted on Hangar first.
-3. **Where a gated deployment's change comes from**: a `clearance register` CI step that renders what it deploys
+3. ~~Where a gated deployment's change comes from~~ Decided: both. Was: a `clearance register` CI step that renders what it deploys
    (recommended: the same strength as Hangar's), or the App classifying the PR's source diff (weaker, zero setup).
-4. **PR comments**: off by default, check runs only (recommended), or on for agent PRs like `agent-gates-`?
-5. **Name**: `clearance-provenance` for the App and `Clearance / agent-identity`, `Clearance / agent-scope` for the
+4. ~~PR comments~~ Decided: off by default, "failures on agent PRs" as an option. Was: off by default, check runs only (recommended), or on for agent PRs like `agent-gates-`?
+5. ~~Name~~ Decided: as proposed. Was: `clearance-provenance` for the App and `Clearance / agent-identity`, `Clearance / agent-scope` for the
    checks, or another name the product site uses.
