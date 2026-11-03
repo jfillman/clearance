@@ -9,9 +9,9 @@ import (
 	"strings"
 
 	"github.com/jfillman/clearance/internal/decide"
-	"github.com/jfillman/clearance/internal/decide/pyval"
-	"github.com/jfillman/clearance/internal/decide/pyyaml"
-	"github.com/jfillman/clearance/internal/decide/scope"
+	"github.com/jfillman/clearance/internal/pycompat"
+	"github.com/jfillman/clearance/internal/pyyaml"
+	"github.com/jfillman/clearance/internal/scope"
 )
 
 // This file is packs/hangar/cicd.py and its vendored vendor/cicd_scope.py (Glidepath's GP-SCOPE rules), ported:
@@ -46,15 +46,15 @@ type scopeRule struct {
 }
 
 func mergePatch(target, patch any) any {
-	pm, ok := patch.(*pyval.Map)
+	pm, ok := patch.(*pycompat.Map)
 	if !ok {
 		return patch // values are never mutated, so sharing is a deep copy's equal
 	}
-	var out *pyval.Map
-	if tm, ok := target.(*pyval.Map); ok {
+	var out *pycompat.Map
+	if tm, ok := target.(*pycompat.Map); ok {
 		out = tm.Copy()
 	} else {
-		out = pyval.NewMap(pm.Len())
+		out = pycompat.NewMap(pm.Len())
 	}
 	for i := range pm.Len() {
 		k, v := pm.At(i)
@@ -91,7 +91,7 @@ func loadIfStr(v any) (any, error) {
 func (p *Pack) cicdScopeProblems(files []any) ([]decide.Problem, error) {
 	var problems []decide.Problem
 	for _, f := range files {
-		fm, ok := f.(*pyval.Map)
+		fm, ok := f.(*pycompat.Map)
 		if !ok {
 			continue
 		}
@@ -115,22 +115,22 @@ func (p *Pack) cicdScopeProblems(files []any) ([]decide.Problem, error) {
 			}
 			return nil, err
 		}
-		if _, isMap := base.(*pyval.Map); base != nil && !isMap {
+		if _, isMap := base.(*pycompat.Map); base != nil && !isMap {
 			problems = append(problems, wholeFile(fp, "the current content (`before`) is not a YAML mapping"))
 			continue
 		}
 		if op, _ := fm.GetStr("op"); op == "merge-patch" {
-			if _, isMap := head.(*pyval.Map); !isMap {
+			if _, isMap := head.(*pycompat.Map); !isMap {
 				problems = append(problems, wholeFile(fp, "a merge-patch must be a mapping"))
 				continue
 			}
 			b := base
-			if !pyval.Truthy(b) {
-				b = pyval.NewMap(0)
+			if !pycompat.Truthy(b) {
+				b = pycompat.NewMap(0)
 			}
 			head = mergePatch(b, head)
 		}
-		hm, isMap := head.(*pyval.Map)
+		hm, isMap := head.(*pycompat.Map)
 		if !isMap {
 			problems = append(problems, wholeFile(fp, "the new content is not a YAML mapping"))
 			continue
@@ -155,7 +155,7 @@ func (p *Pack) cicdScopeProblems(files []any) ([]decide.Problem, error) {
 // --- JSON pointers ---------------------------------------------------------------------------
 
 func esc(k any) string {
-	return strings.ReplaceAll(strings.ReplaceAll(pyval.Str(k), "~", "~0"), "/", "~1")
+	return strings.ReplaceAll(strings.ReplaceAll(pycompat.Str(k), "~", "~0"), "/", "~1")
 }
 
 func segments(pointer string) []string {
@@ -209,7 +209,7 @@ type change struct {
 }
 
 // get is `d.get(k, MISSING)` on a value known to be a dict.
-func get(m *pyval.Map, k any) any {
+func get(m *pycompat.Map, k any) any {
 	if v, ok := m.Get(k); ok {
 		return v
 	}
@@ -223,7 +223,7 @@ func eqTop(a, b any) bool {
 	if am || bm {
 		return am && bm
 	}
-	return pyval.Eq(a, b)
+	return pycompat.Equal(a, b)
 }
 
 func eqIn(a, b any) bool {
@@ -232,13 +232,13 @@ func eqIn(a, b any) bool {
 	if am || bm {
 		return am && bm
 	}
-	return pyval.EqIn(a, b)
+	return pycompat.EqualIn(a, b)
 }
 
 func named(items []any) bool {
 	seen := map[string]bool{}
 	for _, it := range items {
-		m, ok := it.(*pyval.Map)
+		m, ok := it.(*pycompat.Map)
 		if !ok {
 			return false
 		}
@@ -259,15 +259,15 @@ type pair struct {
 
 func pairList(base, head []any) []pair {
 	if named(base) && named(head) {
-		b, h := pyval.NewMap(len(base)), pyval.NewMap(len(head))
-		keys := pyval.NewMap(len(base) + len(head))
+		b, h := pycompat.NewMap(len(base)), pycompat.NewMap(len(head))
+		keys := pycompat.NewMap(len(base) + len(head))
 		for _, it := range base {
-			n, _ := it.(*pyval.Map).GetStr("name")
+			n, _ := it.(*pycompat.Map).GetStr("name")
 			b.Set(n, it)
 			keys.Set(n, nil)
 		}
 		for _, it := range head {
-			n, _ := it.(*pyval.Map).GetStr("name")
+			n, _ := it.(*pycompat.Map).GetStr("name")
 			h.Set(n, it)
 			keys.Set(n, nil)
 		}
@@ -286,7 +286,7 @@ func pairList(base, head []any) []pair {
 	for hi, hv := range head {
 		found := -1
 		for i, bv := range base {
-			if !used[i] && pyval.Eq(bv, hv) {
+			if !used[i] && pycompat.Equal(bv, hv) {
 				found = i
 				break
 			}
@@ -328,10 +328,10 @@ func changes(base, head any, pointer string, depth int) ([]change, error) {
 	if eqTop(base, head) {
 		return nil, nil
 	}
-	bm, bIsMap := base.(*pyval.Map)
-	hm, hIsMap := head.(*pyval.Map)
+	bm, bIsMap := base.(*pycompat.Map)
+	hm, hIsMap := head.(*pycompat.Map)
 	if bIsMap && hIsMap {
-		keys := pyval.NewMap(bm.Len() + hm.Len())
+		keys := pycompat.NewMap(bm.Len() + hm.Len())
 		for _, k := range bm.Keys() {
 			keys.Set(k, nil)
 		}
@@ -364,7 +364,7 @@ func changes(base, head any, pointer string, depth int) ([]change, error) {
 	_, hMissing := head.(missingT)
 	_, bMissing := base.(missingT)
 	if (bIsMap || bIsList) && hMissing {
-		var empty any = pyval.NewMap(0)
+		var empty any = pycompat.NewMap(0)
 		if bIsList {
 			empty = []any{}
 		}
@@ -382,7 +382,7 @@ func changes(base, head any, pointer string, depth int) ([]change, error) {
 		return out, nil
 	}
 	if (hIsMap || hIsList) && bMissing {
-		var empty any = pyval.NewMap(0)
+		var empty any = pycompat.NewMap(0)
 		if hIsList {
 			empty = []any{}
 		}
@@ -436,7 +436,7 @@ func rank(order, value any) (float64, bool, error) {
 			return 0, false, nil
 		}
 		for i, e := range o {
-			if pyval.EqIn(e, value) {
+			if pycompat.EqualIn(e, value) {
 				return float64(i), true, nil
 			}
 		}
@@ -471,19 +471,19 @@ func show(v any, r *scopeRule) string {
 		if !r.hasDefault {
 			return "unset"
 		}
-		return "unset = " + pyval.Repr(r.Default)
+		return "unset = " + pycompat.Repr(r.Default)
 	}
-	return pyval.Repr(v)
+	return pycompat.Repr(v)
 }
 
 // --- structural rules ------------------------------------------------------------------------
 
 // dget is `(x or {}).get(k)` for a value that must be a dict when truthy (AttributeError otherwise).
 func dget(x any, k string) (any, error) {
-	if !pyval.Truthy(x) {
+	if !pycompat.Truthy(x) {
 		return nil, nil
 	}
-	m, ok := x.(*pyval.Map)
+	m, ok := x.(*pycompat.Map)
 	if !ok {
 		return nil, errAttr
 	}
@@ -491,7 +491,7 @@ func dget(x any, k string) (any, error) {
 	return v, nil
 }
 
-func envs(doc any) (*pyval.Map, error) {
+func envs(doc any) (*pycompat.Map, error) {
 	dep, err := dget(doc, "deploy")
 	if err != nil {
 		return nil, err
@@ -502,14 +502,14 @@ func envs(doc any) (*pyval.Map, error) {
 	}
 	l, ok := e.([]any)
 	if !ok {
-		def := pyval.NewMap(2)
+		def := pycompat.NewMap(2)
 		def.Set("name", "dev")
 		def.Set("tier", "ground")
 		l = []any{def}
 	}
-	out := pyval.NewMap(len(l))
+	out := pycompat.NewMap(len(l))
 	for _, it := range l {
-		m, ok := it.(*pyval.Map)
+		m, ok := it.(*pycompat.Map)
 		if !ok {
 			continue
 		}
@@ -524,13 +524,13 @@ func envs(doc any) (*pyval.Map, error) {
 
 // iterate is Python `for s in (x or [])` for _steps: a dict yields its keys, a str its characters.
 func iterate(x any) ([]any, error) {
-	if !pyval.Truthy(x) {
+	if !pycompat.Truthy(x) {
 		return nil, nil
 	}
 	switch v := x.(type) {
 	case []any:
 		return v, nil
-	case *pyval.Map:
+	case *pycompat.Map:
 		return v.Keys(), nil
 	case string:
 		return nil, nil // characters, none of them a dict
@@ -538,18 +538,18 @@ func iterate(x any) ([]any, error) {
 	return nil, errType
 }
 
-func steps(flow any) ([]*pyval.Map, error) {
+func steps(flow any) ([]*pycompat.Map, error) {
 	var s any = flow
-	if m, ok := flow.(*pyval.Map); ok {
+	if m, ok := flow.(*pycompat.Map); ok {
 		s, _ = m.GetStr("steps")
 	}
 	items, err := iterate(s)
 	if err != nil {
 		return nil, err
 	}
-	var out []*pyval.Map
+	var out []*pycompat.Map
 	for _, it := range items {
-		if m, ok := it.(*pyval.Map); ok {
+		if m, ok := it.(*pycompat.Map); ok {
 			out = append(out, m)
 		}
 	}
@@ -558,19 +558,19 @@ func steps(flow any) ([]*pyval.Map, error) {
 
 type gates struct{ rides, tests int }
 
-func gateCounts(doc any) (*pyval.Map, []gates, error) {
+func gateCounts(doc any) (*pycompat.Map, []gates, error) {
 	pl, err := dget(doc, "pipelines")
 	if err != nil {
 		return nil, nil, err
 	}
-	if !pyval.Truthy(pl) {
-		return pyval.NewMap(0), nil, nil
+	if !pycompat.Truthy(pl) {
+		return pycompat.NewMap(0), nil, nil
 	}
-	pm, ok := pl.(*pyval.Map)
+	pm, ok := pl.(*pycompat.Map)
 	if !ok {
 		return nil, nil, errAttr // .items() on a non-dict
 	}
-	out := pyval.NewMap(pm.Len())
+	out := pycompat.NewMap(pm.Len())
 	var counts []gates
 	for i := range pm.Len() {
 		name, flow := pm.At(i)
@@ -581,13 +581,13 @@ func gateCounts(doc any) (*pyval.Map, []gates, error) {
 		var g gates
 		for _, s := range ss {
 			st, _ := s.GetStr("stage")
-			if !pyval.Truthy(st) {
+			if !pycompat.Truthy(st) {
 				st, _ = s.GetStr("task")
 			}
-			if !pyval.Eq(st, "test") {
+			if !pycompat.Equal(st, "test") {
 				continue
 			}
-			if role, _ := s.GetStr("role"); pyval.Eq(role, "check-ride") {
+			if role, _ := s.GetStr("role"); pycompat.Equal(role, "check-ride") {
 				g.rides++
 			} else if req, ok := s.GetStr("required"); !ok || req != false {
 				g.tests++
@@ -613,7 +613,7 @@ func structural(base, head any) ([]decide.Problem, error) {
 	if err != nil {
 		return nil, err
 	}
-	keys := pyval.NewMap(bE.Len() + hE.Len())
+	keys := pycompat.NewMap(bE.Len() + hE.Len())
 	for _, k := range bE.Keys() {
 		keys.Set(k, nil)
 	}
@@ -627,17 +627,17 @@ func structural(base, head any) ([]decide.Problem, error) {
 		ptr := "/deploy/environments/" + esc(name)
 		var bt, ht any
 		if bok {
-			bt, _ = bv.(*pyval.Map).GetStr("tier")
+			bt, _ = bv.(*pycompat.Map).GetStr("tier")
 		}
 		if hok {
-			ht, _ = hv.(*pyval.Map).GetStr("tier")
+			ht, _ = hv.(*pycompat.Map).GetStr("tier")
 		}
 		// `b and h`: a dict here is truthy when it has a key, and every environment has its name.
-		if bok && hok && !pyval.Eq(bt, ht) {
+		if bok && hok && !pycompat.Equal(bt, ht) {
 			out = append(out, prob(ptr+"/tier", "GP-SCOPE-003",
-				fmt.Sprintf("environment '%s' changed tier from %s to %s", name, pyval.Str(bt), pyval.Str(ht)),
+				fmt.Sprintf("environment '%s' changed tier from %s to %s", name, pycompat.Str(bt), pycompat.Str(ht)),
 				"Moving an environment between Ground and Flight changes which gates guard it. A human makes that change."))
-		} else if (pyval.EqIn("flight", bt) || pyval.EqIn("flight", ht)) && !(bok && hok && pyval.Eq(bv, hv)) {
+		} else if (pycompat.EqualIn("flight", bt) || pycompat.EqualIn("flight", ht)) && !(bok && hok && pycompat.Equal(bv, hv)) {
 			what := "changed"
 			if !bok {
 				what = "added"
@@ -665,12 +665,12 @@ func structural(base, head any) ([]decide.Problem, error) {
 		}
 		ptr := "/pipelines/" + esc(flow)
 		if h.rides < b.rides {
-			out = append(out, prob(ptr, "GP-SCOPE-002", fmt.Sprintf("flow '%s' lost its check-ride step", pyval.Str(flow)),
+			out = append(out, prob(ptr, "GP-SCOPE-002", fmt.Sprintf("flow '%s' lost its check-ride step", pycompat.Str(flow)),
 				"The check ride is what the qa gate reads. Removing it is a human's change."))
 		}
 		if h.tests < b.tests {
 			out = append(out, prob(ptr, "GP-SCOPE-002",
-				fmt.Sprintf("flow '%s' has fewer required test steps (%d -> %d)", pyval.Str(flow), b.tests, h.tests),
+				fmt.Sprintf("flow '%s' has fewer required test steps (%d -> %d)", pycompat.Str(flow), b.tests, h.tests),
 				"Removing a required test, or setting required: false on one, loosens the flow. A human makes that change."))
 		}
 	}
@@ -678,10 +678,10 @@ func structural(base, head any) ([]decide.Problem, error) {
 }
 
 // scopeProblems is cicd_scope.scope_problems.
-func (p *Pack) scopeProblems(base any, head *pyval.Map) ([]decide.Problem, error) {
+func (p *Pack) scopeProblems(base any, head *pycompat.Map) ([]decide.Problem, error) {
 	var b any = base
 	if base == nil {
-		b = pyval.NewMap(0)
+		b = pycompat.NewMap(0)
 	}
 	chs, err := changes(b, head, "", 0)
 	if err != nil {

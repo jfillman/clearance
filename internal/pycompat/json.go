@@ -1,24 +1,14 @@
-// Package pycompat reproduces the few Python behaviours the gate's records and digests depend on byte for byte:
-// json.dumps (sort_keys, separators, ensure_ascii, float repr), fnmatch.fnmatchcase, str()/repr() of JSON values,
-// and datetime.isoformat. Values are what encoding/json produces with UseNumber: string, bool, json.Number,
-// float64, []any, map[string]any, nil (int, int64, *big.Int and float64 are accepted too).
-//
-// The chain's canonical form is R-1b's internal/canon (Canonical and ArgsDigest delegate to it); Dumps adds the
-// json.dumps variants the gate's other digests use (ensure_ascii=True, default separators).
 package pycompat
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"math"
 	"math/big"
 	"sort"
 	"strconv"
-	"strings"
 	"unicode/utf8"
 
 	"github.com/jfillman/clearance/internal/canon"
@@ -30,12 +20,17 @@ type Options struct {
 	ASCII bool
 	// Spaced is the default separators (", ", ": "); false is separators=(",", ":").
 	Spaced bool
+	// KeepOrder is sort_keys=False: a *Map's keys in insertion order. The default is sort_keys=True. A
+	// map[string]any is always written sorted (a Go map keeps no order).
+	KeepOrder bool
 }
 
-// Canonical is audit.canonical (R-1b's canon.Canonical).
-func Canonical(v any) ([]byte, error) { return canon.Canonical(v) }
-
-// Dumps is json.dumps(v, sort_keys=True, ...) with the given options.
+// Dumps is json.dumps(v, ...) with the given options, over either value model. A *Map with a non-string key writes
+// it as json.dumps does (its JSON text, quoted); sorting such a map is Python's TypeError. A Date or DateTime is not
+// JSON serializable (json.dumps without default=). Any other Go value is normalised through encoding/json first.
+//
+// The evidence chain's canonical form is not this: it is canon.Canonical, which also refuses what Python's
+// .encode() refuses (invalid UTF-8) and checks number literals; this is for the gate's other digests and messages.
 func Dumps(v any, o Options) ([]byte, error) {
 	var b bytes.Buffer
 	if err := encode(&b, v, o); err != nil {
@@ -44,8 +39,18 @@ func Dumps(v any, o Options) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
+// DumpsLen is len(json.dumps(v)) with Python's defaults (ensure_ascii, ", " and ": ", no sort), in characters.
+func DumpsLen(v any) (int, error) {
+	b, err := Dumps(v, Options{ASCII: true, Spaced: true, KeepOrder: true})
+	if err != nil {
+		return 0, err
+	}
+	return len(b), nil // ensure_ascii output is all ASCII: bytes are characters
+}
+
 // ArgsDigest is audit.args_digest: the sha256 of the canonical JSON of v. v may be any Go value encoding/json
-// can marshal; it is normalised through JSON first, so a struct digests as its JSON object.
+// can marshal; it is normalised through JSON first, so a struct digests as its JSON object. It is "" when v has
+// no JSON form (canon.ArgsDigest, which this wraps, returns the error instead).
 func ArgsDigest(v any) string {
 	n, err := Normalize(v)
 	if err != nil {
@@ -58,12 +63,6 @@ func ArgsDigest(v any) string {
 	return d
 }
 
-// SHA256Hex is hashlib.sha256(b).hexdigest().
-func SHA256Hex(b []byte) string {
-	h := sha256.Sum256(b)
-	return hex.EncodeToString(h[:])
-}
-
 // Normalize turns any marshalable Go value into the generic JSON value encoding/json decodes (with UseNumber).
 func Normalize(v any) (any, error) {
 	switch v.(type) {
@@ -74,11 +73,11 @@ func Normalize(v any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return Decode(bytes.NewReader(raw))
+	return canon.Parse(raw)
 }
 
-// Decode reads exactly one JSON value the way json.loads does (R-1b's canon.Parse: numbers as json.Number,
-// trailing data refused).
+// Decode reads exactly one JSON value the way json.loads does, into the JSON model (canon.Parse: map[string]any,
+// numbers as json.Number, trailing data refused). DecodeJSON is the same for the dict model.
 func Decode(r io.Reader) (any, error) {
 	raw, err := io.ReadAll(r)
 	if err != nil {
@@ -104,13 +103,18 @@ func encode(b *bytes.Buffer, v any, o Options) error {
 		if err != nil {
 			return err
 		}
-		if s == "inf" || s == "-inf" || s == "nan" {
-			b.WriteString(map[string]string{"inf": "Infinity", "-inf": "-Infinity", "nan": "NaN"}[s])
-		} else {
+		switch s {
+		case "inf":
+			b.WriteString("Infinity")
+		case "-inf":
+			b.WriteString("-Infinity")
+		case "nan":
+			b.WriteString("NaN")
+		default:
 			b.WriteString(s)
 		}
 	case float64:
-		b.WriteString(jsonFloat(x))
+		b.WriteString(canon.PyFloat(x)) // NaN, Infinity, -Infinity as json.dumps writes them
 	case int:
 		b.WriteString(strconv.Itoa(x))
 	case int64:
@@ -155,6 +159,10 @@ func encode(b *bytes.Buffer, v any, o Options) error {
 			}
 		}
 		b.WriteByte('}')
+	case *Map:
+		return encodeMap(b, x, o)
+	case Date, DateTime:
+		return fmt.Errorf("pycompat: %s is not JSON serializable", TypeName(v))
 	default:
 		n, err := Normalize(v)
 		if err != nil {
@@ -170,6 +178,44 @@ func encode(b *bytes.Buffer, v any, o Options) error {
 	return nil
 }
 
+func encodeMap(b *bytes.Buffer, x *Map, o Options) error {
+	idx := make([]int, x.Len())
+	for i := range idx {
+		idx[i] = i
+	}
+	if !o.KeepOrder {
+		for _, k := range x.keys {
+			if _, ok := k.(string); !ok {
+				return errors.New("pycompat: sort_keys over a non-string key")
+			}
+		}
+		sort.SliceStable(idx, func(a, c int) bool { return x.keys[idx[a]].(string) < x.keys[idx[c]].(string) })
+	}
+	b.WriteByte('{')
+	for n, i := range idx {
+		if n > 0 {
+			sep(b, o, ',')
+		}
+		k := x.keys[i]
+		ks, ok := k.(string)
+		if !ok {
+			// json.dumps writes a bool, None or number key as its JSON text in quotes.
+			var kb bytes.Buffer
+			if err := encode(&kb, k, o); err != nil {
+				return err
+			}
+			ks = kb.String()
+		}
+		writeString(b, ks, o.ASCII)
+		sep(b, o, ':')
+		if err := encode(b, x.vals[i], o); err != nil {
+			return err
+		}
+	}
+	b.WriteByte('}')
+	return nil
+}
+
 func sep(b *bytes.Buffer, o Options, c byte) {
 	b.WriteByte(c)
 	if o.Spaced {
@@ -177,6 +223,11 @@ func sep(b *bytes.Buffer, o Options, c byte) {
 	}
 }
 
+const hexDigits = "0123456789abcdef"
+
+// writeString is json.dumps' string encoder: '"', '\\' and the short escapes, other controls as \u00XX, and with
+// ascii every character past '~' (DEL included) as \uXXXX, a surrogate pair beyond the BMP. Invalid UTF-8 is
+// written as U+FFFD (a Python str cannot hold it).
 func writeString(b *bytes.Buffer, s string, ascii bool) {
 	b.WriteByte('"')
 	for _, r := range s {
@@ -197,14 +248,13 @@ func writeString(b *bytes.Buffer, s string, ascii bool) {
 			b.WriteString(`\f`)
 		default:
 			switch {
-			case r < 0x20:
-				fmt.Fprintf(b, `\u%04x`, r)
-			case ascii && (r > 0x7e || r == utf8.RuneError):
-				if r > 0xffff {
+			case r < 0x20 || (ascii && r > 0x7e):
+				if r >= 0x10000 {
 					r -= 0x10000
-					fmt.Fprintf(b, `\u%04x\u%04x`, 0xd800+(r>>10), 0xdc00+(r&0x3ff))
+					u4(b, 0xd800|(r>>10))
+					u4(b, 0xdc00|(r&0x3ff))
 				} else {
-					fmt.Fprintf(b, `\u%04x`, r)
+					u4(b, r)
 				}
 			default:
 				b.WriteRune(r)
@@ -212,6 +262,14 @@ func writeString(b *bytes.Buffer, s string, ascii bool) {
 		}
 	}
 	b.WriteByte('"')
+}
+
+func u4(b *bytes.Buffer, r rune) {
+	b.WriteString(`\u`)
+	b.WriteByte(hexDigits[r>>12&0xf])
+	b.WriteByte(hexDigits[r>>8&0xf])
+	b.WriteByte(hexDigits[r>>4&0xf])
+	b.WriteByte(hexDigits[r&0xf])
 }
 
 // ASCIIEscape rewrites every non-ASCII character in JSON text as \uXXXX (what ensure_ascii=True adds to output
@@ -227,22 +285,20 @@ func ASCIIEscape(in []byte) []byte {
 			b.WriteByte(byte(r))
 		case r > 0xffff:
 			r -= 0x10000
-			fmt.Fprintf(&b, `\u%04x\u%04x`, 0xd800+(r>>10), 0xdc00+(r&0x3ff))
+			u4(&b, 0xd800+(r>>10))
+			u4(&b, 0xdc00+(r&0x3ff))
 		default:
-			fmt.Fprintf(&b, `\u%04x`, r)
+			u4(&b, r)
 		}
 		in = in[n:]
 	}
 	return b.Bytes()
 }
 
-// IsInt says whether a json.Number is a JSON integer literal (Python's json.loads makes it an int).
-func IsInt(n json.Number) bool { return !strings.ContainsAny(string(n), ".eE") }
-
 // NumberString is Python's str() of the number json.loads would make of n: an int's decimal, a float's repr
 // ("inf", "-inf" or "nan" for the out-of-range ones).
 func NumberString(n json.Number) (string, error) {
-	if IsInt(n) {
+	if isIntLiteral(string(n)) {
 		z, ok := new(big.Int).SetString(string(n), 10)
 		if !ok {
 			return "", fmt.Errorf("pycompat: bad number %q", n)
@@ -250,77 +306,8 @@ func NumberString(n json.Number) (string, error) {
 		return z.String(), nil
 	}
 	f, err := strconv.ParseFloat(string(n), 64)
-	if err != nil {
-		var ne *strconv.NumError
-		if !(asNumErr(err, &ne) && ne.Err == strconv.ErrRange) {
-			return "", err
-		}
+	if err != nil && !errors.Is(err, strconv.ErrRange) {
+		return "", err
 	}
 	return FloatRepr(f), nil
-}
-
-func asNumErr(err error, target **strconv.NumError) bool {
-	ne, ok := err.(*strconv.NumError)
-	if ok {
-		*target = ne
-	}
-	return ok
-}
-
-func jsonFloat(f float64) string {
-	switch {
-	case math.IsInf(f, 1):
-		return "Infinity"
-	case math.IsInf(f, -1):
-		return "-Infinity"
-	case math.IsNaN(f):
-		return "NaN"
-	}
-	return FloatRepr(f)
-}
-
-// FloatRepr is Python's repr(float): the shortest round-tripping digits, fixed notation when the decimal point
-// falls in -4 < decpt <= 16 (with ".0" for an integral value), else d.ddde±XX.
-func FloatRepr(f float64) string {
-	switch {
-	case math.IsInf(f, 1):
-		return "inf"
-	case math.IsInf(f, -1):
-		return "-inf"
-	case math.IsNaN(f):
-		return "nan"
-	}
-	s := strconv.FormatFloat(f, 'e', -1, 64) // -d.ddde±dd
-	neg := strings.HasPrefix(s, "-")
-	s = strings.TrimPrefix(s, "-")
-	mant, expS, _ := strings.Cut(s, "e")
-	exp, _ := strconv.Atoi(expS)
-	digits := strings.Replace(mant, ".", "", 1)
-	decpt := exp + 1
-	var out string
-	if -4 < decpt && decpt <= 16 {
-		switch {
-		case decpt <= 0:
-			out = "0." + strings.Repeat("0", -decpt) + digits
-		case decpt >= len(digits):
-			out = digits + strings.Repeat("0", decpt-len(digits)) + ".0"
-		default:
-			out = digits[:decpt] + "." + digits[decpt:]
-		}
-	} else {
-		m := digits[:1]
-		if len(digits) > 1 {
-			m += "." + digits[1:]
-		}
-		e := decpt - 1
-		sign := "+"
-		if e < 0 {
-			sign, e = "-", -e
-		}
-		out = fmt.Sprintf("%se%s%02d", m, sign, e)
-	}
-	if neg {
-		out = "-" + out
-	}
-	return out
 }

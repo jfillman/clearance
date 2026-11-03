@@ -1,15 +1,20 @@
-package pyval
+package pycompat
 
 import (
+	"encoding/json"
 	"fmt"
+	"math"
 	"math/big"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/jfillman/clearance/internal/canon"
 )
 
-// Str is Python str(v).
+// Str is Python str(v): a string itself, a date or datetime as Python prints it, repr() for everything else.
 func Str(v any) string {
 	switch x := v.(type) {
 	case string:
@@ -41,7 +46,8 @@ func offsetText(off int) string {
 	return s
 }
 
-// Repr is Python repr(v).
+// Repr is Python repr(v), over either value model. A *Map prints in insertion order; a map[string]any prints its
+// keys sorted (a Go map keeps no insertion order). A json.Number prints as the int or float json.loads makes of it.
 func Repr(v any) string {
 	var b strings.Builder
 	repr(&b, v)
@@ -60,12 +66,45 @@ func repr(b *strings.Builder, v any) {
 		}
 	case int64:
 		b.WriteString(strconv.FormatInt(x, 10))
+	case int:
+		b.WriteString(strconv.Itoa(x))
 	case *big.Int:
 		b.WriteString(x.String())
 	case float64:
 		b.WriteString(FloatRepr(x))
+	case json.Number:
+		n, err := NumberString(x)
+		if err != nil {
+			n = string(x)
+		}
+		b.WriteString(n)
 	case string:
 		b.WriteString(StrRepr(x))
+	case []string:
+		b.WriteByte('[')
+		for i, e := range x {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(StrRepr(e))
+		}
+		b.WriteByte(']')
+	case map[string]any:
+		keys := make([]string, 0, len(x))
+		for k := range x {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		b.WriteByte('{')
+		for i, k := range keys {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(StrRepr(k))
+			b.WriteString(": ")
+			repr(b, x[k])
+		}
+		b.WriteByte('}')
 	case []any:
 		b.WriteByte('[')
 		for i, e := range x {
@@ -252,8 +291,11 @@ func caseIgnorable(r rune) bool {
 		r == '\'' || r == '.' || r == ':' || r == '^' || r == '`' || r == 0xb7 || r == 0x2019
 }
 
-// Slice is Python s[:n] on code points.
-func Slice(s string, n int) string {
+// Truncate is Python s[:n] for n >= 0, on code points.
+func Truncate(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
 	i := 0
 	for pos := range s {
 		if i == n {
@@ -262,4 +304,19 @@ func Slice(s string, n int) string {
 		i++
 	}
 	return s
+}
+
+// FloatRepr is Python repr(float): the shortest round-tripping digits, fixed notation when the decimal exponent is
+// in (-4, 16], scientific otherwise ("1.0", "1e-05", "1e+16", "-0.0"), and "inf", "-inf" or "nan". The digits are
+// canon.PyFloat's, the one implementation; only the three non-finite spellings differ (canon writes JSON's).
+func FloatRepr(f float64) string {
+	switch {
+	case math.IsNaN(f):
+		return "nan"
+	case math.IsInf(f, 1):
+		return "inf"
+	case math.IsInf(f, -1):
+		return "-inf"
+	}
+	return canon.PyFloat(f)
 }

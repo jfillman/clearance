@@ -16,7 +16,7 @@ import (
 	"github.com/google/cel-go/cel"
 
 	"github.com/jfillman/clearance/internal/decide"
-	"github.com/jfillman/clearance/internal/decide/pyval"
+	"github.com/jfillman/clearance/internal/pycompat"
 )
 
 //go:embed hangar.json
@@ -53,7 +53,7 @@ func (p *Pack) loadScope(data []byte) error {
 	if err := dec.Decode(&doc); err != nil {
 		return fmt.Errorf("hangar: glidepath scope: %w", err)
 	}
-	raw, err := pyval.DecodeJSON(data)
+	raw, err := pycompat.DecodeJSON(data)
 	if err != nil {
 		return fmt.Errorf("hangar: glidepath scope: %w", err)
 	}
@@ -69,9 +69,9 @@ func (p *Pack) loadScope(data []byte) error {
 			case "why":
 				err = json.Unmarshal(v, &sr.Why)
 			case "order":
-				sr.Order, err = pyval.DecodeJSON(v)
+				sr.Order, err = pycompat.DecodeJSON(v)
 			case "default":
-				sr.Default, err = pyval.DecodeJSON(v)
+				sr.Default, err = pycompat.DecodeJSON(v)
 				sr.hasDefault = true
 			default:
 				err = fmt.Errorf("unknown key %q", k)
@@ -112,12 +112,12 @@ func (p *Pack) Vars() []decide.Var {
 
 // apps is profile.<section>.apps from the definition's raw profile.
 func apps(profile any, section string) []string {
-	m, ok := profile.(*pyval.Map)
+	m, ok := profile.(*pycompat.Map)
 	if !ok {
 		return nil
 	}
 	sec, _ := m.GetStr(section)
-	sm, ok := sec.(*pyval.Map)
+	sm, ok := sec.(*pycompat.Map)
 	if !ok {
 		return nil
 	}
@@ -217,7 +217,7 @@ func (p *Pack) Decide(rule *decide.Rule, in *decide.CallInput, state any) (decid
 }
 
 // AppOf is the Hangar app a call acts on.
-func (p *Pack) AppOf(tool string, args *pyval.Map) string {
+func (p *Pack) AppOf(tool string, args *pycompat.Map) string {
 	if strings.HasPrefix(tool, "glidepath.") || strings.HasPrefix(tool, "airframe.") || tool == "xr.request" {
 		s, _, _ := strOf(args, "app")
 		return s

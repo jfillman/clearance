@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/jfillman/clearance/internal/authn"
+	"github.com/jfillman/clearance/internal/canon"
 	"github.com/jfillman/clearance/internal/definitions/deftest"
 	"github.com/jfillman/clearance/internal/gate"
 	"github.com/jfillman/clearance/internal/pycompat"
@@ -295,7 +296,7 @@ func TestTheChangeIDIsThePrHead(t *testing.T) {
 		t.Fatal(a.ID(), b.ID())
 	}
 	// the Python id: "ch-" + sha256("jfillman/gitops-gate-api#7@aaaa...")[:16]
-	if want := "ch-" + pycompat.SHA256Hex([]byte("jfillman/gitops-gate-api#7@" + head))[:16]; a.ID() != want {
+	if want := "ch-" + canon.SHA256Hex([]byte("jfillman/gitops-gate-api#7@" + head))[:16]; a.ID() != want {
 		t.Fatal(a.ID(), want)
 	}
 }

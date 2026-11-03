@@ -6,8 +6,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/jfillman/clearance/internal/decide/pyval"
-	"github.com/jfillman/clearance/internal/decide/scope"
+	"github.com/jfillman/clearance/internal/pycompat"
+	"github.com/jfillman/clearance/internal/scope"
 )
 
 // full is Python's re.fullmatch: the whole string. match is re.match on a pattern ending in `$`, which also
@@ -44,7 +44,7 @@ var gpRef = full(`[A-Za-z0-9][A-Za-z0-9._/-]{0,255}`)
 
 const gpPatchBytes = 256 << 10
 
-func strOf(m *pyval.Map, k string) (string, bool, bool) {
+func strOf(m *pycompat.Map, k string) (string, bool, bool) {
 	v, present := m.GetStr(k)
 	s, isStr := v.(string)
 	return s, isStr, present
@@ -61,7 +61,7 @@ func intIn(v any, lo, hi int64) bool {
 	return false
 }
 
-func glidepathBadArgs(a *pyval.Map) int {
+func glidepathBadArgs(a *pycompat.Map) int {
 	bad := 0
 	for _, g := range gpArgs {
 		if s, isStr, present := strOf(a, g.key); present && !(isStr && g.re.MatchString(s)) {
@@ -81,23 +81,23 @@ func glidepathBadArgs(a *pyval.Map) int {
 			bad++
 		}
 	}
-	if s, isStr, present := strOf(a, "reason"); present && !(isStr && between(pyval.Len(pyval.Strip(s)), 1, 1024)) {
+	if s, isStr, present := strOf(a, "reason"); present && !(isStr && between(pycompat.Len(pycompat.Strip(s)), 1, 1024)) {
 		bad++
 	}
 	if v, ok := a.GetStr("patch"); ok {
-		m, isMap := v.(*pyval.Map)
+		m, isMap := v.(*pycompat.Map)
 		n := 0
 		if isMap {
-			n, _ = pyval.DumpsLen(m)
+			n, _ = pycompat.DumpsLen(m)
 		}
 		if !isMap || n > gpPatchBytes {
 			bad++
 		}
 	}
-	if s, isStr, present := strOf(a, "title"); present && !(isStr && between(pyval.Len(pyval.Strip(s)), 1, 200)) {
+	if s, isStr, present := strOf(a, "title"); present && !(isStr && between(pycompat.Len(pycompat.Strip(s)), 1, 200)) {
 		bad++
 	}
-	if s, isStr, present := strOf(a, "body"); present && !(isStr && pyval.Len(s) <= 4000) {
+	if s, isStr, present := strOf(a, "body"); present && !(isStr && pycompat.Len(s) <= 4000) {
 		bad++
 	}
 	for _, k := range []string{"baseRef", "branch"} {
@@ -111,7 +111,7 @@ func glidepathBadArgs(a *pyval.Map) int {
 func between(n, lo, hi int) bool { return lo <= n && n <= hi }
 
 // glidepathPromoteSourceOK: a promotion names exactly one whole source pair.
-func glidepathPromoteSourceOK(a *pyval.Map) bool {
+func glidepathPromoteSourceOK(a *pycompat.Map) bool {
 	given := map[string]bool{}
 	for _, k := range []string{"sourceEnv", "sourceCluster", "sourceImageRepo", "sourceImageTag"} {
 		if v, ok := a.GetStr(k); ok && !(v == nil || v == "") {
@@ -143,7 +143,7 @@ var (
 const afMaxDocs, afMaxBytes = 20, 256 << 10
 
 func afDocumentOK(d any) bool {
-	m, ok := d.(*pyval.Map)
+	m, ok := d.(*pycompat.Map)
 	if !ok {
 		return false
 	}
@@ -164,7 +164,7 @@ func afDocumentOK(d any) bool {
 	return afDocName.MatchString(path.Base(n)) && len(content) <= afMaxBytes
 }
 
-func airframeBadArgs(a *pyval.Map) int {
+func airframeBadArgs(a *pycompat.Map) int {
 	bad := 0
 	for _, g := range afArgs {
 		if s, isStr, present := strOf(a, g.key); present && !(isStr && g.re.MatchString(s)) {
@@ -199,14 +199,14 @@ func airframeBadArgs(a *pyval.Map) int {
 		}
 	}
 	if v, ok := a.GetStr("spec"); ok {
-		if _, isMap := v.(*pyval.Map); !isMap {
+		if _, isMap := v.(*pycompat.Map); !isMap {
 			bad++
 		}
 	}
 	if v, ok := a.GetStr("baseCicd"); ok {
-		_, isMap := v.(*pyval.Map)
+		_, isMap := v.(*pycompat.Map)
 		s, isStr := v.(string)
-		if !isMap && !(isStr && pyval.Len(s) <= afMaxBytes) {
+		if !isMap && !(isStr && pycompat.Len(s) <= afMaxBytes) {
 			bad++
 		}
 	}

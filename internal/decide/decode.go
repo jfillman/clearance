@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/jfillman/clearance/internal/decide/pyval"
+	"github.com/jfillman/clearance/internal/pycompat"
 )
 
 // MaxRequestBytes caps an evaluation request. The largest legitimate one is an airframe.validate call (20
@@ -20,7 +20,7 @@ var ErrTooLarge = errors.New("decide: evaluation request is too large")
 // parsed is a request's decoded arguments.
 type parsed struct {
 	done bool
-	m    *pyval.Map
+	m    *pycompat.Map
 	err  error
 }
 
@@ -54,15 +54,15 @@ func DecodeEvaluation(r io.Reader) (*EvaluationRequest, error) {
 	return req, nil
 }
 
-func parseArgs(raw json.RawMessage) (*pyval.Map, error) {
+func parseArgs(raw json.RawMessage) (*pycompat.Map, error) {
 	if len(raw) == 0 || string(raw) == "null" {
-		return pyval.NewMap(0), nil
+		return pycompat.NewMap(0), nil
 	}
-	v, err := pyval.DecodeJSON(raw)
+	v, err := pycompat.DecodeJSON(raw)
 	if err != nil {
 		return nil, fmt.Errorf("decide: args: %w", err)
 	}
-	m, ok := v.(*pyval.Map)
+	m, ok := v.(*pycompat.Map)
 	if !ok {
 		return nil, errors.New("decide: args must be a JSON object")
 	}
@@ -70,7 +70,7 @@ func parseArgs(raw json.RawMessage) (*pyval.Map, error) {
 }
 
 // argsMap is the request's arguments, decoded (once by DecodeEvaluation, or here for a request built in Go).
-func (r *EvaluationRequest) argsMap() (*pyval.Map, error) {
+func (r *EvaluationRequest) argsMap() (*pycompat.Map, error) {
 	if r.args.done {
 		return r.args.m, r.args.err
 	}

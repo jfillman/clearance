@@ -9,9 +9,9 @@ import (
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 
-	"github.com/jfillman/clearance/internal/decide/pyval"
-	"github.com/jfillman/clearance/internal/decide/pyyaml"
-	"github.com/jfillman/clearance/internal/decide/scope"
+	"github.com/jfillman/clearance/internal/pycompat"
+	"github.com/jfillman/clearance/internal/pyyaml"
+	"github.com/jfillman/clearance/internal/scope"
 )
 
 var errOverflow = &EvalError{Class: ErrClassValue, Err: errors.New("overflow")}
@@ -61,7 +61,7 @@ func tierOf(name string) (int, bool) {
 }
 
 // buildContext is Policy.build_context: the CEL activation for one tool call, and what packs need to decide.
-func (e *Engine) buildContext(req *EvaluationRequest, args *pyval.Map) (*activation, *CallInput, []any, error) {
+func (e *Engine) buildContext(req *EvaluationRequest, args *pycompat.Map) (*activation, *CallInput, []any, error) {
 	tool := req.Resource.ID
 	s := req.Context.Session
 	sc := req.Context.Scope
@@ -71,7 +71,7 @@ func (e *Engine) buildContext(req *EvaluationRequest, args *pyval.Map) (*activat
 	spec := e.b.tools[tool]
 	in := &CallInput{Tool: tool, Spec: spec, Args: args, Session: s, Scope: sc, Globs: e.globs}
 	if len(sc.Profile) > 0 {
-		p, err := pyval.DecodeJSON(sc.Profile)
+		p, err := pycompat.DecodeJSON(sc.Profile)
 		if err != nil {
 			return nil, in, nil, &EvalError{Class: ErrClassValue, Err: err}
 		}
@@ -86,7 +86,7 @@ func (e *Engine) buildContext(req *EvaluationRequest, args *pyval.Map) (*activat
 	}
 	var paths []any
 	for _, f := range files {
-		if fm, ok := f.(*pyval.Map); ok {
+		if fm, ok := f.(*pycompat.Map); ok {
 			p, found := fm.GetStr("path")
 			if !found {
 				p = ""
@@ -148,7 +148,7 @@ func (e *Engine) buildContext(req *EvaluationRequest, args *pyval.Map) (*activat
 	artifactBytes := 0
 	if tool == "artifact.put" {
 		if c, ok := asString(args.GetStr("content")); ok {
-			artifactBytes = pyval.Len(c)
+			artifactBytes = pycompat.Len(c)
 		}
 	}
 
@@ -233,7 +233,7 @@ func (e *Engine) fileFieldViolations(files []any, deny, allow []string) (int, er
 	}
 	total := 0
 	for _, f := range files {
-		fm, ok := f.(*pyval.Map)
+		fm, ok := f.(*pycompat.Map)
 		if !ok {
 			continue
 		}
@@ -266,7 +266,7 @@ func (e *Engine) fileFieldViolations(files []any, deny, allow []string) (int, er
 
 func container(v any) bool {
 	switch v.(type) {
-	case *pyval.Map, []any:
+	case *pycompat.Map, []any:
 		return true
 	}
 	return false

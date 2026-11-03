@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 
 	"github.com/jfillman/clearance/internal/canon"
-	"github.com/jfillman/clearance/internal/decide/pyval"
+	"github.com/jfillman/clearance/internal/pycompat"
 	"github.com/jfillman/clearance/internal/store"
 )
 
@@ -38,7 +38,7 @@ func (e *Engine) RecordFields(req *EvaluationRequest, resp *EvaluationResponse) 
 		if req.Action.Properties.EstTokens != nil {
 			estV = req.Action.Properties.EstTokens.Value()
 		}
-		m := pyval.NewMap(2)
+		m := pycompat.NewMap(2)
 		m.Set("model", req.Resource.ID)
 		m.Set("est", estV)
 		ev := store.Event{"ts": ts, "task_id": nil, "session": c.SessionID, "parent": nil, "principal": req.Subject.ID,
@@ -56,10 +56,10 @@ func (e *Engine) RecordFields(req *EvaluationRequest, resp *EvaluationResponse) 
 		if !resp.Decision {
 			return store.Event{"ts": ts, "session": nil, "task_id": nil, "principal": req.Subject.ID,
 				"agent": req.Resource.ID, "tool": "session.open", "tier": nil, "decision": "deny", "rule": rule,
-				"target": nil, "args_sha256": digest(pyval.NewMap(0)), "result": dc.Message}
+				"target": nil, "args_sha256": digest(pycompat.NewMap(0)), "result": dc.Message}
 		}
 		g := dc.Grant
-		args := pyval.NewMap(2)
+		args := pycompat.NewMap(2)
 		result := "opened"
 		if p.Trigger != "" {
 			args.Set("trigger", p.Trigger)
@@ -69,8 +69,8 @@ func (e *Engine) RecordFields(req *EvaluationRequest, resp *EvaluationResponse) 
 			}
 		} else {
 			raw, _ := decodeRaw(p.Limits)
-			if !pyval.Truthy(raw) {
-				raw = pyval.NewMap(0)
+			if !pycompat.Truthy(raw) {
+				raw = pycompat.NewMap(0)
 			}
 			args.Set("limits", raw)
 		}
@@ -82,7 +82,7 @@ func (e *Engine) RecordFields(req *EvaluationRequest, resp *EvaluationResponse) 
 	tool := req.Resource.ID
 	args, err := req.argsMap()
 	if err != nil {
-		args = pyval.NewMap(0)
+		args = pycompat.NewMap(0)
 	}
 	s := c.Session
 	if s == nil {
@@ -106,7 +106,7 @@ func (e *Engine) RecordFields(req *EvaluationRequest, resp *EvaluationResponse) 
 		"target": target, "args_sha256": digest(args), "result": result}
 	for _, p := range e.b.packs {
 		if app := p.AppOf(tool, args); app != "" {
-			ev["app"] = pyval.Slice(pyval.Lower(app), 100)
+			ev["app"] = pycompat.Truncate(pycompat.Lower(app), 100)
 			break
 		}
 	}
@@ -124,7 +124,7 @@ func itoa(n int) string { return I(int64(n)).String() }
 
 // digest is audit.args_digest over a pyval value.
 func digest(v any) string {
-	d, err := canon.ArgsDigest(pyval.ToJSON(v))
+	d, err := canon.ArgsDigest(pycompat.ToJSON(v))
 	if err != nil {
 		return ""
 	}
