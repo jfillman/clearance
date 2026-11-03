@@ -1,0 +1,482 @@
+package client
+
+import (
+	"encoding/json"
+	"time"
+)
+
+// The wire types mirror the core's Go types field for field (json name, omitempty, shape); types_test.go walks
+// both by reflection and fails on any difference, so they cannot drift from the server. They are declared here
+// rather than aliased so a caller links no policy engine or store code. Two deliberate narrowings:
+//
+//   - the core's exact-at-any-size integers (decide.Int) are int64 here: a caller that holds its budgets in int64
+//     sends nothing larger, and a larger value in an answer fails strict decoding (fail closed);
+//   - the gate's Python-isoformat timestamps (gate.PyTime) are strings, passed through as the core wrote them.
+
+// Action names (EvaluationRequest.Action.Name).
+const (
+	ActionToolCall     = "tool.call"
+	ActionModelCall    = "model.call"
+	ActionSessionOpen  = "session.open"
+	ActionSessionSpawn = "session.spawn"
+)
+
+// Resource types (EvaluationRequest.Resource.Type).
+const (
+	ResourceTool  = "tool"
+	ResourceModel = "model"
+	ResourceAgent = "agent"
+)
+
+// RecordKinds are the kinds POST /v1/records takes (server.RecordKinds).
+var RecordKinds = []string{"session.open", "run.launch", "run.delete", "human.answer", "session.freeze",
+	"trigger.hold", "deploy.outcome", "deploy.exception"}
+
+// -- POST /access/v1/evaluation ------------------------------------------------------------------------------------
+
+// EvaluationRequest is an AuthZEN 1.0 Access Evaluation (decide.EvaluationRequest; internal/decide's package doc
+// describes every field).
+type EvaluationRequest struct {
+	Subject  Subject  `json:"subject"`
+	Action   Action   `json:"action"`
+	Resource Resource `json:"resource"`
+	Context  Context  `json:"context"`
+}
+
+// Subject is the authenticated caller.
+type Subject struct {
+	Type       string            `json:"type"`
+	ID         string            `json:"id"`
+	Properties SubjectProperties `json:"properties"`
+}
+
+// SubjectProperties are what the caller's authenticator vouches for.
+type SubjectProperties struct {
+	Kind        string `json:"kind"`
+	TierCeiling int    `json:"tier_ceiling"`
+	ActingAs    string `json:"acting_as,omitempty"`
+}
+
+// Action is what the caller asks to do.
+type Action struct {
+	Name       string           `json:"name"`
+	Properties ActionProperties `json:"properties"`
+}
+
+// ActionProperties are the action's arguments.
+type ActionProperties struct {
+	Args      json.RawMessage `json:"args,omitempty"`
+	EstTokens *int64          `json:"est_tokens,omitempty"`
+	Limits    json.RawMessage `json:"limits,omitempty"`
+	TaskID    string          `json:"task_id,omitempty"`
+	Trigger   string          `json:"trigger,omitempty"`
+}
+
+// Resource is what the action is on.
+type Resource struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+}
+
+// Context is the state the decision reads; the caller holds it.
+type Context struct {
+	Now          time.Time     `json:"now"`
+	SessionID    string        `json:"session_id,omitempty"`
+	Session      *SessionState `json:"session,omitempty"`
+	Scope        *Scope        `json:"scope,omitempty"`
+	Agent        *AgentDef     `json:"agent,omitempty"`
+	NewSessionID string        `json:"new_session_id,omitempty"`
+	Hold         *Hold         `json:"hold,omitempty"`
+	Live         *SessionState `json:"live,omitempty"`
+	Models       *Models       `json:"models,omitempty"`
+}
+
+// SessionState is a session as the caller holds it.
+type SessionState struct {
+	ID        string    `json:"id"`
+	Principal string    `json:"principal"`
+	Agent     string    `json:"agent"`
+	TaskID    string    `json:"task_id"`
+	ParentID  *string   `json:"parent_id"`
+	Depth     int       `json:"depth"`
+	Limits    Limits    `json:"limits"`
+	Used      Budgets   `json:"used"`
+	Reserved  Budgets   `json:"reserved"`
+	ExpiresAt time.Time `json:"expires_at"`
+	Closed    bool      `json:"closed"`
+	Tripped   bool      `json:"tripped"`
+	Denials   int       `json:"denials"`
+}
+
+// Limits is a session's limits (limits.Limits.as_dict's shape).
+type Limits struct {
+	TierCeiling string   `json:"tier_ceiling"`
+	TTLMinutes  int64    `json:"ttl_minutes"`
+	ToolCalls   int64    `json:"tool_calls"`
+	GithubCalls int64    `json:"github_calls"`
+	OpenPRs     int64    `json:"open_prs"`
+	ModelTokens int64    `json:"model_tokens"`
+	Children    int64    `json:"children"`
+	Tools       []string `json:"tools"`
+	Models      []string `json:"models"`
+	Network     string   `json:"network"`
+	Compute     string   `json:"compute"`
+}
+
+// Budgets are the five budget counters.
+type Budgets struct {
+	ToolCalls   int64 `json:"tool_calls"`
+	GithubCalls int64 `json:"github_calls"`
+	OpenPRs     int64 `json:"open_prs"`
+	ModelTokens int64 `json:"model_tokens"`
+	Children    int64 `json:"children"`
+}
+
+// Scope is what a session's definition allows beyond its limits.
+type Scope struct {
+	AgentKind  string          `json:"agent_kind"`
+	DenyPaths  []string        `json:"deny_paths"`
+	ReposAllow []string        `json:"repos_allow"`
+	APIAllow   []string        `json:"api_allow"`
+	FieldDeny  []string        `json:"field_deny"`
+	FieldAllow []string        `json:"field_allow"`
+	Profile    json.RawMessage `json:"profile,omitempty"`
+}
+
+// AgentDef is the part of an agent definition a session.open or session.spawn reads.
+type AgentDef struct {
+	Name           string  `json:"name"`
+	Kind           string  `json:"kind"`
+	IdentityType   string  `json:"identity_type"`
+	ServiceAccount *string `json:"service_account"`
+	Limits         Limits  `json:"limits"`
+}
+
+// Hold is an active hold on an agent's triggers.
+type Hold struct {
+	By     string    `json:"by"`
+	Until  time.Time `json:"until"`
+	Reason string    `json:"reason"`
+}
+
+// Models is the deployment's model routing.
+type Models struct {
+	Routes []string `json:"routes"`
+}
+
+// EvaluationResult is the evaluation's answer. Decision false is a deny, not an error. DecisionID is nil when the
+// core did not record the decision (then no outcome is taken).
+type EvaluationResult struct {
+	Decision   bool            `json:"decision"`
+	Context    DecisionContext `json:"context"`
+	DecisionID *string         `json:"decision_id"`
+	Record     *RecordRef      `json:"record,omitempty"`
+}
+
+// DecisionContext explains the decision and carries the spend the caller must apply.
+type DecisionContext struct {
+	Rule     string    `json:"rule,omitempty"`
+	Name     string    `json:"name,omitempty"`
+	Message  string    `json:"message"`
+	Hint     string    `json:"hint,omitempty"`
+	Tier     *int      `json:"tier"`
+	Problems []Problem `json:"problems,omitempty"`
+	Spend    Spend     `json:"spend"`
+	Grant    *Grant    `json:"grant,omitempty"`
+	Policy   PolicyRef `json:"policy"`
+}
+
+// Problem is one structured problem behind a decision.
+type Problem struct {
+	Pointer string `json:"pointer"`
+	Rule    string `json:"rule"`
+	Message string `json:"message"`
+	Hint    string `json:"hint"`
+}
+
+// Spend is what the caller applies to the request's session when it acts on the decision.
+type Spend struct {
+	ToolCalls   int64    `json:"tool_calls,omitempty"`
+	GithubCalls int64    `json:"github_calls,omitempty"`
+	OpenPRs     int64    `json:"open_prs,omitempty"`
+	Children    int64    `json:"children,omitempty"`
+	Reserve     *Budgets `json:"reserve,omitempty"`
+	Denial      bool     `json:"denial,omitempty"`
+	Trip        string   `json:"trip,omitempty"`
+	TripTree    string   `json:"trip_tree,omitempty"`
+}
+
+// Grant is the session an allowed session.open or session.spawn creates.
+type Grant struct {
+	Session   string    `json:"session"`
+	TaskID    string    `json:"task_id"`
+	Principal string    `json:"principal"`
+	Agent     string    `json:"agent"`
+	Parent    *string   `json:"parent"`
+	Depth     int       `json:"depth"`
+	Limits    Limits    `json:"limits"`
+	ExpiresAt time.Time `json:"expires_at"`
+	Deduped   bool      `json:"deduped,omitempty"`
+}
+
+// PolicyRef names the bundle that decided.
+type PolicyRef struct {
+	Bundle  string `json:"bundle"`
+	Version string `json:"version"`
+}
+
+// RecordRef names a stored evidence record.
+type RecordRef struct {
+	Seq  int64  `json:"seq"`
+	Hash string `json:"hash"`
+}
+
+// -- POST /v1/decisions/{id}/outcome -------------------------------------------------------------------------------
+
+// OutcomeRequest is what the caller saw when it acted on an allowed decision.
+type OutcomeRequest struct {
+	Result  string         `json:"result"`
+	Effect  *Effect        `json:"effect,omitempty"`
+	Receipt map[string]any `json:"receipt,omitempty"`
+}
+
+// Effect is a write's receipt (a pull request's repo, pr, commit, branch and paths).
+type Effect struct {
+	Repo   string   `json:"repo,omitempty"`
+	PR     int64    `json:"pr,omitempty"`
+	Commit string   `json:"commit,omitempty"`
+	Branch string   `json:"branch,omitempty"`
+	Paths  []string `json:"paths,omitempty"`
+}
+
+// -- POST /v1/records ----------------------------------------------------------------------------------------------
+
+// RecordRequest is a provider's own record. Provider empty is Options.Provider.
+type RecordRequest struct {
+	Provider string        `json:"provider"`
+	Kind     string        `json:"kind"`
+	Record   ProviderEvent `json:"record"`
+}
+
+// ProviderEvent is the fields a provider may report; every one is claimed.
+type ProviderEvent struct {
+	TaskID      *string        `json:"task_id,omitempty"`
+	Session     *string        `json:"session,omitempty"`
+	Parent      *string        `json:"parent,omitempty"`
+	Principal   *string        `json:"principal,omitempty"`
+	Agent       *string        `json:"agent,omitempty"`
+	Target      *string        `json:"target,omitempty"`
+	App         *string        `json:"app,omitempty"`
+	Decision    *string        `json:"decision,omitempty"`
+	Rule        *string        `json:"rule,omitempty"`
+	Tier        *int           `json:"tier,omitempty"`
+	ArgsSHA256  *string        `json:"args_sha256,omitempty"`
+	Result      *string        `json:"result,omitempty"`
+	Reason      *string        `json:"reason,omitempty"`
+	Intent      *string        `json:"intent,omitempty"`
+	Coverage    *string        `json:"coverage,omitempty"`
+	Subject     map[string]any `json:"subject,omitempty"`
+	Initiator   map[string]any `json:"initiator,omitempty"`
+	Source      map[string]any `json:"source,omitempty"`
+	Destination map[string]any `json:"destination,omitempty"`
+	Change      map[string]any `json:"change,omitempty"`
+	Effect      map[string]any `json:"effect,omitempty"`
+	Outcome     map[string]any `json:"outcome,omitempty"`
+}
+
+// String is a pointer to s, for ProviderEvent's optional fields.
+func String(s string) *string { return &s }
+
+// -- the deployment gate -------------------------------------------------------------------------------------------
+
+// ChangeRequest is what a verifier registers (POST /v1/clearances; docs/gate.md). Its keys are the gate's
+// camelCase ones; the core refuses an unknown key.
+type ChangeRequest struct {
+	App          string            `json:"app"`
+	Env          string            `json:"env"`
+	Cluster      string            `json:"cluster"`
+	Repo         string            `json:"repo"`
+	PR           int64             `json:"pr"`
+	Head         string            `json:"head"`
+	Base         string            `json:"base,omitempty"`
+	Proposer     string            `json:"proposer"`
+	ProposerKind string            `json:"proposerKind,omitempty"`
+	Owner        string            `json:"owner,omitempty"`
+	Protected    bool              `json:"protected"`
+	TreeDigest   string            `json:"treeDigest"`
+	Paths        []string          `json:"paths"`
+	LinesChanged int64             `json:"linesChanged"`
+	Objects      []ObjectChange    `json:"objects"`
+	Checks       map[string]string `json:"checks"`
+	Policy       map[string]any    `json:"policy,omitempty"`
+	Agent        *string           `json:"agent,omitempty"`
+	Definition   map[string]any    `json:"definition,omitempty"`
+}
+
+// ObjectChange is one Kubernetes object a change touches.
+type ObjectChange struct {
+	APIVersion string   `json:"apiVersion"`
+	Kind       string   `json:"kind"`
+	Namespace  string   `json:"namespace"`
+	Name       string   `json:"name"`
+	Op         string   `json:"op"`
+	Fields     []string `json:"fields"`
+	Images     []string `json:"images"`
+	Digest     string   `json:"digest"`
+}
+
+// Change is a change on record.
+type Change struct {
+	ID               string            `json:"id"`
+	App              string            `json:"app"`
+	Env              string            `json:"env"`
+	Cluster          string            `json:"cluster"`
+	Repo             string            `json:"repo"`
+	PR               int64             `json:"pr"`
+	Head             string            `json:"head"`
+	Base             string            `json:"base"`
+	Proposer         string            `json:"proposer"`
+	ProposerKind     string            `json:"proposer_kind"`
+	Agent            *string           `json:"agent"`
+	Owner            string            `json:"owner"`
+	Protected        bool              `json:"protected"`
+	TreeDigest       string            `json:"tree_digest"`
+	Paths            []string          `json:"paths"`
+	LinesChanged     int64             `json:"lines_changed"`
+	Objects          []ObjectChange    `json:"objects"`
+	Checks           map[string]string `json:"checks"`
+	PolicyVersion    string            `json:"policy_version"`
+	RepoPolicyDigest *string           `json:"repo_policy_digest"`
+	Tier             int               `json:"tier"`
+	Reasons          []Reason          `json:"reasons"`
+	Requirement      *Requirement      `json:"requirement"`
+	State            string            `json:"state"`
+	CreatedAt        string            `json:"created_at"`
+	UpdatedAt        string            `json:"updated_at"`
+	ExpiresAt        string            `json:"expires_at"`
+	RegisteredBy     string            `json:"registered_by"`
+	Approvals        []Approval        `json:"approvals"`
+	ClearedBy        *string           `json:"cleared_by"`
+	DecidedAt        *string           `json:"decided_at"`
+	DenyReason       *string           `json:"deny_reason"`
+	DeniedBy         *string           `json:"denied_by"`
+	SupersededBy     *string           `json:"superseded_by"`
+	Deployments      []Deployment      `json:"deployments"`
+	Target           string            `json:"target"`
+	ObjectsCount     int               `json:"objects_count"`
+	PathsCount       int               `json:"paths_count"`
+}
+
+// Reason is one classification reason of a change.
+type Reason struct {
+	Subject string `json:"subject"`
+	Rule    string `json:"rule"`
+	Tier    int    `json:"tier"`
+}
+
+// Requirement is who must clear a change.
+type Requirement struct {
+	Owner         int      `json:"owner"`
+	Outside       int      `json:"outside"`
+	OwnerGroup    string   `json:"ownerGroup"`
+	OutsideGroups []string `json:"outsideGroups"`
+}
+
+// Approval is one person's clearance.
+type Approval struct {
+	Person string  `json:"person"`
+	Via    *string `json:"via"`
+	Role   string  `json:"role"`
+	At     string  `json:"at"`
+}
+
+// Deployment is a GitHub Actions deployment waiting on a change.
+type Deployment struct {
+	RunID        int64   `json:"run_id"`
+	Environment  string  `json:"environment"`
+	Installation string  `json:"installation"`
+	CallbackURL  string  `json:"callback_url"`
+	RequestedAt  string  `json:"requested_at"`
+	Answer       *string `json:"answer"`
+	AnsweredAt   *string `json:"answered_at"`
+	Delivered    bool    `json:"delivered"`
+	DeliveredAt  *string `json:"delivered_at"`
+}
+
+// Decided is a clear's or a deny's answer: the change and the seq of the record that recorded the person's act.
+type Decided struct {
+	Change
+	AuditSeq int64 `json:"audit_seq"`
+}
+
+// -- POST /v1/provenance -------------------------------------------------------------------------------------------
+
+// ProvenanceRequest asks for a pull request's agent-identity and agent-scope verdicts.
+type ProvenanceRequest struct {
+	Repo     string            `json:"repo"`
+	PR       int64             `json:"pr"`
+	Head     string            `json:"head"`
+	Paths    []string          `json:"paths"`
+	Author   string            `json:"author,omitempty"`
+	Trailers map[string]string `json:"trailers,omitempty"`
+}
+
+// Verdict is provenance's answer.
+type Verdict struct {
+	AgentPR  bool           `json:"agent_pr"`
+	Identity Check          `json:"identity"`
+	Scope    Check          `json:"scope"`
+	Record   *RecordSummary `json:"record"`
+	AuditSeq *int64         `json:"audit_seq,omitempty"`
+}
+
+// Check is one verdict.
+type Check struct {
+	OK         bool         `json:"ok"`
+	Status     string       `json:"status"`
+	Rule       *string      `json:"rule"`
+	Message    string       `json:"message"`
+	Hint       string       `json:"hint"`
+	Violations *[]Violation `json:"violations,omitempty"`
+}
+
+// Violation is one path an agent's pull request may not touch.
+type Violation struct {
+	Path    string `json:"path"`
+	Rule    string `json:"rule"`
+	Message string `json:"message"`
+}
+
+// RecordSummary is the receipt record a verdict rests on; its values are the stored record's, any JSON type.
+type RecordSummary struct {
+	Seq       any `json:"seq"`
+	Hash      any `json:"hash"`
+	TS        any `json:"ts"`
+	TaskID    any `json:"task_id"`
+	Session   any `json:"session"`
+	Agent     any `json:"agent"`
+	Principal any `json:"principal"`
+	Tool      any `json:"tool"`
+}
+
+// -- operational ---------------------------------------------------------------------------------------------------
+
+// Health is GET /healthz's answer.
+type Health struct {
+	OK bool `json:"ok"`
+}
+
+// Ready is GET /readyz's answer: the policy bundle and the chain's head seq (-1 empty).
+type Ready struct {
+	OK     bool      `json:"ok"`
+	Error  string    `json:"error,omitempty"`
+	Policy PolicyRef `json:"policy"`
+	Head   int64     `json:"head"`
+}
+
+// errorBody is every refusal's body: {"error"} and, from the gate, rule and hint.
+type errorBody struct {
+	Error string `json:"error"`
+	Rule  string `json:"rule"`
+	Hint  string `json:"hint"`
+}
