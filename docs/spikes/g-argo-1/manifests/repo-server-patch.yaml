@@ -1,0 +1,34 @@
+# Merged into the upstream argocd-repo-server Deployment by up.sh (yq): the CMP sidecar and the init container that
+# unpacks the spike binary (shipped as two ConfigMap parts, built by up.sh, never committed).
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: unpack-cmp
+          image: busybox:1.37.0
+          command: ["sh", "-c", "cat /parts/a/part /parts/b/part | gunzip > /cmp-bin/clearance-cmp-spike && chmod 0555 /cmp-bin/clearance-cmp-spike"]
+          securityContext: {runAsNonRoot: true, runAsUser: 999, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
+          volumeMounts:
+            - {name: cmp-part-a, mountPath: /parts/a}
+            - {name: cmp-part-b, mountPath: /parts/b}
+            - {name: cmp-bin, mountPath: /cmp-bin}
+      containers:
+        - name: clearance-spike
+          image: quay.io/argoproj/argocd:v3.5.0
+          command: [/var/run/argocd/argocd-cmp-server]
+          securityContext: {runAsNonRoot: true, runAsUser: 999, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
+          resources: {requests: {cpu: 10m, memory: 64Mi}, limits: {memory: 512Mi}}
+          env:
+            - {name: HOME, value: /tmp}
+          volumeMounts:
+            - {name: var-files, mountPath: /var/run/argocd}
+            - {name: plugins, mountPath: /home/argocd/cmp-server/plugins}
+            - {name: cmp-config, mountPath: /home/argocd/cmp-server/config/plugin.yaml, subPath: plugin.yaml}
+            - {name: cmp-tmp, mountPath: /tmp}
+            - {name: cmp-bin, mountPath: /cmp-bin}
+      volumes:
+        - {name: cmp-config, configMap: {name: clearance-spike-cmp}}
+        - {name: cmp-part-a, configMap: {name: clearance-spike-cmp-bin-a}}
+        - {name: cmp-part-b, configMap: {name: clearance-spike-cmp-bin-b}}
+        - {name: cmp-bin, emptyDir: {}}
+        - {name: cmp-tmp, emptyDir: {}}
