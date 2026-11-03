@@ -202,6 +202,20 @@ For every change to a protected environment:
    `deploy.exception` record (must carry `principal`, `target`, `result`; set `coverage: out-of-band-detected`).
    It is a finding, never a way around the hold.
 
+## The federated role
+
+A federated source observes decisions another gateway's own PDP made. It posts each one as a
+`federated.decision` record through `POST /v1/records`. It has no hold and no outcome, only posture and
+correlation. Every field is claimed.
+
+- **Required fields:** `decision` (`allow` or `deny`), `result` and `coverage`.
+- **Coverage:** `observed-not-attributed`, or `authorized-and-verified` only with the `task_id` the source
+  correlated the call to.
+- **Refused:** the core refuses a Clearance `rule` or `tier`, an `effect`, `outcome` or `change`, and a `tool`.
+
+The first source is the [Traefik Hub adapter](federate-traefik-hub.md) (Unverified). Register it with
+`"kinds": ["federated.decision"]`.
+
 ## Not served yet
 
 | What | Route or piece | Why a provider needs it | Interim |

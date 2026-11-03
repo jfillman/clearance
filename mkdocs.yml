@@ -10,6 +10,7 @@ nav:
   - The evidence record (clearance.evidence/v1): evidence.md
   - The provider protocol and conformance: provider-protocol.md
   - The provenance App (design pass): provenance-app.md
+  - The Traefik Hub adapter (Unverified): federate-traefik-hub.md
 
 plugins:
   - techdocs-core

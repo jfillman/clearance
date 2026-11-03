@@ -103,6 +103,11 @@ func Stored(r map[string]any) map[string]any
   an outage read (`coverage: coverage-unavailable`): a T0 read the provider ran while the core was unreachable,
   posted on recovery. Its `tool` is the tool called and its subject the derived tool-call digest, both claimed. It
   is not a decision, and it carries no `rule`, `effect` or `outcome`.
+- A federated source's record (POST /v1/records, kind `federated.decision`; the Traefik Hub adapter,
+  [federate-traefik-hub.md](federate-traefik-hub.md)): a decision another gateway's own PDP made, sealed with that
+  provider and `ProviderVerified` (everything but `provider` and `ts` claimed). Its coverage is
+  `observed-not-attributed`, or `authorized-and-verified` only with the `task_id` it was correlated to; it carries
+  no `rule`, `tier`, `effect`, `outcome` or `change`.
 - Definitions a provider publishes (PUT /v1/definitions): `definition.load`, `definition.unload` and
   `definition.reject`, sealed by the core with `caller`. Verified: `provider`, `ts`, `caller`, `tool`, `decision`,
   `rule` (and the null session fields). Claimed: the pin's `principal` (`pin:<ns>/<xr>`), `agent`, `target`,

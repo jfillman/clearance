@@ -17,14 +17,16 @@ import (
 // RecordKinds are the records a registered provider writes itself (POST /v1/records): the runtime's session and
 // run lifecycle and people's answers and controls (the Autopilot gateway), a T0 read the gateway allowed while the
 // core was unreachable (tool.call, coverage-unavailable: the outage policy's outbox replay), and the deployment
-// boundary's outcome and exceptions (a deployment-gate provider such as the Argo sync).
+// boundary's outcome and exceptions (a deployment-gate provider such as the Argo sync), and a decision another
+// gateway's own policy decision point made (federated.decision: a federated runtime source such as the Traefik Hub
+// adapter, internal/federate/traefikhub).
 //
 // definition.load, definition.unload and definition.reject are not among them: the core writes those itself when a
 // provider publishes its pinned definitions (PUT /v1/definitions, definitions.Service.Apply), so there is one
 // writer of each.
 var RecordKinds = []string{"session.open", "run.launch", "run.delete", "run.finish", "human.answer",
 	"session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome",
-	"deploy.exception"}
+	"deploy.exception", FederatedKind}
 
 // OutageKind is the record of a T0 read the provider allowed while the core was unreachable. Its tool is the tool
 // that was called (record.tool), its coverage is CoverageUnavailable, and everything in it is claimed: the core
@@ -32,6 +34,15 @@ var RecordKinds = []string{"session.open", "run.launch", "run.delete", "run.fini
 const (
 	OutageKind          = "tool.call"
 	CoverageUnavailable = "coverage-unavailable"
+)
+
+// FederatedKind is a decision a federated runtime source observed at another gateway (its own PDP decided; the
+// core decided nothing). Everything in it is claimed. Its coverage is CoverageObserved, or CoverageAttributed when
+// the source correlated the call to a task_id; it carries no Clearance rule, tier, effect, outcome or change.
+const (
+	FederatedKind      = "federated.decision"
+	CoverageObserved   = "observed-not-attributed"
+	CoverageAttributed = "authorized-and-verified"
 )
 
 // kindSpec is what each kind must carry, and its boundary.
@@ -54,6 +65,7 @@ var recordKinds = map[string]kindSpec{
 		"coverage"}, "runtime"},
 	"deploy.outcome":   {[]string{"app", "target", "outcome"}, "deployment"},
 	"deploy.exception": {[]string{"principal", "target", "result"}, "deployment"},
+	FederatedKind:      {[]string{"decision", "result", "coverage"}, "runtime"},
 }
 
 // RecordRequest is POST /v1/records's body. provider must be the provider the caller authenticates as; kind is the
@@ -208,6 +220,26 @@ func (s *Server) checkOutageRead(e *ProviderEvent) error {
 	return nil
 }
 
+// checkFederated holds a federated.decision to what an observer can say: another PDP's verdict, attributed to a task
+// only when the source correlated one, and nothing that would read as the core's decision (a rule or tier) or as
+// a write (an effect, an outcome, a change).
+func checkFederated(e *ProviderEvent) error {
+	switch {
+	case *e.Coverage != CoverageObserved && *e.Coverage != CoverageAttributed:
+		return fmt.Errorf("a %s record's coverage is %s or %s", FederatedKind, CoverageObserved, CoverageAttributed)
+	case *e.Coverage == CoverageAttributed && (e.TaskID == nil || *e.TaskID == ""):
+		return fmt.Errorf("a %s record is %s only with the task_id it was correlated to", FederatedKind,
+			CoverageAttributed)
+	case e.Rule != nil || e.Tier != nil:
+		return fmt.Errorf("a %s record carries no rule or tier: the core decided nothing", FederatedKind)
+	case e.Effect != nil || e.Outcome != nil || e.Change != nil:
+		return fmt.Errorf("a %s record is a decision: no effect, outcome or change", FederatedKind)
+	case e.Tool != nil:
+		return fmt.Errorf("tool is set on a %s record only (a %s record's tool is its kind)", OutageKind, FederatedKind)
+	}
+	return nil
+}
+
 func text(k, v string) error {
 	if len(v) > MaxFieldText || !utf8.ValidString(v) || strings.ContainsRune(v, 0) {
 		return fmt.Errorf("%s is a string of at most %d bytes", k, MaxFieldText)
@@ -247,6 +279,9 @@ func (s *Server) records(w http.ResponseWriter, r *http.Request) {
 	ev, err := body.Record.event(body.Kind, spec, evidence.ISO(s.opt.Clock()))
 	if err == nil && body.Kind == OutageKind {
 		err = s.checkOutageRead(&body.Record)
+	}
+	if err == nil && body.Kind == FederatedKind {
+		err = checkFederated(&body.Record)
 	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

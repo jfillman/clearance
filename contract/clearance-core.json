@@ -2811,6 +2811,7 @@
     "trigger.release",
     "tool.call",
     "deploy.outcome",
-    "deploy.exception"
+    "deploy.exception",
+    "federated.decision"
   ]
 }

@@ -1,0 +1,1 @@
+{"level":"info","middlewareName":"apps-user-policy@kubernetescrd","middlewareType":"authzen-mcp","decision":"allow","policy":"user-tool-call","trace_id":"5e5e8662ec810c75a0a215e2d8d7e56b","transparency_log_id":"a5499d5c-7cd8-439b-88a8-47924b9db2ab","gateway_id":"6ff586e3-9fe2-4e6a-af4c-437c58f56579","time":"2026-10-06T05:21:10Z","message":"Request allowed"}
