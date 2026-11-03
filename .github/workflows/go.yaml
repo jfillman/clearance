@@ -14,10 +14,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          # The newest 1.26 patch: govulncheck fails on standard-library vulnerabilities fixed in later patches.
+          go-version: "1.26.x"
       - run: go vet ./...
       - run: test -z "$(gofmt -l .)"
       - run: go test -race ./...
         env:
           CLEARANCE_TEST_DSN: postgres://postgres:test@localhost:5432/clearance?sslmode=disable
+      # Fuzz the parsers (section 12): one target per invocation, as go test -fuzz requires.
+      - run: go test -run '^$' -fuzz '^FuzzCanonical$' -fuzztime 30s ./internal/canon
+      - run: go test -run '^$' -fuzz '^FuzzVerifyLine$' -fuzztime 30s ./internal/evidence
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
