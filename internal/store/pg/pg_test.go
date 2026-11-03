@@ -120,7 +120,7 @@ func appendN(t *testing.T, s store.Store, n int) {
 	t.Helper()
 	for i := 0; i < n; i++ {
 		if err := s.Atomic(bg, func(tx store.Tx) error {
-			_, err := tx.Append(bg, store.Event{"tool": "t", "i": i, "f": 0.5})
+			_, err := tx.Append(bg, store.Event{"tool": "t", "i": i, "f": 0.5}, storetest.Writer)
 			return err
 		}); err != nil {
 			t.Fatal(err)
@@ -205,7 +205,10 @@ func TestWriterReconnects(t *testing.T) {
 	// The first write may fail on the dead connection; the store must recover on its own.
 	var errs int
 	for i := 0; i < 3; i++ {
-		if err := s.Atomic(bg, func(tx store.Tx) error { _, err := tx.Append(bg, store.Event{"tool": "after"}); return err }); err != nil {
+		if err := s.Atomic(bg, func(tx store.Tx) error {
+			_, err := tx.Append(bg, store.Event{"tool": "after"}, storetest.Writer)
+			return err
+		}); err != nil {
 			errs++
 			continue
 		}
@@ -241,7 +244,10 @@ func TestStaleHeadAfterCommitFailure(t *testing.T) {
 	s.headMu.Unlock()
 	s.mu.Unlock()
 	// Resume from a checkpoint that does not match: verification must refuse, not fork.
-	err := s.Atomic(bg, func(tx store.Tx) error { _, err := tx.Append(bg, store.Event{"tool": "x"}); return err })
+	err := s.Atomic(bg, func(tx store.Tx) error {
+		_, err := tx.Append(bg, store.Event{"tool": "x"}, storetest.Writer)
+		return err
+	})
 	var bad *evidence.BadRecord
 	if !errors.As(err, &bad) {
 		t.Fatalf("Atomic over a wrong head = %v, want a BadRecord", err)
@@ -350,7 +356,7 @@ func BenchmarkAppend(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		st := time.Now()
-		if err := s.Atomic(bg, func(tx store.Tx) error { _, err := tx.Append(bg, ev); return err }); err != nil {
+		if err := s.Atomic(bg, func(tx store.Tx) error { _, err := tx.Append(bg, ev, storetest.Writer); return err }); err != nil {
 			b.Fatal(err)
 		}
 		lat = append(lat, time.Since(st))
@@ -416,7 +422,7 @@ func TestLiveChainDump(t *testing.T) {
 		t.Fatalf("head %d after loading %d", seq, n)
 	}
 	for _, e := range storetest.GoEvents {
-		if err := s.Atomic(bg, func(tx store.Tx) error { _, err := tx.Append(bg, e); return err }); err != nil {
+		if err := s.Atomic(bg, func(tx store.Tx) error { _, err := tx.Append(bg, e, storetest.Writer); return err }); err != nil {
 			t.Fatal(err)
 		}
 	}

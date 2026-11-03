@@ -35,7 +35,7 @@ func BenchmarkAppend(b *testing.B) {
 		"decision": "allow", "rule": nil, "session": "s-1", "task_id": "t-1", "args_sha256": strings.Repeat("a", 64)}
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		if err := s.Atomic(ctx, func(tx store.Tx) error { _, err := tx.Append(ctx, ev); return err }); err != nil {
+		if err := s.Atomic(ctx, func(tx store.Tx) error { _, err := tx.Append(ctx, ev, storetest.Writer); return err }); err != nil {
 			b.Fatal(err)
 		}
 	}

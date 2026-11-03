@@ -13,6 +13,8 @@ import (
 	"encoding/json"
 	"errors"
 	"time"
+
+	"github.com/jfillman/clearance/internal/evidence"
 )
 
 // LockKey is pg.py's LOCK_KEY ("clr0"): one Clearance writer per database, Python or Go.
@@ -27,8 +29,8 @@ var ErrWriterLocked = errors.New("store: another Clearance writer holds the data
 // ErrNotFound is returned by single-row reads.
 var ErrNotFound = errors.New("store: not found")
 
-// Event is what a caller records: its fields, before the envelope (seq, schema, boundary, coverage, verified,
-// claimed, prev_hash, hash) is added. Values must be what encoding/json would produce from JSON: string, bool,
+// Event is what a caller records: its fields, before the envelope (seq, schema, boundary, coverage, provider,
+// subject, verified, claimed, prev_hash, hash) is added. An event may set boundary, coverage, subject and intent. Values must be what encoding/json would produce from JSON: string, bool,
 // json.Number or float64, []any, map[string]any, nil.
 type Event = map[string]any
 
@@ -62,8 +64,9 @@ type Store interface {
 // Tx is the write side, valid only inside Atomic.
 type Tx interface {
 	Reader
-	// Append writes event as the next chain record and returns the stored record (seq, envelope and hash added).
-	Append(ctx context.Context, event Event) (Record, error)
+	// Append writes event as the next chain record, sealed by w (evidence.Seal: the v1 envelope with w's provider,
+	// intent capture and verified set), and returns the stored record (seq, envelope and hash added).
+	Append(ctx context.Context, event Event, w evidence.Writer) (Record, error)
 	PutChange(ctx context.Context, c Change) error
 	ReplaceDefinitions(ctx context.Context, defs []Definition) error
 }
