@@ -166,7 +166,9 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 	st := &PG{R: rd}
 	defs := NewDefinitions(bundled)
 	if _, err := defs.Refresh(ctx, st); err != nil {
-		return fmt.Errorf("api: reading the stored definitions: %w", err)
+		// The core may not have created its tables yet (a fresh install starts both at once): serve the bundled
+		// set, retry every interval, and stay unready (/readyz) until the database answers.
+		log.Warn("api: the stored definitions are not readable yet; retrying", "error", err.Error())
 	}
 	access := &Access{Delegates: cfg.Delegates, Notifiers: cfg.Notifiers, Auditors: cfg.Auditors, Owners: defs.Owners}
 	if cfg.BackstageURL != "" {

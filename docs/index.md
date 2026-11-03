@@ -36,7 +36,9 @@ module table: [github.com/jfillman/clearance](https://github.com/jfillman/cleara
   until W1 ([core.md](core.md)).
 - **The read API** (`api.py`, `contract/clearance-api.json`): clearance-api, a separate read-only process over the
   same tables: agents, sessions, evidence, counts, PR receipts, the inbox feed, the policy as data, the event history
-  ([clearance-api.md](clearance-api.md)).
+  ([clearance-api.md](clearance-api.md)). Its Go port, `clearance api` (`internal/api`), is Built, not deployed:
+  Clearance's own reads (evidence, receipts and verdicts, the gate, the policy and explainer, definitions); the
+  runtime's reads move to the Autopilot gateway with R-3.
 
 ## On GitHub
 

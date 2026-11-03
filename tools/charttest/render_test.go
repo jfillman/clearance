@@ -312,6 +312,37 @@ func TestFullCoversEveryCoreVariable(t *testing.T) {
 	}
 }
 
+// Every variable `clearance api` reads (internal/api Config's doc and authn.EnvVars) is a chart value: the full
+// render sets each of them on the api Deployment (PORT is the fallback the chart's CLEARANCE_LISTEN replaces).
+func TestFullCoversEveryAPIVariable(t *testing.T) {
+	objs := render(t, "-f", valuesFile("full-values.yaml"))
+	src, err := os.ReadFile("../../internal/api/config.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, doc, _ := strings.Cut(string(src), "// Config is clearance-api's deployment")
+	doc, _, _ = strings.Cut(doc, "type Config struct")
+	names := map[string]bool{}
+	for _, n := range regexp.MustCompile(`\b(?:CLEARANCE|BACKSTAGE)_[A-Z0-9_]*[A-Z0-9]\b`).FindAllString(doc, -1) {
+		names[n] = true
+	}
+	for _, n := range authn.EnvVars {
+		names[n] = true
+	}
+	if len(names) < 20 {
+		t.Fatalf("found only %d variable names in internal/api and authn: the extraction is broken", len(names))
+	}
+	e := env(container(t, find(objs, "Deployment", "t-clearance-api")))
+	for n := range names {
+		if _, ok := e[n]; !ok {
+			t.Errorf("clearance api variable %s has no chart value (not set by ci/full-values.yaml)", n)
+		}
+	}
+	if e["CLEARANCE_LISTEN"] != ":8080" || e["CLEARANCE_GATEWAY_URL"] != "http://autopilot-gateway.autopilot-system.svc:8080" {
+		t.Errorf("listen %q gateway %q", e["CLEARANCE_LISTEN"], e["CLEARANCE_GATEWAY_URL"])
+	}
+}
+
 func TestInstallValues(t *testing.T) {
 	objs := render(t, "-f", valuesFile("install-values.yaml"))
 	np := find(objs, "NetworkPolicy", "t-clearance-core")

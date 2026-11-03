@@ -188,6 +188,8 @@ api:
   # CLEARANCE_API_AUDITORS and CLEARANCE_API_NOTIFIERS: principal globs.
   auditors: []
   notifiers: []
+  # CLEARANCE_GATEWAY_URL: the Autopilot gateway (where the runtime's writes go), named in /v1/contract. Empty: none.
+  gatewayURL: ""
   # CLEARANCE_API_POOL: the read pool's size.
   pool: 5
   # CLEARANCE_API_DEFINITIONS_INTERVAL: seconds between re-reads of the stored agent definitions.

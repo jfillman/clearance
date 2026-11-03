@@ -50,6 +50,7 @@ externalSecrets:
 api:
   auditors: ["user:auditor"]
   notifiers: ["tower/backstage"]
+  gatewayURL: http://autopilot-gateway.autopilot-system.svc:8080
 networkPolicy:
   core:
     from:

@@ -53,6 +53,10 @@ spec:
                   key: {{ include "clearance.readerSecretKey" . }}
             - name: CLEARANCE_CORE_URL
               value: {{ printf "http://%s.%s.svc:%v" (include "clearance.coreName" .) .Release.Namespace .Values.service.port | quote }}
+            {{- with .Values.api.gatewayURL }}
+            - name: CLEARANCE_GATEWAY_URL
+              value: {{ . | quote }}
+            {{- end }}
             {{- with .Values.api.auditors }}
             - name: CLEARANCE_API_AUDITORS
               value: {{ include "clearance.csv" . | quote }}

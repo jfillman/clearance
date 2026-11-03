@@ -20,6 +20,13 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   arm64, SPDX SBOM, keyless signature) and `oci://ghcr.io/jfillman/charts/clearance`, and reruns the install test on
   them. Chart CI (`.github/workflows/chart.yaml`): lint, render tests (`tools/charttest`), kubeconform, and an install
   test on kind (`tools/chart-install-test`, `tools/installtest`). See [docs/install.md](docs/install.md).
+- `clearance api` (R-2b): Clearance's read API in Go (`internal/api`), on the read-only Postgres store: evidence
+  (filters, `seq` cursor, chain verify, counts), receipts and provenance verdicts, the gate's changes and policy, the
+  policy as data and the dry-run explainer (`decide.(*Engine).Trace`), and the new `GET /v1/definitions`. Same paths,
+  parameters, answers and codes as api.py for every route kept, identical on the 612-record hangar-dev chain; the
+  runtime's reads move to the gateway (R-3). Counts exclude the core's outcome records by default (`outcomes`).
+  `contract/clearance-api.json` is now generated from the Go handlers, and `tools/gen_api_contract.py` is gone
+  ([docs/clearance-api.md](docs/clearance-api.md)).
 - `tools/release_notes.py`: print one version's section (the workflow's notes; exits 1 when there is none).
 - The Go core (R-1): one `clearance` binary (`core [--memory]`, `chain verify`, `register`, `conformance`, `version`); the
   decision engine on cel-go with a golden corpus replayed from the Python engine; the Postgres store extending the
