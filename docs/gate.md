@@ -1,5 +1,11 @@
 # The deployment gate (Clearances): design pass, 2026-10-31
 
+Status (v0.26.1): **phase 1a built** (the gate's core, v0.19.0), fed by Glidepath's `clearance-gate-` check
+(advisory on Hangar) and `clearance register` (v0.23.0), and answered to GitHub Actions deployments by the App's
+protection rule (v0.22.0; [provenance-app.md](provenance-app.md)). **Not built**: phase 2 admission (the pulled grant
+and the Kyverno policy), `deploy.exception` and outcome records. The design below is as reviewed; the Built sections
+at the end say what exists.
+
 Clearance has two boundaries. The **runtime boundary** is built: every tool call an agent makes goes through the
 gateway, is decided by policy and recorded as evidence. The **deployment boundary** is this document: may a change
 land in a protected environment, and can we prove afterwards that it did so under policy? The product site names the

@@ -5,7 +5,8 @@ metadata:
   description: >-
     Policy, audit and session gateway for AI agent workloads: every tool call decided against the agent's
     definition and its session's limits, recorded as hash-chained evidence, budgeted, then made. The runtime
-    boundary is built; the deployment gate is designed (docs/gate.md). Autopilot is its native consumer.
+    boundary is built; the deployment gate's core and the GitHub App (check runs, deployment protection rule,
+    clearance register) are built; admission is not (docs/gate.md). Autopilot is its native consumer.
   annotations:
     github.com/project-slug: jfillman/clearance
     backstage.io/techdocs-ref: dir:.

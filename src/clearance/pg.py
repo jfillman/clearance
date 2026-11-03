@@ -25,7 +25,7 @@ from typing import Any, Iterable
 import psycopg
 from psycopg.types.json import Jsonb
 
-from .audit import GENESIS, Checkpoint, Writer, gateway_writer, seal, verify
+from .audit import GENESIS, Checkpoint, Writer, gateway_writer, seal, verify_stream
 
 LOCK_KEY = 0x636C7230  # "clr0": one Clearance writer per database
 RECENT = timedelta(days=1)  # closed or expired sessions kept in memory this long, for the run tree's lookups
@@ -148,14 +148,20 @@ class PgState:
 class PgAuditLog:
     """AuditLog's interface on clearance_evidence. append() does not commit: the operation's flush does."""
 
+    # Rows fetched per round trip while the chain is verified at start (a server-side cursor, so memory stays one
+    # batch however long the chain is).
+    VERIFY_BATCH = 1000
+
     def __init__(self, state: PgState, writer: Writer | None = None):
         self.state = state
         self.writer = writer or gateway_writer()
-        records = self.records
-        ok, bad = verify(records)
+        with self.state.conn.cursor(name="clearance_verify_chain") as cur:
+            cur.itersize = self.VERIFY_BATCH
+            cur.execute("SELECT record FROM clearance_evidence ORDER BY seq")
+            ok, bad, count, head = verify_stream(r[0] for r in cur)
         if not ok:
             raise ValueError(f"evidence chain in the database is broken at seq {bad}")
-        self._count, self._head = len(records), (records[-1]["hash"] if records else GENESIS)
+        self._count, self._head = count, head
 
     @property
     def head(self) -> str:

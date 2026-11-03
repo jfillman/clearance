@@ -83,6 +83,14 @@ go test -race ./...      # internal/store/pg's tests use CLEARANCE_TEST_DSN the 
 tools/fuzz-all.sh 10s
 ```
 
+## Releases
+
+A `vX.Y.Z` tag on `main`, cut after the version-bump PR merges and CI is green, runs `.github/workflows/release.yaml`:
+it checks that the tag, `pyproject.toml` and `CHANGELOG.md` agree, builds the wheel, and publishes a GitHub Release
+whose notes are the version's section of [CHANGELOG.md](CHANGELOG.md) (`tools/release_notes.py`; no section, no
+release). The version-bump PR adds that section; `tests/test_release.py` fails without it. `clearance.__version__` is
+the installed package's version.
+
 ## History
 
 This code was the `clearance` package inside https://github.com/jfillman/autopilot until 2026-10-29 (Hangar decision

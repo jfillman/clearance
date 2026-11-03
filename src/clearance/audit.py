@@ -29,7 +29,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 GENESIS = "0" * 64
 EVIDENCE_SCHEMA = "clearance.evidence/v1"
@@ -275,15 +275,23 @@ class AuditLog:
 
 def verify(records: list[dict[str, Any]]) -> tuple[bool, int | None]:
     """Return (ok, index of the first bad record)."""
-    prev = GENESIS
+    ok, bad, _, _ = verify_stream(records)
+    return ok, bad
+
+
+def verify_stream(records: Iterable[dict[str, Any]]) -> tuple[bool, int | None, int, str]:
+    """verify() over any iterable, holding one record at a time: (ok, index of the first bad record, how many
+    records were read, the head hash). A durable log verifies its chain from a cursor this way, so start-up memory
+    does not grow with the chain (pg.PgAuditLog)."""
+    prev, n = GENESIS, 0
     for i, r in enumerate(records):
         if r.get("seq") != i or r.get("prev_hash") != prev:
-            return False, i
+            return False, i, i, prev
         body = {k: v for k, v in r.items() if k != "hash"}
         if sha256_hex(canonical(body)) != r.get("hash"):
-            return False, i
-        prev = r["hash"]
-    return True, None
+            return False, i, i, prev
+        prev, n = r["hash"], i + 1
+    return True, None, n, prev
 
 
 def verify_against(records: list[dict[str, Any]], anchored: Checkpoint) -> tuple[bool, str]:
