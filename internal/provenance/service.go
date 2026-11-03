@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 
 	"github.com/jfillman/clearance/internal/authn"
+	"github.com/jfillman/clearance/internal/evidence"
 	"github.com/jfillman/clearance/internal/pycompat"
 	"github.com/jfillman/clearance/internal/store"
 )
@@ -36,6 +37,7 @@ type Service struct {
 	Store  store.Store
 	Clock  func() time.Time
 	Defs   Lookup
+	Writer evidence.Writer // zero: evidence.Core("")
 	mu     sync.Mutex
 }
 
@@ -78,7 +80,7 @@ func (s *Service) verify(ctx context.Context, principal string, req Request, bod
 		} else if v.Scope.Rule != nil {
 			ruleV = *v.Scope.Rule
 		}
-		rec, err := tx.Append(ctx, store.Event{
+		rec, err := appendAs(ctx, tx, s.Writer.OrCore(), store.Event{
 			"ts": pycompat.ISO(s.Clock()), "task_id": r.TaskID, "session": r.Session, "parent": nil,
 			"principal": principal, "agent": r.Agent, "tool": "provenance.verify", "tier": nil,
 			"decision": "allow", "rule": ruleV, "target": fmt.Sprintf("%s#%d", req.Repo, req.PR),
@@ -110,7 +112,7 @@ func (s *Service) RecordInstallation(ctx context.Context, installation, action, 
 	}
 	var out store.Record
 	err := s.Store.Atomic(ctx, func(tx store.Tx) error {
-		rec, err := tx.Append(ctx, store.Event{
+		rec, err := appendAs(ctx, tx, s.Writer.OrCore(), store.Event{
 			"ts": pycompat.ISO(s.Clock()), "task_id": nil, "session": nil, "parent": nil,
 			"principal": "app:" + installation, "agent": nil, "tool": "app.installation", "tier": nil,
 			"decision": "allow", "rule": nil, "target": target, "args_sha256": pycompat.ArgsDigest(repos),
@@ -179,4 +181,9 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
 	_ = enc.Encode(v)
+}
+
+// appendAs is tx.Append with the writer first, so the event literal can close the call.
+func appendAs(ctx context.Context, tx store.Tx, w evidence.Writer, ev store.Event) (store.Record, error) {
+	return tx.Append(ctx, ev, w)
 }

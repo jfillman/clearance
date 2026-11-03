@@ -12,6 +12,7 @@ import (
 
 	"github.com/jfillman/clearance/internal/authn"
 	"github.com/jfillman/clearance/internal/definitions"
+	"github.com/jfillman/clearance/internal/evidence"
 	"github.com/jfillman/clearance/internal/pycompat"
 	"github.com/jfillman/clearance/internal/review"
 	"github.com/jfillman/clearance/internal/store"
@@ -58,8 +59,9 @@ type Service struct {
 	Policy    Policy // the baseline; DefaultPolicy() unless the deployment says otherwise
 	Store     store.Store
 	Clock     func() time.Time
-	Owners    Owners    // nil: the outside group stands in
-	Directory Directory // nil: nobody is in any group
+	Writer    evidence.Writer // who the deploy.* records name as provider; zero: evidence.Core("")
+	Owners    Owners          // nil: the outside group stands in
+	Directory Directory       // nil: nobody is in any group
 	Tools     review.Registry
 	Parse     definitions.Parser
 	// OnAnswered is called (non-blocking, after the commit) when a waiting GitHub deployment got its answer: the
@@ -86,7 +88,7 @@ func (s *Service) op(ctx context.Context, fn func(tx store.Tx, w *writer) error)
 	var result error
 	var answered int
 	err := s.Store.Atomic(ctx, func(tx store.Tx) error {
-		w := &writer{ctx: ctx, tx: tx, now: s.now()}
+		w := &writer{ctx: ctx, tx: tx, now: s.now(), wr: s.Writer.OrCore()}
 		result = fn(tx, w)
 		if w.err != nil {
 			return w.err
@@ -112,6 +114,7 @@ type writer struct {
 	now      time.Time
 	err      error
 	answered int
+	wr       evidence.Writer
 }
 
 func (w *writer) put(c *Change) {
@@ -132,7 +135,7 @@ func (w *writer) append(ev store.Event) store.Record {
 	if w.err != nil {
 		return nil
 	}
-	rec, err := w.tx.Append(w.ctx, ev)
+	rec, err := w.tx.Append(w.ctx, ev, w.wr)
 	if err != nil {
 		w.err = err
 	}

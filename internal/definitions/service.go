@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jfillman/clearance/internal/evidence"
 	"github.com/jfillman/clearance/internal/pycompat"
 	"github.com/jfillman/clearance/internal/store"
 )
@@ -16,6 +17,7 @@ type Service struct {
 	Registry *Registry
 	Store    store.Store
 	Clock    func() time.Time
+	Writer   evidence.Writer // zero: evidence.Core("")
 	mu       sync.Mutex
 }
 
@@ -39,7 +41,7 @@ func (s *Service) Apply(ctx context.Context, loaded []Loaded, rejected []Rejecte
 	now := s.Clock()
 	err := s.Store.Atomic(ctx, func(tx store.Tx) error {
 		rec := func(tool, name string, src Source, decision string, rule any, result string) error {
-			_, err := tx.Append(ctx, Event(now, tool, name, src, decision, rule, result))
+			_, err := tx.Append(ctx, Event(now, tool, name, src, decision, rule, result), s.Writer.OrCore())
 			return err
 		}
 		for _, n := range ch.Added {

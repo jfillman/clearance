@@ -30,6 +30,7 @@ import (
 	"github.com/jfillman/clearance/internal/authn"
 	"github.com/jfillman/clearance/internal/definitions"
 	"github.com/jfillman/clearance/internal/definitions/deftest"
+	"github.com/jfillman/clearance/internal/evidence"
 	"github.com/jfillman/clearance/internal/gate"
 	"github.com/jfillman/clearance/internal/githubapp"
 	"github.com/jfillman/clearance/internal/provenance"
@@ -359,7 +360,7 @@ func TestAPrClearanceOpenedIsConfirmed(t *testing.T) {
 		_, err := tx.Append(context.Background(), store.Event{"ts": "2026-09-26T12:00:00Z", "task_id": "t-1", "session": "s-000001", "parent": nil,
 			"principal": "user:alice", "agent": "coding-agent", "tool": "repo.pr.open", "tier": "T1", "decision": "allow", "rule": nil,
 			"target": "jfillman/flight-api", "args_sha256": strings.Repeat("0", 64), "result": "ok",
-			"effect": map[string]any{"pr": json.Number("1"), "commit": commit, "branch": "agent/t-1", "repo": "jfillman/flight-api", "paths": []any{"src/app.js"}}})
+			"effect": map[string]any{"pr": json.Number("1"), "commit": commit, "branch": "agent/t-1", "repo": "jfillman/flight-api", "paths": []any{"src/app.js"}}}, evidence.Core(""))
 		return err
 	})
 	if err != nil {

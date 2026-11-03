@@ -17,6 +17,7 @@ import (
 	"github.com/jfillman/clearance/internal/authn"
 	"github.com/jfillman/clearance/internal/definitions"
 	"github.com/jfillman/clearance/internal/definitions/deftest"
+	"github.com/jfillman/clearance/internal/evidence"
 	"github.com/jfillman/clearance/internal/provenance"
 	"github.com/jfillman/clearance/internal/pycompat"
 	"github.com/jfillman/clearance/internal/store"
@@ -54,7 +55,7 @@ func (f *fixture) opened(t *testing.T, paths ...string) map[string]string {
 			"principal": "user:alice", "agent": "coding-agent", "tool": "repo.pr.open", "tier": "T1", "decision": "allow", "rule": nil,
 			"target": "jfillman/flight-api", "args_sha256": strings.Repeat("0", 64), "result": "ok",
 			"effect": map[string]any{"pr": json.Number("1"), "commit": commit, "branch": "agent/t-1", "repo": "jfillman/flight-api",
-				"paths": anyList(paths)}})
+				"paths": anyList(paths)}}, evidence.Core(""))
 		return err
 	})
 	if err != nil {

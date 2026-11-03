@@ -621,3 +621,24 @@ func Anchored(count int64, hashAt func(int64) string, anchored Checkpoint) (bool
 
 // ISO is the one timestamp format records use (audit.py iso).
 func ISO(t time.Time) string { return t.UTC().Format("2006-01-02T15:04:05Z") }
+
+// CoreProviderName is the provider name the Go core writes its own records as (decisions, deploy.*, provenance
+// verdicts, definition.*).
+const CoreProviderName = "clearance"
+
+// Core is the Writer for the core's own records at a build version; a zero Writer in a service means Core with
+// version "unversioned" (tests, and a build without -ldflags).
+func Core(version string) Writer {
+	if version == "" {
+		version = "unversioned"
+	}
+	return Writer{Provider: Provider{Name: CoreProviderName, Version: version}}
+}
+
+// OrCore is w, or Core("") when w names no provider.
+func (w Writer) OrCore() Writer {
+	if w.Provider.Name == "" {
+		return Core("")
+	}
+	return w
+}
