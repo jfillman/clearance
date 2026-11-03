@@ -1,0 +1,53 @@
+{
+ "keys": [
+  [
+   "v1",
+   "ConfigMap",
+   "ns",
+   "tricky"
+  ],
+  [
+   "v1",
+   "Secret",
+   "",
+   "s1"
+  ]
+ ],
+ "canonical": {
+  "v1|ConfigMap|ns|tricky": "{\"apiVersion\":\"v1\",\"base\":{\"flag\":true,\"replicas\":2},\"data\":{\"big\":123456789012345678901234567890,\"date\":\"2026-01-02\",\"empty\":null,\"float\":1.5,\"hex\":31,\"inf\":Infinity,\"intfloat\":2.0,\"multi\":\"line one\\nline two\\n\",\"octal\":493,\"quoted\":\"yes\",\"sci\":\"1e3\",\"sexa\":90,\"ts\":\"2001-12-14 21:59:43.100000-05:00\",\"tsz\":\"2001-12-14 21:59:43+00:00\",\"under\":1000,\"unicode\":\"caf\\u00e9 \\ud83d\\ude00\"},\"images\":[{\"image\":\"b\"},{\"image\":\"a\",\"other\":{\"image\":\"b\"}}],\"kind\":\"ConfigMap\",\"merged\":{\"flag\":true,\"replicas\":3},\"metadata\":{\"annotations\":{\"n\":null},\"labels\":{\"true\":false},\"name\":\"tricky\",\"namespace\":\"ns\"}}",
+  "v1|Secret||s1": "{\"apiVersion\":\"v1\",\"kind\":\"Secret\",\"metadata\":{\"name\":\"s1\"}}"
+ },
+ "images": {
+  "v1|ConfigMap|ns|tricky": [
+   "b",
+   "a"
+  ],
+  "v1|Secret||s1": []
+ },
+ "tree": "7b4e132ece9fbe0907171567ecb69b5459b43b7dbe85644721ae75f0f7f85a27",
+ "objects": [
+  {
+   "apiVersion": "v1",
+   "kind": "ConfigMap",
+   "namespace": "ns",
+   "name": "tricky",
+   "op": "added",
+   "fields": [],
+   "images": [
+    "b",
+    "a"
+   ],
+   "digest": "d470f533bfa2dba4843c934ac7b3c376abcdeeb6d82efc62988137ba541d1b4f"
+  },
+  {
+   "apiVersion": "v1",
+   "kind": "Secret",
+   "namespace": "",
+   "name": "s1",
+   "op": "added",
+   "fields": [],
+   "images": [],
+   "digest": "9574525bf3bb7864e7889d2d109606b9018bfd823f91ef3eb9c22936327cb146"
+  }
+ ]
+}

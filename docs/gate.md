@@ -252,3 +252,12 @@ What exists in Clearance now; the check, the release guardrail and the screens f
    groups.
 5. ~~Holding TTL~~ Decided: 7 days with the PR, a new push re-asks. Was: with the PR (7 days) or shorter (the board shows an hour); and whether a new push re-asks (recommended:
    yes, a new head is a new change).
+
+## The Go core (R-1c, Built, not deployed)
+
+The gate is ported to Go with behaviour unchanged: `internal/gate` (classification, the change record,
+`POST /v1/clearances`, `.../{id}/clear`, `.../{id}/deny`, expiry and the GitHub deployment answers), `internal/review`
+(`POST /v1/definitions/review`), `internal/definitions` (the pinned-definition set and its `definition.*` records) and
+`internal/gate/render` (`clearance register`'s manifest diff, reading YAML the way PyYAML's SafeLoader does). Each gate
+operation is one store transaction: the change row and its `deploy.*` records commit together. One tightening: an unknown
+field in a request body is refused (400) where the Python core ignored it. The Python gate keeps serving until W1.

@@ -1,0 +1,41 @@
+base: &base
+  replicas: 2
+  flag: yes
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tricky
+  namespace: ns
+  labels: {on: off}
+  annotations: {n: ~}
+data:
+  octal: 0755
+  sexa: 1:30
+  sci: 1e3
+  float: 1.5
+  intfloat: 2.0
+  big: 123456789012345678901234567890
+  date: 2026-01-02
+  ts: 2001-12-14t21:59:43.10-05:00
+  tsz: 2001-12-14 21:59:43Z
+  hex: 0x1F
+  under: 1_000
+  inf: .inf
+  quoted: "yes"
+  unicode: "café \U0001F600"
+  multi: |
+    line one
+    line two
+  empty:
+merged:
+  <<: *base
+  replicas: 3
+images:
+  - image: b
+  - {image: a, other: {image: b}}
+---
+apiVersion: v1
+kind: List
+items:
+  - {apiVersion: v1, kind: Secret, metadata: {name: s1}}
+  - notamap

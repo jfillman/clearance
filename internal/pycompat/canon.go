@@ -3,8 +3,8 @@
 // and datetime.isoformat. Values are what encoding/json produces with UseNumber: string, bool, json.Number,
 // float64, []any, map[string]any, nil (int, int64, *big.Int and float64 are accepted too).
 //
-// R-1b's record package owns the chain's canonical form; this is the same encoding for the digests the gate
-// computes itself (args_sha256, the clearance.yaml digest, the rendered tree's digest). Merge the two when R-1 lands.
+// The chain's canonical form is R-1b's internal/canon (Canonical and ArgsDigest delegate to it); Dumps adds the
+// json.dumps variants the gate's other digests use (ensure_ascii=True, default separators).
 package pycompat
 
 import (
@@ -20,6 +20,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/jfillman/clearance/internal/canon"
 )
 
 // Options select json.dumps' arguments.
@@ -30,8 +32,8 @@ type Options struct {
 	Spaced bool
 }
 
-// Canonical is audit.canonical: json.dumps(v, sort_keys=True, separators=(",", ":"), ensure_ascii=False).
-func Canonical(v any) ([]byte, error) { return Dumps(v, Options{}) }
+// Canonical is audit.canonical (R-1b's canon.Canonical).
+func Canonical(v any) ([]byte, error) { return canon.Canonical(v) }
 
 // Dumps is json.dumps(v, sort_keys=True, ...) with the given options.
 func Dumps(v any, o Options) ([]byte, error) {
@@ -49,11 +51,11 @@ func ArgsDigest(v any) string {
 	if err != nil {
 		return ""
 	}
-	b, err := Canonical(n)
+	d, err := canon.ArgsDigest(n)
 	if err != nil {
 		return ""
 	}
-	return SHA256Hex(b)
+	return d
 }
 
 // SHA256Hex is hashlib.sha256(b).hexdigest().
@@ -75,18 +77,14 @@ func Normalize(v any) (any, error) {
 	return Decode(bytes.NewReader(raw))
 }
 
-// Decode reads exactly one JSON value (numbers as json.Number), refusing trailing data as json.loads does.
+// Decode reads exactly one JSON value the way json.loads does (R-1b's canon.Parse: numbers as json.Number,
+// trailing data refused).
 func Decode(r io.Reader) (any, error) {
-	dec := json.NewDecoder(r)
-	dec.UseNumber()
-	var v any
-	if err := dec.Decode(&v); err != nil {
+	raw, err := io.ReadAll(r)
+	if err != nil {
 		return nil, err
 	}
-	if _, err := dec.Token(); err != io.EOF {
-		return nil, fmt.Errorf("trailing data after the JSON value")
-	}
-	return v, nil
+	return canon.Parse(raw)
 }
 
 func encode(b *bytes.Buffer, v any, o Options) error {

@@ -708,7 +708,7 @@ func (a *App) postCheck(ctx context.Context, token, repo, head, name string, res
 	}
 	body := map[string]any{"name": name, "head_sha": head, "status": "completed", "conclusion": conclusion,
 		"external_id": external,
-		"output": map[string]any{"title": truncate(title, 255), "summary": truncate(summary, 60000), "annotations": annotations}}
+		"output":      map[string]any{"title": truncate(title, 255), "summary": truncate(summary, 60000), "annotations": annotations}}
 	status, doc, err := a.gh.call(ctx, "POST", fmt.Sprintf("/repos/%s/check-runs", repo), "token", token, body)
 	if err != nil {
 		return CheckRun{}, err

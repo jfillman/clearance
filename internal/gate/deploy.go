@@ -47,7 +47,7 @@ func (s *Service) DeploymentRequested(ctx context.Context, installation, repo, h
 			rec := w.append(store.Event{
 				"ts": pycompat.ISO(w.now), "task_id": nil, "session": nil, "parent": nil, "principal": principal,
 				"agent": nil, "tool": "deploy.request", "tier": nil, "decision": "deny", "rule": "DG-UNREGISTERED",
-				"target": repo + "@" + pycompat.Truncate(head, 7),
+				"target":      repo + "@" + pycompat.Truncate(head, 7),
 				"args_sha256": pycompat.ArgsDigest(map[string]any{"run": runID, "environment": environment}),
 				"result":      fmt.Sprintf("deployment run %d to %s: rejected", runID, environment), "boundary": "deployment"})
 			out = DeploymentResult{strp("rejected"), strp("DG-UNREGISTERED"), why, nil, recordSeq(rec)}
