@@ -85,7 +85,7 @@ only the operations in its vendored contract, so its copy is refreshed with R-3/
   v0-draft rows have no outcomes, so every count over them is unchanged.
 - **Counts take every list filter** (`task`, `session`, `principal`, `rule` too). api.py ignored them, so Tower's
   Evidence page total with a rule filter counted every rule; now it counts what the list shows.
-- **Strict queries**: an unknown or repeated parameter is 400; `since`/`until` on evidence must be ISO times.
+- **Strict queries**: an unknown or repeated parameter is 400; `since`/`until` on evidence must be ISO times; `/v1/clearances` and `/v1/clearances/counts` both refuse an unknown `state` or a non-ISO `since` (api.py counted them as nothing).
   Comparison is still as text against the record's `ts`, as api.py, so a `ts` with no fraction sorts after every
   fraction of its own second (Tower's `toISOString` is second-granular here).
 - **Receipts by repo** escape LIKE's `_` and `%` (api.py matched `a_b` as any character).
