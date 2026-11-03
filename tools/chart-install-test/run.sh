@@ -8,6 +8,7 @@
 #   IMAGE_REPO, IMAGE_TAG   the clearance image, already loaded into kind (pullPolicy Never)
 #   INSTALLTEST_IMAGE  the installtest image (Dockerfile target installtest), already loaded into kind
 #   API                true: the chart's api Deployment is on and checked (needs `clearance api` in the image)
+#   (a second pod, outsider, outside networkPolicy.core.from, must not reach the core at all)
 #   MAX_IMAGE_BYTES (40000000), MAX_IDLE_BYTES (67108864: 64 MiB), IDLE_SECONDS (60)
 #
 # Prints PASS/FAIL lines; writes a Markdown summary to $GITHUB_STEP_SUMMARY when set. Exits non-zero on a failure.
@@ -30,6 +31,7 @@ dump() {
   kubectl -n "$ns" logs deploy/clearance-core --tail=200 || true
   kubectl -n "$ns" logs deploy/clearance-api --tail=100 || true
   kubectl -n clearance-test logs installtest || true
+  kubectl -n clearance-test logs outsider || true
   echo "::endgroup::"
 }
 trap 'rc=$?; if [ $rc -ne 0 ]; then dump; fi' EXIT
@@ -55,17 +57,19 @@ api_url=""
 if [ "$API" = true ]; then api_url="http://clearance-api.${ns}.svc:8080"; fi
 INSTALLTEST_IMAGE="$INSTALLTEST_IMAGE" API_URL="$api_url" envsubst '${INSTALLTEST_IMAGE} ${API_URL}' \
   < "$here/installtest-pod.yaml" | kubectl apply -f -
-# Wait for the pod to finish (Succeeded or Failed), then read its verdict.
-for _ in $(seq 1 150); do
-  phase=$(kubectl -n clearance-test get pod installtest -o jsonpath='{.status.phase}')
-  case "$phase" in Succeeded|Failed) break ;; esac
-  sleep 2
+# Wait for each pod to finish (Succeeded or Failed), then read its verdict.
+echo "### Install test" >> "$summary"
+for p in installtest outsider; do
+  phase=""
+  for _ in $(seq 1 150); do
+    phase=$(kubectl -n clearance-test get pod "$p" -o jsonpath='{.status.phase}')
+    case "$phase" in Succeeded|Failed) break ;; esac
+    sleep 2
+  done
+  kubectl -n clearance-test logs "$p" | tee "$p.log"
+  { echo; echo '```'; cat "$p.log"; echo '```'; } >> "$summary"
+  if [ "$phase" != Succeeded ]; then echo "FAIL $p pod: $phase"; fail=1; fi
 done
-kubectl -n clearance-test logs installtest | tee installtest.log
-{
-  echo "### Install test"; echo; echo '```'; cat installtest.log; echo '```'
-} >> "$summary"
-if [ "$phase" != Succeeded ]; then echo "FAIL installtest pod: $phase"; fail=1; fi
 
 # The evidence chain verifies from genesis, read-only (helm test).
 if helm test clearance -n "$ns" --logs | tee helmtest.log; then

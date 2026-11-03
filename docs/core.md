@@ -185,4 +185,5 @@ tools/fuzz-all.sh 10s        # every Fuzz* target, as CI runs them
 ```
 
 CI (`.github/workflows/go.yaml`) runs vet, gofmt, the race tests, the fuzz targets and govulncheck. The contract is
-regenerated with `go generate ./internal/server`.
+regenerated with `go generate ./internal/server`. The image (`Dockerfile`) and the Helm chart (`charts/clearance`) are
+in [install.md](install.md); every variable above is a chart value, and `tools/charttest` fails when one is not.

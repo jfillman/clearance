@@ -4,6 +4,7 @@
 //
 //	installtest --core http://clearance-core.clearance:8080 [--api http://clearance-api.clearance:8080]
 //	            [--token-file /var/run/clearance/token]
+//	installtest --core ... --expect-blocked     (from a pod the NetworkPolicy does not admit)
 //
 // The token is the pod's projected service-account token for the core's audience: the core authenticates it by
 // TokenReview, and the pod's service account is registered in CLEARANCE_PROVIDERS and CLEARANCE_VERIFIERS by the
@@ -33,6 +34,7 @@ func main() {
 	api := flag.String("api", os.Getenv("INSTALLTEST_API_URL"), "clearance-api's URL (optional)")
 	tokenFile := flag.String("token-file", "/var/run/clearance/token", "the projected token for the core's audience")
 	wait := flag.Duration("wait", 2*time.Minute, "how long to wait for /readyz")
+	blocked := flag.Bool("expect-blocked", false, "only check that the core is unreachable from here (NetworkPolicy)")
 	flag.Parse()
 	if *core == "" {
 		fmt.Fprintln(os.Stderr, "installtest: --core is required")
@@ -42,7 +44,14 @@ func main() {
 	defer cancel()
 	t := &tester{core: strings.TrimRight(*core, "/"), api: strings.TrimRight(*api, "/"), tokenFile: *tokenFile,
 		http: &http.Client{Timeout: 15 * time.Second}}
-	t.run(ctx, *wait)
+	if *blocked {
+		t.http.Timeout = 5 * time.Second
+		code, err := t.call(ctx, "GET", t.core+"/healthz", nil, false, nil)
+		t.check("networkpolicy.core-unreachable", err != nil && code == 0,
+			fmt.Sprintf("a pod not in networkPolicy.core.from: HTTP %d %s", code, errText(err)))
+	} else {
+		t.run(ctx, *wait)
+	}
 	if t.failed > 0 {
 		fmt.Printf("installtest: %d of %d checks FAILED\n", t.failed, t.checks)
 		os.Exit(1)

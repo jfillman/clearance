@@ -42,3 +42,28 @@ spec:
       projected:
         sources:
           - serviceAccountToken: {path: token, audience: clearance, expirationSeconds: 3600}
+---
+# A pod the chart's NetworkPolicy does not admit (label app: outsider): the core must be unreachable from it.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: outsider
+  namespace: clearance-test
+  labels: {app: outsider}
+spec:
+  serviceAccountName: fake-provider
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    seccompProfile: {type: RuntimeDefault}
+  containers:
+    - name: installtest
+      image: ${INSTALLTEST_IMAGE}
+      imagePullPolicy: Never
+      args: ["--core", "http://clearance-core.clearance.svc:8080", "--expect-blocked"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities: {drop: ["ALL"]}
