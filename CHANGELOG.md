@@ -9,6 +9,8 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-11-03
+
 R-3: the Python package is gone. Breaking for anyone who installs `clearance` from this repository with pip (or
 `uv`), imports it, or runs its `clearance` console script: there is no Python `clearance` any more. Clearance is the
 Go module and its one binary; the gateway half of the old package is Autopilot's. Nothing deployed changes: hangar-dev
@@ -405,7 +407,8 @@ What the Autopilot gateway needs of the core before the hangar-dev cutover (R-3e
   scope, narrow-only limits, CEL policy, sessions, the hash-chained audit log and the gateway; the Hangar pack's
   `glidepath.*` and `airframe.*` tools over glidepath-api and a GET-only Kubernetes adapter.
 
-[Unreleased]: https://github.com/jfillman/clearance/compare/v0.29.0...HEAD
+[Unreleased]: https://github.com/jfillman/clearance/compare/v0.30.0...HEAD
+[0.30.0]: https://github.com/jfillman/clearance/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/jfillman/clearance/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/jfillman/clearance/compare/v0.27.1...v0.28.0
 [0.27.1]: https://github.com/jfillman/clearance/compare/v0.27.0...v0.27.1
