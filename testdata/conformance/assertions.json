@@ -1,0 +1,26 @@
+{
+  "suite": "clearance-conformance/v1",
+  "assertions": {
+    "runtime": [
+      "control.info",
+      "runtime.deny-not-acted",
+      "runtime.allow-acted-once",
+      "runtime.outcome-references-decision",
+      "runtime.spend-applied",
+      "runtime.outage-fails-closed",
+      "chain.verify"
+    ],
+    "deployment": [
+      "control.info",
+      "deployment.register-subject",
+      "deployment.hold",
+      "deployment.clear",
+      "deployment.release-once",
+      "deployment.outcome-digest",
+      "deployment.policy-clear",
+      "deployment.deny-never-applied",
+      "deployment.expiry-never-applied",
+      "chain.verify"
+    ]
+  }
+}

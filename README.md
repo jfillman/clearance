@@ -72,7 +72,8 @@ D16); its history came with it. Design: Hangar's `docs/autopilot/design.md`, sec
 
 ## Docs
 
-The TechDocs site is `mkdocs.yml` over `docs/` (home, clearance-api, the deployment gate), published in Hangar's
+The TechDocs site is `mkdocs.yml` over `docs/` (home, clearance-api, the deployment gate, the evidence record, the
+provider protocol and `clearance conformance`), published in Hangar's
 portal from `catalog-info.yaml` (`backstage.io/techdocs-ref: dir:.`). Preview locally with `pip install
 mkdocs-techdocs-core && mkdocs serve`.
 
