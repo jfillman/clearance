@@ -7,7 +7,7 @@ import (
 )
 
 // model is Gateway.model_authorize and ModelProxy._decide.
-func (e *Engine) model(req *EvaluationRequest) (Decision, Spend) {
+func (e *engine) model(req *EvaluationRequest) (Decision, Spend) {
 	c := &req.Context
 	if c.Models == nil {
 		return Decision{Rule: "M006", Message: "this deployment has no model routes"}, Spend{}

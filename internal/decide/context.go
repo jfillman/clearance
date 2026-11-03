@@ -63,7 +63,7 @@ func tierOf(name string) (int, bool) {
 }
 
 // buildContext is Policy.build_context: the CEL activation for one tool call, and each bundle's document findings.
-func (e *Engine) buildContext(req *EvaluationRequest, args *pycompat.Map) (*activation, *CallInput, [][][]Problem, error) {
+func (e *engine) buildContext(req *EvaluationRequest, args *pycompat.Map) (*activation, *CallInput, [][][]Problem, error) {
 	tool := req.Resource.ID
 	s := req.Context.Session
 	sc := req.Context.Scope
@@ -212,7 +212,7 @@ func (e *Engine) buildContext(req *EvaluationRequest, args *pycompat.Map) (*acti
 }
 
 // fileFieldViolations is policy._file_field_violations (AF-9a).
-func (e *Engine) fileFieldViolations(files []any, deny, allow []string) (int, error) {
+func (e *engine) fileFieldViolations(files []any, deny, allow []string) (int, error) {
 	if len(deny) == 0 && len(allow) == 0 {
 		return 0, nil
 	}
@@ -277,6 +277,8 @@ type Decision struct {
 	Hint     string
 	Tier     *int
 	Problems []Problem
+
+	uncharged bool // a degraded bundle's refusal: no denial is spent
 }
 
 // ctxActivation is the context expressions' variables for one call.
@@ -346,7 +348,7 @@ func callActivation(in *CallInput) *ctxActivation {
 
 // bundleContext computes one bundle's vars (into the rules' activation), its bad-argument count and its
 // documents' findings for a call.
-func (e *Engine) bundleContext(cb *compiledBundle, in *CallInput, files []any, v []ref.Val) (int, [][]Problem, error) {
+func (e *engine) bundleContext(cb *compiledBundle, in *CallInput, files []any, v []ref.Val) (int, [][]Problem, error) {
 	base := callActivation(in)
 	act := &varActivation{base: base, names: map[string]int{}, vals: make([]ref.Val, len(cb.vars))}
 	for i, p := range cb.vars {
@@ -379,6 +381,19 @@ func (e *Engine) bundleContext(cb *compiledBundle, in *CallInput, files []any, v
 	}
 	probs := make([][]Problem, len(cb.b.docs))
 	for i, d := range cb.b.docs {
+		if missing := cb.b.docMissing[i]; missing != "" {
+			if len(files) > 0 && in.Spec != nil && in.Spec.WritesFiles {
+				for _, f := range files {
+					if fm, ok := f.(*pycompat.Map); ok {
+						if p, _ := fm.GetStr("path"); d.Applies(p) {
+							return 0, nil, &degradedError{cb.b.unavailableMessage()}
+						}
+					}
+				}
+			}
+			v[cb.docSlots[i]] = types.Int(0)
+			continue
+		}
 		if len(files) > 0 && in.Spec != nil && in.Spec.WritesFiles {
 			found, err := d.Problems(files)
 			if err != nil {
@@ -394,7 +409,7 @@ func (e *Engine) bundleContext(cb *compiledBundle, in *CallInput, files []any, v
 }
 
 // appOf is the application a call acts on, from the first bundle whose app expression names one.
-func (e *Engine) appOf(tool string, args *pycompat.Map) string {
+func (e *engine) appOf(tool string, args *pycompat.Map) string {
 	in := &CallInput{Tool: tool, Spec: e.b.tools[tool], Args: args}
 	for _, cb := range e.b.bundles {
 		if cb.app == nil {

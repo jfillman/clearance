@@ -108,6 +108,15 @@
             },
             "type": "array"
           },
+          "status": {
+            "type": "string"
+          },
+          "unavailable": {
+            "items": {
+              "$ref": "#/components/schemas/DecideSourceFailure"
+            },
+            "type": "array"
+          },
           "version": {
             "type": "string"
           }
@@ -115,6 +124,7 @@
         "required": [
           "digest",
           "name",
+          "status",
           "version"
         ],
         "type": "object"
@@ -532,6 +542,21 @@
             "$ref": "#/components/schemas/DecideBudgets"
           }
         },
+        "type": "object"
+      },
+      "DecideSourceFailure": {
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "name"
+        ],
         "type": "object"
       },
       "DecideSourceRef": {
@@ -1585,6 +1610,12 @@
       },
       "Ready": {
         "properties": {
+          "degraded": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "error": {
             "type": "string"
           },

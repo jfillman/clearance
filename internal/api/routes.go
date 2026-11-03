@@ -64,6 +64,8 @@ type Health struct {
 type Ready struct {
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
+	// Degraded names the policy bundles whose sources could not be read (the api stays ready).
+	Degraded []string `json:"degraded,omitempty"`
 }
 
 var routeTable = []Route{

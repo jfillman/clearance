@@ -17,8 +17,12 @@ core: `CLEARANCE_PACKS`, `CLEARANCE_FLIGHT_REGISTRIES` and `TOWER_*` are gone (s
   CEL context (vars, argument checks, the recorded app) and document field scope (`internal/docscope`), loaded from
   `CLEARANCE_BUNDLES` by the core and clearance-api. A bundle's sources (for example a CI system's `GET /v1/contract`)
   are fetched at start from `CLEARANCE_BUNDLE_SOURCES` (HTTP(S) with a projected token, or a file), with a
-  compatible-version check and `CLEARANCE_BUNDLE_SOURCE_WAIT` (default 60s) of retries, then the start fails: no
-  fallback copy.
+  compatible-version check (a version the bundle does not list fails the start). No fallback copy: a source that
+  does not answer within `CLEARANCE_BUNDLE_SOURCE_WAIT` (default 10s) leaves its bundle degraded. Its tools and the
+  checks that need the source are denied R000 naming the bundle, with no denial charged. `/readyz` names it in
+  `degraded`, still 200, and the gate and records keep working. A background loader retries with backoff (2s to
+  60s) and loads it whole once the source answers; the load is logged and named in later decisions
+  (`policy.bundles[].status`).
 - Every decision names its policy: `context.policy.bundles` (each bundle's name, version, digest and the sources it
   read), and each decision record carries `policy: {ref, version, engine}` (the evidence schema's Decision group).
 - The deployment's vocabulary as configuration (`internal/vocab`): `CLEARANCE_ON_BEHALF_OF_HEADER`,

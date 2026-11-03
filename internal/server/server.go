@@ -353,7 +353,16 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, Ready{OK: false, Error: "no policy loaded", Policy: pol})
 		return
 	}
-	writeJSON(w, http.StatusOK, Ready{OK: true, Policy: pol, Head: seq})
+	// A degraded policy bundle does not make the core unready: the core is one replica that also serves the gate,
+	// records and the GitHub App, and a 503 would take it out of its Service. The bundle's own calls are denied
+	// (R000) instead; readyz names it.
+	var degraded []string
+	for _, b := range pol.Bundles {
+		if b.Status == "unavailable" {
+			degraded = append(degraded, b.Name)
+		}
+	}
+	writeJSON(w, http.StatusOK, Ready{OK: true, Policy: pol, Head: seq, Degraded: degraded})
 }
 
 // Health is GET /healthz's answer.
@@ -367,6 +376,8 @@ type Ready struct {
 	Error  string           `json:"error,omitempty"`
 	Policy decide.PolicyRef `json:"policy"`
 	Head   int64            `json:"head"`
+	// Degraded names the policy bundles whose sources could not be read (still 200: see readyz).
+	Degraded []string `json:"degraded,omitempty"`
 }
 
 // ErrorResponse is every refusal of this package's routes.

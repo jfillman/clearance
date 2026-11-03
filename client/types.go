@@ -243,6 +243,15 @@ type BundleRef struct {
 	Version string      `json:"version"`
 	Digest  string      `json:"digest"`
 	Sources []SourceRef `json:"sources,omitempty"`
+	// Status is "loaded", or "unavailable" while a source could not be read (Unavailable names which and why).
+	Status      string          `json:"status"`
+	Unavailable []SourceFailure `json:"unavailable,omitempty"`
+}
+
+// SourceFailure is a source a degraded bundle could not read.
+type SourceFailure struct {
+	Name  string `json:"name"`
+	Error string `json:"error"`
 }
 
 // SourceRef is a source document a bundle read at load.
@@ -571,6 +580,8 @@ type Ready struct {
 	Error  string    `json:"error,omitempty"`
 	Policy PolicyRef `json:"policy"`
 	Head   int64     `json:"head"`
+	// Degraded names the policy bundles whose sources could not be read (the core stays ready).
+	Degraded []string `json:"degraded,omitempty"`
 }
 
 // errorBody is every refusal's body: {"error"} and, from the gate, rule and hint.

@@ -148,8 +148,9 @@ type bundle struct {
 	slots         map[string]int // CEL variable name -> activation slot
 	bundles       []*compiledBundle
 	refs          []BundleRef
-	problemsOf    map[string]docRef // rule id -> the document whose findings decide it
-	ruleBundle    map[string]string // rule id -> the bundle that brought it
+	problemsOf    map[string]docRef          // rule id -> the document whose findings decide it
+	owner         map[string]*compiledBundle // tool name -> the bundle that registered it
+	ruleBundle    map[string]string          // rule id -> the bundle that brought it
 }
 
 // docRef is one bundle's document check.
@@ -224,6 +225,7 @@ func compileBundle(core BundleData, opt Options) (*bundle, error) {
 	b := &bundle{
 		tools: map[string]*ToolSpec{}, tripwires: map[string]bool{}, prTools: map[string]bool{},
 		slots: map[string]int{}, env: env, problemsOf: map[string]docRef{}, ruleBundle: map[string]string{},
+		owner: map[string]*compiledBundle{},
 	}
 	for _, t := range core.Tripwires {
 		b.tripwires[t] = true
@@ -357,6 +359,9 @@ func compileBundle(core BundleData, opt Options) (*bundle, error) {
 			if cb.app, err = compileCtx(cenv, spec.App, cel.StringType, "policy bundle "+spec.Name+": app"); err != nil {
 				return nil, err
 			}
+		}
+		for _, t := range spec.Tools {
+			b.owner[t.Name] = cb
 		}
 		b.bundles = append(b.bundles, cb)
 		b.refs = append(b.refs, lb.ref())

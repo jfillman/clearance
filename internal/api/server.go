@@ -194,7 +194,17 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, Ready{OK: false, Error: "store unreachable"})
 		return
 	}
-	writeJSON(w, http.StatusOK, Ready{OK: true})
+	// A degraded policy bundle leaves the api ready (200): only /v1/policy and the explainer read the policy, and
+	// they show the bundle's state. readyz names it.
+	var degraded []string
+	if s.opt.Engine != nil {
+		for _, b := range s.opt.Engine.Policy().Bundles {
+			if b.Status == "unavailable" {
+				degraded = append(degraded, b.Name)
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, Ready{OK: true, Degraded: degraded})
 }
 
 // notFound answers what no route matched: 405 for a known path asked with another method, else 404.

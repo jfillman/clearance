@@ -95,8 +95,42 @@ type DocumentSpec struct {
 type Bundle struct {
 	Spec    PolicyBundle
 	Sources []LoadedSource
-	Digest  string // sha256 of the bundle file and every source document, hex
-	docs    []*docscope.Config
+	// Unavailable are the sources that could not be read (SourceUnavailable): the bundle is degraded. Its tools,
+	// and calls a document reading such a source applies to, are denied (R000) until a whole load replaces it.
+	Unavailable []SourceFailure
+	Digest      string // sha256 of the bundle file and every source document read, hex
+	docs        []*docscope.Config
+	docMissing  []string // per document: the unavailable source it reads, "" when it is whole
+	data        []byte
+}
+
+// SourceFailure is a source a bundle could not read.
+type SourceFailure struct {
+	Name  string `json:"name"`
+	Error string `json:"error"`
+}
+
+// SourceUnavailable is a Fetch error meaning "not now" (the source did not answer, or answered with an error
+// status): the load goes on with the bundle degraded. Any other Fetch error, and a document that does not parse or
+// is a version the bundle does not list, fails the load: that is configuration, not an outage.
+type SourceUnavailable struct{ Err error }
+
+func (e *SourceUnavailable) Error() string { return "source unavailable: " + e.Err.Error() }
+func (e *SourceUnavailable) Unwrap() error { return e.Err }
+
+// Data is the bundle file as loaded (for a reload).
+func (b *Bundle) Data() []byte { return b.data }
+
+// Degraded says whether a source could not be read.
+func (b *Bundle) Degraded() bool { return len(b.Unavailable) > 0 }
+
+// unavailableMessage is the R000 message a degraded bundle's denials carry.
+func (b *Bundle) unavailableMessage() string {
+	names := make([]string, len(b.Unavailable))
+	for i, f := range b.Unavailable {
+		names[i] = f.Name
+	}
+	return fmt.Sprintf("policy bundle %s is unavailable: its source %s could not be read", b.Spec.Name, strings.Join(names, ", "))
 }
 
 // LoadedSource is one fetched source document.
@@ -166,13 +200,18 @@ func LoadBundle(data []byte, fetch Fetch) (*Bundle, error) {
 	}
 	sum := sha256.New()
 	sum.Write(data)
-	out := &Bundle{Spec: spec}
+	out := &Bundle{Spec: spec, data: data}
 	for _, s := range spec.Sources {
 		if fetch == nil {
 			return nil, fmt.Errorf("decide: policy bundle %s: source %s: no source is configured", spec.Name, s.Name)
 		}
 		raw, loc, err := fetch(spec.Name, s)
 		if err != nil {
+			var su *SourceUnavailable
+			if errors.As(err, &su) {
+				out.Unavailable = append(out.Unavailable, SourceFailure{Name: s.Name, Error: err.Error()})
+				continue
+			}
 			return nil, fmt.Errorf("decide: policy bundle %s: source %s: %w", spec.Name, s.Name, err)
 		}
 		var doc any
@@ -211,6 +250,16 @@ func LoadBundle(data []byte, fetch Fetch) (*Bundle, error) {
 					src = &out.Sources[j]
 				}
 			}
+			if src == nil { // the source is unavailable: the document is checked, its rules are not there yet
+				cfg := &docscope.Config{File: d.File, WholeFile: d.WholeFile, Human: d.Human, Loosened: d.Loosened,
+					Keyed: d.Keyed, Counted: d.Counted}
+				if err := cfg.Prepare(); err != nil {
+					return nil, fmt.Errorf("decide: policy bundle %s: document %s: %w", spec.Name, d.Name, err)
+				}
+				out.docs = append(out.docs, cfg)
+				out.docMissing = append(out.docMissing, d.Rules.Source)
+				continue
+			}
 			v, ok := pointer(src.doc, d.Rules.Pointer)
 			if !ok {
 				return nil, fmt.Errorf("decide: policy bundle %s: document %s: source %s has nothing at %q",
@@ -230,6 +279,7 @@ func LoadBundle(data []byte, fetch Fetch) (*Bundle, error) {
 			return nil, fmt.Errorf("decide: policy bundle %s: document %s: %w", spec.Name, d.Name, err)
 		}
 		out.docs = append(out.docs, cfg)
+		out.docMissing = append(out.docMissing, "")
 	}
 	out.Digest = hex.EncodeToString(sum.Sum(nil))
 	return out, nil
@@ -272,6 +322,9 @@ type BundleRef struct {
 	Version string      `json:"version"`
 	Digest  string      `json:"digest"`
 	Sources []SourceRef `json:"sources,omitempty"`
+	// Status is "loaded", or "unavailable" while a source could not be read (Unavailable names which and why).
+	Status      string          `json:"status"`
+	Unavailable []SourceFailure `json:"unavailable,omitempty"`
 }
 
 // SourceRef is a source document a bundle read at load.
@@ -282,7 +335,11 @@ type SourceRef struct {
 }
 
 func (b *Bundle) ref() BundleRef {
-	r := BundleRef{Name: b.Spec.Name, Version: b.Spec.Version, Digest: b.Digest}
+	r := BundleRef{Name: b.Spec.Name, Version: b.Spec.Version, Digest: b.Digest, Status: "loaded",
+		Unavailable: append([]SourceFailure(nil), b.Unavailable...)}
+	if b.Degraded() {
+		r.Status = "unavailable"
+	}
 	for _, s := range b.Sources {
 		r.Sources = append(r.Sources, SourceRef{Name: s.Name, Version: s.Version, Digest: s.Digest})
 	}

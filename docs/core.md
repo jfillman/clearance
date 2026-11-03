@@ -127,7 +127,7 @@ All configuration comes from the environment. An empty variable counts as unset.
 | `CLEARANCE_PROVIDERS` | The registered providers (above). |
 | `CLEARANCE_BUNDLES` | Comma-separated [policy bundle](#policy-bundles) files. Default none: the core rules only. (`CLEARANCE_PACKS` is gone; setting it is an error.) |
 | `CLEARANCE_BUNDLE_SOURCES` | JSON object, source name to `{"url": "http(s)://...", "tokenFile": "..."}` or `{"file": "..."}`: where each source a bundle names is read at start. |
-| `CLEARANCE_BUNDLE_SOURCE_WAIT` | How long the start keeps retrying a source it cannot fetch (Go duration, default `60s`). Then the process exits. |
+| `CLEARANCE_BUNDLE_SOURCE_WAIT` | How long the start keeps retrying a source that does not answer before it goes on with that bundle degraded (Go duration, default `10s`). |
 | `CLEARANCE_ENV_LOWER_NAMES`, `CLEARANCE_ENV_LOWER_PREFIXES`, `CLEARANCE_ENV_LOWER_PROJECT_SUFFIXES`, `CLEARANCE_ENV_UPPER_REPO_PREFIXES` | How arguments name an environment tier, for R012 (below). Defaults: lower names `dev,development,sandbox,scratch`, no prefixes or suffixes. |
 | `CLEARANCE_VERIFIERS` | Principal globs that may register changes and ask for provenance. |
 | `CLEARANCE_DELEGATES` | Principal globs that may act for a person they name (in `CLEARANCE_ON_BEHALF_OF_HEADER`). |
@@ -247,13 +247,34 @@ computed would put part of the policy in the enforcement point. A compiled-in pa
 keep the deployment's names in the core.
 
 **Sources are read live, at start.** A source such as a CI system's published contract (`GET /v1/contract`) is
-fetched over HTTP(S) with the pod's projected service-account token (`tokenFile`), or read from a file. When it
-cannot be read, the loader retries every 2 s until `CLEARANCE_BUNDLE_SOURCE_WAIT` (default 60 s) runs out, and then
-the process exits non-zero. There is no fallback copy: the core does not decide on a policy it could not load, and
-Kubernetes restarts it until the source answers. While it is down, every evaluation fails at the caller (the
-gateway's outage policy), and the deployment gate, provenance and the GitHub App webhook are down too. A changed
-source document (a new scope rule) changes the policy version in every decision after the next start; a source
-version the bundle is not written for stops the start until the bundle is updated.
+fetched over HTTP(S) with the pod's projected service-account token (`tokenFile`), or read from a file. There is
+no fallback copy.
+
+- **A source that does not answer** (no connection, a timeout, a non-200 status, an unreadable token file) is
+  retried every 2 s for `CLEARANCE_BUNDLE_SOURCE_WAIT` (default 10 s). Then the core starts with that bundle
+  **degraded** (decided 2026-11-03):
+  - Every call to one of the bundle's tools is denied **R000** with "policy bundle `<name>` is unavailable: its
+    source `<source>` could not be read".
+  - So is any call carrying a file one of the bundle's documents checks with rules from that source (an agent's
+    cicd.yaml).
+  - These denials charge nothing: no denial is counted and no breaker trips. It is a platform fault, not the
+    agent's.
+  - Every other call decides as usual. Records, the deployment gate, provenance, the GitHub App and clearance-api
+    keep working.
+  - The degraded bundle is named in every decision (`policy.bundles[].status: "unavailable"`, with the reason in
+    `unavailable`) and in `/readyz` (`degraded`). The core and the api still answer **200**, deliberately: the core
+    is one replica that also serves the gate, records and the webhook, and a 503 would take all of that out of its
+    Service. Monitor `degraded` instead.
+- **Meanwhile** the loader keeps fetching in the background (`bundles.Watch`), with backoff from 2 s doubling to
+  60 s. When the source answers, it loads the bundle whole and swaps the policy in at once. Each load is logged
+  (`policy bundle loaded`, with each source's location, version and digest), and later decisions name it
+  (`status: "loaded"` and a new policy version).
+- **A source that answers with a document that does not parse, or a version the bundle does not list** in
+  `compatible`, is a configuration error, not an outage. At start it fails the start. Found later by the
+  background loader, it is logged and the bundle stays degraded.
+
+A changed source document (a new scope rule) changes the policy version in every decision after the next start
+or load.
 
 **Environments.** R012 (a lower-target tool pointed at an upper environment) reads the deployment's naming:
 `project` ending in a `CLEARANCE_ENV_LOWER_PROJECT_SUFFIXES` entry is lower (any other project upper); else an

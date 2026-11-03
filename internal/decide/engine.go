@@ -7,6 +7,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
@@ -15,11 +17,21 @@ import (
 	"github.com/jfillman/clearance/internal/pycompat"
 	"github.com/jfillman/clearance/internal/pyyaml"
 	"github.com/jfillman/clearance/internal/scope"
+	"github.com/jfillman/clearance/internal/store"
 )
 
-// Engine decides. It is built once per bundle version (New) and is safe for concurrent use; Decide is a pure
-// function of its request.
+// Engine decides. It is safe for concurrent use; Decide is a pure function of its request and the policy in force.
+// The policy is compiled once per bundle version (New) and replaced whole when a degraded bundle's source answers
+// (Reload): every call works on one compiled policy from start to end.
 type Engine struct {
+	cur  atomic.Pointer[engine]
+	core BundleData
+	opt  Options
+	mu   sync.Mutex // serialises Reload
+}
+
+// engine is one compiled policy.
+type engine struct {
 	b     *bundle
 	globs *scope.Globs
 }
@@ -41,19 +53,114 @@ func NewFromData(core BundleData, opt Options) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Engine{b: b, globs: &scope.Globs{}}, nil
+	e := &Engine{core: core, opt: opt}
+	e.cur.Store(&engine{b: b, globs: &scope.Globs{}})
+	return e, nil
+}
+
+// Reload replaces one loaded bundle (by name) with b, typically the same bundle once its source answers, and
+// compiles the policy again. A bundle that does not compile leaves the policy in force as it was.
+func (e *Engine) Reload(b *Bundle) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	opt := e.opt
+	opt.Bundles = append([]*Bundle(nil), e.opt.Bundles...)
+	found := false
+	for i, x := range opt.Bundles {
+		if x.Spec.Name == b.Spec.Name {
+			opt.Bundles[i], found = b, true
+		}
+	}
+	if !found {
+		return fmt.Errorf("decide: no loaded bundle named %q", b.Spec.Name)
+	}
+	nb, err := compileBundle(e.core, opt)
+	if err != nil {
+		return err
+	}
+	e.opt = opt
+	e.cur.Store(&engine{b: nb, globs: &scope.Globs{}})
+	return nil
+}
+
+// Degraded are the loaded bundles whose sources could not be read: their tools and the checks that need the
+// source are denied (R000) until Reload swaps them for a whole load.
+func (e *Engine) Degraded() []*Bundle {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	var out []*Bundle
+	for _, b := range e.opt.Bundles {
+		if len(b.Unavailable) > 0 {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+func (e *Engine) get() *engine { return e.cur.Load() }
+
+// Policy names what decides: the core and every bundle, the digest over all of it, and each bundle's own version
+// and state.
+func (e *Engine) Policy() PolicyRef { return e.get().Policy() }
+
+// RuleBundle is the name of the bundle a rule came from, "" for a core rule.
+func (e *Engine) RuleBundle(id string) string { return e.get().RuleBundle(id) }
+
+// BundleNames are the loaded bundles' names, in load order.
+func (e *Engine) BundleNames() []string { return e.get().BundleNames() }
+
+// PRTools are the tools whose receipt is a pull request: the core's and every bundle's.
+func (e *Engine) PRTools() []string { return e.get().PRTools() }
+
+// ProfileSections are the definition profile sections whose `apps` list scopes an agent, from the bundles.
+func (e *Engine) ProfileSections() []string { return e.get().ProfileSections() }
+
+// Tripwires are the T3 tool names no definition may grant.
+func (e *Engine) Tripwires() []string { return e.get().Tripwires() }
+
+// Tools is the registry, core tools then each bundle's, in registration order.
+func (e *Engine) Tools() []ToolSpec { return e.get().Tools() }
+
+// Rules are the compiled rules in evaluation order.
+func (e *Engine) Rules() []Rule { return e.get().Rules() }
+
+// Tool is a registered tool's spec, or nil.
+func (e *Engine) Tool(name string) *ToolSpec { return e.get().Tool(name) }
+
+// Globs is the policy in force's compiled-glob cache.
+func (e *Engine) Globs() *scope.Globs { return e.get().Globs() }
+
+// Decide is the decision for one evaluation (engine.Decide).
+func (e *Engine) Decide(ctx context.Context, req *EvaluationRequest) *EvaluationResponse {
+	return e.get().Decide(ctx, req)
+}
+
+// EvaluateActivation runs the rules over a raw activation (engine.EvaluateActivation).
+func (e *Engine) EvaluateActivation(ctx context.Context, raw *pycompat.Map) Decision {
+	return e.get().EvaluateActivation(ctx, raw)
+}
+
+// Trace is every rule's verdict on a tool.call evaluation (engine.Trace).
+func (e *Engine) Trace(ctx context.Context, req *EvaluationRequest) []RuleVerdict {
+	return e.get().Trace(ctx, req)
+}
+
+// RecordFields are the record fields for a decision (engine.RecordFields). Call it with the response Decide gave:
+// a Reload between the two can only change the recorded `app`, never the decision.
+func (e *Engine) RecordFields(req *EvaluationRequest, resp *EvaluationResponse) store.Event {
+	return e.get().RecordFields(req, resp)
 }
 
 // Policy names what decides: the core and every bundle, the digest over all of it, and each bundle's own version.
-func (e *Engine) Policy() PolicyRef {
+func (e *engine) Policy() PolicyRef {
 	return PolicyRef{Bundle: e.b.name, Version: e.b.version, Bundles: append([]BundleRef(nil), e.b.refs...)}
 }
 
 // RuleBundle is the name of the bundle a rule came from, "" for a core rule.
-func (e *Engine) RuleBundle(id string) string { return e.b.ruleBundle[id] }
+func (e *engine) RuleBundle(id string) string { return e.b.ruleBundle[id] }
 
 // BundleNames are the loaded bundles' names, in load order.
-func (e *Engine) BundleNames() []string {
+func (e *engine) BundleNames() []string {
 	out := make([]string, len(e.b.refs))
 	for i, r := range e.b.refs {
 		out[i] = r.Name
@@ -62,13 +169,13 @@ func (e *Engine) BundleNames() []string {
 }
 
 // PRTools are the tools whose receipt is a pull request: the core's and every bundle's.
-func (e *Engine) PRTools() []string { return append([]string(nil), e.b.prToolList...) }
+func (e *engine) PRTools() []string { return append([]string(nil), e.b.prToolList...) }
 
 // ProfileSections are the definition profile sections whose `apps` list scopes an agent, from the bundles.
-func (e *Engine) ProfileSections() []string { return append([]string(nil), e.b.sections...) }
+func (e *engine) ProfileSections() []string { return append([]string(nil), e.b.sections...) }
 
 // Tripwires are the T3 tool names no definition may grant.
-func (e *Engine) Tripwires() []string {
+func (e *engine) Tripwires() []string {
 	out := make([]string, 0, len(e.b.tripwires))
 	for t := range e.b.tripwires {
 		out = append(out, t)
@@ -78,10 +185,10 @@ func (e *Engine) Tripwires() []string {
 }
 
 // Tools is the registry, core tools then each pack's, in registration order.
-func (e *Engine) Tools() []ToolSpec { return append([]ToolSpec(nil), e.b.toolList...) }
+func (e *engine) Tools() []ToolSpec { return append([]ToolSpec(nil), e.b.toolList...) }
 
 // Rules are the compiled rules in evaluation order.
-func (e *Engine) Rules() []Rule {
+func (e *engine) Rules() []Rule {
 	out := make([]Rule, len(e.b.rules))
 	for i, r := range e.b.rules {
 		out[i] = r.Rule
@@ -90,10 +197,10 @@ func (e *Engine) Rules() []Rule {
 }
 
 // Tool is a registered tool's spec, or nil.
-func (e *Engine) Tool(name string) *ToolSpec { return e.b.tools[name] }
+func (e *engine) Tool(name string) *ToolSpec { return e.b.tools[name] }
 
 // Globs is the engine's compiled-glob cache.
-func (e *Engine) Globs() *scope.Globs { return e.globs }
+func (e *engine) Globs() *scope.Globs { return e.globs }
 
 // R000: anything that fails while deciding is a deny.
 const (
@@ -132,14 +239,28 @@ func classOf(err error) string {
 }
 
 func failClosed(err error) Decision {
+	var de *degradedError
+	if errors.As(err, &de) {
+		return Decision{Rule: errorRuleID, Name: errorRuleName, Message: errorMessage + ": " + de.msg, Hint: degradedHint,
+			uncharged: true}
+	}
 	return Decision{Rule: errorRuleID, Name: errorRuleName, Message: errorMessage + ": " + classOf(err), Hint: errorHint}
 }
+
+// degradedError is a call a degraded bundle owns: one of its tools, or a file one of its documents checks with
+// rules from a source that could not be read.
+type degradedError struct{ msg string }
+
+func (e *degradedError) Error() string { return e.msg }
+
+const degradedHint = "A platform fault, not something to retry around: the call is refused until the policy " +
+	"bundle's source answers and the bundle loads. It fails closed."
 
 func intp(n int) *int { return &n }
 
 // Decide is the decision for one evaluation. It never fails: an invalid request or an evaluation error is a deny
 // (R000), so a caller that acts on the response fails closed.
-func (e *Engine) Decide(ctx context.Context, req *EvaluationRequest) *EvaluationResponse {
+func (e *engine) Decide(ctx context.Context, req *EvaluationRequest) *EvaluationResponse {
 	var d Decision
 	var sp Spend
 	var g *Grant
@@ -182,7 +303,7 @@ func denialSpend(s *SessionState, rule, tool string) Spend {
 const denialTrip = 5
 
 // toolCall is Gateway.call's decision: Policy.build_context then Policy.evaluate.
-func (e *Engine) toolCall(ctx context.Context, req *EvaluationRequest) (Decision, Spend) {
+func (e *engine) toolCall(ctx context.Context, req *EvaluationRequest) (Decision, Spend) {
 	tool := req.Resource.ID
 	s := req.Context.Session
 	if s == nil {
@@ -193,13 +314,16 @@ func (e *Engine) toolCall(ctx context.Context, req *EvaluationRequest) (Decision
 		return failClosed(err), denialSpend(s, errorRuleID, tool)
 	}
 	d, spec := e.evaluateCall(ctx, req, args)
+	if !d.Allow && d.uncharged {
+		return d, Spend{} // a platform fault: no denial counts against the session, no breaker trips
+	}
 	if !d.Allow {
 		return d, denialSpend(s, d.Rule, tool)
 	}
 	return d, e.callSpend(tool, spec)
 }
 
-func (e *Engine) callSpend(tool string, spec *ToolSpec) Spend {
+func (e *engine) callSpend(tool string, spec *ToolSpec) Spend {
 	sp := Spend{ToolCalls: 1, GithubCalls: spec.GithubCost}
 	if e.b.prTools[tool] {
 		sp.OpenPRs = 1
@@ -224,7 +348,14 @@ func (a *activation) ResolveName(name string) (any, bool) {
 func (a *activation) Parent() interpreter.Activation { return nil }
 
 // evaluateCall builds the context and runs the rules.
-func (e *Engine) evaluateCall(ctx context.Context, req *EvaluationRequest, args *pycompat.Map) (Decision, *ToolSpec) {
+func (e *engine) evaluateCall(ctx context.Context, req *EvaluationRequest, args *pycompat.Map) (Decision, *ToolSpec) {
+	if cb := e.b.owner[req.Resource.ID]; cb != nil && cb.b.Degraded() {
+		d := failClosed(&degradedError{cb.b.unavailableMessage()})
+		if spec := e.b.tools[req.Resource.ID]; spec != nil {
+			d.Tier = intp(spec.Tier)
+		}
+		return d, e.b.tools[req.Resource.ID]
+	}
 	act, in, states, err := e.buildContext(req, args)
 	if err != nil {
 		return failClosed(err), in.Spec
@@ -232,7 +363,7 @@ func (e *Engine) evaluateCall(ctx context.Context, req *EvaluationRequest, args 
 	return e.run(ctx, act, in, states), in.Spec
 }
 
-func (e *Engine) run(ctx context.Context, act *activation, in *CallInput, states [][][]Problem) Decision {
+func (e *engine) run(ctx context.Context, act *activation, in *CallInput, states [][][]Problem) Decision {
 	tier := 0
 	if t, ok := act.vals[vToolTier].(types.Int); ok {
 		tier = int(t)
@@ -269,7 +400,7 @@ func (e *Engine) run(ctx context.Context, act *activation, in *CallInput, states
 // "effective": {...}, "session": {...}, "cost": {...}, "ctx": {...}}), with no context building. It is the
 // diagnostic replay of a context the Python tests built or altered by hand; bundle documents' findings do not
 // apply. Values are pycompat dict-model values (pycompat.DecodeJSON).
-func (e *Engine) EvaluateActivation(ctx context.Context, raw *pycompat.Map) Decision {
+func (e *engine) EvaluateActivation(ctx context.Context, raw *pycompat.Map) Decision {
 	act := &activation{slots: e.b.slots, vals: make([]ref.Val, len(e.b.slots))}
 	for i := range raw.Len() {
 		k, v := raw.At(i)
@@ -349,7 +480,7 @@ func celValue(v any) (ref.Val, error) {
 }
 
 // envTierOf is policy.env_tier_of: which environment tier the arguments point at, by the deployment's naming.
-func (e *Engine) envTierOf(spec *ToolSpec, args *pycompat.Map) string {
+func (e *engine) envTierOf(spec *ToolSpec, args *pycompat.Map) string {
 	if spec.Target == "none" {
 		return "none"
 	}

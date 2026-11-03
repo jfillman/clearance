@@ -18,7 +18,7 @@ CONTRACT_VERSION = "1.0.0"
 
 RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "run.finish", "human.answer", "session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome", "deploy.exception")
 
-__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Budgets", "BundleRef", "Context", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateApproval", "GateChange", "GateChangeWithAuditSeq", "GateDeployment", "GateErrorBody", "GateObjectChange", "GateReason", "GateRequirement", "Grant", "Health", "Hold", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Problem", "ProvenanceCheck", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceRef", "Spend", "Subject", "SubjectProperties", "WebhookAnswer"]
+__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Budgets", "BundleRef", "Context", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateApproval", "GateChange", "GateChangeWithAuditSeq", "GateDeployment", "GateErrorBody", "GateObjectChange", "GateReason", "GateRequirement", "Grant", "Health", "Hold", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Problem", "ProvenanceCheck", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "WebhookAnswer"]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -108,12 +108,16 @@ class BundleRef(Model):
         Field("digest", "digest", ("str",), True),
         Field("name", "name", ("str",), True),
         Field("sources", "sources", ("list", ("ref", "SourceRef")), False),
+        Field("status", "status", ("str",), True),
+        Field("unavailable", "unavailable", ("list", ("ref", "SourceFailure")), False),
         Field("version", "version", ("str",), True),
     )
 
     digest: str
     name: str
     sources: list[SourceRef] | None = None
+    status: str
+    unavailable: list[SourceFailure] | None = None
     version: str
 
 
@@ -953,12 +957,14 @@ class Ready(Model):
 
     _STRICT: ClassVar[bool] = False
     _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("degraded", "degraded", ("list", ("str",)), False),
         Field("error", "error", ("str",), False),
         Field("head", "head", ("int",), True),
         Field("ok", "ok", ("bool",), True),
         Field("policy", "policy", ("ref", "PolicyRef"), True),
     )
 
+    degraded: list[str] | None = None
     error: str | None = None
     head: int
     ok: bool
@@ -1152,6 +1158,20 @@ class SessionState(Model):
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
+class SourceFailure(Model):
+    """Contract schema DecideSourceFailure."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("error", "error", ("str",), True),
+        Field("name", "name", ("str",), True),
+    )
+
+    error: str
+    name: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
 class SourceRef(Model):
     """Contract schema DecideSourceRef."""
 
@@ -1287,6 +1307,7 @@ MODELS: dict[str, type[Model]] = {
     "ReviewResult": ReviewResult,
     "Scope": Scope,
     "SessionState": SessionState,
+    "SourceFailure": SourceFailure,
     "SourceRef": SourceRef,
     "Spend": Spend,
     "Subject": Subject,

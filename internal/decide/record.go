@@ -16,7 +16,7 @@ import (
 // For an allowed tool call the result is "ok": the call's outcome (a backend error, a handler's refusal, a PR's
 // receipt as `effect`) is the caller's to record once the call has run. Arguments are only ever hashed
 // (args_sha256, canonical JSON), never stored.
-func (e *Engine) RecordFields(req *EvaluationRequest, resp *EvaluationResponse) store.Event {
+func (e *engine) RecordFields(req *EvaluationRequest, resp *EvaluationResponse) store.Event {
 	c := &req.Context
 	dc := &resp.Context
 	decision := "deny"

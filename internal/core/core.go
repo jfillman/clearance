@@ -389,6 +389,10 @@ func (c *Core) Loops(ctx context.Context) {
 	if c.App != nil {
 		go func() { c.App.Run(ctx); done <- struct{}{} }()
 	}
+	// A degraded policy bundle loads once its source answers (bundles.Watch); the gate and records never wait on it.
+	watched := make(chan struct{})
+	go func() { bundles.Watch(ctx, c.Config.Policy, c.Engine, c.log); close(watched) }()
+	defer func() { <-watched }()
 	every := c.Config.ExpireEvery
 	if every <= 0 {
 		every = time.Minute

@@ -186,6 +186,9 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 	bg, stop := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defs.Run(bg, st, cfg.DefinitionsEvery, log); close(done) }()
+	watched := make(chan struct{})
+	go func() { bundles.Watch(bg, cfg.Policy, eng, log); close(watched) }()
+	defer func() { <-watched }()
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- hs.Serve(ln) }()
 	log.Info("clearance api serving", "addr", ln.Addr().String(), "agents", len(defs.Names()),

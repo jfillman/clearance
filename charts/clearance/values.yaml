@@ -42,14 +42,15 @@ policy:
   #    key: bundle.json
   # CLEARANCE_BUNDLE_SOURCES: where each source a bundle names is read at start, by name. A url is fetched over
   # HTTP(S) (sendToken: with a projected service-account token, of tokenAudience when set, else the API server's
-  # default audience); a configMap is a file (key, default contract.json). A source that cannot be read within
-  # sourceWait, or is a version the bundle is not written for, stops the core and the api from starting.
+  # default audience); a configMap is a file (key, default contract.json). A source that does not answer within
+  # sourceWait leaves its bundle degraded (its tools denied R000, /readyz names it, still 200) until it answers; a
+  # version the bundle is not written for stops the start.
   sources: {}
   #  contract:
   #    url: http://contract-api.example-system.svc:8080/v1/contract
   #    sendToken: true
   #    tokenAudience: ""
-  # CLEARANCE_BUNDLE_SOURCE_WAIT (Go duration; empty: 60s).
+  # CLEARANCE_BUNDLE_SOURCE_WAIT (Go duration; empty: 10s).
   sourceWait: ""
   # NetworkPolicy egress rules (networkPolicy.enabled) for the core and the api to reach the sources.
   egress: []
