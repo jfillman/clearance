@@ -142,7 +142,7 @@ unset, so the core's default applies. Lists are joined with commas.
 | `core.resources` | requests 50m / 64Mi, limit 256Mi | |
 | `core.startupSeconds` | 300 | The core verifies the whole chain before it listens; a long chain needs time. |
 | `core.serviceAccount.{create,name,annotations}` | create | |
-| `core.{podAnnotations,podLabels,nodeSelector,tolerations,affinity,priorityClassName,extraEnv,extraVolumes,extraVolumeMounts}` | | |
+| `core.{podAnnotations,podLabels,nodeSelector,tolerations,affinity,priorityClassName,hostAliases,extraEnv,extraVolumes,extraVolumeMounts}` | | |
 | `api.enabled` | true | |
 | `api.replicas` | 2 | |
 | `api.pdb.{enabled,minAvailable}` | true, 1 | |
