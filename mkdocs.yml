@@ -3,8 +3,11 @@ site_description: 'Policy, audit and session gateway for AI agent workloads: eve
 
 nav:
   - Home: index.md
+  - The Go core (clearance): core.md
   - The read API and the write path (clearance-api): clearance-api.md
   - The deployment gate (Clearances): gate.md
+  - The evidence record (clearance.evidence/v1): evidence.md
+  - The provider protocol and conformance: provider-protocol.md
   - The provenance App (design pass): provenance-app.md
 
 plugins:

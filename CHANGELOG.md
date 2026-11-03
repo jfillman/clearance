@@ -14,6 +14,14 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   Release with this file's section for the version as its notes, and fails when the section is missing. Image and
   Helm chart jobs are placeholders until the Go image and chart exist.
 - `tools/release_notes.py`: print one version's section (the workflow's notes; exits 1 when there is none).
+- The Go core (R-1): one `clearance` binary (`core [--memory]`, `chain verify`, `register`, `conformance`, `version`); the
+  decision engine on cel-go with a golden corpus replayed from the Python engine; the Postgres store extending the
+  same chain byte for byte; the deployment gate, provenance and GitHub App ported; `POST /access/v1/evaluation`,
+  `POST /v1/decisions/{id}/outcome`, `POST /v1/records` for registered providers (`CLEARANCE_PROVIDERS`);
+  `contract/clearance-core.json`; Go (`client/`) and Python (`clients/python`) clients; the provider protocol and
+  `clearance conformance` ([docs/core.md](docs/core.md)). Built, not deployed.
+- Evidence record v1 (R-6): `schemas/evidence.schema.json`, `clearance.evidence/v1`, with `provider` and `subject`;
+  v0-draft rows are projected on read by clearance-api ([docs/evidence.md](docs/evidence.md)).
 
 ### Changed
 - `clearance.__version__` comes from the installed package's metadata (pyproject's version), not a hard-coded

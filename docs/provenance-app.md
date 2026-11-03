@@ -215,3 +215,13 @@ The customer's own CI registers what it is about to deploy, so the protection ru
 4. ~~PR comments~~ Decided: off by default, "failures on agent PRs" as an option. Was: off by default, check runs only (recommended), or on for agent PRs like `agent-gates-`?
 5. ~~Name~~ Decided: as proposed. Was: `clearance-provenance` for the App and `Clearance / agent-identity`, `Clearance / agent-scope` for the
    checks, or another name the product site uses.
+
+## The Go core (R-1c, Built, not deployed)
+
+`internal/provenance` (`POST /v1/provenance`, the `provenance.verify` and `app.installation` records) and
+`internal/githubapp` (`POST /v1/github/webhook`: the constant-time X-Hub-Signature-256 check, the queue, the
+installation tokens from an RS256 App JWT signed with the key file, check runs, comments and the deployment protection
+rule) port `provenance.py` and `github_app.py`. Every GitHub call has a deadline and redirects are followed only on the
+API's own host, so a token never leaves it. `clearance register` is also a Go subcommand now, with the same flags,
+output and exit codes; `register/action.yml` still installs the Python package until it switches. The Go binary does not
+take `--paths-from-git` (it never shells out): paths are the files that differ between `--before` and `--after`.

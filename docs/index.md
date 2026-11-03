@@ -24,13 +24,16 @@ module table: [github.com/jfillman/clearance](https://github.com/jfillman/cleara
 - **Policy** (`tiers.py`, `scope.py`, `limits.py`, `policy.py`, `pack.py`, `packs/hangar`): the rules, core plus a
   pack per platform. Anything that fails to evaluate denies.
 - **Sessions and evidence** (`session.py`, `audit.py`, `pg.py`): budgets, the breaker, the run tree; one hash-chained
-  record per decision; Postgres as the one writer.
+  record per decision in the clearance.evidence/v1 shape ([evidence.md](evidence.md)); Postgres as the one writer.
 - **The gateway** (`dispatch.py`, `server.py`, `backends.py`, `modelproxy.py`): authenticate, decide, record, spend,
   call, record. The MCP surface for agents, the model proxy for their model calls, the human inbox, and the person
   controls (freeze, end, hold, release) through the delegate model, and run results (`results.py`).
 - **The deployment gate** (`gate.py`, `review.py`, `register.py`): changes to protected environments, tiered and
   cleared; definition releases reviewed through the same gate.
 - **The GitHub App** (`github_app.py`): check runs on PRs and the deployment protection rule.
+- **The Go core** (`cmd/clearance`, `internal/`, `contract/clearance-core.json`): the decision service, the recorder
+  and the gate in Go, one `clearance` binary. Built, not deployed: the live gateway runs the Python modules above
+  until W1 ([core.md](core.md)).
 - **The read API** (`api.py`, `contract/clearance-api.json`): clearance-api, a separate read-only process over the
   same tables: agents, sessions, evidence, counts, PR receipts, the inbox feed, the policy as data, the event history
   ([clearance-api.md](clearance-api.md)).

@@ -59,8 +59,10 @@ def test_records_are_evidence_shaped_with_assurance_beside_them(db, defs, gw_par
     state, g = gateway(db, defs, gw_parts, clock)
     sid = g.open_session("alice", "coding-agent").data["session"]
     rec = g.audit.records[-1]
-    assert rec["schema"] == "clearance.evidence/v0-draft" and rec["boundary"] == "runtime"
+    assert rec["schema"] == "clearance.evidence/v1" and rec["boundary"] == "runtime"
     assert rec["coverage"] == "authorized-and-verified" and "principal" in rec["verified"] and rec["claimed"] == []
+    assert rec["provider"]["name"] == "autopilot-gateway" and rec["subject"]["kind"] == "tool-call"
+    assert {"provider", "subject"} <= set(rec["verified"])
     assert rec["session"] == sid and "assurance" not in rec
     assert g.audit.assurance(rec["seq"]) == "recorded-not-checkpointed"
     state.close()

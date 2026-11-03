@@ -12,6 +12,9 @@ Who sees what (`Viewer`):
   delegate   everything the person named in X-Hangar-On-Behalf-Of may (CLEARANCE_DELEGATES, e.g. Tower)
   notifier   the human-inbox feed across everyone, nothing else (CLEARANCE_API_NOTIFIERS, e.g. Tower's poller)
 
+Evidence is served in the clearance.evidence/v1 shape (audit.project): a v0-draft row is returned as written plus the
+provider and subject a v1 writer would have set, named in `projected`; `assurance` is added beside every record.
+
 ROUTES is the route table and the contract (`contract()`, contract/clearance-api.json, checked by a test): one
 entry per operation, with its parameters and the roles that may call it.
 """
@@ -26,7 +29,7 @@ from fnmatch import fnmatchcase
 from typing import Any, Callable, Iterable, Mapping, Protocol, Sequence
 
 from . import provenance
-from .audit import GENESIS, canonical, sha256_hex
+from .audit import GENESIS, canonical, project, sha256_hex
 from .dispatch import AuthError, Authenticator
 from .policy import RULES
 from .session import Session
@@ -640,7 +643,7 @@ def create_api_app(store: ReadStore, access: Access, *, clock: Callable[[], date
             after_n = int(after) if after else None
         except ValueError:
             raise ApiError(400, "after is a seq") from None
-        return page(store.evidence(f, v, limit, after_n), limit, "seq")
+        return page([project(r) for r in store.evidence(f, v, limit, after_n)], limit, "seq")
 
     def get_evidence(req, v):
         try:
@@ -650,7 +653,7 @@ def create_api_app(store: ReadStore, access: Access, *, clock: Callable[[], date
         r = store.evidence_one(seq, v)
         if r is None:
             raise ApiError(404, "no such record")
-        return r
+        return project(r)
 
     def verify(req, v):
         return verify_chain(store.chain(1000))
@@ -698,7 +701,7 @@ def create_api_app(store: ReadStore, access: Access, *, clock: Callable[[], date
                 raise ApiError(400, "repo is required (owner/name)")
             if pr is not None and not pr.isdigit():
                 raise ApiError(400, "pr is a number")
-            return {"items": store.by_pr(tools, repo, pr, v)}
+            return {"items": [project(r) for r in store.by_pr(tools, repo, pr, v)]}
         return run
 
     def human(req, v):

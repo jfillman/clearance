@@ -1,0 +1,529 @@
+package gate
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/jfillman/clearance/internal/authn"
+	"github.com/jfillman/clearance/internal/definitions"
+	"github.com/jfillman/clearance/internal/evidence"
+	"github.com/jfillman/clearance/internal/pycompat"
+	"github.com/jfillman/clearance/internal/review"
+	"github.com/jfillman/clearance/internal/store"
+)
+
+// Config is the gate's part of the deployment (Gateway's constructor arguments; R-1d/R-2 map the environment).
+type Config struct {
+	// Off is a Clearance that keeps no changes: every gate route answers DG-OFF (Gateway(changes=None)).
+	Off bool `json:"off"`
+	// Verifiers are principal globs that may register changes (CLEARANCE_VERIFIERS).
+	Verifiers []string `json:"verifiers"`
+	// Delegates are principal globs that may act for a person they name (CLEARANCE_DELEGATES).
+	Delegates []string `json:"delegates"`
+	// Admins are principal globs (user:<login>) that may deny any held change (CLEARANCE_ADMINS).
+	Admins []string `json:"admins"`
+	// FlightRegistries narrow tier 1 to images from these prefixes (GatePolicy.flight_registries; empty = any).
+	FlightRegistries []string `json:"flightRegistries"`
+	// Models are the deployment's model routes, for a definition release's review (nil = not checked).
+	Models []string `json:"models"`
+	// ImageAllow are the runtime-image globs a definition release's runtime.image must match.
+	ImageAllow []string `json:"imageAllow"`
+}
+
+// Owners says who owns an app (a group ref) when the check does not: on Hangar, the Backstage Component's
+// spec.owner. "" when unknown.
+type Owners interface {
+	OwnerOf(ctx context.Context, app string) string
+}
+
+// Directory is a person's groups (inbox.Directory).
+type Directory interface {
+	Groups(ctx context.Context, person string) []string
+}
+
+// NotVerifier is provenance.NotVerifier raised by the gate (403, {"error": ...}).
+type NotVerifier struct{ Message string }
+
+func (e *NotVerifier) Error() string { return e.Message }
+
+// Service is the deployment gate on a store: one store.Atomic per operation (the change row and its deploy.*
+// records commit together) and one operation at a time (Gateway.lock).
+type Service struct {
+	Config    Config
+	Policy    Policy // the baseline; DefaultPolicy() unless the deployment says otherwise
+	Store     store.Store
+	Clock     func() time.Time
+	Writer    evidence.Writer // who the deploy.* records name as provider; zero: evidence.Core("")
+	Owners    Owners          // nil: the outside group stands in
+	Directory Directory       // nil: nobody is in any group
+	Tools     review.Registry
+	Parse     definitions.Parser
+	// OnAnswered is called (non-blocking, after the commit) when a waiting GitHub deployment got its answer: the
+	// GitHub App's delivery poke.
+	OnAnswered []func()
+
+	mu sync.Mutex
+}
+
+// NewService is a Service with the baseline policy (and the configured flight registries).
+func NewService(cfg Config, st store.Store, clock func() time.Time) *Service {
+	p := DefaultPolicy()
+	p.FlightRegistries = append([]string(nil), cfg.FlightRegistries...)
+	return &Service{Config: cfg, Policy: p, Store: st, Clock: clock}
+}
+
+func (s *Service) now() time.Time { return s.Clock().UTC().Truncate(time.Microsecond) }
+
+// op runs fn under the gate's lock in one transaction; fn's result error is returned after the commit (a refusal
+// that follows a write, such as an expiry found while clearing, still commits the write).
+func (s *Service) op(ctx context.Context, fn func(tx store.Tx, w *writer) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var result error
+	var answered int
+	err := s.Store.Atomic(ctx, func(tx store.Tx) error {
+		w := &writer{ctx: ctx, tx: tx, now: s.now(), wr: s.Writer.OrCore()}
+		result = fn(tx, w)
+		if w.err != nil {
+			return w.err
+		}
+		answered = w.answered
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("gate: %w", err)
+	}
+	if answered > 0 {
+		for _, poke := range s.OnAnswered {
+			poke()
+		}
+	}
+	return result
+}
+
+// writer collects a gate operation's writes inside its transaction; the first store error aborts it.
+type writer struct {
+	ctx      context.Context
+	tx       store.Tx
+	now      time.Time
+	err      error
+	answered int
+	wr       evidence.Writer
+}
+
+func (w *writer) put(c *Change) {
+	if w.err != nil {
+		return
+	}
+	c.View()
+	raw, err := json.Marshal(c)
+	if err != nil {
+		w.err = err
+		return
+	}
+	w.err = w.tx.PutChange(w.ctx, store.Change{ID: c.ID, App: c.App, Env: c.Env, State: c.State, Repo: c.Repo,
+		Head: c.Head, PR: int(c.PR), ExpiresAt: c.ExpiresAt.Time, Record: raw})
+}
+
+func (w *writer) append(ev store.Event) store.Record {
+	if w.err != nil {
+		return nil
+	}
+	rec, err := w.tx.Append(w.ctx, ev, w.wr)
+	if err != nil {
+		w.err = err
+	}
+	return rec
+}
+
+// record is Gateway._gate_record.
+func (w *writer) record(principal string, via *string, tool string, c *Change, decision string, rule *string, result string, args any) store.Record {
+	if via != nil {
+		result += " via " + *via
+	}
+	return w.append(store.Event{
+		"ts": pycompat.ISO(w.now), "task_id": nil, "session": nil, "parent": nil, "principal": principal,
+		"agent": strOrNil(c.Agent), "tool": tool, "tier": nil, "decision": decision, "rule": strOrNil(rule),
+		"target": c.TargetOf(), "args_sha256": pycompat.ArgsDigest(args), "result": result, "app": c.App,
+		"boundary": "deployment", "change": c.Summary(),
+	})
+}
+
+func (w *writer) settle(c *Change) {
+	w.answered += AnswerDeployments(c, w.now)
+}
+
+func strOrNil(p *string) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+func load(ctx context.Context, r store.Reader, id string) (*Change, error) {
+	row, err := r.Change(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return FromRecord(row.Record)
+}
+
+func loadAll(rows []store.Change, err error) ([]*Change, error) {
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*Change, 0, len(rows))
+	for _, row := range rows {
+		c, err := FromRecord(row.Record)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	// ORDER BY record->>'created_at' (pg.py): isoformat strings, compared as text.
+	sort.SliceStable(out, func(i, j int) bool {
+		return pycompat.Isoformat(out[i].CreatedAt.Time) < pycompat.Isoformat(out[j].CreatedAt.Time)
+	})
+	return out, nil
+}
+
+func (s *Service) gateOn() error {
+	if s.Config.Off {
+		return gerr("DG-OFF", "this Clearance keeps no changes (the deployment gate is off)", "", 404)
+	}
+	return nil
+}
+
+// Registered is register_change's answer: the change's view.
+type Registered = Change
+
+// Register is Gateway.register_change: the clearance-gate check registers (or re-evaluates) a change. The caller
+// must be a verifier. Idempotent by (repo, pr, head): a holding change is re-evaluated with the new checks, a
+// decided one returned as it stands; a new head on the same PR supersedes the heads still holding. body is the
+// decoded JSON (numbers as json.Number). Errors: *NotVerifier, *BadChange, *Error.
+func (s *Service) Register(ctx context.Context, p authn.Principal, body any) (*Change, error) {
+	if !pycompat.MatchAny(p.ID, s.Config.Verifiers) {
+		return nil, &NotVerifier{p.ID + " is not a verifier"}
+	}
+	if err := s.gateOn(); err != nil {
+		return nil, err
+	}
+	req, err := ParseRequest(body)
+	if err != nil {
+		return nil, err
+	}
+	if bound, ok := p.Claims["repository"].(string); ok {
+		// A workflow's OIDC token registers changes for its own repository only (`clearance register`).
+		if req.Repo != lower(bound) {
+			return nil, gerr("DG-REPO", fmt.Sprintf("%s may register changes for %s only, not %s", p.ID, bound, req.Repo),
+				"Register from a workflow in the repository the change deploys.", 403)
+		}
+	}
+	if req.Owner == "" && s.Owners != nil {
+		req.Owner = s.Owners.OwnerOf(ctx, req.App)
+	}
+	if req.Owner == "" {
+		req.Owner = DefaultOwnerFallback
+		if len(s.Policy.OutsideGroups) > 0 {
+			req.Owner = s.Policy.OutsideGroups[0]
+		}
+	}
+	var out *Change
+	err = s.op(ctx, func(tx store.Tx, w *writer) error {
+		existing, err := load(ctx, tx, req.ID())
+		if err != nil {
+			return err
+		}
+		if existing != nil && existing.State != "holding" {
+			out = existing
+			return nil
+		}
+		var problems []review.Problem
+		if req.Definition != nil {
+			problems = s.definitionProblems(req)
+		}
+		c, cerr := Classify(req, s.Policy, s.Tools, problems)
+		var ge *Error
+		if errors.As(cerr, &ge) {
+			// A clearance.yaml that loosens the baseline: the change is denied, not the file ignored.
+			ch := existing
+			if ch == nil {
+				ch = Open(req, Classification{3, []Reason{{"clearance.yaml", "policy:loosens", 3}}, "deny", &ge.Rule, ge.Message, nil, s.Policy}, w.now, p.ID)
+			}
+			now := PyTime{w.now}
+			ch.State, ch.DenyReason, ch.DeniedBy, ch.DecidedAt, ch.UpdatedAt = "denied", strp(ge.Message), strp("policy"), &now, now
+			w.put(ch)
+			if existing == nil {
+				w.record(p.ID, nil, "deploy.request", ch, "allow", nil, fmt.Sprintf("tier %d: denied (%s)", ch.Tier, ge.Rule), body)
+			}
+			w.record("policy", nil, "deploy.deny", ch, "deny", &ge.Rule, ge.Message, map[string]any{"rule": ge.Rule})
+			out = ch
+			return nil
+		} else if cerr != nil {
+			return cerr
+		}
+		now := PyTime{w.now}
+		var ch *Change
+		if existing == nil {
+			olds, err := loadAll(tx.ChangesForPR(ctx, req.Repo, int(req.PR)))
+			if err != nil {
+				return err
+			}
+			for _, old := range olds {
+				if old.State == "holding" && old.Head != req.Head {
+					old.State, old.SupersededBy, old.DecidedAt, old.UpdatedAt = "superseded", strp(req.Head), &now, now
+					w.settle(old)
+					w.put(old)
+					w.record("policy", nil, "deploy.expire", old, "allow", nil, "superseded by "+pycompat.Truncate(req.Head, 7), map[string]any{"by": req.Head})
+				}
+			}
+			ch = Open(req, c, w.now, p.ID)
+			w.record(p.ID, nil, "deploy.request", ch, "allow", nil, c.Why, body)
+		} else {
+			ch = existing
+			ch.Checks, ch.Tier, ch.Reasons, ch.UpdatedAt = copyChecks(req.Checks), c.Tier, append([]Reason(nil), c.Reasons...), now
+			ch.Requirement = c.Requirement
+		}
+		switch c.Decision {
+		case "deny":
+			ch.State, ch.DenyReason, ch.DeniedBy, ch.DecidedAt = "denied", strp(c.Why), strp("policy"), &now
+			w.record("policy", nil, "deploy.deny", ch, "deny", c.Rule, c.Why, map[string]any{"rule": strOrNil(c.Rule)})
+		case "clear":
+			ch.State, ch.ClearedBy, ch.DecidedAt = "cleared", strp("policy"), &now
+			w.record("policy", nil, "deploy.clear", ch, "allow", nil, c.Why, map[string]any{"tier": c.Tier})
+		}
+		w.settle(ch)
+		w.put(ch)
+		out = ch
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out.View(), nil
+}
+
+func (s *Service) definitionProblems(req ChangeRequest) []review.Problem {
+	newDoc := req.Definition["new"]
+	if newDoc == nil {
+		return nil
+	}
+	name, _ := req.Definition["name"].(string)
+	o := review.Options{Name: &name, Models: s.Config.Models, ImageAllow: s.Config.ImageAllow}
+	if req.Owner != "" {
+		o.Owner = strp(req.Owner)
+	}
+	if p, ok := req.Definition["path"].(string); ok {
+		o.Path = &p
+	}
+	return review.Validate(newDoc, s.Tools, s.Parse, o)
+}
+
+// person is Gateway._person through _gate_person: a person signed in themselves, or a delegate naming one.
+func (s *Service) person(ctx context.Context, p authn.Principal, onBehalfOf string) (string, *string, map[string]bool, error) {
+	person, via := p.ID, (*string)(nil)
+	if onBehalfOf != "" {
+		if !pycompat.MatchAny(p.ID, s.Config.Delegates) {
+			return "", nil, nil, gerr("DG-DELEGATE", p.ID+" may not act for a person", "", 403)
+		}
+		if len(onBehalfOf) < 5 || onBehalfOf[:5] != "user:" || pycompat.Len(onBehalfOf) > 200 {
+			return "", nil, nil, gerr("DG-PERSON", "on-behalf-of must name a person (user:<name>)", "", 400)
+		}
+		person, via = onBehalfOf, strp(p.ID)
+	} else if !p.IsPerson() {
+		return "", nil, nil, gerr("DG-PERSON", p.ID+" is not a person", "", 403)
+	}
+	groups := map[string]bool{}
+	if s.Directory != nil {
+		for _, g := range s.Directory.Groups(ctx, person) {
+			groups[g] = true
+		}
+	}
+	return person, via, groups, nil
+}
+
+// Decided is clear_change's and deny_change's answer: the change's view and the record's seq.
+type Decided struct {
+	*Change
+	AuditSeq any `json:"audit_seq"`
+}
+
+// MarshalJSON writes the change's view with audit_seq last ({**c.view(now), "audit_seq": seq}).
+func (d Decided) MarshalJSON() ([]byte, error) {
+	raw, err := json.Marshal(d.Change)
+	if err != nil {
+		return nil, err
+	}
+	seq, err := json.Marshal(d.AuditSeq)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(raw[:len(raw)-1], []byte(`,"audit_seq":`)...), append(seq, '}')...), nil
+}
+
+// Clear is Gateway.clear_change: one approval in the role the person qualifies for; the change is cleared when the
+// requirement is met. Recorded as deploy.clear naming person and delegate.
+func (s *Service) Clear(ctx context.Context, p authn.Principal, changeID, onBehalfOf string) (Decided, error) {
+	if err := s.gateOn(); err != nil {
+		return Decided{}, err
+	}
+	var out Decided
+	err := s.op(ctx, func(tx store.Tx, w *writer) error {
+		c, err := load(ctx, tx, changeID)
+		if err != nil {
+			return err
+		}
+		if c == nil {
+			return gerr("DG-UNKNOWN", "no such change", "", 404)
+		}
+		person, via, groups, err := s.person(ctx, p, onBehalfOf)
+		if err != nil {
+			return err
+		}
+		if c.State == "holding" && !w.now.Before(c.ExpiresAt.Time) {
+			s.expire(w, c)
+			return gerr("DG-STATE", "this change has expired; a new push registers it again", "", 409)
+		}
+		role, err := RoleFor(person, groups, c)
+		if err != nil {
+			return err
+		}
+		now := PyTime{w.now}
+		c.Approvals = append(c.Approvals, Approval{person, via, role, pycompat.ISO(w.now)})
+		c.UpdatedAt = now
+		req := c.RequirementObj()
+		done := req != nil && req.Satisfied(c.Approvals)
+		if done {
+			c.State, c.ClearedBy, c.DecidedAt = "cleared", strp("people"), &now
+			w.settle(c)
+		}
+		w.put(c)
+		result := "cleared as " + role
+		if done {
+			result += " (requirement met)"
+		} else {
+			result += fmt.Sprintf(" (%d of the people needed)", len(c.Approvals))
+		}
+		rec := w.record(person, via, "deploy.clear", c, "allow", nil, result, map[string]any{"role": role})
+		out = Decided{c.View(), recordSeq(rec)}
+		return nil
+	})
+	return out, err
+}
+
+// Deny is Gateway.deny_change: a person who could clear a holding change denies it, with a reason.
+func (s *Service) Deny(ctx context.Context, p authn.Principal, changeID string, reason any, onBehalfOf string) (Decided, error) {
+	if err := s.gateOn(); err != nil {
+		return Decided{}, err
+	}
+	var out Decided
+	err := s.op(ctx, func(tx store.Tx, w *writer) error {
+		c, err := load(ctx, tx, changeID)
+		if err != nil {
+			return err
+		}
+		if c == nil {
+			return gerr("DG-UNKNOWN", "no such change", "", 404)
+		}
+		person, via, groups, err := s.person(ctx, p, onBehalfOf)
+		if err != nil {
+			return err
+		}
+		text, err := CheckReason(reason)
+		if err != nil {
+			return err
+		}
+		if c.State != "holding" {
+			return gerr("DG-STATE", "this change is "+c.State, "", 409)
+		}
+		req := c.RequirementObj()
+		eligible := false
+		if req != nil {
+			eligible = groups[req.OwnerGroup] || pycompat.MatchAny(person, s.Config.Admins)
+			for _, g := range req.OutsideGroups {
+				eligible = eligible || groups[g]
+			}
+		}
+		if !eligible {
+			return gerr("DG-FORBIDDEN", person+" may not decide this change", "Only the owner group, the outside group or a platform admin may.", 403)
+		}
+		now := PyTime{w.now}
+		c.State, c.DenyReason, c.DeniedBy, c.DecidedAt, c.UpdatedAt = "denied", &text, &person, &now, now
+		w.settle(c)
+		w.put(c)
+		rec := w.record(person, via, "deploy.deny", c, "deny", strp("DG-DENIED"), text, map[string]any{"reason": text})
+		out = Decided{c.View(), recordSeq(rec)}
+		return nil
+	})
+	return out, err
+}
+
+func (s *Service) expire(w *writer, c *Change) {
+	now := PyTime{w.now}
+	c.State, c.DecidedAt, c.UpdatedAt = "expired", &now, now
+	w.settle(c)
+	w.put(c)
+	w.record("policy", nil, "deploy.expire", c, "allow", nil, fmt.Sprintf("not cleared within %d days", s.Policy.TTLDays),
+		map[string]any{"expires_at": pycompat.ISO(c.ExpiresAt.Time)})
+}
+
+// Expire is Gateway.expire_changes: holding changes past their TTL expire, each a deploy.expire record. The ids
+// expired, in created order.
+func (s *Service) Expire(ctx context.Context) ([]string, error) {
+	if s.Config.Off {
+		return nil, nil
+	}
+	var done []string
+	err := s.op(ctx, func(tx store.Tx, w *writer) error {
+		hold, err := loadAll(tx.ChangesHolding(ctx))
+		if err != nil {
+			return err
+		}
+		for _, c := range hold {
+			if c.State == "holding" && !w.now.Before(c.ExpiresAt.Time) {
+				s.expire(w, c)
+				done = append(done, c.ID)
+			}
+		}
+		return nil
+	})
+	return done, err
+}
+
+// recordSeq is the stored record's seq as a JSON number.
+func recordSeq(rec store.Record) any {
+	if rec == nil {
+		return nil
+	}
+	return rec["seq"]
+}
+
+// SeqInt is a record's seq as an integer (any of the number types a store may return).
+func SeqInt(v any) (int64, bool) {
+	switch x := v.(type) {
+	case int64:
+		return x, true
+	case int:
+		return int64(x), true
+	case float64:
+		return int64(x), true
+	case json.Number:
+		n, err := x.Int64()
+		return n, err == nil
+	}
+	return 0, false
+}
+
+func lower(s string) string { return strings.ToLower(s) }
+
+// PolicyView is Gateway.gate_policy_view.
+func (s *Service) PolicyView() PolicyView { return s.Policy.View() }

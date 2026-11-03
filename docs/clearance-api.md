@@ -44,7 +44,7 @@ All list endpoints are cursor-paginated (`limit`, max 200; `after`), newest firs
 | `GET /v1/sessions/{id}/result` (v0.25.0) | a finished in-cluster run's answer, kept **30 days**: `{status, final_text (at most 16 KiB, `truncated` if cut), turns, tool_calls: [{tool, ok, rule}], reason, written_at, expires_at}`; 404 before the run finishes, when it kept none, or after it expired. Scoped like the session |
 | `GET /v1/tasks/{task_id}` | the run tree: every session in the task, parent links, totals |
 | `GET /v1/evidence` | records filtered by `task`, `session`, `agent`, `tool`, `principal`, `decision`, `rule`, `app`, `since`, `until`; cursor is `seq` |
-| `GET /v1/evidence/{seq}` | one record, with its hash and assurance state |
+| `GET /v1/evidence/{seq}` | one record, with its hash and assurance state; every served record is in the clearance.evidence/v1 shape, a v0-draft row with the `provider` and `subject` the api derived named in `projected` ([evidence.md](evidence.md)) |
 | `GET /v1/evidence/verify` | the chain checked from genesis (or `from`/`to`): `ok`, `count`, `head`, first bad `seq` |
 | `GET /v1/evidence/counts` | records you may see counted by `by` (rule, tool, agent, app, decision), same filters as the list: the 7-day hits on the Policy page |
 | `GET /v1/policy` | the policy in force: deny rules in evaluation order (id, name, CEL, message, hint, pack), the tool registry with tiers, the packs |

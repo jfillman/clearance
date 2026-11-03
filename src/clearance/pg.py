@@ -25,7 +25,7 @@ from typing import Any, Iterable
 import psycopg
 from psycopg.types.json import Jsonb
 
-from .audit import ENVELOPE, GENESIS, Checkpoint, canonical, evidence, sha256_hex, verify_stream
+from .audit import GENESIS, Checkpoint, Writer, gateway_writer, seal, verify_stream
 
 LOCK_KEY = 0x636C7230  # "clr0": one Clearance writer per database
 RECENT = timedelta(days=1)  # closed or expired sessions kept in memory this long, for the run tree's lookups
@@ -152,8 +152,9 @@ class PgAuditLog:
     # batch however long the chain is).
     VERIFY_BATCH = 1000
 
-    def __init__(self, state: PgState):
+    def __init__(self, state: PgState, writer: Writer | None = None):
         self.state = state
+        self.writer = writer or gateway_writer()
         with self.state.conn.cursor(name="clearance_verify_chain") as cur:
             cur.itersize = self.VERIFY_BATCH
             cur.execute("SELECT record FROM clearance_evidence ORDER BY seq")
@@ -173,10 +174,7 @@ class PgAuditLog:
             return [r[0] for r in cur.fetchall()]
 
     def append(self, event: dict[str, Any]) -> dict[str, Any]:
-        if ENVELOPE & set(event) - {"coverage", "boundary"}:
-            raise ValueError(f"event must not set {sorted(ENVELOPE & set(event) - {'coverage', 'boundary'})}")
-        rec = {"seq": self._count, **event, **evidence(event), "prev_hash": self._head}
-        rec["hash"] = sha256_hex(canonical(rec))
+        rec = seal(self._count, self._head, event, self.writer)
         with self.state.conn.cursor() as cur:
             cur.execute("INSERT INTO clearance_evidence (seq, hash, prev_hash, record) VALUES (%s, %s, %s, %s)",
                         (rec["seq"], rec["hash"], rec["prev_hash"], Jsonb(rec)))
