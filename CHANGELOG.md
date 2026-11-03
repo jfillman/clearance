@@ -9,6 +9,8 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-11-03
+
 What the Autopilot gateway needs of the core before the hangar-dev cutover (R-3e).
 
 ### Added
@@ -307,7 +309,8 @@ What the Autopilot gateway needs of the core before the hangar-dev cutover (R-3e
   scope, narrow-only limits, CEL policy, sessions, the hash-chained audit log and the gateway; the Hangar pack's
   `glidepath.*` and `airframe.*` tools over glidepath-api and a GET-only Kubernetes adapter.
 
-[Unreleased]: https://github.com/jfillman/clearance/compare/v0.27.1...HEAD
+[Unreleased]: https://github.com/jfillman/clearance/compare/v0.28.0...HEAD
+[0.28.0]: https://github.com/jfillman/clearance/compare/v0.27.1...v0.28.0
 [0.27.1]: https://github.com/jfillman/clearance/compare/v0.27.0...v0.27.1
 [0.27.0]: https://github.com/jfillman/clearance/compare/v0.26.1...v0.27.0
 [0.26.1]: https://github.com/jfillman/clearance/compare/v0.26.0...v0.26.1
