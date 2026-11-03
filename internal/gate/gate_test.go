@@ -1010,3 +1010,22 @@ func TestAMalformedAdmissionResultIsRefused(t *testing.T) {
 		}
 	}
 }
+
+func TestReRegistrationRefreshesThePolicyRef(t *testing.T) {
+	f := newGate(t)
+	pending := map[string]any{"ci": "pending", "provenance": "not-agent", "render": "ok"}
+	pol := map[string]any{"ttlDays": 3}
+	out := f.register(t, "ci", change(map[string]any{"objects": imageBump, "checks": pending, "policy": pol}))
+	if out.State != "holding" || out.PolicyRef != "clearance.yaml@sha256:"+*out.RepoPolicyDigest {
+		t.Fatal(out.PolicyRef)
+	}
+	commit := strings.Repeat("6", 40)
+	out = f.register(t, "ci", change(map[string]any{"objects": imageBump, "policy": pol, "policyCommit": commit,
+		"checks": map[string]any{"ci": "pass", "provenance": "not-agent", "render": "ok"}}))
+	if out.State != "cleared" || out.PolicyRef != "clearance.yaml@"+commit {
+		t.Fatal(out.State, out.PolicyRef)
+	}
+	if got := policyOf(t, f.records(t, "deploy.clear")[0])["ref"]; got != "clearance.yaml@"+commit {
+		t.Fatal(got)
+	}
+}

@@ -294,6 +294,7 @@ func (s *Service) Register(ctx context.Context, p authn.Principal, body any) (*C
 			ch.Checks, ch.Tier, ch.Reasons, ch.UpdatedAt = copyChecks(req.Checks), c.Tier, append([]Reason(nil), c.Reasons...), now
 			ch.Requirement = c.Requirement
 			ch.Admission = copyAdmission(req.Admission)
+			ch.PolicyRef, ch.PolicyVersion, ch.RepoPolicyDigest = policyRefOf(req), c.Policy.Version, c.Policy.RepoPolicyDigest
 		}
 		switch c.Decision {
 		case "deny":
