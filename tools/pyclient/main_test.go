@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// The committed Python models and version are what the contract and pyproject.toml generate now.
+// The committed Python models and version are what the contract and VERSION generate now.
 func TestTheGeneratedPythonClientIsCurrent(t *testing.T) {
 	files, err := GenerateFrom("../..")
 	if err != nil {
@@ -46,24 +46,6 @@ func TestGenerationIsDeterministic(t *testing.T) {
 		`"evaluate": Operation("POST", "/access/v1/evaluation"`, `Field("decision_id", "decision_id", ("nullable", ("str",)), True)`} {
 		if !strings.Contains(m, want) {
 			t.Errorf("the models do not have %s", want)
-		}
-	}
-}
-
-func TestReleaseVersion(t *testing.T) {
-	cases := []struct {
-		in, want string
-		ok       bool
-	}{
-		{"[project]\nname = \"x\"\nversion = \"0.26.1\"\n", "0.26.1", true},
-		{"[tool.x]\nversion = \"9.9.9\"\n[project]\nversion = \"1.2.3\"\n", "1.2.3", true},
-		{"[project]\nversion = \"latest\"\n", "", false},
-		{"[project]\nname = \"x\"\n", "", false},
-	}
-	for _, tc := range cases {
-		got, err := ReleaseVersion([]byte(tc.in))
-		if (err == nil) != tc.ok || got != tc.want {
-			t.Errorf("%q: %q %v", tc.in, got, err)
 		}
 	}
 }

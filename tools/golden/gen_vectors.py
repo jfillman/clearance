@@ -1,6 +1,6 @@
 """Write the Python reference values the Go pycompat and pyyaml tests check against:
 
-    PYTHONPATH=src .venv/bin/python tools/golden/gen_vectors.py
+    python3 -I tools/golden/gen_vectors.py      # needs PyYAML; nothing from the removed clearance package
 
 internal/pycompat/testdata/vectors.json (repr of floats and strings, str.lower, str.strip, json.dumps length and
 its sort_keys/separators/ensure_ascii variants, fnmatch.fnmatchcase) and internal/pyyaml/testdata/vectors.json

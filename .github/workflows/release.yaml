@@ -1,8 +1,9 @@
 name: release
-# A vX.Y.Z tag on main publishes that version: the wheel, and a GitHub Release whose notes are the version's
-# CHANGELOG.md section, the Go image (ghcr.io/jfillman/clearance) and the Helm chart (oci://ghcr.io/jfillman/charts/
-# clearance), and reruns the chart's install test on the published chart and image before the Release is made. The
-# tag is cut by hand after the version-bump PR merges and main's CI is green (never off a red main).
+# A vX.Y.Z tag on main publishes that version (VERSION names it): the Python client's wheel (clients/python), and a
+# GitHub Release whose notes are the version's CHANGELOG.md section, the Go image (ghcr.io/jfillman/clearance) and
+# the Helm chart (oci://ghcr.io/jfillman/charts/clearance), and reruns the chart's install test on the published
+# chart and image before the Release is made. The tag is cut by hand after the version-bump PR merges and main's CI
+# is green (never off a red main).
 on:
   push:
     tags: ["v*.*.*"]
@@ -20,19 +21,20 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
       - id: v
-        name: the tag, pyproject's version and CHANGELOG.md agree, and the tag is on main
+        name: the tag, VERSION and CHANGELOG.md agree, and the tag is on main
         run: |
-          tag="${GITHUB_REF_NAME}"
-          version="${tag#v}"
-          project=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
-          if [ "$project" != "$version" ]; then
-            echo "::error::tag $tag but pyproject.toml says $project"; exit 1
-          fi
+          set -euo pipefail
+          version=$(go run ./tools/releasenotes -check-tag "$GITHUB_REF_NAME")
           if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "::error::$tag ($GITHUB_SHA) is not on main"; exit 1
+            echo "::error::$GITHUB_REF_NAME ($GITHUB_SHA) is not on main"; exit 1
           fi
-          python3 tools/release_notes.py "$version" CHANGELOG.md > /dev/null
+          go run ./tools/releasenotes "$version" CHANGELOG.md > /dev/null
+          # the Python client's generated version is this release's
+          go run ./tools/pyclient -check
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
   wheel:
@@ -43,13 +45,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: build the wheel and sdist
+      - name: build the Python client's wheel and sdist
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
         run: |
+          set -euo pipefail
           pip install build
-          python -m build --outdir dist
-          # the same contents check as CI: the schema and the vendored Glidepath scope ship in the wheel
-          python -m zipfile -l dist/*.whl | grep -q 'clearance/schemas/agent-definition.schema.json'
-          python -m zipfile -l dist/*.whl | grep -q 'clearance/packs/hangar/vendor/glidepath-scope.json'
+          python -m build clients/python --outdir dist
+          # the same contents check as CI: the generated modules ship, at this release's version
+          python -m zipfile -l "dist/clearance_core_client-${VERSION}-py3-none-any.whl" | grep -q 'clearance_client/_models.py'
           (cd dist && sha256sum * > SHA256SUMS)
       - uses: actions/upload-artifact@v4
         with:
@@ -212,6 +216,9 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
       - uses: actions/download-artifact@v4
         with:
           name: dist
@@ -228,7 +235,7 @@ jobs:
           IMAGE_DIGEST: ${{ needs.image.outputs.digest }}
           CHART_DIGEST: ${{ needs.chart.outputs.digest }}
         run: |
-          python3 tools/release_notes.py "$VERSION" CHANGELOG.md > notes.md
+          go run ./tools/releasenotes "$VERSION" CHANGELOG.md > notes.md
           owner="${GITHUB_REPOSITORY_OWNER,,}"
           cat >> notes.md <<EOF
 

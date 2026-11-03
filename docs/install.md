@@ -1,10 +1,10 @@
 # Installing Clearance
 
-**Status: Built, not deployed.** The image (`ghcr.io/jfillman/clearance`) and the Helm chart
+**Status: Built and deployed.** The image (`ghcr.io/jfillman/clearance`) and the Helm chart
 (`oci://ghcr.io/jfillman/charts/clearance`) are built and published by the release workflow from the first tag after
 R-2 (v0.27.0). The chart's install test passes on a fresh kind cluster in CI (`.github/workflows/chart.yaml`), and
-the release workflow reruns it on the published chart and image. Nothing on hangar-dev runs this chart yet: R-7 makes
-it Apron's `components.clearance`, and R-4 is the cutover.
+the release workflow reruns it on the published chart and image. hangar-dev runs this chart (0.29.0, Apron's
+`components.clearance`, R-7) since the cutover of 2026-11-03 (R-4).
 
 Clearance installs on any Kubernetes cluster (1.27 or newer). It needs a Postgres database and nothing else: no
 Airframe, no Glidepath, no Autopilot, no Backstage. Those are integrations you can turn on with values.

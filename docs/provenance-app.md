@@ -185,22 +185,24 @@ no bearer token). clearance-api gains the installation as a filter on the existi
 The customer's own CI registers what it is about to deploy, so the protection rule has a change to answer.
 
 - **The identity**: the workflow's GitHub Actions OIDC ID token (`permissions: id-token: write`), verified against
-  GitHub's JWKS (RS256, the configured audience, default `clearance`, not expired; `auth.GitHubActionsAuthenticator`).
+  GitHub's JWKS (RS256, the configured audience, default `clearance`, not expired; `internal/authn`, was
+  `auth.GitHubActionsAuthenticator`).
   The principal is `github:<sub>`, for example `github:repo:acme/shop:environment:prod`; it registers only when
   `CLEARANCE_VERIFIERS` lists it (a glob such as `github:repo:acme/*`). Newer repositories' tokens carry GitHub's
   immutable-ID subject (`repo:acme@123/shop@456:...`); since v0.24.2 the ids are dropped for matching and naming, so
   globs stay by name, and the raw subject and ids are kept as the principal's attributes.
 - **Its own repository only**: the token's `repository` claim travels with the principal, and `POST /v1/clearances`
   refuses a change for any other repository (`DG-REPO`, 403). A workflow cannot clear the way for another repo.
-- **The change**: `clearance register` (`src/clearance/register.py`, the `clearance` console script) diffs two
+- **The change**: `clearance register` (the Go binary's subcommand, `cmd/clearance/register.go`) diffs two
   directories of rendered manifests, `--before` and `--after`: each object added, removed or changed, a changed
   object's differing leaves as JSON pointers, the images it runs, a digest; the tree digest of `--after`; the repo,
   commit and PR (0 for a push) from the Actions environment and event. The gate's own validation runs before
   anything is sent; `--dry-run` prints the body.
 - **The exit code**: 0 cleared, 3 holding for people (the deploy job then waits on the protection rule), 1 denied or
   refused, 2 a usage error. It never waits itself: the protection rule does.
-- **The GitHub Action**: `jfillman/clearance/register@<ref>` (`register/action.yml`) installs clearance at its own
-  ref and runs the command; holding is not a failure there. See `register/README.md`.
+- **The GitHub Action**: `jfillman/clearance/register@<ref>` (`register/action.yml`) builds the Go `clearance`
+  binary from its own checkout at that ref (`actions/setup-go` with the repo's `go.mod`; no Python since v0.30.0) and
+  runs the command, with the same inputs as before; holding is not a failure there. See `register/README.md`.
 - **On Hangar**: the gateway needs `CLEARANCE_GITHUB_OIDC_AUDIENCE` set (autopilot) and `POST /v1/clearances` reachable
   from GitHub's runners (the apron route and the Cloudflare tunnel's path list).
 - **Elsewhere**: `--token-file` takes any bearer Clearance accepts as a verifier.
@@ -216,12 +218,13 @@ The customer's own CI registers what it is about to deploy, so the protection ru
 5. ~~Name~~ Decided: as proposed. Was: `clearance-provenance` for the App and `Clearance / agent-identity`, `Clearance / agent-scope` for the
    checks, or another name the product site uses.
 
-## The Go core (R-1c, Built, not deployed)
+## The Go core (R-1c, Built, deployed on hangar-dev 2026-11-03)
 
 `internal/provenance` (`POST /v1/provenance`, the `provenance.verify` and `app.installation` records) and
 `internal/githubapp` (`POST /v1/github/webhook`: the constant-time X-Hub-Signature-256 check, the queue, the
 installation tokens from an RS256 App JWT signed with the key file, check runs, comments and the deployment protection
 rule) port `provenance.py` and `github_app.py`. Every GitHub call has a deadline and redirects are followed only on the
-API's own host, so a token never leaves it. `clearance register` is also a Go subcommand now, with the same flags,
-output and exit codes; `register/action.yml` still installs the Python package until it switches. The Go binary does not
+API's own host, so a token never leaves it. `clearance register` is a Go subcommand, with the Python command's flags,
+output and exit codes; `register/action.yml` builds and runs it (v0.30.0; at v0.29.0 and before it installed the
+Python package). The Go binary does not
 take `--paths-from-git` (it never shells out): paths are the files that differ between `--before` and `--after`.

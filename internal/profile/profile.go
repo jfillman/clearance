@@ -33,7 +33,7 @@ import (
 //go:embed agent-definition.schema.json
 var schemaJSON []byte
 
-// SchemaJSON is the embedded agent-definition schema, byte-identical to src/clearance/schemas.
+// SchemaJSON is the embedded agent-definition schema, byte-identical to Autopilot's (src/autopilot/engine/schemas).
 func SchemaJSON() []byte { return bytes.Clone(schemaJSON) }
 
 const schemaURL = "https://clearance.local/agent-definition.schema.json"

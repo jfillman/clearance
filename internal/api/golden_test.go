@@ -1,7 +1,7 @@
 package api
 
-// The golden check against Python api.py: tools/api-golden/golden_py.py (run by hand, see docs/clearance-api.md
-// "Verifying against api.py") loads a chain dump into a scratch database, records api.py's answers to a list of
+// The golden check against Python api.py: tools/api-golden/golden_py.py (at v0.29.0, with the Python package; see
+// docs/clearance-api.md "Verifying against api.py") loads a chain dump into a scratch database, records api.py's answers to a list of
 // requests, and writes them with the database's DSN. This test serves the same database through the Go API and
 // compares every answer. It runs only with CLEARANCE_API_GOLDEN set to that file.
 

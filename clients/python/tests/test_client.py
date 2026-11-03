@@ -4,7 +4,6 @@ import asyncio
 import datetime
 import http.server
 import json
-import re
 import threading
 import time
 from pathlib import Path
@@ -62,9 +61,7 @@ def test_strict_decoding_refuses_what_the_contract_does_not_say():
 
 
 def test_the_version_is_the_clearance_release():
-    pyproject = (REPO / "pyproject.toml").read_text()
-    project = pyproject.split("[project]", 1)[1]
-    assert cc.__version__ == re.search(r'^version = "([^"]+)"', project, re.M).group(1)
+    assert cc.__version__ == (REPO / "VERSION").read_text().strip()
 
 
 # -- against a real core -------------------------------------------------------------------------------------------
