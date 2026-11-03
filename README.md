@@ -64,28 +64,17 @@ cleared by policy, chain verify, the image size and the core's idle memory).
 | `clearance register` | `register.py` (the `clearance` console script), `register/action.yml`, `auth.GitHubActionsAuthenticator`; ported to the Go binary's `clearance register` (docs/core.md) | Phase 2b: a customer's CI registers what it deploys with the deployment gate (the diff of two rendered manifest directories), authenticated by the workflow's GitHub Actions OIDC token, for its own repository only (`DG-REPO`) |
 | Who is calling | `auth.py` | interim, until ID-JAG: service-account tokens by TokenReview for the `clearance` audience (principal `<namespace>/<name>`), people's OIDC ID tokens against the issuer's JWKS (RS256/ES256 only; principal `user:<email>`), and only the people its `allowed` globs name (a valid token from an issuer that federates GitHub is anyone with a GitHub account; empty allows nobody), routed by issuer and cached briefly (never past `exp`, never a failure). Another cluster's service accounts (`ForeignWorkloadAuthenticator`, e.g. Tower's backend on hangar-prod) are verified against that cluster's public issuer and named `<cluster>/<namespace>/<sa>`, only for the service accounts it allows |
 
-## Packs
+## Policy bundles
 
-A pack is the policy for tools only some deployments have: tool specs, CEL rules placed among the core rules by an
-explicit order, a function that adds what those rules read, and an optional hook for a rule that reports structured
-problems. A pack holds policy only; what a tool does is a handler the deployment registers.
+The Go core (v0.29.0) has no packs. A deployment's own policy, such as the tools only it has, the rules about them,
+their argument checks, and field scope over a file its CI owns (read live from that CI system's contract), is a
+**policy bundle**: a `clearance.policy/v1` JSON file the core loads from configuration (`CLEARANCE_BUNDLES`) and
+names, with its version, in every decision. The deployment's other names (the on-behalf-of header, the commit-trailer
+prefix, baseline deny paths, environment naming, group refs) are configuration too. The core's source carries no
+platform's names; `tests/test_boundary.py` checks that. See [docs/core.md, Policy bundles](docs/core.md#policy-bundles).
+Hangar's bundle ships with Autopilot (`policy/hangar/bundle.json`) and Apron deploys it.
 
-`clearance.packs.hangar` is the pack for Hangar: the `glidepath.*` and `airframe.*` tools, R021 (cicd.yaml field
-scope, from Glidepath's contract vendored byte for byte in `packs/hangar/vendor/`), R022 and R023 (per-agent app
-scope). `glidepath.cicd.propose` is a PR tool like `repo.pr.open` (budgeted, receipted for the agent gates); the
-handler asks glidepath-api for the verdict on the change first. Nothing in the core imports the pack; `tests/test_boundary.py`
-fails if anything does.
-
-```python
-from clearance.dispatch import Gateway
-from clearance.backends import core_handlers
-from clearance.packs.hangar import HANGAR
-
-gw = Gateway(definitions, store, audit, auth, clock,
-             packs=(HANGAR,), handlers={**core_handlers(git=..., read=...), **my_handlers}, runs=my_run_backend)
-```
-
-A Gateway with no packs is a complete Clearance for the core tools.
+The Python package below (`src/clearance`, `clearance.packs.hangar`) is the pre-R-3 gateway, kept until R-3 removes it.
 
 ## Tests
 

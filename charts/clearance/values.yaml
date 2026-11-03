@@ -21,35 +21,81 @@ commonLabels: {}
 # {name, version, principals: [<namespace>/<serviceaccount> globs], kinds?: [...], intent_capture?: redacted|full,
 # definitions?: true (at most one provider: it publishes its cluster-pinned agent definitions, PUT /v1/definitions)}.
 providers: []
-#  - name: autopilot-gateway
-#    version: "0.3.27"
-#    principals: ["autopilot-system/autopilot-gateway"]
+#  - name: example-gateway
+#    version: "1.0.0"
+#    principals: ["gateway-system/gateway"]
 #    definitions: true
 # CLEARANCE_VERIFIERS: principal globs that may register changes and ask for provenance (gate providers, CI).
 verifiers: []
-# CLEARANCE_DELEGATES: principal globs that may act for a person they name (X-Hangar-On-Behalf-Of), e.g. a portal.
+# CLEARANCE_DELEGATES: principal globs that may act for a person they name (vocabulary.onBehalfOfHeader), e.g. a portal.
 delegates: []
 # CLEARANCE_ADMINS: principal globs (user:<login>) that may deny any held change.
 admins: []
-# CLEARANCE_PACKS: policy packs to load ("hangar" is the only one today). Default none: the core rules only.
-packs: []
+# -- Policy bundles (docs/core.md, Policy bundles) ---------------------------------------------------------------
+policy:
+  # CLEARANCE_BUNDLES: clearance.policy/v1 files, each from a ConfigMap you manage (the deployment ships its own,
+  # Clearance ships none), mounted for the core and the api at /etc/clearance/bundles/<name>/<key>. Empty: the
+  # core rules only.
+  bundles: []
+  #  - name: platform
+  #    configMap: clearance-bundle-platform
+  #    key: bundle.json
+  # CLEARANCE_BUNDLE_SOURCES: where each source a bundle names is read at start, by name. A url is fetched over
+  # HTTP(S) (sendToken: with a projected service-account token, of tokenAudience when set, else the API server's
+  # default audience); a configMap is a file (key, default contract.json). A source that does not answer within
+  # sourceWait leaves its bundle degraded (its tools denied R000, /readyz names it, still 200) until it answers; a
+  # version the bundle is not written for stops the start.
+  sources: {}
+  #  contract:
+  #    url: http://contract-api.example-system.svc:8080/v1/contract
+  #    sendToken: true
+  #    tokenAudience: ""
+  # CLEARANCE_BUNDLE_SOURCE_WAIT (Go duration; empty: 10s).
+  sourceWait: ""
+  # NetworkPolicy egress rules (networkPolicy.enabled) for the core and the api to reach the sources.
+  egress: []
+  # CLEARANCE_ENV_*: how arguments name an environment tier (a lower-target tool pointed upper is R012). Empty:
+  # the core's defaults (lower names dev, development, sandbox, scratch; no prefixes or suffixes).
+  environments:
+    lowerNames: []
+    lowerPrefixes: []
+    lowerProjectSuffixes: []
+    upperRepoPrefixes: []
+
+# The deployment's vocabulary (internal/vocab): names that are the platform's, not Clearance's. Empty: the core's
+# defaults.
+vocabulary:
+  # CLEARANCE_ON_BEHALF_OF_HEADER (default X-Clearance-On-Behalf-Of)
+  onBehalfOfHeader: ""
+  # CLEARANCE_TRAILER_PREFIX: the prefix of an agent commit's trailers (default Clearance-)
+  trailerPrefix: ""
+  # CLEARANCE_RUN_IDENTITY_NAMESPACE: a workload agent's service-account namespace (default agent-runs)
+  runIdentityNamespace: ""
+  # CLEARANCE_BASELINE_DENY_PATHS (default CODEOWNERS, **/CODEOWNERS, .github/**) and _FIELDS (default none)
+  baselineDenyPaths: []
+  baselineDenyFields: []
+  # CLEARANCE_GATE_OUTSIDE_GROUPS (default none) and CLEARANCE_GATE_OWNER_FALLBACK (default none)
+  gateOutsideGroups: []
+  gateOwnerFallback: ""
+  # CLEARANCE_V0_PROVIDER: name/version for rows written before providers were recorded (default unrecorded/unrecorded)
+  v0Provider: ""
 # CLEARANCE_AUDIENCE: the audience callers' projected service-account tokens carry (TokenReview), and the audience
-# of a foreign (Tower) cluster's tokens.
+# of a foreign cluster's tokens.
 audience: clearance
 
 # -- The deployment gate and definitions --------------------------------------------------------------------------
 gate:
   # CLEARANCE_EXPIRE_SECONDS: how often holding changes past their TTL are expired.
   expireSeconds: 60
-  # AGENT_LOGINS: GitHub logins agents open PRs as (empty: the core's default, hangar-autopilot-agents[bot]).
+  # AGENT_LOGINS: GitHub logins agents open PRs as (empty: none; an agent PR is known by its record or trailers).
   agentLogins: []
   # MODEL_ROUTES: alias=upstream pairs a definition release may name (empty: model aliases are not checked).
   modelRoutes: []
   # RUNTIME_IMAGES_EXTRA: globs a definition's runtime.image may match.
   runtimeImagesExtra: []
-  # CLEARANCE_FLIGHT_REGISTRIES: image prefixes, each ending in "/", a tier-1 image bump may come from; a bump from
-  # anywhere else is tier 2 (image:not-flight-registry). Empty: any registry (the product default).
-  flightRegistries: []
+  # CLEARANCE_TRUSTED_REGISTRIES: image prefixes, each ending in "/", a tier-1 image bump may come from; a bump from
+  # anywhere else is tier 2 (image:not-trusted-registry). Empty: any registry (the product default).
+  trustedRegistries: []
 
 # Bundled agent definitions (*.yaml) from a ConfigMap you manage, mounted at /etc/clearance/agents and named in
 # CLEARANCE_AGENTS_DIR for the core and the api. Empty: none.
@@ -67,8 +113,8 @@ oidc:
   # CLEARANCE_OIDC_ALLOWED_USERS: globs on the claim. Required with an issuer.
   allowedUsers: []
 
-# Another cluster's workloads (TOWER_*): its service-account issuer, its name, the <namespace>/<sa> globs it may use.
-tower:
+# Another cluster's workloads (CLEARANCE_FOREIGN_*), e.g. a portal's: its service-account issuer, its name, the <namespace>/<sa> globs it may use.
+foreignCluster:
   issuer: ""
   cluster: ""
   serviceAccounts: []
@@ -94,7 +140,7 @@ githubApp:
   # CLEARANCE_GITHUB_API (empty: https://api.github.com)
   api: ""
 
-# Tower's Backstage: the gate's group directory and app owners. Empty url: nobody is in any group, so no person
+# A Backstage catalog: the gate's group directory and app owners. Empty url: nobody is in any group, so no person
 # can clear a tier-2/3 change. The core and the api send a projected service-account token for tokenAudience,
 # mounted at /var/run/clearance/backstage-token (BACKSTAGE_TOKEN_FILE).
 backstage:
@@ -195,7 +241,7 @@ api:
   # CLEARANCE_API_AUDITORS and CLEARANCE_API_NOTIFIERS: principal globs.
   auditors: []
   notifiers: []
-  # CLEARANCE_GATEWAY_URL: the Autopilot gateway (where the runtime's writes go), named in /v1/contract. Empty: none.
+  # CLEARANCE_GATEWAY_URL: the AI gateway (where the runtime's writes go), named in /v1/contract. Empty: none.
   gatewayURL: ""
   # CLEARANCE_API_POOL: the read pool's size.
   pool: 5

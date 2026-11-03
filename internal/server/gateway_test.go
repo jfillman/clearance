@@ -17,6 +17,7 @@ import (
 	"github.com/jfillman/clearance/internal/core"
 	"github.com/jfillman/clearance/internal/evidence"
 	"github.com/jfillman/clearance/internal/server"
+	"github.com/jfillman/clearance/internal/vocab/vocabtest"
 )
 
 func sha(s string) string {
@@ -289,7 +290,7 @@ func publish(pins []any, rejected []any) map[string]any {
 func scopeStatus(t *testing.T, f *fixture) string {
 	t.Helper()
 	pv := f.do("POST", "/v1/provenance", ci, map[string]any{"repo": "jfillman/gate-api", "pr": 32, "head": headSHA,
-		"paths": []string{"app.js"}, "author": core.DefaultAgentLogin}).want(t, 200, "")
+		"paths": []string{"app.js"}, "author": vocabtest.AgentLogin}).want(t, 200, "")
 	return fmt.Sprint(pv.body["scope"].(map[string]any)["status"], " ", pv.body["scope"].(map[string]any)["rule"])
 }
 

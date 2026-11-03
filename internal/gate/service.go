@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/jfillman/clearance/internal/vocab"
 	"sort"
 	"strings"
 	"sync"
@@ -28,8 +29,8 @@ type Config struct {
 	Delegates []string `json:"delegates"`
 	// Admins are principal globs (user:<login>) that may deny any held change (CLEARANCE_ADMINS).
 	Admins []string `json:"admins"`
-	// FlightRegistries narrow tier 1 to images from these prefixes (GatePolicy.flight_registries; empty = any).
-	FlightRegistries []string `json:"flightRegistries"`
+	// TrustedRegistries narrow tier 1 to images from these prefixes (GatePolicy.trusted_registries; empty = any).
+	TrustedRegistries []string `json:"trustedRegistries"`
 	// Models are the deployment's model routes, for a definition release's review (nil = not checked).
 	Models []string `json:"models"`
 	// ImageAllow are the runtime-image globs a definition release's runtime.image must match.
@@ -71,10 +72,10 @@ type Service struct {
 	mu sync.Mutex
 }
 
-// NewService is a Service with the baseline policy (and the configured flight registries).
+// NewService is a Service with the baseline policy (and the configured trusted registries).
 func NewService(cfg Config, st store.Store, clock func() time.Time) *Service {
 	p := DefaultPolicy()
-	p.FlightRegistries = append([]string(nil), cfg.FlightRegistries...)
+	p.TrustedRegistries = append([]string(nil), cfg.TrustedRegistries...)
 	return &Service{Config: cfg, Policy: p, Store: st, Clock: clock}
 }
 
@@ -232,7 +233,7 @@ func (s *Service) Register(ctx context.Context, p authn.Principal, body any) (*C
 		req.Owner = s.Owners.OwnerOf(ctx, req.App)
 	}
 	if req.Owner == "" {
-		req.Owner = DefaultOwnerFallback
+		req.Owner = vocab.Get().OwnerFallback
 		if len(s.Policy.OutsideGroups) > 0 {
 			req.Owner = s.Policy.OutsideGroups[0]
 		}

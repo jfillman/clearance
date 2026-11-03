@@ -20,7 +20,7 @@ the inbox, trigger history, results), so the Go API serves only Clearance's own 
   with `assurance` beside it ([evidence.md](evidence.md)).
 - PR receipts and the agent-gate verdicts (`provenance.verify` records) for a repo or a PR.
 - The deployment gate: changes, counts, one change, and the gate's baseline policy.
-- The decision policy as data (rules in evaluation order with their pack, the tool registry, the packs) and the
+- The decision policy as data (rules in evaluation order with the bundle each came from as `pack`, the tool registry, and `core` plus the loaded bundles as `packs`) and the
   dry-run explainer, which runs the real engine (`decide.(*Engine).Decide` and the new `decide.(*Engine).Trace`, the
   port of `Policy.trace`) on a fresh session of a definition. Records nothing, spends nothing.
 - The agent definitions Clearance decides with (`GET /v1/definitions`): the bundled set and the cluster pins the core
@@ -103,17 +103,18 @@ only the operations in its vendored contract, so its copy is refreshed with R-3/
 | `CLEARANCE_API_DSN` | (required) | the read-only role's DSN |
 | `CLEARANCE_API_AUDITORS` | none | principal globs: every read, the chain check, `full=1` |
 | `CLEARANCE_API_NOTIFIERS` | none | principal globs: the notifier role |
-| `CLEARANCE_DELEGATES` | none | principal globs that may name a person in `X-Hangar-On-Behalf-Of` |
+| `CLEARANCE_DELEGATES` | none | principal globs that may name a person in the on-behalf-of header (`CLEARANCE_ON_BEHALF_OF_HEADER`; Hangar sets `X-Hangar-On-Behalf-Of`) |
 | `CLEARANCE_AGENTS_DIR` | none | the bundled definitions; cluster pins come from `clearance_definitions` |
 | `CLEARANCE_API_DEFINITIONS_INTERVAL` | 30 | seconds between re-reads of the stored definitions |
 | `CLEARANCE_API_POOL` | 5 | Postgres connections per replica (1 to 50) |
-| `CLEARANCE_PACKS` | none | the policy packs the core runs (`hangar`), for `/v1/policy` and the explainer |
+| `CLEARANCE_BUNDLES`, `CLEARANCE_BUNDLE_SOURCES`, `CLEARANCE_BUNDLE_SOURCE_WAIT`, `CLEARANCE_ENV_*` | none | the policy bundles the core runs ([core.md](core.md#policy-bundles)), for `/v1/policy` and the explainer; loaded as the core loads them: a source that does not answer leaves the bundle degraded (named in `/readyz` `degraded`, still 200) until it answers |
+| `CLEARANCE_ON_BEHALF_OF_HEADER`, `CLEARANCE_V0_PROVIDER` and the rest of the vocabulary | core.md | the header a delegate names a person in, the provider v0-draft rows are projected with ([core.md](core.md#configuration)) |
 | `CLEARANCE_CORE_URL` | none | where Clearance's writes go, named in `/v1/contract` as `core` |
 | `CLEARANCE_GATEWAY_URL` | none | where the runtime's writes go, named in `/v1/contract` as `gateway` |
 | `BACKSTAGE_URL`, `BACKSTAGE_TOKEN_FILE` | none, `/var/run/clearance/backstage-token` | a person's groups (memberOf) and the apps they own (Components by `spec.owner`, `backstage.Ownership`) |
 | `CLEARANCE_LISTEN` | `:$PORT` | listen address; `PORT` defaults to 8080 |
 
-plus the authenticator's (`authn.EnvVars`: `CLEARANCE_AUDIENCE`, `CLEARANCE_OIDC_*`, `TOWER_*`,
+plus the authenticator's (`authn.EnvVars`: `CLEARANCE_AUDIENCE`, `CLEARANCE_OIDC_*`, `CLEARANCE_FOREIGN_*`,
 `CLEARANCE_GITHUB_OIDC_*`). The chart sets each (`api.*` values; `tools/charttest` fails when one is missing).
 
 ### Indexes
@@ -186,7 +187,7 @@ All list endpoints are cursor-paginated (`limit`, max 200; `after`), newest firs
 | `GET /v1/evidence/{seq}` | one record, with its hash and assurance state; every served record is in the clearance.evidence/v1 shape, a v0-draft row with the `provider` and `subject` the api derived named in `projected` ([evidence.md](evidence.md)) |
 | `GET /v1/evidence/verify` | the chain checked from genesis (or `from`/`to`): `ok`, `count`, `head`, first bad `seq` |
 | `GET /v1/evidence/counts` | records you may see counted by `by` (rule, tool, agent, app, decision), same filters as the list: the 7-day hits on the Policy page |
-| `GET /v1/policy` | the policy in force: deny rules in evaluation order (id, name, CEL, message, hint, pack), the tool registry with tiers, the packs |
+| `GET /v1/policy` | the policy in force: deny rules in evaluation order (id, name, CEL, message, hint, and the bundle it came from as `pack`), the tool registry with tiers, `core` plus the loaded bundles as `packs` |
 | `GET /v1/policy/explain` | "would this be allowed?": `agent`, `tool`, `args` (JSON); the real policy on a fresh session of that definition, the decision and every rule's verdict in order (the path). Records nothing, spends nothing |
 | `GET /v1/receipts` | PR receipts (`repo`, `pr`): what Clearance's agents opened, the commit, the paths |
 | `GET /v1/provenance` | the agent-gate verdicts recorded for a PR (`provenance.verify` records) |

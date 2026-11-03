@@ -3,7 +3,7 @@
     from clearance_client import CoreClient, CoreUnavailable, EvaluationRequest
 
     core = CoreClient("http://clearance-core.clearance-system:8080",
-                      token_file="/var/run/secrets/tokens/clearance", provider="autopilot-gateway")
+                      token_file="/var/run/secrets/tokens/clearance", provider="example-gateway")
     try:
         res = core.evaluate(request)
     except CoreUnavailable:

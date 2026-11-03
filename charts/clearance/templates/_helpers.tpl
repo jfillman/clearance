@@ -105,16 +105,42 @@ app.kubernetes.io/component: {{ .component }}
 - name: CLEARANCE_ADMINS
   value: {{ include "clearance.csv" . | quote }}
 {{- end }}
-{{- with .Values.packs }}
-- name: CLEARANCE_PACKS
+{{- with .Values.policy.bundles }}
+- name: CLEARANCE_BUNDLES
+  value: {{ include "clearance.bundleFiles" $ | quote }}
+{{- end }}
+{{- with .Values.policy.sources }}
+- name: CLEARANCE_BUNDLE_SOURCES
+  value: {{ include "clearance.bundleSources" $ | quote }}
+{{- end }}
+{{- with .Values.policy.sourceWait }}
+- name: CLEARANCE_BUNDLE_SOURCE_WAIT
+  value: {{ . | quote }}
+{{- end }}
+{{- range $k, $env := dict "lowerNames" "CLEARANCE_ENV_LOWER_NAMES" "lowerPrefixes" "CLEARANCE_ENV_LOWER_PREFIXES" "lowerProjectSuffixes" "CLEARANCE_ENV_LOWER_PROJECT_SUFFIXES" "upperRepoPrefixes" "CLEARANCE_ENV_UPPER_REPO_PREFIXES" }}
+{{- with index $.Values.policy.environments $k }}
+- name: {{ $env }}
   value: {{ include "clearance.csv" . | quote }}
+{{- end }}
+{{- end }}
+{{- range $k, $env := dict "onBehalfOfHeader" "CLEARANCE_ON_BEHALF_OF_HEADER" "trailerPrefix" "CLEARANCE_TRAILER_PREFIX" "runIdentityNamespace" "CLEARANCE_RUN_IDENTITY_NAMESPACE" "gateOwnerFallback" "CLEARANCE_GATE_OWNER_FALLBACK" "v0Provider" "CLEARANCE_V0_PROVIDER" }}
+{{- with index $.Values.vocabulary $k }}
+- name: {{ $env }}
+  value: {{ . | quote }}
+{{- end }}
+{{- end }}
+{{- range $k, $env := dict "baselineDenyPaths" "CLEARANCE_BASELINE_DENY_PATHS" "baselineDenyFields" "CLEARANCE_BASELINE_DENY_FIELDS" "gateOutsideGroups" "CLEARANCE_GATE_OUTSIDE_GROUPS" }}
+{{- with index $.Values.vocabulary $k }}
+- name: {{ $env }}
+  value: {{ include "clearance.csv" . | quote }}
+{{- end }}
 {{- end }}
 {{- with .Values.gate.runtimeImagesExtra }}
 - name: RUNTIME_IMAGES_EXTRA
   value: {{ include "clearance.csv" . | quote }}
 {{- end }}
-{{- with .Values.gate.flightRegistries }}
-- name: CLEARANCE_FLIGHT_REGISTRIES
+{{- with .Values.gate.trustedRegistries }}
+- name: CLEARANCE_TRUSTED_REGISTRIES
   value: {{ include "clearance.csv" . | quote }}
 {{- end }}
 {{- if .Values.agents.configMap }}
@@ -137,15 +163,15 @@ app.kubernetes.io/component: {{ .component }}
   value: {{ . | quote }}
 {{- end }}
 {{- end }}
-{{- if .Values.tower.issuer }}
-- name: TOWER_ISSUER
-  value: {{ .Values.tower.issuer | quote }}
-- name: TOWER_CLUSTER
-  value: {{ required "tower.cluster is required with tower.issuer" .Values.tower.cluster | quote }}
-- name: TOWER_SERVICE_ACCOUNTS
-  value: {{ required "tower.serviceAccounts is required with tower.issuer" (include "clearance.csv" .Values.tower.serviceAccounts) | quote }}
-{{- with .Values.tower.jwksURL }}
-- name: TOWER_JWKS_URL
+{{- if .Values.foreignCluster.issuer }}
+- name: CLEARANCE_FOREIGN_ISSUER
+  value: {{ .Values.foreignCluster.issuer | quote }}
+- name: CLEARANCE_FOREIGN_CLUSTER
+  value: {{ required "foreignCluster.cluster is required with foreignCluster.issuer" .Values.foreignCluster.cluster | quote }}
+- name: CLEARANCE_FOREIGN_SERVICE_ACCOUNTS
+  value: {{ required "foreignCluster.serviceAccounts is required with foreignCluster.issuer" (include "clearance.csv" .Values.foreignCluster.serviceAccounts) | quote }}
+{{- with .Values.foreignCluster.jwksURL }}
+- name: CLEARANCE_FOREIGN_JWKS_URL
   value: {{ . | quote }}
 {{- end }}
 {{- end }}
@@ -165,8 +191,71 @@ app.kubernetes.io/component: {{ .component }}
 {{- end }}
 {{- end -}}
 
+{{/* CLEARANCE_BUNDLES: each bundle's file, mounted from its ConfigMap */}}
+{{- define "clearance.bundleFiles" -}}
+{{- $out := list -}}
+{{- range .Values.policy.bundles -}}
+{{- if not (regexMatch "^[a-z0-9][a-z0-9-]{0,40}$" (.name | default "")) }}{{ fail (printf "policy.bundles: name %q must be [a-z0-9-], at most 41 characters" .name) }}{{ end -}}
+{{- $_ := required (printf "policy.bundles: %s needs a configMap" .name) .configMap -}}
+{{- $out = append $out (printf "/etc/clearance/bundles/%s/%s" .name (.key | default "bundle.json")) -}}
+{{- end -}}
+{{- join "," $out -}}
+{{- end -}}
+
+{{/* CLEARANCE_BUNDLE_SOURCES as JSON: a url (with this pod's projected token when sendToken) or a ConfigMap file */}}
+{{- define "clearance.bundleSources" -}}
+{{- $out := dict -}}
+{{- range $name, $s := .Values.policy.sources -}}
+{{- if not (regexMatch "^[a-z0-9][a-z0-9-]{0,40}$" $name) }}{{ fail (printf "policy.sources: name %q must be [a-z0-9-], at most 41 characters" $name) }}{{ end -}}
+{{- if and $s.url $s.configMap }}{{ fail (printf "policy.sources.%s: url or configMap, not both" $name) }}{{ end -}}
+{{- if $s.url -}}
+{{- if $s.sendToken -}}
+{{- $_ := set $out $name (dict "url" $s.url "tokenFile" (printf "/var/run/clearance/sources/%s" $name)) -}}
+{{- else -}}
+{{- $_ := set $out $name (dict "url" $s.url) -}}
+{{- end -}}
+{{- else if $s.configMap -}}
+{{- $_ := set $out $name (dict "file" (printf "/etc/clearance/sources/%s/%s" $name ($s.key | default "contract.json"))) -}}
+{{- else -}}
+{{- fail (printf "policy.sources.%s: give a url or a configMap" $name) -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $out -}}
+{{- end -}}
+
+{{- define "clearance.sourceTokens" -}}
+{{- range $name, $s := .Values.policy.sources }}{{ if and $s.url $s.sendToken }}{{ $name }} {{ end }}{{ end -}}
+{{- end -}}
+
 {{/* volumes shared by the core and the api */}}
 {{- define "clearance.sharedVolumes" -}}
+{{- range .Values.policy.bundles }}
+- name: bundle-{{ .name }}
+  configMap:
+    name: {{ .configMap }}
+{{- end }}
+{{- range $name, $s := .Values.policy.sources }}
+{{- if $s.configMap }}
+- name: source-{{ $name }}
+  configMap:
+    name: {{ $s.configMap }}
+{{- end }}
+{{- end }}
+{{- if include "clearance.sourceTokens" . }}
+- name: source-tokens
+  projected:
+    sources:
+      {{- range $name, $s := .Values.policy.sources }}
+      {{- if and $s.url $s.sendToken }}
+      - serviceAccountToken:
+          path: {{ $name }}
+          {{- with $s.tokenAudience }}
+          audience: {{ . | quote }}
+          {{- end }}
+          expirationSeconds: {{ $s.tokenExpirationSeconds | default 3600 }}
+      {{- end }}
+      {{- end }}
+{{- end }}
 {{- if .Values.backstage.url }}
 - name: backstage-token
   projected:
@@ -183,6 +272,23 @@ app.kubernetes.io/component: {{ .component }}
 {{- end }}
 {{- end -}}
 {{- define "clearance.sharedMounts" -}}
+{{- range .Values.policy.bundles }}
+- name: bundle-{{ .name }}
+  mountPath: /etc/clearance/bundles/{{ .name }}
+  readOnly: true
+{{- end }}
+{{- range $name, $s := .Values.policy.sources }}
+{{- if $s.configMap }}
+- name: source-{{ $name }}
+  mountPath: /etc/clearance/sources/{{ $name }}
+  readOnly: true
+{{- end }}
+{{- end }}
+{{- if include "clearance.sourceTokens" . }}
+- name: source-tokens
+  mountPath: /var/run/clearance/sources
+  readOnly: true
+{{- end }}
 {{- if .Values.backstage.url }}
 - name: backstage-token
   mountPath: /var/run/clearance

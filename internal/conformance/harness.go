@@ -227,7 +227,7 @@ func (h *harness) start(ctx context.Context, info Info) error {
 	})
 	prov := server.Provider{Name: info.Name, Version: info.Version, Principals: []string{Principal}}
 	cfg := core.Config{Memory: true, Version: "conformance", Providers: []server.Provider{prov}, Auth: auth,
-		AgentLogins: []string{core.DefaultAgentLogin}}
+		AgentLogins: []string{"conformance-agents[bot]"}}
 	cfg.Gate.Verifiers = []string{Principal}
 	c, err := core.Build(ctx, cfg, h.clock, h.opt.CoreLog)
 	if err != nil {
@@ -741,7 +741,7 @@ type fakeChange struct {
 func (h *harness) change(id string, pr int64, tier2 bool) fakeChange {
 	head := sha("conformance-head-" + id)[:40]
 	manifest := fmt.Sprintf("apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n  namespace: conformance\n"+
-		"  annotations:\n    conformance.clearance.hangarplatform.dev/apply: %s\nspec:\n  replicas: 3\n", id)
+		"  annotations:\n    conformance.clearance.dev/apply: %s\nspec:\n  replicas: 3\n", id)
 	digest := sha(manifest)
 	body := map[string]any{"app": changeApp, "env": changeEnv, "cluster": changeCluster, "repo": changeRepo,
 		"pr": pr, "head": head, "proposer": Proposer, "proposerKind": "person", "owner": OwnerGroup,

@@ -11,6 +11,7 @@ package provenance
 
 import (
 	"fmt"
+	"github.com/jfillman/clearance/internal/vocab"
 	"regexp"
 	"strings"
 
@@ -20,8 +21,8 @@ import (
 	"github.com/jfillman/clearance/internal/store"
 )
 
-// PRTools are the tools whose receipt is a pull request. glidepath.cicd.propose is the Hangar pack's.
-var PRTools = []string{"repo.pr.open", "repo.pr.open_upper", "glidepath.cicd.propose"}
+// PRTools are the tools whose receipt is a pull request: the core's and the loaded policy bundles' (vocab).
+func PRTools() []string { return vocab.Get().PRTools }
 
 // TrailerKeys are the commit trailers compared with the receipt.
 var TrailerKeys = []string{"task", "session", "run", "agent"}
@@ -224,12 +225,12 @@ func Verify(req Request, receipts []store.Record, defs Lookup, agentLogins []str
 				task = "?"
 			}
 			ident = check(false, "unrecorded", fmt.Sprintf("the PR's commit trailers name task %s, but Clearance has no record of opening this PR", task),
-				"Only Clearance opens agent PRs. If a person wrote this change, remove the "+TrailerPrefix+"* trailers; otherwise treat the PR as forged.", rule("AI001"))
+				"Only Clearance opens agent PRs. If a person wrote this change, remove the "+vocab.Get().TrailerPrefix+"* trailers; otherwise treat the PR as forged.", rule("AI001"))
 		case byAgentLogin:
 			ident = check(false, "unrecorded", fmt.Sprintf("the PR is authored by %s, an agents' login, but Clearance has no record of opening it", req.Author),
 				"The agents' GitHub App was used outside Clearance. Close the PR and review the App's credentials and installations.", rule("AI002"))
 		default:
-			ident = check(true, "not-agent", "not an agent PR: no Clearance record, no "+TrailerPrefix[:len(TrailerPrefix)-1]+" trailers, and not authored by an agents' login", "", nil)
+			ident = check(true, "not-agent", "not an agent PR: no Clearance record, no "+strings.TrimSuffix(vocab.Get().TrailerPrefix, "-")+" trailers, and not authored by an agents' login", "", nil)
 		}
 		var scope Check
 		if ident.OK {

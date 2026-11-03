@@ -23,8 +23,9 @@ const (
 	DefaultMaxResponseBytes = 4 << 20
 )
 
-// OnBehalfOfHeader names the person a delegate acts for on the gate's clear and deny.
-const OnBehalfOfHeader = "X-Hangar-On-Behalf-Of"
+// DefaultOnBehalfOfHeader names the person a delegate acts for on the gate's clear and deny: the core's default
+// CLEARANCE_ON_BEHALF_OF_HEADER (Options.OnBehalfOfHeader for a core configured otherwise).
+const DefaultOnBehalfOfHeader = "X-Clearance-On-Behalf-Of"
 
 // Options configure a Client. The zero value of each field is its default.
 type Options struct {
@@ -32,8 +33,10 @@ type Options struct {
 	BaseURL string
 	// Token gives the bearer token, asked for on every request. Nil sends none (only /healthz and /readyz work).
 	Token TokenSource
-	// Provider is the registered provider name RecordRequest.Provider defaults to (autopilot-gateway).
+	// Provider is the registered provider name RecordRequest.Provider defaults to.
 	Provider string
+	// OnBehalfOfHeader is the header the core reads a delegate's person from; default DefaultOnBehalfOfHeader.
+	OnBehalfOfHeader string
 	// Timeout bounds each attempt (connect, send, the whole answer read). Default 250 ms.
 	Timeout time.Duration
 	// Retries is how many times a retryable failure is retried; default 1, negative is none.
@@ -76,6 +79,9 @@ func New(opt Options) (*Client, error) {
 	}
 	if opt.Timeout == 0 {
 		opt.Timeout = DefaultTimeout
+	}
+	if opt.OnBehalfOfHeader == "" {
+		opt.OnBehalfOfHeader = DefaultOnBehalfOfHeader
 	}
 	if opt.Timeout < 0 {
 		return nil, errors.New("clearance client: Timeout is positive")
@@ -336,7 +342,7 @@ func (c *Client) attempt(ctx context.Context, cl call, payload []byte, out any) 
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", c.opt.UserAgent)
 	if cl.onBehalfOf != "" {
-		req.Header.Set(OnBehalfOfHeader, cl.onBehalfOf)
+		req.Header.Set(c.opt.OnBehalfOfHeader, cl.onBehalfOf)
 	}
 	if c.opt.Token != nil {
 		tok, err := c.opt.Token.Token(ctx)

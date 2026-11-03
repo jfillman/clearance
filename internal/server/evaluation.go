@@ -33,8 +33,18 @@ func callerField(prov *Provider, p authn.Principal) map[string]any {
 	return map[string]any{"provider": prov.Name, "principal": p.ID}
 }
 
-// decisionVerified is GatewayVerified plus caller: the core's own decision records.
-var decisionVerified = union(evidence.GatewayVerified, "caller")
+// decisionVerified is GatewayVerified plus caller and policy: the core's own decision records.
+var decisionVerified = union(evidence.GatewayVerified, "caller", "policy")
+
+// policyField is a decision record's `policy` (the evidence schema's Decision group): ref names the core and each
+// policy bundle with its declared version, version is the digest of everything that decided, engine the evaluator.
+func policyField(p decide.PolicyRef) map[string]any {
+	ref := "clearance-core"
+	for _, b := range p.Bundles {
+		ref += "+" + b.Name + "@" + b.Version
+	}
+	return map[string]any{"ref": ref, "version": p.Version, "engine": "cel-go"}
+}
 
 func union(base map[string]bool, more ...string) map[string]bool {
 	out := maps.Clone(base)
@@ -73,6 +83,7 @@ func (s *Server) evaluate(w http.ResponseWriter, r *http.Request) {
 	out := EvaluationResult{Decision: resp.Decision, Context: resp.Context}
 	if ev := eng.RecordFields(req, resp); ev != nil {
 		ev["caller"] = callerField(prov, p)
+		ev["policy"] = policyField(resp.Context.Policy)
 		var rec store.Record
 		err := s.opt.Store.Atomic(r.Context(), func(tx store.Tx) error {
 			var err error

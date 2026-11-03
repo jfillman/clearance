@@ -6,6 +6,7 @@ package review_test
 import (
 	"context"
 	"encoding/json"
+	"github.com/jfillman/clearance/internal/vocab/vocabtest"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -257,7 +258,7 @@ func TestTheReviewRoute(t *testing.T) {
 	if out["ok"] != false || len(out["problems"].([]any)) != 1 || out["problems"].([]any)[0].(map[string]any)["rule"] != "DF-IMAGE" || out["tier"] != nil {
 		t.Fatal(out)
 	}
-	_, out = post("tower", map[string]any{"doc": Doc(t, nil), "old": Doc(t, nil)}, map[string]string{authn.OnBehalfOfHeader: "user:dana"})
+	_, out = post("tower", map[string]any{"doc": Doc(t, nil), "old": Doc(t, nil)}, map[string]string{vocabtest.Lab().OnBehalfOfHeader: "user:dana"})
 	if out["tier"] != 0.0 {
 		t.Fatal(out)
 	}

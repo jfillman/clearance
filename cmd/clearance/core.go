@@ -83,7 +83,7 @@ func coreCmd(ctx context.Context, args []string, _, stderr io.Writer) int {
 
 // devSkippedEnv are the authenticator's variables, ignored under --insecure-dev-auth.
 var devSkippedEnv = []string{"CLEARANCE_OIDC_ISSUER", "CLEARANCE_OIDC_AUDIENCE", "CLEARANCE_OIDC_ALLOWED_USERS",
-	"TOWER_ISSUER", "TOWER_CLUSTER", "TOWER_SERVICE_ACCOUNTS", "CLEARANCE_GITHUB_OIDC_AUDIENCE"}
+	"CLEARANCE_FOREIGN_ISSUER", "CLEARANCE_FOREIGN_CLUSTER", "CLEARANCE_FOREIGN_SERVICE_ACCOUNTS", "CLEARANCE_GITHUB_OIDC_AUDIENCE"}
 
 func buildVersion() string {
 	if version != "" {

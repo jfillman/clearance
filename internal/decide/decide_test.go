@@ -4,23 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/jfillman/clearance/internal/decide"
-	"github.com/jfillman/clearance/internal/decide/packs/hangar"
+	"github.com/jfillman/clearance/internal/decide/decidetest"
 )
 
 func engine(t testing.TB) *decide.Engine {
-	hp, err := hangar.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	e, err := decide.New(hp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return e
+	return decidetest.Engine(t)
 }
 
 func TestLoadFailsOnABadRule(t *testing.T) {
@@ -34,7 +27,7 @@ func TestLoadFailsOnABadRule(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			core, _ := decide.Core()
 			core.Rules = append(core.Rules, decide.Rule{ID: "R900", Name: "x", Expr: c.expr, Message: "m", Hint: "h", Order: 900})
-			_, err := decide.NewFromData(core)
+			_, err := decide.NewFromData(core, decide.Options{})
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("got %v, want an error containing %q", err, c.want)
 			}
@@ -42,17 +35,17 @@ func TestLoadFailsOnABadRule(t *testing.T) {
 	}
 	core, _ := decide.Core()
 	core.Rules = append(core.Rules, core.Rules[0])
-	if _, err := decide.NewFromData(core); err == nil {
+	if _, err := decide.NewFromData(core, decide.Options{}); err == nil {
 		t.Error("a rule id registered twice must fail the load")
 	}
 	core, _ = decide.Core()
 	core.Tools = append(core.Tools, decide.ToolSpec{Name: "k8s.exec", Target: "none"})
-	if _, err := decide.NewFromData(core); err == nil {
+	if _, err := decide.NewFromData(core, decide.Options{}); err == nil {
 		t.Error("a tripwire registered as a tool must fail the load")
 	}
-	hp, _ := hangar.New()
-	if _, err := decide.New(hp, hp); err == nil {
-		t.Error("a pack registered twice must fail the load")
+	hb := decidetest.Bundle(t)
+	if _, err := decide.New(decide.Options{Bundles: []*decide.Bundle{hb, hb}}); err == nil {
+		t.Error("a bundle loaded twice must fail the load")
 	}
 }
 
@@ -168,6 +161,8 @@ func FuzzDecodeEvaluation(f *testing.F) {
 	f.Add([]byte(sprintf(base, `{"agent":"x","limits":{"tool_calls":1}}`, "run.spawn")))
 	f.Add([]byte(`{"subject":{"type":"principal","id":"u","properties":{"kind":"user","tier_ceiling":1}},"action":{"name":"model.call","properties":{"est_tokens":5}},"resource":{"type":"model","id":"m"},"context":{"now":"2026-01-01T00:00:00Z","models":{"routes":["m"]}}}`))
 	f.Add([]byte(`{"subject":{"type":"principal","id":"u","properties":{"kind":"user","tier_ceiling":1}},"action":{"name":"session.open","properties":{"limits":{"network":"clearance-model"}}},"resource":{"type":"agent","id":"a"},"context":{"now":"2026-01-01T00:00:00Z","new_session_id":"s-1"}}`))
+	f.Add([]byte(sprintf(base, `{"app":"gate-api","documents":[{"path":"a.yaml","content":"k: v"}],"patch":{"a":1}}`, "airframe.validate")))
+	f.Add([]byte(sprintf(base, `{"app":"gate-api","env":"prod","cluster":"c","sourceEnv":"dev","sourceCluster":"c"}`, "glidepath.promote")))
 	e := engine(f)
 	f.Fuzz(func(t *testing.T, data []byte) {
 		req, err := decide.DecodeEvaluation(bytes.NewReader(data))
@@ -180,4 +175,106 @@ func FuzzDecodeEvaluation(f *testing.F) {
 			t.Fatalf("an allow with a rule: %+v", resp.Context)
 		}
 	})
+}
+
+// FuzzBundleSource: a source document is read over the network at start; whatever it holds, the load either fails
+// or yields a bundle whose engine builds and decides.
+func FuzzBundleSource(f *testing.F) {
+	bundle, err := os.ReadFile(decidetest.FixtureBundle())
+	if err != nil {
+		f.Fatal(err)
+	}
+	good, err := os.ReadFile(decidetest.FixtureSource())
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(good)
+	f.Add([]byte(`{"contractVersion":1,"scope":{"rules":[{"pattern":"/**","agentScope":"open"}]}}`))
+	f.Add([]byte(`{"contractVersion":1.5,"scope":{"rules":[]}}`))
+	f.Add([]byte(`{"contractVersion":1,"scope":{"rules":[{"pattern":"/a","agentScope":"tighten","order":"int","default":1e400}]}}`))
+	req := sprintf(base, `{"repo":"jfillman/x","branch":"b","title":"t","files":[{"path":"cicd.yaml","before":"a: 1","content":"a: 2"}]}`, "repo.pr.open")
+	f.Fuzz(func(t *testing.T, doc []byte) {
+		b, err := decide.LoadBundle(bundle, func(string, decide.SourceSpec) ([]byte, string, error) { return doc, "fuzz", nil })
+		if err != nil {
+			return
+		}
+		e, err := decide.New(decide.Options{Bundles: []*decide.Bundle{b}})
+		if err != nil {
+			return
+		}
+		r, err := decide.DecodeEvaluation(strings.NewReader(req))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = e.Decide(context.Background(), r)
+	})
+}
+
+// A policy bundle is checked like the core rules: its context expressions compile and type-check at load, its
+// rules name documents it has, and its sources are the versions it was written for.
+func TestABadPolicyBundleFailsTheLoad(t *testing.T) {
+	fixture, err := os.ReadFile(decidetest.FixtureBundle())
+	if err != nil {
+		t.Fatal(err)
+	}
+	edit := func(f func(m map[string]any)) []byte {
+		var m map[string]any
+		_ = json.Unmarshal(fixture, &m)
+		f(m)
+		b, _ := json.Marshal(m)
+		return b
+	}
+	src := decidetest.FileFetch(decidetest.FixtureSource())
+	for name, c := range map[string]struct {
+		data []byte
+		want string
+	}{
+		"var does not compile": {edit(func(m map[string]any) { m["vars"].([]any)[0].(map[string]any)["expr"] = "args['app'] &&" }), "does not compile"},
+		"var is not its type":  {edit(func(m map[string]any) { m["vars"].([]any)[0].(map[string]any)["expr"] = "1" }), "not bool"},
+		"arg check reads nothing declared": {edit(func(m map[string]any) {
+			m["arg_checks"].([]any)[0].(map[string]any)["checks"] = []any{"nope.x"}
+		}), "does not compile"},
+		"app is not a string": {edit(func(m map[string]any) { m["app"] = "1" }), "not string"},
+		"app reads a var":     {edit(func(m map[string]any) { m["app"] = "ctx.has_glidepath_app ? 'x' : ''" }), "does not compile"},
+		"problems from no document": {edit(func(m map[string]any) {
+			for _, r := range m["rules"].([]any) {
+				if r.(map[string]any)["id"] == "R021" {
+					r.(map[string]any)["problems"] = "nope"
+				}
+			}
+		}), "not one of its documents"},
+		"incompatible source": {edit(func(m map[string]any) {
+			m["sources"].([]any)[0].(map[string]any)["compatible"] = []any{7}
+		}), "this bundle is written for [7]"},
+		"unknown field": {edit(func(m map[string]any) { m["surprise"] = true }), "unknown field"},
+		"wrong format":  {edit(func(m map[string]any) { m["apiVersion"] = "v0" }), "apiVersion"},
+		"no such source": {edit(func(m map[string]any) {
+			m["documents"].([]any)[0].(map[string]any)["rules"] = map[string]any{"source": "x"}
+		}), "unknown source"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b, err := decide.LoadBundle(c.data, src)
+			if err == nil {
+				_, err = decide.New(decide.Options{Bundles: []*decide.Bundle{b}})
+			}
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("got %v, want an error containing %q", err, c.want)
+			}
+		})
+	}
+}
+
+// The core names no deployment's tools: without a bundle, a bundle's tool is unknown (R003).
+func TestTheCoreAloneKnowsNoBundleTool(t *testing.T) {
+	e, err := decide.New(decide.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Tool("glidepath.runs.list") != nil || len(e.PRTools()) != 2 || len(e.ProfileSections()) != 0 {
+		t.Fatal(e.PRTools(), e.ProfileSections())
+	}
+	resp := decideJSON(t, e, "glidepath.runs.list", `{"app":"x"}`)
+	if resp.Context.Rule != "R003" {
+		t.Fatal(resp.Context)
+	}
 }

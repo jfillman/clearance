@@ -309,7 +309,7 @@ func addMinutes(now time.Time, ttl Int) (time.Time, bool) {
 }
 
 // open is Gateway.open_session and Gateway.open_triggered.
-func (e *Engine) open(req *EvaluationRequest) (Decision, *Grant) {
+func (e *engine) open(req *EvaluationRequest) (Decision, *Grant) {
 	c := &req.Context
 	d := c.Agent
 	p := req.Action.Properties
@@ -363,7 +363,7 @@ func decodeRaw(raw []byte) (any, error) {
 }
 
 // grant is SessionStore.open for a top-level session.
-func (e *Engine) grant(c *Context, principal string, d *AgentDef, lr *limitRequest, taskID, ttlRule string) (Decision, *Grant) {
+func (e *engine) grant(c *Context, principal string, d *AgentDef, lr *limitRequest, taskID, ttlRule string) (Decision, *Grant) {
 	lim, err := narrow(d.Limits, lr)
 	if err != nil {
 		if err.(*requestError).widen {
@@ -386,7 +386,7 @@ func (e *Engine) grant(c *Context, principal string, d *AgentDef, lr *limitReque
 }
 
 // spawn is a run.spawn call: the call's own rules, then Gateway._spawn's checks on the child.
-func (e *Engine) spawn(ctx context.Context, req *EvaluationRequest) (Decision, Spend, *Grant) {
+func (e *engine) spawn(ctx context.Context, req *EvaluationRequest) (Decision, Spend, *Grant) {
 	d, sp := e.toolCall(ctx, req)
 	if !d.Allow {
 		return d, sp, nil

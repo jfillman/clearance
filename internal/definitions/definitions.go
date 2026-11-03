@@ -13,6 +13,7 @@ package definitions
 import (
 	"errors"
 	"fmt"
+	"github.com/jfillman/clearance/internal/vocab"
 	"slices"
 	"sort"
 	"sync"
@@ -20,9 +21,9 @@ import (
 	"github.com/jfillman/clearance/internal/pycompat"
 )
 
-// RunIdentityNamespace is where a workload agent's service account lives (definitions.RUN_IDENTITY_NAMESPACE).
-// Autopilot's namespace name; R-5 makes it configuration.
-const RunIdentityNamespace = "autopilot-runs"
+// RunIdentityNamespace is where a workload agent's service account lives (definitions.RUN_IDENTITY_NAMESPACE): the
+// deployment's (vocab, CLEARANCE_RUN_IDENTITY_NAMESPACE).
+func RunIdentityNamespace() string { return vocab.Get().RunIdentityNamespace }
 
 // Tier names, T0..T3, as tiers.Tier.name.
 var TierNames = [...]string{"T0", "T1", "T2", "T3"}
@@ -207,9 +208,9 @@ func FromPin(doc any, source Source, owner string, reserved func(string) bool, p
 		return nil, &Rejected{name, source, fmt.Sprintf("the file's owner is %s; the pin's owner is %s: they must agree",
 			ownerRepr(d), pycompat.Repr(owner))}
 	}
-	if d.IdentityType == "workload" && d.ServiceAccount != RunIdentityNamespace+"/"+d.Name {
+	if d.IdentityType == "workload" && d.ServiceAccount != RunIdentityNamespace()+"/"+d.Name {
 		return nil, &Rejected{name, source, fmt.Sprintf("a pinned agent's workload identity is %s/%s, not %s",
-			RunIdentityNamespace, d.Name, saRepr(d))}
+			RunIdentityNamespace(), d.Name, saRepr(d))}
 	}
 	if reserved != nil && reserved(name) {
 		return nil, &Rejected{name, source, fmt.Sprintf("%s is a bundled platform definition; a pin cannot replace it", pycompat.Repr(name))}

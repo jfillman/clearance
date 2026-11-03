@@ -90,14 +90,19 @@ unset, so the core's default applies. Lists are joined with commas.
 | `verifiers` | `CLEARANCE_VERIFIERS` | Principal globs that may register changes and ask for provenance. |
 | `delegates` | `CLEARANCE_DELEGATES` | Principal globs that may act for a person they name. |
 | `admins` | `CLEARANCE_ADMINS` | `user:<login>` globs that may deny any held change. |
-| `packs` | `CLEARANCE_PACKS` | Policy packs (`hangar`). Default: the core rules only. |
+| `policy.bundles` | `CLEARANCE_BUNDLES` | Policy bundles, each `{name, configMap, key}` (key default `bundle.json`): a ConfigMap you manage, mounted for the core and the api at `/etc/clearance/bundles/<name>/` ([core.md](core.md#policy-bundles)). Default: the core rules only. |
+| `policy.sources` | `CLEARANCE_BUNDLE_SOURCES` | Where each bundle source is read at start, by name: `{url, sendToken?, tokenAudience?, tokenExpirationSeconds?}` (with `sendToken` the pod sends a projected service-account token, of `tokenAudience` or else the API server's default audience, mounted at `/var/run/clearance/sources/<name>`), or `{configMap, key?}` (a file). |
+| `policy.sourceWait` | `CLEARANCE_BUNDLE_SOURCE_WAIT` | How long the start retries a source that does not answer before going on with its bundle degraded (default `10s`; [core.md](core.md#policy-bundles)). |
+| `policy.egress` | | NetworkPolicy egress rules for the core and the api to reach the sources (with `networkPolicy.enabled`). |
+| `policy.environments.*` | `CLEARANCE_ENV_*` | `lowerNames`, `lowerPrefixes`, `lowerProjectSuffixes`, `upperRepoPrefixes`: how arguments name an environment tier. |
+| `vocabulary.*` | `CLEARANCE_ON_BEHALF_OF_HEADER`, `_TRAILER_PREFIX`, `_RUN_IDENTITY_NAMESPACE`, `_BASELINE_DENY_PATHS`, `_BASELINE_DENY_FIELDS`, `_GATE_OUTSIDE_GROUPS`, `_GATE_OWNER_FALLBACK`, `_V0_PROVIDER` | The deployment's vocabulary ([core.md](core.md#configuration)); empty values keep the core's defaults. |
 | `audience` | `CLEARANCE_AUDIENCE` | Callers' token audience (default `clearance`). |
 | `gate.expireSeconds` | `CLEARANCE_EXPIRE_SECONDS` | How often expired changes are swept (60). |
 | `core.maxClockSkew` | `CLEARANCE_MAX_CLOCK_SKEW` | How far an evaluation's `context.now` may be from the core's clock, a Go duration (empty: `5m`; at most `24h`). The core refuses `0` (off) here: off is for `clearance core --memory` test cores. |
-| `gate.agentLogins` | `AGENT_LOGINS` | GitHub logins agents open PRs as. |
+| `gate.agentLogins` | `AGENT_LOGINS` | GitHub logins agents open PRs as (default none). |
 | `gate.modelRoutes` | `MODEL_ROUTES` | `alias=upstream` pairs a definition release may name. |
 | `gate.runtimeImagesExtra` | `RUNTIME_IMAGES_EXTRA` | Globs a definition's `runtime.image` may match. |
-| `gate.flightRegistries` | `CLEARANCE_FLIGHT_REGISTRIES` | Image prefixes, each ending in `/`, a tier-1 image bump may come from; others are tier 2. Empty: any registry (the product default; Hangar sets its own in Apron). |
+| `gate.trustedRegistries` | `CLEARANCE_TRUSTED_REGISTRIES` | Image prefixes, each ending in `/`, a tier-1 image bump may come from; others are tier 2. Empty: any registry (the product default; Hangar sets its own in Apron). |
 | `agents.configMap` | `CLEARANCE_AGENTS_DIR` | A ConfigMap of bundled agent definitions, mounted at `/etc/clearance/agents`. |
 
 ### People and other identities
@@ -107,7 +112,7 @@ unset, so the core's default applies. Lists are joined with commas.
 | `oidc.issuer`, `oidc.audience` | `CLEARANCE_OIDC_ISSUER`, `CLEARANCE_OIDC_AUDIENCE` | People's OIDC issuer and audience, together or not at all. |
 | `oidc.allowedUsers` | `CLEARANCE_OIDC_ALLOWED_USERS` | Required with an issuer: an issuer that federates GitHub signs in anyone. |
 | `oidc.jwksURL`, `oidc.userClaim` | `CLEARANCE_OIDC_JWKS_URL`, `CLEARANCE_OIDC_USER_CLAIM` | Defaults `<issuer>/keys`, `email`. |
-| `tower.issuer`, `tower.cluster`, `tower.serviceAccounts`, `tower.jwksURL` | `TOWER_*` | Another cluster's workloads (a portal on another cluster); cluster and service accounts are required with an issuer. |
+| `foreignCluster.issuer`, `foreignCluster.cluster`, `foreignCluster.serviceAccounts`, `foreignCluster.jwksURL` | `CLEARANCE_FOREIGN_*` | Another cluster's workloads (a portal on another cluster); cluster and service accounts are required with an issuer. |
 | `githubActions.audience`, `githubActions.allowed` | `CLEARANCE_GITHUB_OIDC_AUDIENCE`, `CLEARANCE_GITHUB_OIDC_ALLOWED` | GitHub Actions callers (`clearance register` in CI); off while the audience is empty. |
 | `githubApp.enabled`, `githubApp.appId` | `CLEARANCE_GITHUB_APP_ID` | The Clearance GitHub App. |
 | `githubApp.existingSecret`, `githubApp.privateKeyKey`, `githubApp.webhookSecretKey` | `CLEARANCE_GITHUB_APP_KEY_FILE`, `..._WEBHOOK_SECRET_FILE` | The Secret and its keys, mounted read-only (mode 0400) at `/etc/clearance/github-app/`. |

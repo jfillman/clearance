@@ -447,13 +447,6 @@
   ],
   "pr_tools": [
     "repo.pr.open",
-    "repo.pr.open_upper",
-    "glidepath.cicd.propose"
-  ],
-  "lower_envs": [
-    "dev",
-    "development",
-    "sandbox",
-    "scratch"
+    "repo.pr.open_upper"
   ]
 }

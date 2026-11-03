@@ -64,6 +64,8 @@ type Health struct {
 type Ready struct {
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
+	// Degraded names the policy bundles whose sources could not be read (the api stays ready).
+	Degraded []string `json:"degraded,omitempty"`
 }
 
 var routeTable = []Route{
@@ -88,7 +90,7 @@ var routeTable = []Route{
 		Response: Counts{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).countEvidence},
 	{OperationID: "getPolicy", Method: "GET", Path: "/v1/policy", Roles: PersonRoles, Params: []string{},
 		Summary: "The policy in force: the deny rules in evaluation order (id, name, CEL expression, message, hint, " +
-			"pack), the tool registry with tiers, the packs",
+			"bundle, `pack`), the tool registry with tiers, \"core\" and the loaded bundles (`packs`)",
 		Response: PolicyDoc{}, Errors: []int{401, 403, 404}, serve: (*Server).getPolicy},
 	{OperationID: "explainPolicy", Method: "GET", Path: "/v1/policy/explain", Roles: PersonRoles,
 		Params: []string{"agent", "tool", "args"},

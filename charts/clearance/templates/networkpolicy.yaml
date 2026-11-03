@@ -72,6 +72,10 @@ spec:
         {{- range $np.kubeAPIServer.ports }}
         - {protocol: TCP, port: {{ . }}}
         {{- end }}
+    {{- with $.Values.policy.egress }}
+    # The policy bundles' sources (policy.egress)
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
     {{- with $np.extraEgress }}
     {{- toYaml . | nindent 4 }}
     {{- end }}

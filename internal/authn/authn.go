@@ -12,10 +12,6 @@ const (
 	KindForeignWorkload = "foreign-workload"
 )
 
-// OnBehalfOfHeader names the person a delegate (Tower's backend) acts for. Hangar vocabulary, kept for the
-// delegates already deployed; R-5 renames it.
-const OnBehalfOfHeader = "X-Hangar-On-Behalf-Of"
-
 // Principal is who called: its id ("user:<login>", "<ns>/<sa>", "github:repo:...", "<cluster>/<ns>/<sa>"), its
 // kind, and the verified claims its authenticator vouches for (a GitHub Actions token's "repository").
 type Principal struct {

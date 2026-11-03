@@ -94,6 +94,41 @@
         },
         "type": "object"
       },
+      "DecideBundleRef": {
+        "properties": {
+          "digest": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/DecideSourceRef"
+            },
+            "type": "array"
+          },
+          "status": {
+            "type": "string"
+          },
+          "unavailable": {
+            "items": {
+              "$ref": "#/components/schemas/DecideSourceFailure"
+            },
+            "type": "array"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "digest",
+          "name",
+          "status",
+          "version"
+        ],
+        "type": "object"
+      },
       "DecideContext": {
         "additionalProperties": false,
         "properties": {
@@ -369,6 +404,12 @@
           "bundle": {
             "type": "string"
           },
+          "bundles": {
+            "items": {
+              "$ref": "#/components/schemas/DecideBundleRef"
+            },
+            "type": "array"
+          },
           "version": {
             "type": "string"
           }
@@ -501,6 +542,40 @@
             "$ref": "#/components/schemas/DecideBudgets"
           }
         },
+        "type": "object"
+      },
+      "DecideSourceFailure": {
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "name"
+        ],
+        "type": "object"
+      },
+      "DecideSourceRef": {
+        "properties": {
+          "digest": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "digest",
+          "name",
+          "version"
+        ],
         "type": "object"
       },
       "DecideSpend": {
@@ -1535,6 +1610,12 @@
       },
       "Ready": {
         "properties": {
+          "degraded": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "error": {
             "type": "string"
           },
@@ -2062,7 +2143,7 @@
             "bearer": []
           }
         ],
-        "summary": "A person (or a delegate naming one in X-Hangar-On-Behalf-Of) approves a holding change.",
+        "summary": "A person (or a delegate naming one in the on-behalf-of header) approves a holding change.",
         "x-clearance-auth": "bearer",
         "x-clearance-max-body": 65536
       }

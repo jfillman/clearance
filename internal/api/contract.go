@@ -25,10 +25,10 @@ const APIVersion = "v1"
 // ContractNotes is the contract's note on where writes go.
 const ContractNotes = "GET only. clearance-api reads what the Clearance core committed. Writes go to the core " +
 	"(POST /v1/clearances/{id}/clear and /deny, /v1/provenance, /v1/records); the runtime's reads and writes " +
-	"(sessions, tasks, agents and their holds, the human inbox, events, results, runtimes) are the Autopilot " +
-	"gateway's (R-3)."
+	"(sessions, tasks, agents and their holds, the human inbox, events, results, runtimes) are the AI " +
+	"gateway's."
 
-// Operation is one entry of the contract's operations, in api.py's shape (Tower's backend vendors it and forwards
+// Operation is one entry of the contract's operations, in api.py's shape (a portal's backend vendors it and forwards
 // only the operations it lists, by method, path and roles).
 type Operation struct {
 	OperationID string   `json:"operationId"`

@@ -14,6 +14,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/jfillman/clearance/internal/vocab"
 	"regexp"
 	"sort"
 	"strings"
@@ -80,18 +81,18 @@ type Approvers struct {
 
 // Policy is gate.GatePolicy: the platform's tier table and approval rule.
 type Policy struct {
-	Version          string
-	Tier3Kinds       map[string]bool
-	Tier3Fields      []string
-	Tier3Paths       []string
-	NonruntimePaths  []string
-	FlightRegistries []string // image prefixes a tier-1 bump may come from; empty = any registry
-	MaxLinesTier1    int
-	OutsideGroups    []string
-	TTLDays          int
-	Approvers        map[int]Approvers
-	RepoPolicyDigest *string // set by Tightened: the clearance.yaml that shaped this policy
-	Tier2Paths       []string
+	Version           string
+	Tier3Kinds        map[string]bool
+	Tier3Fields       []string
+	Tier3Paths        []string
+	NonruntimePaths   []string
+	TrustedRegistries []string // image prefixes a tier-1 bump may come from; empty = any registry
+	MaxLinesTier1     int
+	OutsideGroups     []string
+	TTLDays           int
+	Approvers         map[int]Approvers
+	RepoPolicyDigest  *string // set by Tightened: the clearance.yaml that shaped this policy
+	Tier2Paths        []string
 }
 
 // DefaultPolicy is GatePolicy(): the baseline of 2026-10-31.
@@ -112,7 +113,7 @@ func DefaultPolicy() Policy {
 		Tier3Paths:      []string{"clearance.yaml", "**/clearance.yaml", "**/appproject*.yaml", "**/AppProject*.yaml"},
 		NonruntimePaths: []string{"docs/**", "**/*.md", "*.md", "LICENSE", ".gitignore", "tests/**", "**/tests/**", ".github/**", "CODEOWNERS"},
 		MaxLinesTier1:   MaxLinesTier1,
-		OutsideGroups:   append([]string(nil), DefaultOutsideGroups...),
+		OutsideGroups:   append([]string{}, vocab.Get().OutsideGroups...),
 		TTLDays:         DefaultTTLDays,
 		Approvers:       map[int]Approvers{2: {1, 0}, 3: {1, 1}},
 	}
@@ -120,14 +121,14 @@ func DefaultPolicy() Policy {
 
 // PolicyView is GatePolicy.view(), the shape GET /v1/clearance-policy serves.
 type PolicyView struct {
-	Version          string               `json:"version"`
-	Tiers            PolicyTiers          `json:"tiers"`
-	FlightRegistries []string             `json:"flightRegistries"`
-	MaxLinesTier1    int                  `json:"maxLinesTier1"`
-	OutsideGroups    []string             `json:"outsideGroups"`
-	TTLDays          int                  `json:"ttlDays"`
-	Approvers        map[string]Approvers `json:"approvers"`
-	RepoPolicy       *string              `json:"repoPolicy"`
+	Version           string               `json:"version"`
+	Tiers             PolicyTiers          `json:"tiers"`
+	TrustedRegistries []string             `json:"trustedRegistries"`
+	MaxLinesTier1     int                  `json:"maxLinesTier1"`
+	OutsideGroups     []string             `json:"outsideGroups"`
+	TTLDays           int                  `json:"ttlDays"`
+	Approvers         map[string]Approvers `json:"approvers"`
+	RepoPolicy        *string              `json:"repoPolicy"`
 }
 
 // PolicyTiers is the view's tier table: "3" then "0", as gate.py writes it.
@@ -158,7 +159,7 @@ func (p Policy) View() PolicyView {
 	tiers.T0.Paths = nonNil(p.NonruntimePaths)
 	return PolicyView{
 		Version: p.Version, Tiers: tiers,
-		FlightRegistries: nonNil(p.FlightRegistries), MaxLinesTier1: p.MaxLinesTier1,
+		TrustedRegistries: nonNil(p.TrustedRegistries), MaxLinesTier1: p.MaxLinesTier1,
 		OutsideGroups: nonNil(p.OutsideGroups), TTLDays: p.TTLDays, Approvers: appr, RepoPolicy: p.RepoPolicyDigest,
 	}
 }

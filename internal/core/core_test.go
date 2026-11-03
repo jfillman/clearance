@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"github.com/jfillman/clearance/internal/vocab/vocabtest"
 	"io"
 	"log/slog"
 	"net/http"
@@ -14,7 +15,8 @@ func env(m map[string]string) func(string) string { return func(k string) string
 
 func TestConfigFromEnv(t *testing.T) {
 	cfg, err := FromEnv(env(map[string]string{
-		"CLEARANCE_DSN": "postgres://x", "CLEARANCE_PACKS": "hangar", "CLEARANCE_VERIFIERS": "a/*, b/c ,",
+		"CLEARANCE_DSN": "postgres://x", "CLEARANCE_BUNDLES": "/b/hangar.json", "CLEARANCE_VERIFIERS": "a/*, b/c ,",
+		"AGENT_LOGINS": vocabtest.AgentLogin, "CLEARANCE_TRAILER_PREFIX": "Hangar-",
 		"CLEARANCE_PROVIDERS":      `[{"name":"autopilot-gateway","version":"1","principals":["autopilot-system/clearance"]}]`,
 		"CLEARANCE_EXPIRE_SECONDS": "15", "MODEL_ROUTES": "claude-sonnet-5=claude-sonnet-5-5,x=y",
 	}))
@@ -23,11 +25,19 @@ func TestConfigFromEnv(t *testing.T) {
 	}
 	if cfg.Listen != ":8080" || cfg.ExpireEvery != 15*time.Second || len(cfg.Providers) != 1 || cfg.Auth == nil ||
 		strings.Join(cfg.Gate.Verifiers, "|") != "a/*|b/c" || strings.Join(cfg.Gate.Models, "|") != "claude-sonnet-5|x" ||
-		cfg.AgentLogins[0] != DefaultAgentLogin || cfg.GitHubApp != nil || cfg.Gate.Admins == nil {
+		cfg.AgentLogins[0] != vocabtest.AgentLogin || cfg.GitHubApp != nil || cfg.Gate.Admins == nil ||
+		strings.Join(cfg.Policy.Files, "|") != "/b/hangar.json" || cfg.Vocabulary.TrailerPrefix != "Hangar-" ||
+		cfg.Vocabulary.OnBehalfOfHeader != "X-Clearance-On-Behalf-Of" {
 		t.Fatalf("%+v", cfg)
 	}
 	for _, bad := range []map[string]string{
-		{"CLEARANCE_PACKS": "nope"},
+		{"CLEARANCE_PACKS": "hangar"},
+		{"CLEARANCE_FLIGHT_REGISTRIES": "ghcr.io/x/"},
+		{"CLEARANCE_BUNDLE_SOURCES": `{"x": {}}`},
+		{"CLEARANCE_BUNDLE_SOURCES": `{"x": {"url": "ftp://h/x"}}`},
+		{"CLEARANCE_BUNDLE_SOURCE_WAIT": "soon"},
+		{"CLEARANCE_TRAILER_PREFIX": "a b"},
+		{"CLEARANCE_V0_PROVIDER": "noversion"},
 		{"CLEARANCE_PROVIDERS": "[{]"},
 		{"CLEARANCE_EXPIRE_SECONDS": "-1"},
 		{"CLEARANCE_EXPIRE_SECONDS": "x"},
@@ -35,8 +45,8 @@ func TestConfigFromEnv(t *testing.T) {
 		{"CLEARANCE_GITHUB_APP_ID": "1"},
 		{"CLEARANCE_GITHUB_APP_COMMENTS": "all"},
 		{"CLEARANCE_OIDC_ISSUER": "https://dex"},
-		{"CLEARANCE_FLIGHT_REGISTRIES": "ghcr.io/riley-roooo"},
-		{"CLEARANCE_FLIGHT_REGISTRIES": "ghcr.io/a b/"},
+		{"CLEARANCE_TRUSTED_REGISTRIES": "ghcr.io/acme"},
+		{"CLEARANCE_TRUSTED_REGISTRIES": "ghcr.io/a b/"},
 	} {
 		if _, err := FromEnv(env(bad)); err == nil {
 			t.Errorf("accepted %v", bad)
@@ -134,17 +144,17 @@ func TestRunServesAndShutsDownOnCancel(t *testing.T) {
 
 // Hangar's Flight registry (decided 2026-11-03): an image bump from it stays tier 1, anything else is tier 2. Unset
 // keeps the product default, any registry.
-func TestFlightRegistriesFromEnv(t *testing.T) {
+func TestTrustedRegistriesFromEnv(t *testing.T) {
 	cfg, err := FromEnv(env(map[string]string{"CLEARANCE_DSN": "postgres://x",
-		"CLEARANCE_FLIGHT_REGISTRIES": "ghcr.io/riley-roooo/, registry.example/flight/"}))
+		"CLEARANCE_TRUSTED_REGISTRIES": "ghcr.io/riley-roooo/, registry.example/flight/"}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(cfg.Gate.FlightRegistries, "|") != "ghcr.io/riley-roooo/|registry.example/flight/" {
-		t.Fatalf("%q", cfg.Gate.FlightRegistries)
+	if strings.Join(cfg.Gate.TrustedRegistries, "|") != "ghcr.io/riley-roooo/|registry.example/flight/" {
+		t.Fatalf("%q", cfg.Gate.TrustedRegistries)
 	}
 	cfg, err = FromEnv(env(map[string]string{"CLEARANCE_DSN": "postgres://x"}))
-	if err != nil || len(cfg.Gate.FlightRegistries) != 0 {
-		t.Fatalf("default: %q %v", cfg.Gate.FlightRegistries, err)
+	if err != nil || len(cfg.Gate.TrustedRegistries) != 0 {
+		t.Fatalf("default: %q %v", cfg.Gate.TrustedRegistries, err)
 	}
 }

@@ -9,6 +9,46 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-11-03
+
+R-5: policy bundles and Hangar's vocabulary out of the core. Breaking for a deployment of the Go
+core: `CLEARANCE_PACKS`, `CLEARANCE_FLIGHT_REGISTRIES` and `TOWER_*` are gone (set, the first two stop the start).
+
+### Added
+- Policy bundles (`clearance.policy/v1`, [docs/core.md](docs/core.md#policy-bundles)): a deployment's tools, CEL rules,
+  CEL context (vars, argument checks, the recorded app) and document field scope (`internal/docscope`), loaded from
+  `CLEARANCE_BUNDLES` by the core and clearance-api. A bundle's sources (for example a CI system's `GET /v1/contract`)
+  are fetched at start from `CLEARANCE_BUNDLE_SOURCES` (HTTP(S) with a projected token, or a file), with a
+  compatible-version check (a version the bundle does not list fails the start). No fallback copy: a source that
+  does not answer within `CLEARANCE_BUNDLE_SOURCE_WAIT` (default 10s) leaves its bundle degraded. Its tools and the
+  checks that need the source are denied R000 naming the bundle, with no denial charged. `/readyz` names it in
+  `degraded`, still 200, and the gate and records keep working. A background loader retries with backoff (2s to
+  60s) and loads it whole once the source answers; the load is logged and named in later decisions
+  (`policy.bundles[].status`).
+- Every decision names its policy: `context.policy.bundles` (each bundle's name, version, digest and the sources it
+  read), and each decision record carries `policy: {ref, version, engine}` (the evidence schema's Decision group).
+- The deployment's vocabulary as configuration (`internal/vocab`): `CLEARANCE_ON_BEHALF_OF_HEADER`,
+  `CLEARANCE_TRAILER_PREFIX`, `CLEARANCE_RUN_IDENTITY_NAMESPACE`, `CLEARANCE_BASELINE_DENY_PATHS`,
+  `CLEARANCE_BASELINE_DENY_FIELDS`, `CLEARANCE_GATE_OUTSIDE_GROUPS`, `CLEARANCE_GATE_OWNER_FALLBACK`,
+  `CLEARANCE_V0_PROVIDER`, and the environment naming `CLEARANCE_ENV_*`; chart values `policy.*` and `vocabulary.*`.
+- The Go client's `Options.OnBehalfOfHeader` and the Python client's `on_behalf_of_header`.
+- `tests/test_boundary.py`: a data-level check that the Go core's source names no Hangar product.
+
+### Changed
+- The Hangar pack (`internal/decide/packs/hangar`, its vendored Glidepath scope) is gone from the Go core. Its policy
+  is a bundle (Autopilot's `policy/hangar/bundle.json`); the corpus replays identically with it
+  (`testdata/bundles/hangar` is the test fixture).
+- Defaults are product-neutral: on-behalf-of header `X-Clearance-On-Behalf-Of` (was `X-Hangar-On-Behalf-Of`), trailer
+  prefix `Clearance-` (was `Hangar-`), run namespace `agent-runs` (was `autopilot-runs`), baseline deny paths
+  `CODEOWNERS`, `**/CODEOWNERS`, `.github/**` (the Tekton, AppProject and release-file globs and the deny fields are
+  Hangar's to set), no outside group or owner fallback (was `group:default/admins`), no `AGENT_LOGINS` (was
+  `hangar-autopilot-agents[bot]`), v0 rows projected as `unrecorded` (was `autopilot-gateway`), and the environment
+  naming knows only `dev`, `development`, `sandbox`, `scratch` (the `pr-`/`agent-` prefixes, `-lower` projects and
+  `gitops-` repos are Hangar's to set).
+- `CLEARANCE_FLIGHT_REGISTRIES` is `CLEARANCE_TRUSTED_REGISTRIES` (chart `gate.trustedRegistries`, gate policy
+  `trustedRegistries`, rule `image:not-trusted-registry`); `TOWER_*` are `CLEARANCE_FOREIGN_*` (chart
+  `foreignCluster.*`).
+
 ## [0.28.0] - 2026-11-03
 
 What the Autopilot gateway needs of the core before the hangar-dev cutover (R-3e).
@@ -309,7 +349,8 @@ What the Autopilot gateway needs of the core before the hangar-dev cutover (R-3e
   scope, narrow-only limits, CEL policy, sessions, the hash-chained audit log and the gateway; the Hangar pack's
   `glidepath.*` and `airframe.*` tools over glidepath-api and a GET-only Kubernetes adapter.
 
-[Unreleased]: https://github.com/jfillman/clearance/compare/v0.28.0...HEAD
+[Unreleased]: https://github.com/jfillman/clearance/compare/v0.29.0...HEAD
+[0.29.0]: https://github.com/jfillman/clearance/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/jfillman/clearance/compare/v0.27.1...v0.28.0
 [0.27.1]: https://github.com/jfillman/clearance/compare/v0.27.0...v0.27.1
 [0.27.0]: https://github.com/jfillman/clearance/compare/v0.26.1...v0.27.0

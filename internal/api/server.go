@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/jfillman/clearance/internal/vocab"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -55,7 +56,6 @@ type Options struct {
 	Auth        authn.Authenticator
 	Access      *Access
 	Engine      *decide.Engine
-	Packs       []decide.Pack // the packs Engine was built with, to name each rule's pack
 	GatePolicy  *gate.PolicyView
 	Definitions *Definitions
 	// GatewayURL and CoreURL are where writes go, named in /v1/contract.
@@ -69,7 +69,6 @@ type Server struct {
 	opt     Options
 	log     *slog.Logger
 	handler http.Handler
-	pack    map[string]string // rule id -> pack name
 }
 
 // New builds the server.
@@ -83,12 +82,7 @@ func New(opt Options) (*Server, error) {
 	if opt.Log == nil {
 		opt.Log = slog.Default()
 	}
-	s := &Server{opt: opt, log: opt.Log, pack: map[string]string{}}
-	for _, p := range opt.Packs {
-		for _, r := range p.Rules() {
-			s.pack[r.ID] = p.Name()
-		}
-	}
+	s := &Server{opt: opt, log: opt.Log}
 	mux := http.NewServeMux()
 	for _, rt := range Routes() {
 		if rt.serve == nil {
@@ -158,7 +152,7 @@ func (s *Server) endpoint(rt Route) http.HandlerFunc {
 			}
 			notePrincipal(r, p.ID)
 			var aerr *apiError
-			if v, aerr = s.opt.Access.Viewer(r.Context(), p, r.Header.Get(authn.OnBehalfOfHeader)); aerr != nil {
+			if v, aerr = s.opt.Access.Viewer(r.Context(), p, r.Header.Get(vocab.Get().OnBehalfOfHeader)); aerr != nil {
 				aerr.write(w)
 				return
 			}
@@ -200,7 +194,17 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, Ready{OK: false, Error: "store unreachable"})
 		return
 	}
-	writeJSON(w, http.StatusOK, Ready{OK: true})
+	// A degraded policy bundle leaves the api ready (200): only /v1/policy and the explainer read the policy, and
+	// they show the bundle's state. readyz names it.
+	var degraded []string
+	if s.opt.Engine != nil {
+		for _, b := range s.opt.Engine.Policy().Bundles {
+			if b.Status == "unavailable" {
+				degraded = append(degraded, b.Name)
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, Ready{OK: true, Degraded: degraded})
 }
 
 // notFound answers what no route matched: 405 for a known path asked with another method, else 404.

@@ -23,7 +23,7 @@ type RuleVerdict struct {
 //
 // A request that is not a valid tool.call, or whose context cannot be built (an argument the policy cannot hold),
 // is reported as every rule erroring, as Decide fails such a request closed.
-func (e *Engine) Trace(ctx context.Context, req *EvaluationRequest) []RuleVerdict {
+func (e *engine) Trace(ctx context.Context, req *EvaluationRequest) []RuleVerdict {
 	out := make([]RuleVerdict, len(e.b.rules))
 	for i := range e.b.rules {
 		r := &e.b.rules[i]

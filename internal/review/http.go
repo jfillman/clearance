@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/jfillman/clearance/internal/vocab"
 	"io"
 	"net/http"
 
@@ -130,7 +131,7 @@ func (h *Handler) review(w http.ResponseWriter, r *http.Request) {
 		httpjson.Write(w, status, map[string]any{"error": msg})
 		return
 	}
-	out, err := h.Review(r.Context(), p, body, r.Header.Get(authn.OnBehalfOfHeader))
+	out, err := h.Review(r.Context(), p, body, r.Header.Get(vocab.Get().OnBehalfOfHeader))
 	var na ErrNotAllowed
 	var br BadRequest
 	switch {

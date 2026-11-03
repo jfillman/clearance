@@ -15,17 +15,17 @@ import (
 //	CLEARANCE_OIDC_JWKS_URL         default <issuer>/keys
 //	CLEARANCE_OIDC_USER_CLAIM       default email
 //	CLEARANCE_OIDC_ALLOWED_USERS    comma-separated globs on the claim; required with an issuer
-//	TOWER_ISSUER                    another cluster's service-account issuer (trailing "/" dropped)
-//	TOWER_CLUSTER                   that cluster's name; required with TOWER_ISSUER
-//	TOWER_SERVICE_ACCOUNTS          comma-separated <namespace>/<sa> globs; required with TOWER_ISSUER
-//	TOWER_JWKS_URL                  default <issuer>/jwks.json
+//	CLEARANCE_FOREIGN_ISSUER                    another cluster's service-account issuer (trailing "/" dropped)
+//	CLEARANCE_FOREIGN_CLUSTER                   that cluster's name; required with CLEARANCE_FOREIGN_ISSUER
+//	CLEARANCE_FOREIGN_SERVICE_ACCOUNTS          comma-separated <namespace>/<sa> globs; required with CLEARANCE_FOREIGN_ISSUER
+//	CLEARANCE_FOREIGN_JWKS_URL                  default <issuer>/jwks.json
 //	CLEARANCE_GITHUB_OIDC_AUDIENCE  GitHub Actions tokens' audience; GitHub Actions callers are off when unset
 //	CLEARANCE_GITHUB_OIDC_ALLOWED   comma-separated globs on the sub by name (default "repo:*")
 var EnvVars = []string{
 	"CLEARANCE_AUDIENCE",
 	"CLEARANCE_OIDC_ISSUER", "CLEARANCE_OIDC_AUDIENCE", "CLEARANCE_OIDC_JWKS_URL", "CLEARANCE_OIDC_USER_CLAIM",
 	"CLEARANCE_OIDC_ALLOWED_USERS",
-	"TOWER_ISSUER", "TOWER_CLUSTER", "TOWER_SERVICE_ACCOUNTS", "TOWER_JWKS_URL",
+	"CLEARANCE_FOREIGN_ISSUER", "CLEARANCE_FOREIGN_CLUSTER", "CLEARANCE_FOREIGN_SERVICE_ACCOUNTS", "CLEARANCE_FOREIGN_JWKS_URL",
 	"CLEARANCE_GITHUB_OIDC_AUDIENCE", "CLEARANCE_GITHUB_OIDC_ALLOWED",
 }
 
@@ -62,10 +62,10 @@ func FromEnv(getenv func(string) string) (Authenticator, error) {
 		return nil, errors.New("CLEARANCE_OIDC_ISSUER needs CLEARANCE_OIDC_ALLOWED_USERS: an issuer that federates GitHub " +
 			"signs in anyone with a GitHub account")
 	}
-	towerIssuer := strings.TrimRight(get("TOWER_ISSUER", ""), "/")
-	towerCluster, towerSAs := get("TOWER_CLUSTER", ""), splitList(get("TOWER_SERVICE_ACCOUNTS", ""))
+	towerIssuer := strings.TrimRight(get("CLEARANCE_FOREIGN_ISSUER", ""), "/")
+	towerCluster, towerSAs := get("CLEARANCE_FOREIGN_CLUSTER", ""), splitList(get("CLEARANCE_FOREIGN_SERVICE_ACCOUNTS", ""))
 	if towerIssuer != "" && (towerCluster == "" || len(towerSAs) == 0) {
-		return nil, errors.New("TOWER_ISSUER needs TOWER_CLUSTER and TOWER_SERVICE_ACCOUNTS (namespace/name globs): the " +
+		return nil, errors.New("CLEARANCE_FOREIGN_ISSUER needs CLEARANCE_FOREIGN_CLUSTER and CLEARANCE_FOREIGN_SERVICE_ACCOUNTS (namespace/name globs): the " +
 			"issuer signs a token for every pod of that cluster")
 	}
 	byIssuer := map[string]Authenticator{}
@@ -76,7 +76,7 @@ func FromEnv(getenv func(string) string) (Authenticator, error) {
 	}
 	if towerIssuer != "" {
 		byIssuer[towerIssuer] = NewForeignWorkloadAuthenticator(towerCluster, towerIssuer, audience,
-			NewJWKS(get("TOWER_JWKS_URL", towerIssuer+"/jwks.json")), towerSAs)
+			NewJWKS(get("CLEARANCE_FOREIGN_JWKS_URL", towerIssuer+"/jwks.json")), towerSAs)
 	}
 	if ghAud := get("CLEARANCE_GITHUB_OIDC_AUDIENCE", ""); ghAud != "" {
 		byIssuer[GitHubActionsIssuer] = NewGitHubActionsAuthenticator(ghAud, NewJWKS(GitHubActionsJWKS),

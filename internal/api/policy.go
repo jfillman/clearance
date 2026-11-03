@@ -12,7 +12,7 @@ import (
 )
 
 // PolicyDoc is GET /v1/policy (api.py policy_view): the rules in evaluation order with their pack, the tool
-// registry with tiers, the packs.
+// registry with tiers, and "core" plus the loaded policy bundles (`packs`, the name api.py gave them).
 type PolicyDoc struct {
 	Rules []PolicyRule `json:"rules"`
 	Tools []PolicyTool `json:"tools"`
@@ -74,13 +74,13 @@ func tierName(t int) string {
 	return "T?"
 }
 
-// PolicyView is api.py policy_view for an engine and the packs it was built with.
+// PolicyView is api.py policy_view for the engine: each rule names the bundle it came from ("core" for the core's).
 func (s *Server) PolicyView() PolicyDoc {
 	e := s.opt.Engine
 	doc := PolicyDoc{Rules: []PolicyRule{}, Tools: []PolicyTool{}, Packs: []string{"core"}}
 	for _, r := range e.Rules() {
 		pack := "core"
-		if p, ok := s.pack[r.ID]; ok {
+		if p := e.RuleBundle(r.ID); p != "" {
 			pack = p
 		}
 		doc.Rules = append(doc.Rules, PolicyRule{ID: r.ID, Name: r.Name, Expression: r.Expr, Message: r.Message,
@@ -102,9 +102,7 @@ func (s *Server) PolicyView() PolicyDoc {
 			RequiredArgs: req, Target: t.Target, ProposeOnly: t.ProposeOnly, WritesFiles: t.WritesFiles,
 			GithubCost: t.GithubCost})
 	}
-	for _, p := range s.opt.Packs {
-		doc.Packs = append(doc.Packs, p.Name())
-	}
+	doc.Packs = append(doc.Packs, e.BundleNames()...)
 	return doc
 }
 

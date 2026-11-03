@@ -18,7 +18,7 @@ CONTRACT_VERSION = "1.0.0"
 
 RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "run.finish", "human.answer", "session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome", "deploy.exception")
 
-__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Budgets", "Context", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateApproval", "GateChange", "GateChangeWithAuditSeq", "GateDeployment", "GateErrorBody", "GateObjectChange", "GateReason", "GateRequirement", "Grant", "Health", "Hold", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Problem", "ProvenanceCheck", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "Spend", "Subject", "SubjectProperties", "WebhookAnswer"]
+__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Budgets", "BundleRef", "Context", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateApproval", "GateChange", "GateChangeWithAuditSeq", "GateDeployment", "GateErrorBody", "GateObjectChange", "GateReason", "GateRequirement", "Grant", "Health", "Hold", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Problem", "ProvenanceCheck", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "WebhookAnswer"]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -97,6 +97,28 @@ class Budgets(Model):
     model_tokens: int | None = None
     open_prs: int | None = None
     tool_calls: int | None = None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class BundleRef(Model):
+    """Contract schema DecideBundleRef."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("digest", "digest", ("str",), True),
+        Field("name", "name", ("str",), True),
+        Field("sources", "sources", ("list", ("ref", "SourceRef")), False),
+        Field("status", "status", ("str",), True),
+        Field("unavailable", "unavailable", ("list", ("ref", "SourceFailure")), False),
+        Field("version", "version", ("str",), True),
+    )
+
+    digest: str
+    name: str
+    sources: list[SourceRef] | None = None
+    status: str
+    unavailable: list[SourceFailure] | None = None
+    version: str
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -762,10 +784,12 @@ class PolicyRef(Model):
     _STRICT: ClassVar[bool] = False
     _FIELDS: ClassVar[tuple[Field, ...]] = (
         Field("bundle", "bundle", ("str",), True),
+        Field("bundles", "bundles", ("list", ("ref", "BundleRef")), False),
         Field("version", "version", ("str",), True),
     )
 
     bundle: str
+    bundles: list[BundleRef] | None = None
     version: str
 
 
@@ -933,12 +957,14 @@ class Ready(Model):
 
     _STRICT: ClassVar[bool] = False
     _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("degraded", "degraded", ("list", ("str",)), False),
         Field("error", "error", ("str",), False),
         Field("head", "head", ("int",), True),
         Field("ok", "ok", ("bool",), True),
         Field("policy", "policy", ("ref", "PolicyRef"), True),
     )
 
+    degraded: list[str] | None = None
     error: str | None = None
     head: int
     ok: bool
@@ -1132,6 +1158,36 @@ class SessionState(Model):
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
+class SourceFailure(Model):
+    """Contract schema DecideSourceFailure."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("error", "error", ("str",), True),
+        Field("name", "name", ("str",), True),
+    )
+
+    error: str
+    name: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class SourceRef(Model):
+    """Contract schema DecideSourceRef."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("digest", "digest", ("str",), True),
+        Field("name", "name", ("str",), True),
+        Field("version", "version", ("int",), True),
+    )
+
+    digest: str
+    name: str
+    version: int
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
 class Spend(Model):
     """Contract schema DecideSpend."""
 
@@ -1206,6 +1262,7 @@ MODELS: dict[str, type[Model]] = {
     "ActionProperties": ActionProperties,
     "AgentDef": AgentDef,
     "Budgets": Budgets,
+    "BundleRef": BundleRef,
     "Context": Context,
     "DecisionContext": DecisionContext,
     "DefinitionsRejectedView": DefinitionsRejectedView,
@@ -1250,6 +1307,8 @@ MODELS: dict[str, type[Model]] = {
     "ReviewResult": ReviewResult,
     "Scope": Scope,
     "SessionState": SessionState,
+    "SourceFailure": SourceFailure,
+    "SourceRef": SourceRef,
     "Spend": Spend,
     "Subject": Subject,
     "SubjectProperties": SubjectProperties,

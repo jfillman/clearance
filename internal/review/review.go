@@ -5,6 +5,7 @@ package review
 
 import (
 	"fmt"
+	"github.com/jfillman/clearance/internal/vocab"
 	"math/big"
 	"regexp"
 	"sort"
@@ -29,7 +30,7 @@ type ToolSpec struct {
 	ReadsRepo   bool
 }
 
-// Registry is the deployment's tool registry (core plus its packs) and the T3 tripwire names.
+// Registry is the deployment's tool registry (core plus its policy bundles') and the T3 tripwire names.
 type Registry struct {
 	Tools     map[string]ToolSpec
 	Tripwires map[string]bool
@@ -67,7 +68,7 @@ func Validate(doc any, reg Registry, parse definitions.Parser, o Options) []Prob
 	}
 	if desc, ok := m["description"].(string); !ok || strings.TrimSpace(desc) == "" {
 		return []Problem{{"DF-DESCRIPTION", "description", "the definition has no description",
-			"Add one line saying what the agent is for: `description: Explains why a Glidepath run failed.`"}}
+			"Add one line saying what the agent is for: `description: Explains why a CI run failed.`"}}
 	}
 	if rt, ok := m["runtime"].(map[string]any); ok {
 		if img, ok := rt["image"].(string); ok && placeholderRx.MatchString(img) {
@@ -101,12 +102,12 @@ func Validate(doc any, reg Registry, parse definitions.Parser, o Options) []Prob
 		}
 		out = append(out, Problem{"DF-OWNER", "owner", fmt.Sprintf("the pin's owner is %s but the file's is %s", pycompat.Repr(*o.Owner), fileOwner), "They must agree."})
 	}
-	if d.IdentityType == "workload" && d.ServiceAccount != definitions.RunIdentityNamespace+"/"+d.Name {
+	if d.IdentityType == "workload" && d.ServiceAccount != vocab.Get().RunIdentityNamespace+"/"+d.Name {
 		sa := "None"
 		if d.ServiceAccount != "" {
 			sa = pycompat.Repr(d.ServiceAccount)
 		}
-		out = append(out, Problem{"DF-IDENTITY", "identity.serviceAccount", fmt.Sprintf("a workload agent runs as %s/%s, not %s", definitions.RunIdentityNamespace, d.Name, sa), ""})
+		out = append(out, Problem{"DF-IDENTITY", "identity.serviceAccount", fmt.Sprintf("a workload agent runs as %s/%s, not %s", vocab.Get().RunIdentityNamespace, d.Name, sa), ""})
 	}
 	ceiling := d.TierCeiling
 	var repoTools []string
@@ -159,7 +160,7 @@ func Validate(doc any, reg Registry, parse definitions.Parser, o Options) []Prob
 			out = append(out, Problem{"DF-IMAGE", "runtime.image", img + " is not pinned by digest", "Pin it: <registry>/<repo>@sha256:<64 hex>."})
 		} else if len(o.ImageAllow) > 0 && !pycompat.MatchAny(img, o.ImageAllow) {
 			out = append(out, Problem{"DF-IMAGE", "runtime.image", img + " is not from an allowed runtime source",
-				"Use an image from the runtime catalog, or one Glidepath built for this agent's own repository."})
+				"Use an image from the runtime catalog, or one your CI built for this agent's own repository."})
 		}
 	}
 	return out
@@ -474,7 +475,7 @@ func scopeSets(doc map[string]any) map[string]map[string]bool {
 		return out
 	}
 	out := map[string]map[string]bool{"profile.repos.allow": list("repos", "allow"), "profile.apis.allow": list("apis", "allow")}
-	for _, k := range ScopeAppSections {
+	for _, k := range vocab.Get().ProfileSections {
 		out["profile."+k+".apps"] = list(k, "apps")
 	}
 	return out
@@ -482,7 +483,7 @@ func scopeSets(doc map[string]any) map[string]map[string]bool {
 
 func scopeFields() []string {
 	f := []string{"profile.repos.allow", "profile.apis.allow"}
-	for _, k := range ScopeAppSections {
+	for _, k := range vocab.Get().ProfileSections {
 		f = append(f, "profile."+k+".apps")
 	}
 	return f

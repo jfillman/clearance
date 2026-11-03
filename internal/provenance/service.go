@@ -64,7 +64,7 @@ func (s *Service) verify(ctx context.Context, principal string, req Request, bod
 	defer s.mu.Unlock()
 	var out Verdict
 	err := s.Store.Atomic(ctx, func(tx store.Tx) error {
-		receipts, err := tx.Receipts(ctx, req.Repo, int(req.PR), PRTools)
+		receipts, err := tx.Receipts(ctx, req.Repo, int(req.PR), PRTools())
 		if err != nil {
 			return err
 		}

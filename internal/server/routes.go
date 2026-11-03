@@ -163,7 +163,7 @@ var routeTable = []Route{
 	{
 		Method: "POST", Path: "/v1/clearances/{change_id}/clear", OperationID: "clearChange", Auth: AuthBearer,
 		MaxBody:   gate.MaxPersonBody,
-		Summary:   "A person (or a delegate naming one in X-Hangar-On-Behalf-Of) approves a holding change.",
+		Summary:   "A person (or a delegate naming one in the on-behalf-of header) approves a holding change.",
 		Responses: append([]Response{{200, "the change and the record's seq", gate.Decided{}}}, gateErrs...),
 	},
 	{
