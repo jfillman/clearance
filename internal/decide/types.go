@@ -153,8 +153,8 @@ type Scope struct {
 	APIAllow   []string `json:"api_allow"`
 	FieldDeny  []string `json:"field_deny"`
 	FieldAllow []string `json:"field_allow"`
-	// Profile is the definition's profile as written; a pack reads its own sections (hangar: glidepath.apps,
-	// airframe.apps).
+	// Profile is the definition's profile as written; a policy bundle's context expressions read their own
+	// sections from it (`profile`).
 	Profile json.RawMessage `json:"profile,omitempty"`
 }
 
@@ -198,7 +198,7 @@ type DecisionContext struct {
 	Policy   PolicyRef `json:"policy"`
 }
 
-// Problem is one structured problem behind a decision (GP-SCOPE findings for R021).
+// Problem is one structured problem behind a decision: a policy bundle document's finding.
 type Problem struct {
 	Pointer string `json:"pointer"`
 	Rule    string `json:"rule"`
@@ -235,10 +235,13 @@ type Grant struct {
 	Deduped   bool      `json:"deduped,omitempty"` // a triggered open landed on the live session; nothing is created
 }
 
-// PolicyRef names the bundle that decided.
+// PolicyRef names the policy that decided: Bundle joins the core's name and every loaded bundle's
+// ("clearance-core+<bundle>..."), Version is a digest over all of it (rules, tools, the environment naming, each
+// bundle file and the source documents it read), and Bundles names each bundle with its own declared version.
 type PolicyRef struct {
-	Bundle  string `json:"bundle"`
-	Version string `json:"version"`
+	Bundle  string      `json:"bundle"`
+	Version string      `json:"version"`
+	Bundles []BundleRef `json:"bundles,omitempty"`
 }
 
 // Int is a JSON integer of any size, as Python's int is. Values outside int64 are rare (a budget nobody bounded)

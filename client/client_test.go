@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/jfillman/clearance/internal/vocab/vocabtest"
 	"io"
 	"log/slog"
 	"net"
@@ -45,7 +46,7 @@ func coreServer(t *testing.T) (*core.Core, *httptest.Server) {
 		t.Fatal(err)
 	}
 	cfg := core.Config{Memory: true, Version: "test", Providers: ps, Auth: core.DevAuthenticator(), MaxClockSkew: -1,
-		AgentLogins: []string{core.DefaultAgentLogin}}
+		AgentLogins: []string{vocabtest.AgentLogin}}
 	cfg.Gate.Verifiers = []string{"app-*-cicd/pipeline-runner"}
 	cfg.Gate.Admins = []string{"user:admin"}
 	c, err := core.Build(context.Background(), cfg, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -166,7 +167,7 @@ func TestEvaluateOutcomeAndRecordAgainstTheCore(t *testing.T) {
 
 	// Provenance finds the outcome's receipt.
 	v, err := newClient(t, srv.URL, ci).Provenance(ctx, &client.ProvenanceRequest{Repo: "jfillman/gate-api", PR: 32,
-		Head: headSHA, Paths: []string{"app.js"}, Author: core.DefaultAgentLogin})
+		Head: headSHA, Paths: []string{"app.js"}, Author: vocabtest.AgentLogin})
 	if err != nil || !v.AgentPR || v.Record == nil || v.AuditSeq == nil {
 		t.Fatalf("%+v %v", v, err)
 	}

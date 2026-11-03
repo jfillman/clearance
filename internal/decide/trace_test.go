@@ -6,7 +6,7 @@ import (
 )
 
 func TestTraceOfAnInvalidRequestIsEveryRuleErroring(t *testing.T) {
-	e, err := New()
+	e, err := New(Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

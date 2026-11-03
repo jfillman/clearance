@@ -125,30 +125,48 @@ All configuration comes from the environment. An empty variable counts as unset.
 | `CLEARANCE_DSN` | The Postgres DSN. Required unless `--memory`. |
 | `CLEARANCE_LISTEN` | Listen address (default `:8080`). |
 | `CLEARANCE_PROVIDERS` | The registered providers (above). |
-| `CLEARANCE_PACKS` | Comma-separated policy packs. `hangar` loads the Hangar pack. Default none; any other name is an error. |
+| `CLEARANCE_BUNDLES` | Comma-separated [policy bundle](#policy-bundles) files. Default none: the core rules only. (`CLEARANCE_PACKS` is gone; setting it is an error.) |
+| `CLEARANCE_BUNDLE_SOURCES` | JSON object, source name to `{"url": "http(s)://...", "tokenFile": "..."}` or `{"file": "..."}`: where each source a bundle names is read at start. |
+| `CLEARANCE_BUNDLE_SOURCE_WAIT` | How long the start keeps retrying a source it cannot fetch (Go duration, default `60s`). Then the process exits. |
+| `CLEARANCE_ENV_LOWER_NAMES`, `CLEARANCE_ENV_LOWER_PREFIXES`, `CLEARANCE_ENV_LOWER_PROJECT_SUFFIXES`, `CLEARANCE_ENV_UPPER_REPO_PREFIXES` | How arguments name an environment tier, for R012 (below). Defaults: lower names `dev,development,sandbox,scratch`, no prefixes or suffixes. |
 | `CLEARANCE_VERIFIERS` | Principal globs that may register changes and ask for provenance. |
-| `CLEARANCE_DELEGATES` | Principal globs that may act for a person they name (`X-Hangar-On-Behalf-Of`). |
+| `CLEARANCE_DELEGATES` | Principal globs that may act for a person they name (in `CLEARANCE_ON_BEHALF_OF_HEADER`). |
 | `CLEARANCE_ADMINS` | Principal globs (`user:<login>`) that may deny any held change. |
 | `CLEARANCE_EXPIRE_SECONDS` | How often holding changes past their TTL are expired (default 60, at most 86400). |
 | `CLEARANCE_MAX_CLOCK_SKEW` | How far an evaluation's `context.now` may be from the core's clock, a Go duration (default `5m`, at most `24h`). `0` turns the check off, and `clearance core` refuses that without `--memory`: a decision record's `ts` is the evaluation's `now` and is verified, so a kept chain never takes an unbounded one. A test core on a fixed clock runs `clearance core --memory --insecure-dev-auth --max-clock-skew 0`. |
 | `CLEARANCE_AGENTS_DIR` | Bundled agent definitions (`*.yaml`). Default none. |
-| `AGENT_LOGINS` | GitHub logins agents open PRs as (default `hangar-autopilot-agents[bot]`). |
+| `AGENT_LOGINS` | GitHub logins agents open PRs as. Default none: an agent PR is known by its Clearance record or its trailers. |
 | `MODEL_ROUTES` | `alias=upstream,...`: the model aliases a definition release may name. When unset they are not checked. |
 | `RUNTIME_IMAGES_EXTRA` | Globs a definition's `runtime.image` may match. |
-| `CLEARANCE_FLIGHT_REGISTRIES` | Comma-separated image prefixes, each ending in `/`, that a tier-1 image bump may come from; an image bump from anywhere else is tier 2 (`image:not-flight-registry`) and held for the owner group. Unset: any registry (the product default). Hangar sets `ghcr.io/riley-roooo/` (decided 2026-11-03, live from the R-4 cutover). |
+| `CLEARANCE_TRUSTED_REGISTRIES` | Comma-separated image prefixes, each ending in `/`, that a tier-1 image bump may come from; an image bump from anywhere else is tier 2 (`image:not-trusted-registry`) and held for the owner group. Unset: any registry (the product default). Hangar sets `ghcr.io/riley-roooo/` (decided 2026-11-03, live from the R-4 cutover). |
 | `CLEARANCE_GITHUB_APP_ID`, `CLEARANCE_GITHUB_APP_KEY_FILE`, `CLEARANCE_GITHUB_APP_WEBHOOK_SECRET_FILE` | The Clearance GitHub App. Set all three or none. The key and secret are read from files. |
 | `CLEARANCE_GITHUB_APP_COMMENTS` | `off` (default) or `agent-failures`. |
 | `CLEARANCE_GITHUB_API` | The GitHub API base (default `https://api.github.com`). |
-| `CLEARANCE_AUDIENCE` | The TokenReview audience for this cluster's workloads, and the audience of the Tower cluster's tokens (default `clearance`). |
+| `CLEARANCE_AUDIENCE` | The TokenReview audience for this cluster's workloads, and the audience of the foreign cluster's tokens (default `clearance`). |
 | `CLEARANCE_OIDC_ISSUER`, `CLEARANCE_OIDC_AUDIENCE` | People's OIDC issuer and their ID tokens' audience. Set both or neither. |
 | `CLEARANCE_OIDC_JWKS_URL` | Default `<issuer>/keys`. |
 | `CLEARANCE_OIDC_USER_CLAIM` | Default `email`. |
 | `CLEARANCE_OIDC_ALLOWED_USERS` | Comma-separated globs on that claim. Required with an issuer, because a valid token from an issuer that federates GitHub could belong to anyone with a GitHub account. |
-| `TOWER_ISSUER`, `TOWER_CLUSTER`, `TOWER_SERVICE_ACCOUNTS`, `TOWER_JWKS_URL` | Another cluster's service-account issuer, its name, the `<namespace>/<sa>` globs it may use, and its JWKS (default `<issuer>/jwks.json`). |
+| `CLEARANCE_FOREIGN_ISSUER`, `CLEARANCE_FOREIGN_CLUSTER`, `CLEARANCE_FOREIGN_SERVICE_ACCOUNTS`, `CLEARANCE_FOREIGN_JWKS_URL` | Another cluster's service-account issuer, its name, the `<namespace>/<sa>` globs it may use, and its JWKS (default `<issuer>/jwks.json`). These were `TOWER_*` before v0.29.0. |
 | `CLEARANCE_GITHUB_OIDC_AUDIENCE` | GitHub Actions tokens' audience. GitHub Actions callers are off when it is unset. |
 | `CLEARANCE_GITHUB_OIDC_ALLOWED` | Comma-separated globs on the token's `sub` (default `repo:*`). |
 
-The source of truth is the package documentation of `internal/core` and `authn.EnvVars`. `clearance register`
+The deployment's vocabulary: names that belong to the platform Clearance is deployed in, each with a
+product-neutral default (`internal/vocab`).
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `CLEARANCE_ON_BEHALF_OF_HEADER` | The header a delegate names a person in. | `X-Clearance-On-Behalf-Of` |
+| `CLEARANCE_TRAILER_PREFIX` | The prefix of the commit trailers an agent's commit carries (`<prefix>Task:`, `Session:`, `Run:`, `Agent:`). | `Clearance-` |
+| `CLEARANCE_RUN_IDENTITY_NAMESPACE` | The namespace a workload agent's service account must live in (`<ns>/<agent>`). | `agent-runs` |
+| `CLEARANCE_BASELINE_DENY_PATHS` | Path globs every agent is denied, whatever its definition says. | `CODEOWNERS,**/CODEOWNERS,.github/**` |
+| `CLEARANCE_BASELINE_DENY_FIELDS` | JSON pointers every agent is denied. | none |
+| `CLEARANCE_GATE_OUTSIDE_GROUPS` | The gate baseline's outside groups (group refs). | none |
+| `CLEARANCE_GATE_OWNER_FALLBACK` | The owner group of a change nobody names an owner for, when there is no outside group. | none |
+| `CLEARANCE_V0_PROVIDER` | `name/version` that rows written before providers were recorded are projected with. | `unrecorded/unrecorded` |
+
+The source of truth is the package documentation of `internal/core`, `internal/bundles`, `internal/vocab` and
+`authn.EnvVars`. `clearance register`
 reads `CLEARANCE_URL` and GitHub Actions' `GITHUB_EVENT_PATH`, `GITHUB_REPOSITORY`, `GITHUB_SHA` and
 `GITHUB_ACTOR`.
 
@@ -159,9 +177,9 @@ message, hint, tier, the spend the caller must apply, and the record fields to w
 every piece of state the decision reads, and `now`, so `Decide` does no I/O and reads no clock. The package
 documentation (`internal/decide/doc.go`) has the request and response shapes and the four actions.
 
-- **Rules are data.** They live in `internal/decide/core.json` and each pack's file (`packs/hangar/hangar.json`),
-  exported from the Python rule set by `tools/golden/export_bundle.py`, so rule text and hints match the Python
-  character for character. They are compiled once at load with cel-go against typed variables. A rule that does not
+- **Rules are data.** The core's live in `internal/decide/core.json`, exported from the Python rule set by
+  `tools/golden/export_bundle.py`, so rule text and hints match the Python character for character. A deployment's
+  own rules are a [policy bundle](#policy-bundles) it loads. They are compiled once at load with cel-go against typed variables. A rule that does not
   compile, is not a bool, reads an undeclared field, or has a worst-case cost over `MaxRuleCost` (100,000) fails the
   load. Each evaluation is also cut off at that cost. Anything that fails to evaluate denies with R000.
 - **Python semantics are reproduced exactly** where a decision depends on them: dict order and key equality,
@@ -176,20 +194,80 @@ documentation (`internal/decide/doc.go`) has the request and response shapes and
   that a typed request cannot reach, and for inputs where the Python engine raises and the Go engine fails closed.
 - **The golden corpus.** `testdata/golden/corpus.jsonl` is recorded from the Python engine over the whole Python
   test suite plus the fixture agents' calls (`tools/golden/test_fixture_calls.py`). It replays through the Go engine
-  (`internal/decide/golden`) with identical decisions, rule ids, names, messages, hints, tiers, problems, spend,
+  (`internal/decide/golden`), with the policy bundle the corpus deployment loads (`testdata/bundles/hangar`, or the
+  file `CLEARANCE_GOLDEN_BUNDLE` names), with identical decisions, rule ids, names, messages, hints, tiers, problems, spend,
   grants and record fields. The same package benchmarks the decide path against its budget of 2 ms p99 in-process.
 
 To re-record after a change to the Python rules or engine (from the repository root, with the Python test extras
 installed):
 
 ```shell
-PYTHONPATH=src .venv/bin/python tools/golden/export_bundle.py   # the Go engine's embedded bundles
+PYTHONPATH=src .venv/bin/python tools/golden/export_bundle.py   # the Go engine's embedded core rules
 .venv/bin/python tools/golden/record.py                         # testdata/golden/corpus.jsonl (HANGAR_TECH defaults to ../)
 PYTHONPATH=src .venv/bin/python tools/golden/gen_vectors.py     # pycompat and pyyaml reference vectors
 go test ./internal/decide/... ./internal/pycompat ./internal/pyyaml
 ```
 
-The replay fails if the embedded bundles drift from the export on the corpus's first line.
+The replay fails if the embedded core rules, or the fixture bundle's tools and rules, drift from the export on the
+corpus's first line.
+
+## Policy bundles
+
+Built (v0.29.0). A deployment's policy is a **policy bundle**: a JSON file (`apiVersion: clearance.policy/v1`) that
+the core and clearance-api load from configuration (`CLEARANCE_BUNDLES`) and name, with its version, in every
+decision. Nothing about any deployment is compiled into Clearance: the core's source carries no platform's names
+(`tests/test_boundary.py` checks every string literal and identifier of the Go core and every line of its embedded
+data). A bundle holds:
+
+| Field | What it is |
+|---|---|
+| `name`, `version`, `description` | The bundle's identity. Decisions name it as `clearance-core+<name>`, and `policy.bundles` lists `{name, version, digest, sources}`. |
+| `tools` | The tools its rules govern (name, tier, required args, GitHub cost, target, propose-only, writes files, reads repo, receipt). The gateway's tool registry names the same tools; the core needs them to tier and type-check. |
+| `pr_tools` | Tools whose receipt is a pull request (provenance looks them up by PR). |
+| `profile_sections` | Definition profile sections whose `apps` list scopes an agent (a definition review reads them). |
+| `sources` | Documents read at load, each `{name, version_pointer, compatible}`: the version at `version_pointer` must be one of `compatible`, or the load fails. Where each is read from is the deployment's `CLEARANCE_BUNDLE_SOURCES`. |
+| `vars` | `ctx.<name>` variables, `{name, type: bool or int, expr}`, CEL over the call, in order. |
+| `arg_checks` | `{when, checks}`: for a call `when` selects, each check that is true is one bad argument (R008). |
+| `documents` | Field scope over a file a file-writing tool carries (`internal/docscope`): the file name, pointer rules (inline, or from a source at a JSON pointer), the rule id and hint of each finding class, and structural invariants (a keyed collection whose attribute may not change and whose protected items may not change at all; counted items per entry that may not decrease). `ctx.<name>` is its finding count. |
+| `app` | CEL string: the application a call acts on, recorded as `app`. |
+| `rules` | Deny-if rules (`id, name, expr, message, hint, order`, optional `problems` naming a document) placed among the core's by `order`. A rule with `problems` decides with that document's findings: the first finding's rule id and hint, every message, all of them as `problems`. |
+
+**Context expressions** (vars, arg checks, app) are CEL, compiled and type-checked once at load like the rules,
+over `tool.name`, `tool.known`, `tool.tier`, `tool.writes_files`, `tool.reads_repo`, `args` (the call's
+arguments as sent) and `profile` (the definition's profile as written), with cel-go's strings extension and a
+small library of total functions: `py.get`, `py.strlist`, `py.strip`, `py.len`, `py.utf8len`, `py.json_len`,
+`py.trim_prefix`, `path.norm`, `path.base`, `glob.match`, `glob.any` (`internal/decide/celctx.go`). None of them fails
+on a value of the wrong shape, so an expression with `type()` guards decides on any input. An integer outside int64
+is neither `int` nor `double`. Each evaluation is cut off at `MaxContextCost`; an error is R000.
+
+**Why the context is in the bundle, not in the caller.** The gateway sends the call as it is, and the core
+computes everything the rules read: the argument checks, the app allowlists, the document scope. The decision
+stays the core's, and a deployment changes it with a bundle, not a Clearance release. A context the gateway
+computed would put part of the policy in the enforcement point. A compiled-in pack selected by configuration would
+keep the deployment's names in the core.
+
+**Sources are read live, at start.** A source such as a CI system's published contract (`GET /v1/contract`) is
+fetched over HTTP(S) with the pod's projected service-account token (`tokenFile`), or read from a file. When it
+cannot be read, the loader retries every 2 s until `CLEARANCE_BUNDLE_SOURCE_WAIT` (default 60 s) runs out, and then
+the process exits non-zero. There is no fallback copy: the core does not decide on a policy it could not load, and
+Kubernetes restarts it until the source answers. While it is down, every evaluation fails at the caller (the
+gateway's outage policy), and the deployment gate, provenance and the GitHub App webhook are down too. A changed
+source document (a new scope rule) changes the policy version in every decision after the next start; a source
+version the bundle is not written for stops the start until the bundle is updated.
+
+**Environments.** R012 (a lower-target tool pointed at an upper environment) reads the deployment's naming:
+`project` ending in a `CLEARANCE_ENV_LOWER_PROJECT_SUFFIXES` entry is lower (any other project upper); else an
+`env` in `CLEARANCE_ENV_LOWER_NAMES` or starting with a `CLEARANCE_ENV_LOWER_PREFIXES` entry is lower (any other env
+upper); else a `repo` whose name starts with a `CLEARANCE_ENV_UPPER_REPO_PREFIXES` entry is upper (any other repo
+lower).
+
+**Records.** Each decision record carries `policy: {ref, version, engine}`: `ref` is `clearance-core` plus
+`+<bundle>@<version>` for each bundle, `version` the digest over the core rules, the bundles, their source documents
+and the environment naming, `engine` is `cel-go`.
+
+The chart mounts each bundle from a ConfigMap (`policy.bundles`), configures its sources (`policy.sources`, with a
+projected token and `policy.egress` for the NetworkPolicy), the environment naming (`policy.environments`) and the
+vocabulary (`vocabulary.*`): see [install.md](install.md).
 
 ## The store (`internal/store`)
 

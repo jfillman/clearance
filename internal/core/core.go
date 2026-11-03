@@ -1,4 +1,4 @@
-// Package core wires the Go core: the store, the decision engine and its packs, the gate, review, provenance and
+// Package core wires the Go core: the store, the decision engine and its policy bundles, the gate, review, provenance and
 // GitHub App services, the authenticator and the HTTP server (internal/server), from the environment. Run serves
 // until its context ends, then shuts the server down gracefully and stops the background loops.
 //
@@ -7,31 +7,35 @@
 //	CLEARANCE_DSN                 the Postgres DSN (required unless Memory)
 //	CLEARANCE_LISTEN              listen address (default :8080)
 //	CLEARANCE_PROVIDERS           the registered providers, JSON (server.Provider; required to serve decisions)
-//	CLEARANCE_PACKS               comma-separated policy packs; "hangar" loads the Hangar pack (default none)
+//	CLEARANCE_BUNDLES, CLEARANCE_BUNDLE_SOURCES, CLEARANCE_BUNDLE_SOURCE_WAIT, CLEARANCE_ENV_*
+//	                              the policy bundles and environment naming (internal/bundles; default: the core
+//	                              rules only). A bundle whose sources cannot be read fails the start.
 //	CLEARANCE_VERIFIERS           principal globs that may register changes and ask for provenance
-//	CLEARANCE_DELEGATES           principal globs that may act for a person they name (X-Hangar-On-Behalf-Of)
+//	CLEARANCE_DELEGATES           principal globs that may act for a person they name (the on-behalf-of header)
 //	CLEARANCE_ADMINS              principal globs (user:<login>) that may deny any held change
 //	CLEARANCE_EXPIRE_SECONDS      how often holding changes past their TTL are expired (default 60)
 //	CLEARANCE_MAX_CLOCK_SKEW      how far an evaluation's context.now may be from the core's clock, a Go duration
 //	                              (default 5m, at most 24h); 0 turns the check off, which `clearance core` allows
 //	                              only with --memory (ParseMaxClockSkew)
 //	CLEARANCE_AGENTS_DIR          bundled agent definitions (*.yaml, profile.LoadDir); default none
-//	AGENT_LOGINS                  GitHub logins agents open PRs as (default hangar-autopilot-agents[bot])
+//	AGENT_LOGINS                  GitHub logins agents open PRs as (default none: an agent PR is known by its
+//	                              Clearance record or its trailers only)
 //	MODEL_ROUTES                  alias=upstream,...: the model aliases a definition release may name (unset: not checked)
 //	RUNTIME_IMAGES_EXTRA          globs a definition's runtime.image may match
-//	CLEARANCE_FLIGHT_REGISTRIES   comma-separated image prefixes, each ending in "/", a tier-1 image bump may come from;
-//	                              an image from anywhere else is tier 2 (image:not-flight-registry). Unset: any registry
+//	CLEARANCE_TRUSTED_REGISTRIES  comma-separated image prefixes, each ending in "/", a tier-1 image bump may come from;
+//	                              an image from anywhere else is tier 2 (image:not-trusted-registry). Unset: any registry
 //	CLEARANCE_GITHUB_APP_ID, CLEARANCE_GITHUB_APP_KEY_FILE, CLEARANCE_GITHUB_APP_WEBHOOK_SECRET_FILE
 //	                              the Clearance GitHub App: all three or none
 //	CLEARANCE_GITHUB_APP_COMMENTS off | agent-failures
 //	CLEARANCE_GITHUB_API          the GitHub API base (default https://api.github.com)
-//	BACKSTAGE_URL                 Tower's Backstage (http/https): the gate's group directory (a person's memberOf
+//	BACKSTAGE_URL                 the portal's Backstage (http/https): the gate's group directory (a person's memberOf
 //	                              groups) and app owners (a Component's spec.owner). Unset: neither, so nobody is in
-//	                              any group and no person can clear a tier-2/3 change (autopilot serve.py likewise)
+//	                              any group and no person can clear a tier-2/3 change
 //	BACKSTAGE_TOKEN_FILE          the bearer token for Backstage, re-read on every call (default
 //	                              /var/run/clearance/backstage-token: a projected token for the backstage audience)
 //
-// and the authenticator's (authn.EnvVars: CLEARANCE_AUDIENCE, CLEARANCE_OIDC_*, TOWER_*, CLEARANCE_GITHUB_OIDC_*).
+// and the authenticator's (authn.EnvVars: CLEARANCE_AUDIENCE, CLEARANCE_OIDC_*, CLEARANCE_FOREIGN_*,
+// CLEARANCE_GITHUB_OIDC_*), and the deployment's vocabulary (vocab.EnvVars).
 // An empty variable is an unset one.
 package core
 
@@ -50,8 +54,8 @@ import (
 	"time"
 
 	"github.com/jfillman/clearance/internal/authn"
+	"github.com/jfillman/clearance/internal/bundles"
 	"github.com/jfillman/clearance/internal/decide"
-	"github.com/jfillman/clearance/internal/decide/packs/hangar"
 	"github.com/jfillman/clearance/internal/definitions"
 	"github.com/jfillman/clearance/internal/directory/backstage"
 	"github.com/jfillman/clearance/internal/evidence"
@@ -64,10 +68,8 @@ import (
 	"github.com/jfillman/clearance/internal/store"
 	"github.com/jfillman/clearance/internal/store/memory"
 	"github.com/jfillman/clearance/internal/store/pg"
+	"github.com/jfillman/clearance/internal/vocab"
 )
-
-// DefaultAgentLogin is the agents' GitHub App's bot login (autopilot serve.py AGENT_LOGIN).
-const DefaultAgentLogin = "hangar-autopilot-agents[bot]"
 
 // ShutdownTimeout is how long Run waits for requests in flight once its context ends.
 const ShutdownTimeout = 20 * time.Second
@@ -80,8 +82,10 @@ type Config struct {
 	// Version is the build version: the provider version of the core's own records.
 	Version   string
 	Providers []server.Provider
-	Packs     []string
-	Gate      gate.Config
+	Policy    bundles.Config
+	// Vocabulary is the deployment's names (vocab); Build sets it process-wide.
+	Vocabulary *vocab.Vocabulary // nil: the vocabulary already in force (vocab.Get; tests)
+	Gate       gate.Config
 	// AgentLogins are provenance's agent logins.
 	AgentLogins []string
 	AgentsDir   string
@@ -115,20 +119,28 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	if cfg.Providers, err = server.ParseProviders(get("CLEARANCE_PROVIDERS", "")); err != nil {
 		return cfg, err
 	}
-	cfg.Packs = list(get("CLEARANCE_PACKS", ""))
-	for _, p := range cfg.Packs {
-		if p != "hangar" {
-			return cfg, fmt.Errorf("CLEARANCE_PACKS: unknown pack %q (known: hangar)", p)
-		}
+	if get("CLEARANCE_PACKS", "") != "" {
+		return cfg, errors.New("CLEARANCE_PACKS is gone: name policy bundle files in CLEARANCE_BUNDLES (docs/core.md, Policy bundles)")
 	}
+	if get("CLEARANCE_FLIGHT_REGISTRIES", "") != "" {
+		return cfg, errors.New("CLEARANCE_FLIGHT_REGISTRIES is now CLEARANCE_TRUSTED_REGISTRIES")
+	}
+	if cfg.Policy, err = bundles.FromEnv(getenv); err != nil {
+		return cfg, err
+	}
+	v, err := vocab.FromEnv(getenv)
+	if err != nil {
+		return cfg, err
+	}
+	cfg.Vocabulary = &v
 	cfg.Gate = gate.Config{Verifiers: list(get("CLEARANCE_VERIFIERS", "")),
 		Delegates: list(get("CLEARANCE_DELEGATES", "")), Admins: list(get("CLEARANCE_ADMINS", "")),
-		ImageAllow: list(get("RUNTIME_IMAGES_EXTRA", "")), FlightRegistries: list(get("CLEARANCE_FLIGHT_REGISTRIES", ""))}
-	for _, r := range cfg.Gate.FlightRegistries {
+		ImageAllow: list(get("RUNTIME_IMAGES_EXTRA", "")), TrustedRegistries: list(get("CLEARANCE_TRUSTED_REGISTRIES", ""))}
+	for _, r := range cfg.Gate.TrustedRegistries {
 		// The check is a plain prefix test, so a prefix without its trailing slash would also admit a look-alike
-		// owner (ghcr.io/riley-roooo matches ghcr.io/riley-roooo-evil/...).
+		// owner (ghcr.io/acme matches ghcr.io/acme-evil/...).
 		if !strings.HasSuffix(r, "/") || strings.ContainsAny(r, " \t") {
-			return cfg, fmt.Errorf("CLEARANCE_FLIGHT_REGISTRIES: %q is not a registry prefix ending in \"/\"", r)
+			return cfg, fmt.Errorf("CLEARANCE_TRUSTED_REGISTRIES: %q is not a registry prefix ending in \"/\"", r)
 		}
 	}
 	if routes := get("MODEL_ROUTES", ""); routes != "" {
@@ -141,7 +153,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 			cfg.Gate.Models = append(cfg.Gate.Models, strings.TrimSpace(alias))
 		}
 	}
-	cfg.AgentLogins = list(get("AGENT_LOGINS", DefaultAgentLogin))
+	cfg.AgentLogins = list(get("AGENT_LOGINS", ""))
 	secs, err := strconv.ParseFloat(get("CLEARANCE_EXPIRE_SECONDS", "60"), 64)
 	if err != nil || secs <= 0 || secs > 86400 {
 		return cfg, errors.New("CLEARANCE_EXPIRE_SECONDS must be a positive number of seconds (at most 86400)")
@@ -260,21 +272,15 @@ func Build(ctx context.Context, cfg Config, clock func() time.Time, log *slog.Lo
 	if cfg.DevRecords && !cfg.Memory {
 		return nil, errors.New("core: the dev records read is for an in-memory core only")
 	}
-	var packs []decide.Pack
-	for _, name := range cfg.Packs {
-		if name != "hangar" {
-			return nil, fmt.Errorf("core: unknown pack %q", name)
-		}
-		p, err := hangar.New()
-		if err != nil {
-			return nil, fmt.Errorf("core: the hangar pack: %w", err)
-		}
-		packs = append(packs, p)
-	}
-	eng, err := decide.New(packs...)
+	eng, err := bundles.Engine(ctx, cfg.Policy, log)
 	if err != nil {
 		return nil, fmt.Errorf("core: loading the policy: %w", err)
 	}
+	voc := vocab.Get()
+	if cfg.Vocabulary != nil {
+		voc = *cfg.Vocabulary
+	}
+	vocab.Set(voc.WithPolicy(eng))
 	var st store.Store
 	switch {
 	case cfg.Memory:
@@ -331,10 +337,8 @@ func (c *Core) wire(ctx context.Context) error {
 		tools.Tools[t.Name] = review.ToolSpec{Tier: t.Tier, ProposeOnly: t.ProposeOnly, WritesFiles: t.WritesFiles,
 			ReadsRepo: t.ReadsRepo}
 	}
-	if core, err := decide.Core(); err == nil {
-		for _, n := range core.Tripwires {
-			tools.Tripwires[n] = true
-		}
+	for _, n := range c.Engine.Tripwires() {
+		tools.Tripwires[n] = true
 	}
 
 	g := gate.NewService(cfg.Gate, c.Store, c.clock)
@@ -432,7 +436,7 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 	go func() { serveErr <- hs.Serve(ln) }()
 	pol := c.Engine.Policy()
 	log.Info("clearance core serving", "addr", ln.Addr().String(), "memory", cfg.Memory, "policy", pol.Bundle,
-		"policy_version", pol.Version, "providers", len(cfg.Providers), "github_app", c.App != nil,
+		"policy_version", pol.Version, "bundles", c.Engine.BundleNames(), "providers", len(cfg.Providers), "github_app", c.App != nil,
 		"backstage", cfg.BackstageURL != "")
 	if ready != nil {
 		ready(ln.Addr().String())
@@ -457,7 +461,7 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 	return runErr
 }
 
-// DevAuthenticator accepts any bearer token as the principal it names ("Bearer autopilot-system/clearance",
+// DevAuthenticator accepts any bearer token as the principal it names ("Bearer gateway-system/gateway",
 // "Bearer user:alice"): `clearance core --memory --insecure-dev-auth` only, for local runs and other packages'
 // tests. Never the default, never with a durable store.
 func DevAuthenticator() authn.Authenticator {

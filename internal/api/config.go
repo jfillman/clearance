@@ -13,31 +13,33 @@ import (
 	"time"
 
 	"github.com/jfillman/clearance/internal/authn"
-	"github.com/jfillman/clearance/internal/decide"
-	"github.com/jfillman/clearance/internal/decide/packs/hangar"
+	"github.com/jfillman/clearance/internal/bundles"
 	"github.com/jfillman/clearance/internal/directory/backstage"
 	"github.com/jfillman/clearance/internal/gate"
 	"github.com/jfillman/clearance/internal/profile"
 	"github.com/jfillman/clearance/internal/store/pg"
+	"github.com/jfillman/clearance/internal/vocab"
 )
 
-// Config is clearance-api's deployment, read by FromEnv. The names are autopilot api_serve.py's:
+// Config is clearance-api's deployment, read by FromEnv:
 //
 //	CLEARANCE_API_DSN                   the read-only role's DSN (required)
 //	CLEARANCE_API_AUDITORS              principal globs, comma-separated: every read, the chain check, full=1
 //	CLEARANCE_API_NOTIFIERS             principal globs: the notifier role (no Clearance read is a notifier's)
-//	CLEARANCE_DELEGATES                 principal globs that may name a person in X-Hangar-On-Behalf-Of (Tower)
+//	CLEARANCE_DELEGATES                 principal globs that may name a person in the on-behalf-of header (a portal)
 //	CLEARANCE_AGENTS_DIR                the bundled agent definitions (*.yaml); the cluster pins come from the
 //	                                    core's store (clearance_definitions), refreshed every
 //	CLEARANCE_API_DEFINITIONS_INTERVAL  seconds (default 30)
 //	CLEARANCE_API_POOL                  Postgres connections per replica (default 5)
-//	CLEARANCE_PACKS                     the policy packs the core runs ("hangar"), for /v1/policy and the explainer
+//	CLEARANCE_BUNDLES, CLEARANCE_BUNDLE_SOURCES, CLEARANCE_ENV_*  the policy the core runs (internal/bundles), for
+//	                                    /v1/policy and the explainer
 //	CLEARANCE_GATEWAY_URL               where the runtime's writes go, named in /v1/contract as gateway
 //	CLEARANCE_CORE_URL                  where Clearance's writes go, named in /v1/contract as core
-//	BACKSTAGE_URL, BACKSTAGE_TOKEN_FILE Tower's catalog: a person's groups and the apps they own (unset: none)
+//	BACKSTAGE_URL, BACKSTAGE_TOKEN_FILE the portal's catalog: a person's groups and the apps they own (unset: none)
 //	CLEARANCE_LISTEN                    the listen address (the core's name; default :$PORT, PORT default 8080)
 //
-// and the authenticator's (authn.EnvVars: CLEARANCE_AUDIENCE, CLEARANCE_OIDC_*, TOWER_*, CLEARANCE_GITHUB_OIDC_*).
+// and the authenticator's (authn.EnvVars: CLEARANCE_AUDIENCE, CLEARANCE_OIDC_*, CLEARANCE_FOREIGN_*,
+// CLEARANCE_GITHUB_OIDC_*) and the deployment's vocabulary (vocab.EnvVars).
 // An empty variable is an unset one.
 type Config struct {
 	DSN                            string
@@ -46,7 +48,8 @@ type Config struct {
 	AgentsDir                      string
 	DefinitionsEvery               time.Duration
 	Pool                           int32
-	Packs                          []string
+	Policy                         bundles.Config
+	Vocabulary                     *vocab.Vocabulary // nil: the vocabulary already in force (vocab.Get; tests)
 	GatewayURL, CoreURL            string
 	BackstageURL                   string
 	BackstageTokenFile             string
@@ -73,7 +76,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	}
 	cfg := Config{DSN: get("CLEARANCE_API_DSN", ""), AgentsDir: get("CLEARANCE_AGENTS_DIR", ""),
 		Auditors: list(get("CLEARANCE_API_AUDITORS", "")), Notifiers: list(get("CLEARANCE_API_NOTIFIERS", "")),
-		Delegates: list(get("CLEARANCE_DELEGATES", "")), Packs: list(get("CLEARANCE_PACKS", "")),
+		Delegates:  list(get("CLEARANCE_DELEGATES", "")),
 		GatewayURL: get("CLEARANCE_GATEWAY_URL", ""), CoreURL: get("CLEARANCE_CORE_URL", ""),
 		BackstageURL: get("BACKSTAGE_URL", ""), BackstageTokenFile: get("BACKSTAGE_TOKEN_FILE", backstage.DefaultTokenFile)}
 	if cfg.DSN == "" {
@@ -97,11 +100,17 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		return cfg, errors.New("CLEARANCE_API_POOL is a number of connections, 1 to 50")
 	}
 	cfg.Pool = int32(pool)
-	for _, p := range cfg.Packs {
-		if p != "hangar" {
-			return cfg, fmt.Errorf("CLEARANCE_PACKS: unknown pack %q (known: hangar)", p)
-		}
+	if getenv("CLEARANCE_PACKS") != "" {
+		return cfg, errors.New("CLEARANCE_PACKS is gone: name policy bundle files in CLEARANCE_BUNDLES (docs/core.md, Policy bundles)")
 	}
+	if cfg.Policy, err = bundles.FromEnv(getenv); err != nil {
+		return cfg, err
+	}
+	v, err := vocab.FromEnv(getenv)
+	if err != nil {
+		return cfg, err
+	}
+	cfg.Vocabulary = &v
 	for k, v := range map[string]string{"BACKSTAGE_URL": cfg.BackstageURL, "CLEARANCE_GATEWAY_URL": cfg.GatewayURL,
 		"CLEARANCE_CORE_URL": cfg.CoreURL} {
 		if v == "" {
@@ -119,26 +128,6 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	return cfg, nil
 }
 
-// Engine is the decision engine for cfg.Packs (the policy the core runs), and the packs.
-func Engine(names []string) (*decide.Engine, []decide.Pack, error) {
-	var packs []decide.Pack
-	for _, n := range names {
-		if n != "hangar" {
-			return nil, nil, fmt.Errorf("api: unknown pack %q", n)
-		}
-		p, err := hangar.New()
-		if err != nil {
-			return nil, nil, fmt.Errorf("api: the hangar pack: %w", err)
-		}
-		packs = append(packs, p)
-	}
-	e, err := decide.New(packs...)
-	if err != nil {
-		return nil, nil, fmt.Errorf("api: loading the policy: %w", err)
-	}
-	return e, packs, nil
-}
-
 // ShutdownTimeout is how long Run waits for requests in flight once its context ends.
 const ShutdownTimeout = 20 * time.Second
 
@@ -148,10 +137,15 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 	if log == nil {
 		log = slog.Default()
 	}
-	eng, packs, err := Engine(cfg.Packs)
+	eng, err := bundles.Engine(ctx, cfg.Policy, log)
 	if err != nil {
-		return err
+		return fmt.Errorf("api: loading the policy: %w", err)
 	}
+	voc := vocab.Get()
+	if cfg.Vocabulary != nil {
+		voc = *cfg.Vocabulary
+	}
+	vocab.Set(voc.WithPolicy(eng))
 	bundled := map[string]profile.AgentDefinition{}
 	if cfg.AgentsDir != "" {
 		if bundled, err = profile.LoadDir(cfg.AgentsDir); err != nil {
@@ -179,7 +173,7 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 		log.Warn("api: no BACKSTAGE_URL, so no groups and no app owners: a person sees only their own records")
 	}
 	gp := gate.DefaultPolicy().View()
-	srv, err := New(Options{Store: st, Auth: cfg.Auth, Access: access, Engine: eng, Packs: packs, GatePolicy: &gp,
+	srv, err := New(Options{Store: st, Auth: cfg.Auth, Access: access, Engine: eng, GatePolicy: &gp,
 		Definitions: defs, GatewayURL: cfg.GatewayURL, CoreURL: cfg.CoreURL, Log: log})
 	if err != nil {
 		return err

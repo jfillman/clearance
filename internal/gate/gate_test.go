@@ -9,6 +9,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/jfillman/clearance/internal/vocab"
+	"github.com/jfillman/clearance/internal/vocab/vocabtest"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -122,7 +124,8 @@ func has(xs []string, x string) bool {
 	return false
 }
 
-var baseline = gate.DefaultPolicy()
+// baseline is the lab deployment's (its outside group is vocabulary, set before the package's variables are).
+var baseline = func() gate.Policy { vocab.Set(vocabtest.Lab()); return gate.DefaultPolicy() }()
 
 // -- classification -------------------------------------------------------------------------------------------------
 
@@ -161,13 +164,13 @@ func TestAnImageBumpWaitsForCIAndBecomesTier2(t *testing.T) {
 
 func TestAnImageFromOutsideTheFlightRegistryIsTier2(t *testing.T) {
 	pol := gate.DefaultPolicy()
-	pol.FlightRegistries = []string{"ghcr.io/jfillman/flight/"}
+	pol.TrustedRegistries = []string{"ghcr.io/jfillman/flight/"}
 	if c := mustClassify(t, change(map[string]any{"objects": imageBump}), pol); c.Tier != 1 {
 		t.Fatal(c.Tier)
 	}
 	other := objs(obj("Rollout", "gate-api", "changed", []string{"/spec/template/spec/containers/0/image"}, []string{"docker.io/library/nginx:latest"}, "argoproj.io/v1alpha1"))
 	c := mustClassify(t, change(map[string]any{"objects": other}), pol)
-	if c.Tier != 2 || !has(ruleList(c), "image:not-flight-registry") {
+	if c.Tier != 2 || !has(ruleList(c), "image:not-trusted-registry") {
 		t.Fatal(c)
 	}
 }
@@ -710,7 +713,7 @@ func TestHTTPRoutes(t *testing.T) {
 	if code, out := call(mux, "POST", "/v1/clearances/"+cid+"/deny", "erin", map[string]any{"reason": ""}, nil); code != 400 || out["rule"] != "DG-REASON" {
 		t.Fatal(code, out)
 	}
-	code, out = call(mux, "POST", "/v1/clearances/"+cid+"/clear", "tower", nil, map[string]string{authn.OnBehalfOfHeader: "user:erin"})
+	code, out = call(mux, "POST", "/v1/clearances/"+cid+"/clear", "tower", nil, map[string]string{vocabtest.Lab().OnBehalfOfHeader: "user:erin"})
 	if code != 200 || out["state"] != "cleared" || out["audit_seq"] == nil {
 		t.Fatal(code, out)
 	}

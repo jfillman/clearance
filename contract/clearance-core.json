@@ -94,6 +94,31 @@
         },
         "type": "object"
       },
+      "DecideBundleRef": {
+        "properties": {
+          "digest": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/DecideSourceRef"
+            },
+            "type": "array"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "digest",
+          "name",
+          "version"
+        ],
+        "type": "object"
+      },
       "DecideContext": {
         "additionalProperties": false,
         "properties": {
@@ -369,6 +394,12 @@
           "bundle": {
             "type": "string"
           },
+          "bundles": {
+            "items": {
+              "$ref": "#/components/schemas/DecideBundleRef"
+            },
+            "type": "array"
+          },
           "version": {
             "type": "string"
           }
@@ -501,6 +532,25 @@
             "$ref": "#/components/schemas/DecideBudgets"
           }
         },
+        "type": "object"
+      },
+      "DecideSourceRef": {
+        "properties": {
+          "digest": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "digest",
+          "name",
+          "version"
+        ],
         "type": "object"
       },
       "DecideSpend": {
@@ -2062,7 +2112,7 @@
             "bearer": []
           }
         ],
-        "summary": "A person (or a delegate naming one in X-Hangar-On-Behalf-Of) approves a holding change.",
+        "summary": "A person (or a delegate naming one in the on-behalf-of header) approves a holding change.",
         "x-clearance-auth": "bearer",
         "x-clearance-max-body": 65536
       }

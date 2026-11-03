@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/jfillman/clearance/internal/vocab/vocabtest"
 	"io"
 	"log/slog"
 	"net/http"
@@ -64,7 +65,7 @@ func config(t testing.TB, dsn string) core.Config {
 		t.Fatal(err)
 	}
 	cfg := core.Config{Memory: dsn == "", DSN: dsn, Version: "test", Providers: ps, Auth: core.DevAuthenticator(),
-		MaxClockSkew: -1, AgentLogins: []string{core.DefaultAgentLogin}}
+		MaxClockSkew: -1, AgentLogins: []string{vocabtest.AgentLogin}}
 	cfg.Gate.Verifiers = []string{"app-*-cicd/pipeline-runner"}
 	cfg.Gate.Delegates = []string{tower}
 	cfg.Gate.Admins = []string{"user:admin"}
@@ -281,8 +282,14 @@ func TestAnEvaluationIsDecidedAndRecordedAsTheCore(t *testing.T) {
 	if c := r["caller"].(map[string]any); c["provider"] != "autopilot-gateway" || c["principal"] != gw {
 		t.Fatal(c)
 	}
-	if !slices.Contains(anyStrings(r["verified"]), "caller") || !slices.Contains(anyStrings(r["verified"]), "principal") {
+	if !slices.Contains(anyStrings(r["verified"]), "caller") || !slices.Contains(anyStrings(r["verified"]), "principal") ||
+		!slices.Contains(anyStrings(r["verified"]), "policy") {
 		t.Fatal(r["verified"])
+	}
+	// The decision names the policy that decided it: the core alone here, the digest, the evaluator.
+	pol := allow.body["context"].(map[string]any)["policy"].(map[string]any)
+	if p := r["policy"].(map[string]any); p["ref"] != "clearance-core" || p["engine"] != "cel-go" || p["version"] != pol["version"] {
+		t.Fatal(p, pol)
 	}
 	if allow.body["record"].(map[string]any)["hash"] != r["hash"] {
 		t.Fatal("the answer's record is not the stored one")
@@ -388,7 +395,7 @@ func TestAnOutcomeIsRecordedOnceForTheProviderThatAsked(t *testing.T) {
 
 	// Provenance finds the receipt the outcome recorded.
 	pv := f.do("POST", "/v1/provenance", ci, map[string]any{"repo": "jfillman/gate-api", "pr": 32, "head": headSHA,
-		"paths": []string{"app.js"}, "author": core.DefaultAgentLogin}).want(t, 200, "")
+		"paths": []string{"app.js"}, "author": vocabtest.AgentLogin}).want(t, 200, "")
 	if pv.body["record"] == nil || pv.body["agent_pr"] != true {
 		t.Fatal(pv.body)
 	}
@@ -641,7 +648,7 @@ func runSequence(t *testing.T, f *fixture) {
 		"record": map[string]any{"app": "gate-api", "target": "prod", "outcome": map[string]any{"applied": true}}}).want(t, 200, "")
 	f.do("POST", "/v1/clearances", ci, change("pass")).want(t, 200, "")
 	f.do("POST", "/v1/provenance", ci, map[string]any{"repo": "jfillman/gate-api", "pr": 32, "head": headSHA,
-		"paths": []string{"app.js"}, "author": core.DefaultAgentLogin}).want(t, 200, "")
+		"paths": []string{"app.js"}, "author": vocabtest.AgentLogin}).want(t, 200, "")
 }
 
 func verifyChain(t *testing.T, f *fixture) {

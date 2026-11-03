@@ -115,7 +115,7 @@ func TestBaselineDenyPathsAlwaysPresentAndCannotBeRemoved(t *testing.T) {
 	// Repeating a baseline entry neither removes nor duplicates it.
 	prof(d)["repos"] = map[string]any{"allow": []any{"jfillman/*"}, "denyPaths": []any{".tekton/**"}, "fieldDeny": []any{"/release"}}
 	out, _ = profile.Parse(d)
-	if len(out.DenyPaths) != len(profile.BaselineDenyPaths) || len(out.FieldDeny) != len(profile.BaselineDenyFields) {
+	if len(out.DenyPaths) != len(profile.BaselineDenyPaths()) || len(out.FieldDeny) != len(profile.BaselineDenyFields()) {
 		t.Fatal(out.DenyPaths, out.FieldDeny)
 	}
 }
@@ -146,7 +146,7 @@ func TestBaselineDenyPathsCoverReleaseFiles(t *testing.T) {
 			t.Fatalf("%s not denied", p)
 		}
 	}
-	for _, f := range profile.BaselineDenyFields {
+	for _, f := range profile.BaselineDenyFields() {
 		if !has(out.FieldDeny, f) {
 			t.Fatalf("%s not field-denied", f)
 		}
@@ -283,7 +283,7 @@ func TestTheParserFillsADefinition(t *testing.T) {
 	full, _ := profile.Parse(d)
 	if got.Name != "triage-agent" || got.Description == "" || got.Kind != full.Kind || got.TierCeiling != full.Limits.TierCeiling ||
 		got.IdentityType != full.IdentityType || got.ServiceAccount != full.ServiceAccount || got.Image != full.Image ||
-		len(got.DenyPaths) < len(profile.BaselineDenyPaths) || got.Raw == nil {
+		len(got.DenyPaths) < len(profile.BaselineDenyPaths()) || got.Raw == nil {
 		t.Fatalf("%+v", got)
 	}
 	tools := prof(d)["tools"].([]any)
@@ -314,8 +314,8 @@ func FuzzParse(f *testing.F) {
 
 // The provenance and githubapp tests build definitions from deftest's baseline; it must be this one.
 func TestDeftestsBaselineIsTheRealOne(t *testing.T) {
-	if strings.Join(deftest.BaselineDenyPaths, "|") != strings.Join(profile.BaselineDenyPaths, "|") {
-		t.Fatal("deftest.BaselineDenyPaths drifted from profile.BaselineDenyPaths")
+	if strings.Join(deftest.BaselineDenyPaths, "|") != strings.Join(profile.BaselineDenyPaths(), "|") {
+		t.Fatal("deftest.BaselineDenyPaths drifted from profile.BaselineDenyPaths()")
 	}
 }
 

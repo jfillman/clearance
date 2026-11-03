@@ -2,6 +2,7 @@ package githubapp_test
 
 import (
 	"fmt"
+	"github.com/jfillman/clearance/internal/vocab/vocabtest"
 	"os"
 	"testing"
 
@@ -15,6 +16,7 @@ import (
 var parseDef definitions.Parser = deftest.Parse
 
 func TestMain(m *testing.M) {
+	vocabtest.UseMainVocabulary()
 	code := m.Run()
 	if code == 0 {
 		fmt.Println("again with profile.Parser")

@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/jfillman/clearance/internal/decide/decidetest"
+	"github.com/jfillman/clearance/internal/vocab/vocabtest"
 	"io"
 	"log/slog"
 	"net/http/httptest"
@@ -308,7 +310,7 @@ type harness struct {
 
 type option func(*Options)
 
-func noPolicy(o *Options)     { o.Engine, o.Packs = nil, nil }
+func noPolicy(o *Options)     { o.Engine = nil }
 func noGatePolicy(o *Options) { o.GatePolicy = nil }
 
 func newHarness(t *testing.T, b backend, w world, opts ...option) *harness {
@@ -318,16 +320,13 @@ func newHarness(t *testing.T, b backend, w world, opts ...option) *harness {
 	if _, err := defs.Refresh(bg, st); err != nil {
 		t.Fatal(err)
 	}
-	eng, packs, err := Engine([]string{"hangar"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	eng := decidetest.Engine(t)
 	gp := gate.DefaultPolicy().View()
 	o := Options{Store: st, Auth: fakeAuth, Log: quiet,
 		Access: &Access{Delegates: []string{tower}, Notifiers: []string{tower}, Auditors: []string{"user:auditor"},
 			Directory: groups{"user:bob": {platform}, "user:erin": {"group:default/team-gate"}},
 			Ownership: owns{"user:carol": {"flight-api"}}, Owners: defs.Owners},
-		Engine: eng, Packs: packs, GatePolicy: &gp, Definitions: defs, GatewayURL: "http://clearance.example",
+		Engine: eng, GatePolicy: &gp, Definitions: defs, GatewayURL: "http://clearance.example",
 		Clock: func() time.Time { return time.Date(2026, 10, 30, 12, 30, 0, 0, time.UTC) }}
 	for _, f := range opts {
 		f(&o)
@@ -361,7 +360,7 @@ func (h *harness) do(method, path, token, who string) resp {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	if who != "" {
-		req.Header.Set(authn.OnBehalfOfHeader, who)
+		req.Header.Set(vocabtest.Lab().OnBehalfOfHeader, who)
 	}
 	rec := httptest.NewRecorder()
 	h.srv.Handler().ServeHTTP(rec, req)

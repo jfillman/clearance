@@ -113,11 +113,8 @@ func (e *Engine) RecordFields(req *EvaluationRequest, resp *EvaluationResponse) 
 	ev := store.Event{"ts": ts, "task_id": s.TaskID, "session": s.ID, "parent": strp(s.ParentID),
 		"principal": req.Subject.ID, "agent": s.Agent, "tool": tool, "tier": tier, "decision": decision, "rule": rule,
 		"target": target, "args_sha256": digest(args), "result": result}
-	for _, p := range e.b.packs {
-		if app := p.AppOf(tool, args); app != "" {
-			ev["app"] = pycompat.Truncate(pycompat.Lower(app), 100)
-			break
-		}
+	if app := e.appOf(tool, args); app != "" {
+		ev["app"] = pycompat.Truncate(pycompat.Lower(app), 100)
 	}
 	return ev
 }

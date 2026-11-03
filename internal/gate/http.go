@@ -3,6 +3,7 @@ package gate
 import (
 	"bytes"
 	"errors"
+	"github.com/jfillman/clearance/internal/vocab"
 	"io"
 	"log/slog"
 	"net/http"
@@ -65,7 +66,7 @@ func (h *Handler) clear(w http.ResponseWriter, r *http.Request) {
 		httpjson.Write(w, http.StatusUnauthorized, map[string]any{"error": "a bearer token is required"})
 		return
 	}
-	out, err := h.Svc.Clear(r.Context(), p, r.PathValue("change_id"), r.Header.Get(authn.OnBehalfOfHeader))
+	out, err := h.Svc.Clear(r.Context(), p, r.PathValue("change_id"), r.Header.Get(vocab.Get().OnBehalfOfHeader))
 	if err != nil {
 		h.fail(w, err)
 		return
@@ -90,7 +91,7 @@ func (h *Handler) deny(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	out, err := h.Svc.Deny(r.Context(), p, r.PathValue("change_id"), body["reason"], r.Header.Get(authn.OnBehalfOfHeader))
+	out, err := h.Svc.Deny(r.Context(), p, r.PathValue("change_id"), body["reason"], r.Header.Get(vocab.Get().OnBehalfOfHeader))
 	if err != nil {
 		h.fail(w, err)
 		return

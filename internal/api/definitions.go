@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/jfillman/clearance/internal/vocab"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -231,7 +232,7 @@ func (d *Definitions) View(name string, full bool) (DefinitionView, bool) {
 	if v.Triggers == nil {
 		v.Triggers = []map[string]any{}
 	}
-	for _, k := range []string{"glidepath", "airframe"} {
+	for _, k := range vocab.Get().ProfileSections {
 		if s, ok := def.RawProfile[k]; ok {
 			v.Scopes[k] = s
 		}

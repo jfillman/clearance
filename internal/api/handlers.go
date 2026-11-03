@@ -208,7 +208,7 @@ func (s *Server) byPR(w http.ResponseWriter, r *http.Request, v *Viewer, tools [
 }
 
 func (s *Server) listReceipts(w http.ResponseWriter, r *http.Request, v *Viewer) {
-	s.byPR(w, r, v, provenance.PRTools)
+	s.byPR(w, r, v, provenance.PRTools())
 }
 
 func (s *Server) listProvenance(w http.ResponseWriter, r *http.Request, v *Viewer) {

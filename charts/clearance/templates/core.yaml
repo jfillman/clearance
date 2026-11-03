@@ -1,5 +1,5 @@
 {{- if .Values.core.replicas }}{{ fail "core.replicas is not a setting: the core is always one replica (the one writer of the evidence chain)" }}{{ end -}}
-{{- range .Values.gate.flightRegistries }}{{ if not (hasSuffix "/" .) }}{{ fail (printf "gate.flightRegistries: %q must end in \"/\"" .) }}{{ end }}{{ end -}}
+{{- range .Values.gate.trustedRegistries }}{{ if not (hasSuffix "/" .) }}{{ fail (printf "gate.trustedRegistries: %q must end in \"/\"" .) }}{{ end }}{{ end -}}
 {{- if not (has (toString .Values.githubApp.comments) (list "off" "agent-failures")) }}{{ fail "githubApp.comments is off or agent-failures" }}{{ end -}}
 apiVersion: apps/v1
 kind: Deployment

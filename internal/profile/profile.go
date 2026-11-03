@@ -11,6 +11,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"github.com/jfillman/clearance/internal/vocab"
 	"math"
 	"math/big"
 	"os"
@@ -52,24 +53,14 @@ var compiled = sync.OnceValues(func() (*jsonschema.Schema, error) {
 // placeholderDigest is PLACEHOLDER_DIGEST.
 var placeholderDigest = regexp.MustCompile(`@sha256:0{64}\n?$`)
 
-// BaselineDenyPaths are always denied, for every agent, in addition to whatever a definition adds. A definition can
-// extend this list but cannot shrink it: an agent must never be able to edit the controls that constrain it.
-// cicd.yaml is not here (2026-10-25): an agent may change it field by field under Glidepath's scope rules (the
-// Hangar pack's R021). The generated pipeline (.tekton/) stays denied whole. Release files (D9/AF-5) are
-// machine-owned.
-var BaselineDenyPaths = []string{
-	".tekton/**", "**/.tekton/**",
-	"CODEOWNERS", "**/CODEOWNERS", ".github/**",
-	"**/appproject*.yaml", "**/AppProject*.yaml",
-	"release.yaml", "**/release.yaml", "*.release.yaml", "**/*.release.yaml",
-}
+// BaselineDenyPaths are always denied, for every agent, in addition to whatever a definition adds: the
+// deployment's (vocab, CLEARANCE_BASELINE_DENY_PATHS). A definition can extend this list but cannot shrink it: an
+// agent must never be able to edit the controls that constrain it.
+func BaselineDenyPaths() []string { return vocab.Get().BaselineDenyPaths }
 
 // BaselineDenyFields (AF-9a) are the field-level equivalent: these JSON pointers, and anything under them, can never
-// be the field an agent's diff touches, even if a definition's own fieldDeny omits them.
-var BaselineDenyFields = []string{
-	"/extraManifests", "/networkPolicy", "/httpRoute",
-	"/release", "/releaseTracking", "/rollout/image",
-}
+// be the field an agent's diff touches, even if a definition's own fieldDeny omits them (CLEARANCE_BASELINE_DENY_FIELDS).
+func BaselineDenyFields() []string { return vocab.Get().BaselineDenyFields }
 
 // DefinitionError is a definition that does not parse: "<name>: <path>: <message>".
 type DefinitionError struct{ Msg string }
@@ -246,9 +237,9 @@ func Parse(doc map[string]any) (AgentDefinition, error) {
 		Name: doc["name"].(string), Kind: doc["kind"].(string), IdentityType: id["type"].(string),
 		Limits:     limits,
 		ReposAllow: strs(repos["allow"]), APIAllow: strs(mapOf(p["apis"])["allow"]),
-		DenyPaths:  dedupe(append(append([]string(nil), BaselineDenyPaths...), strs(repos["denyPaths"])...)),
+		DenyPaths:  dedupe(append(append([]string(nil), BaselineDenyPaths()...), strs(repos["denyPaths"])...)),
 		FieldAllow: strs(repos["fieldAllow"]),
-		FieldDeny:  dedupe(append(append([]string(nil), BaselineDenyFields...), strs(repos["fieldDeny"])...)),
+		FieldDeny:  dedupe(append(append([]string(nil), BaselineDenyFields()...), strs(repos["fieldDeny"])...)),
 		Image:      image, Framework: strOr(rt["framework"], "generic"), Sandbox: strOr(rt["sandbox"], "standard"),
 		RawProfile: p, Description: doc["description"].(string), Raw: doc,
 	}

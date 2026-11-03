@@ -1,7 +1,7 @@
 {
   "api": "clearance-api",
   "version": "v1",
-  "notes": "GET only. clearance-api reads what the Clearance core committed. Writes go to the core (POST /v1/clearances/{id}/clear and /deny, /v1/provenance, /v1/records); the runtime's reads and writes (sessions, tasks, agents and their holds, the human inbox, events, results, runtimes) are the Autopilot gateway's (R-3).",
+  "notes": "GET only. clearance-api reads what the Clearance core committed. Writes go to the core (POST /v1/clearances/{id}/clear and /deny, /v1/provenance, /v1/records); the runtime's reads and writes (sessions, tasks, agents and their holds, the human inbox, events, results, runtimes) are the AI gateway's.",
   "operations": [
     {
       "operationId": "listEvidence",
@@ -86,7 +86,7 @@
         "auditor"
       ],
       "params": [],
-      "summary": "The policy in force: the deny rules in evaluation order (id, name, CEL expression, message, hint, pack), the tool registry with tiers, the packs"
+      "summary": "The policy in force: the deny rules in evaluation order (id, name, CEL expression, message, hint, bundle, `pack`), the tool registry with tiers, \"core\" and the loaded bundles (`packs`)"
     },
     {
       "operationId": "explainPolicy",
@@ -1377,12 +1377,6 @@
           },
           "type": "object"
         },
-        "flightRegistries": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
         "maxLinesTier1": {
           "type": "integer"
         },
@@ -1401,6 +1395,12 @@
         "tiers": {
           "$ref": "#/schemas/GatePolicyTiers"
         },
+        "trustedRegistries": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "ttlDays": {
           "type": "integer"
         },
@@ -1410,11 +1410,11 @@
       },
       "required": [
         "approvers",
-        "flightRegistries",
         "maxLinesTier1",
         "outsideGroups",
         "repoPolicy",
         "tiers",
+        "trustedRegistries",
         "ttlDays",
         "version"
       ],

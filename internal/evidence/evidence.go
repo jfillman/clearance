@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/jfillman/clearance/internal/vocab"
 	"math"
 	"regexp"
 	"sort"
@@ -74,9 +75,12 @@ var Annotations = set("assurance", "projected")
 // MaxIntent caps an event's intent text, in UTF-8 bytes.
 const MaxIntent = 64 << 10
 
-// V0Provider is the provider a v0-draft row is projected with: every one was written by the Python gateway
-// process, which named no version.
-var V0Provider = Provider{Name: "autopilot-gateway", Version: "unrecorded"}
+// V0Provider is the provider a v0-draft row is projected with: the deployment's (vocab, CLEARANCE_V0_PROVIDER),
+// since a v0-draft row names none.
+func V0Provider() Provider {
+	v := vocab.Get()
+	return Provider{Name: v.V0ProviderName, Version: v.V0ProviderVersion}
+}
 
 func set(ks ...string) map[string]bool {
 	m := make(map[string]bool, len(ks))
@@ -437,7 +441,7 @@ func Project(r map[string]any) map[string]any {
 	added := []any{}
 	if r["schema"] == SchemaV0 {
 		if _, ok := out["provider"]; !ok {
-			out["provider"] = V0Provider.value()
+			out["provider"] = V0Provider().value()
 			added = append(added, "provider")
 		}
 		if _, ok := out["subject"]; !ok {

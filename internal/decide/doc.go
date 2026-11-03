@@ -1,7 +1,8 @@
 // Package decide is Clearance's runtime decision: a pure function from an AuthZEN 1.0 Access Evaluation to a
 // decision with its rule id, hint, the spend the caller must apply and the record fields to write. It ports
 // policy.py, tiers.py, scope.py, limits.py's narrowing, session.py's spawn checks, modelproxy.py's model decision
-// and the rule set; the Hangar pack (packs/hangar) ports clearance.packs.hangar. The engine holds no session:
+// and the rule set; a deployment's own policy is a policy bundle (PolicyBundle, LoadBundle) it loads from
+// configuration, never code compiled in. The engine holds no session:
 // the request's context carries every piece of state the decision reads, and `now`, so Decide does no I/O and
 // reads no clock.
 //
@@ -38,12 +39,13 @@
 //
 //	{"decision": false,
 //	 "context": {"rule": "R014", "name": "repo-not-allowed", "message": "...", "hint": "...", "tier": 1,
-//	             "problems": [{pointer, rule, message, hint}],         // R021's GP-SCOPE findings
+//	             "problems": [{pointer, rule, message, hint}],         // a bundle document's findings
 //	             "spend": {"tool_calls": 1, "github_calls": 4, "open_prs": 1, "children": 1,
 //	                       "reserve": {...budgets...},                  // spawn: reserved on the parent
 //	                       "denial": true, "trip": "5 denied calls", "trip_tree": "tripwire: k8s.exec"},
 //	             "grant": {session, task_id, principal, agent, parent, depth, limits, expires_at, deduped},
-//	             "policy": {"bundle": "clearance-core+hangar", "version": "..."}}}
+//	             "policy": {"bundle": "clearance-core+<bundle>", "version": "<digest>",
+//	                        "bundles": [{name, version, digest, sources: [{name, version, digest}]}]}}}
 //
 // Spend is what the gateway applies to the request's session when it acts on the decision: add the counters to
 // used, add reserve to reserved, count a denial, trip the breaker with trip (if not already tripped), and trip
@@ -64,12 +66,21 @@
 //
 // # Rules
 //
-// Rules are data (core.json, and each pack's own file): id, name, CEL expression, message, hint and order. New
-// compiles them once with cel-go against typed variables (tool.name string, tool.tier int, effective.tools
+// Rules are data (core.json, and each policy bundle's file): id, name, CEL expression, message, hint and order.
+// New compiles them once with cel-go against typed variables (tool.name string, tool.tier int, effective.tools
 // list(string), ctx.* bool or int, ...), so a rule that does not compile, is not a bool, reads an undeclared
 // field, or whose worst-case cost estimate is over MaxRuleCost fails the load; each evaluation is also cut off
-// at MaxRuleCost. A pack (Pack) adds tools, rules placed among the core ones by order, the ctx.* variables its
-// Context computes, and a Decide for structured decisions (R021).
+// at MaxRuleCost.
+//
+// # Policy bundles
+//
+// A bundle (clearance.policy/v1, docs/core.md) adds tools, rules placed among the core ones by order, and the
+// context those rules read, all as data: vars (ctx.<name>, CEL over the call's tool, arguments and the
+// definition's profile, celctx.go's total-function library), arg_checks (CEL; each true one is a bad argument,
+// R008), documents (field scope over a file a file-writing tool carries, internal/docscope, parameterised by the
+// bundle and by sources it reads at load: a system's published contract, checked against the versions the bundle
+// names), and app (CEL: the application recorded as `app`). A rule naming a document in `problems` decides with its
+// findings (rule id and hint of the first). The environment naming R012 reads is the deployment's (Environments).
 //
 // # Records
 //
@@ -85,7 +96,7 @@
 // PyYAML's YAML 1.1 safe_load (internal/pyyaml), json.dumps lengths (internal/pycompat holds those helpers;
 // internal/scope is scope.py). The golden corpus (testdata/golden, recorded by
 // tools/golden/record.py over the whole Python test suite and the fixture agents' calls) replays through this
-// package with identical decisions, rule ids, names, messages, hints, tiers, problems, spend, grants and record
+// package, with the policy bundle that deployment loads (testdata/bundles), with identical decisions, rule ids, names, messages, hints, tiers, problems, spend, grants and record
 // fields; CEL_DIFFERENCES.md lists where cel-python and cel-go part (only for ill-typed contexts a request
 // cannot carry) and where the Go engine fails closed on input the Python one raises on.
 package decide

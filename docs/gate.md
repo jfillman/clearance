@@ -52,7 +52,7 @@ people), never loosen, the way `cicd.yaml`'s `governance` fields work.
 | **2** | Runtime shape: replicas, resources, Rollout strategy, `values-<env>.yaml`, NetworkPolicy, HTTPRoute, environment variables, probes | **one** person from the app's owner group, not the proposer |
 | **3** | Secrets and their references (Secret, ExternalSecret, SecretStore), RBAC (Role, RoleBinding, ServiceAccount), AppProject, migrations/jobs that write data, anything in `clearance.yaml` itself | **two** people: one from the owner group, one from outside it (a group `clearance.yaml` names: platform-leads, security), neither the proposer |
 
-Which registries count as Flight is deployment configuration, `CLEARANCE_FLIGHT_REGISTRIES` (prefixes ending in `/`). Unset, the product default, any registry counts and the `image:not-flight-registry` rule never fires. Hangar sets `ghcr.io/riley-roooo/` from the R-4 cutover (decided 2026-11-03): a bump to any other image, the third-party images Kyverno allows included, is tier 2 and waits for one owner.
+Which registries count as Flight is deployment configuration, `CLEARANCE_TRUSTED_REGISTRIES` (prefixes ending in `/`). Unset, the product default, any registry counts and the `image:not-trusted-registry` rule never fires. Hangar sets `ghcr.io/riley-roooo/` from the R-4 cutover (decided 2026-11-03): a bump to any other image, the third-party images Kyverno allows included, is tier 2 and waits for one owner.
 
 Tier is a floor: a change touching a tier-3 object is tier 3 however small the edit ("Secrets are tier 3 however
 small"). The classifier explains itself: every grant carries **why this tier** (the objects and rules that set it),
@@ -229,7 +229,7 @@ What exists in Clearance now; the check, the release guardrail and the screens f
   group when the check knows it, the tree digest, the changed paths and lines, each touched object with the JSON
   pointers of its changed fields and its new images, the checks' results, the repo's `clearance.yaml`). `classify()`:
   the tier as the maximum over paths and objects (`kind:Secret`, `field:secretKeyRef`, `path:clearance.yaml`,
-  `image-bump`, `image:not-flight-registry`, `metadata-only`, `non-runtime`, `lines>400`, `checks:ci,render`,
+  `image-bump`, `image:not-trusted-registry`, `metadata-only`, `non-runtime`, `lines>400`, `checks:ci,render`,
   `provenance:agent`), then the decision: tiers 0 and 1 clear by policy, 2 and 3 hold for a `Requirement`
   (owner-group people, outside-group people), an unknown proposer is denied (`DG-PROVENANCE`). `Change`: the record,
   with `role_for()` (owner first, then outside; `DG-PROPOSER`, `DG-TWICE`, `DG-FILLED`, `DG-FORBIDDEN`, `DG-STATE`).

@@ -42,8 +42,8 @@ func (s *Service) DeploymentRequested(ctx context.Context, installation, repo, h
 			}
 		}
 		if len(found) == 0 {
-			why := fmt.Sprintf("no change is registered for %s to %s; register it first (Glidepath's "+
-				"clearance-gate check, or `clearance register` in this workflow before the deploy job)", pycompat.Truncate(head, 7), environment)
+			why := fmt.Sprintf("no change is registered for %s to %s; register it first (the CI "+
+				"system's gate check, or `clearance register` in this workflow before the deploy job)", pycompat.Truncate(head, 7), environment)
 			rec := w.append(store.Event{
 				"ts": pycompat.ISO(w.now), "task_id": nil, "session": nil, "parent": nil, "principal": principal,
 				"agent": nil, "tool": "deploy.request", "tier": nil, "decision": "deny", "rule": "DG-UNREGISTERED",

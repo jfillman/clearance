@@ -6,6 +6,9 @@ package charttest
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"github.com/jfillman/clearance/internal/bundles"
+	"github.com/jfillman/clearance/internal/vocab"
 	"io"
 	"os"
 	"os/exec"
@@ -192,7 +195,7 @@ func TestMinimal(t *testing.T) {
 		t.Errorf("core: CLEARANCE_DSN %q", e["CLEARANCE_DSN"])
 	}
 	for _, unset := range []string{"CLEARANCE_PROVIDERS", "CLEARANCE_OIDC_ISSUER", "CLEARANCE_GITHUB_APP_ID",
-		"BACKSTAGE_URL", "CLEARANCE_FLIGHT_REGISTRIES", "CLEARANCE_PACKS"} {
+		"BACKSTAGE_URL", "CLEARANCE_TRUSTED_REGISTRIES", "CLEARANCE_BUNDLES", "CLEARANCE_BUNDLE_SOURCES"} {
 		if _, ok := e[unset]; ok {
 			t.Errorf("core: %s is set by default", unset)
 		}
@@ -245,10 +248,10 @@ func TestFullCoversEveryCoreVariable(t *testing.T) {
 	}
 	doc, _, _ := strings.Cut(string(src), "package core")
 	names := map[string]bool{}
-	for _, n := range regexp.MustCompile(`\b(?:CLEARANCE|BACKSTAGE|AGENT|MODEL|RUNTIME|TOWER)_[A-Z0-9_]*[A-Z0-9]\b`).FindAllString(doc, -1) {
+	for _, n := range regexp.MustCompile(`\b(?:CLEARANCE|BACKSTAGE|AGENT|MODEL|RUNTIME)_[A-Z0-9_]*[A-Z0-9]\b`).FindAllString(doc, -1) {
 		names[n] = true
 	}
-	for _, n := range authn.EnvVars {
+	for _, n := range append(append(append([]string(nil), authn.EnvVars...), bundles.EnvVars...), vocab.EnvVars...) {
 		names[n] = true
 	}
 	if len(names) < 25 {
@@ -261,8 +264,32 @@ func TestFullCoversEveryCoreVariable(t *testing.T) {
 			t.Errorf("CLEARANCE core variable %s has no chart value (not set by ci/full-values.yaml)", n)
 		}
 	}
-	if e["CLEARANCE_FLIGHT_REGISTRIES"] != "ghcr.io/riley-roooo/" || e["CLEARANCE_PACKS"] != "hangar" {
-		t.Errorf("flight registries %q packs %q", e["CLEARANCE_FLIGHT_REGISTRIES"], e["CLEARANCE_PACKS"])
+	if e["CLEARANCE_TRUSTED_REGISTRIES"] != "ghcr.io/riley-roooo/" || e["CLEARANCE_BUNDLES"] != "/etc/clearance/bundles/hangar/bundle.json" {
+		t.Errorf("trusted registries %q bundles %q", e["CLEARANCE_TRUSTED_REGISTRIES"], e["CLEARANCE_BUNDLES"])
+	}
+	// Each source: a url with this pod's projected token, or a file from a ConfigMap.
+	if want := `{"glidepath":{"tokenFile":"/var/run/clearance/sources/glidepath","url":"http://glidepath-api.platform-system.svc:8080/v1/contract"},"offline":{"file":"/etc/clearance/sources/offline/contract.json"}}`; e["CLEARANCE_BUNDLE_SOURCES"] != want {
+		t.Errorf("CLEARANCE_BUNDLE_SOURCES %s", e["CLEARANCE_BUNDLE_SOURCES"])
+	}
+	if e["CLEARANCE_ON_BEHALF_OF_HEADER"] != "X-Hangar-On-Behalf-Of" || e["CLEARANCE_ENV_LOWER_PREFIXES"] != "pr-,agent-" {
+		t.Errorf("vocabulary %q, environments %q", e["CLEARANCE_ON_BEHALF_OF_HEADER"], e["CLEARANCE_ENV_LOWER_PREFIXES"])
+	}
+	var sawBundle, sawSourceToken bool
+	for _, v := range get(core, "spec", "template", "spec", "volumes").([]any) {
+		if get(v, "name") == "bundle-hangar" && get(v, "configMap", "name") == "clearance-bundle-hangar" {
+			sawBundle = true
+		}
+		if get(v, "name") == "source-tokens" && get(v, "projected", "sources", 0, "serviceAccountToken", "path") == "glidepath" &&
+			get(v, "projected", "sources", 0, "serviceAccountToken", "audience") == nil {
+			sawSourceToken = true
+		}
+	}
+	if !sawBundle || !sawSourceToken {
+		t.Errorf("volumes: bundle %v, source token (API server audience) %v", sawBundle, sawSourceToken)
+	}
+	np := find(objs, "NetworkPolicy", "t-clearance-core")
+	if eg := fmt.Sprint(get(np, "spec", "egress")); !strings.Contains(eg, "glidepath-api") {
+		t.Errorf("core NetworkPolicy has no egress to the bundle source: %s", eg)
 	}
 	if e["CLEARANCE_DSN"] != "secret:t-clearance-pg-app/uri" {
 		t.Errorf("with cnpg the core's DSN is %q", e["CLEARANCE_DSN"])
@@ -326,7 +353,7 @@ func TestFullCoversEveryAPIVariable(t *testing.T) {
 	for _, n := range regexp.MustCompile(`\b(?:CLEARANCE|BACKSTAGE)_[A-Z0-9_]*[A-Z0-9]\b`).FindAllString(doc, -1) {
 		names[n] = true
 	}
-	for _, n := range authn.EnvVars {
+	for _, n := range append(append(append([]string(nil), authn.EnvVars...), bundles.EnvVars...), vocab.EnvVars...) {
 		names[n] = true
 	}
 	if len(names) < 20 {
@@ -363,18 +390,18 @@ func TestRefused(t *testing.T) {
 		args []string
 		want string
 	}{
-		"no database":            {nil, "the core needs a database"},
-		"core replicas":          {[]string{"--set", "database.existingSecret=x", "--set", "core.replicas=2"}, "always one replica"},
-		"oidc without users":     {[]string{"--set", "database.existingSecret=x", "--set", "oidc.issuer=https://i", "--set", "oidc.audience=a"}, "oidc.allowedUsers is required"},
-		"oidc half":              {[]string{"--set", "database.existingSecret=x", "--set", "oidc.issuer=https://i"}, "oidc.audience is set together"},
-		"tower without accounts": {[]string{"--set", "database.existingSecret=x", "--set", "tower.issuer=https://t", "--set", "tower.cluster=c"}, "tower.serviceAccounts is required"},
-		"app without secret":     {[]string{"--set", "database.existingSecret=x", "--set", "githubApp.enabled=true", "--set", "githubApp.appId=1"}, "githubApp.enabled needs"},
-		"app without id":         {[]string{"--set", "database.existingSecret=x", "--set", "githubApp.enabled=true", "--set", "githubApp.existingSecret=s"}, "githubApp.appId is required"},
-		"bad comments":           {[]string{"--set", "database.existingSecret=x", "--set", "githubApp.comments=all"}, "githubApp.comments is off or agent-failures"},
-		"flight registry slash":  {[]string{"--set", "database.existingSecret=x", "--set", "gate.flightRegistries[0]=ghcr.io/x"}, `must end in "/"`},
-		"bad digest":             {[]string{"--set", "database.existingSecret=x", "--set", "image.digest=latest"}, "image.digest is sha256"},
-		"route without parent":   {[]string{"--set", "database.existingSecret=x", "--set", "httpRoutes.core.enabled=true"}, "parentRefs is required"},
-		"eso without store":      {[]string{"--set", "database.existingSecret=x", "--set", "externalSecrets.enabled=true"}, "secretStoreRef.name is required"},
+		"no database":                      {nil, "the core needs a database"},
+		"core replicas":                    {[]string{"--set", "database.existingSecret=x", "--set", "core.replicas=2"}, "always one replica"},
+		"oidc without users":               {[]string{"--set", "database.existingSecret=x", "--set", "oidc.issuer=https://i", "--set", "oidc.audience=a"}, "oidc.allowedUsers is required"},
+		"oidc half":                        {[]string{"--set", "database.existingSecret=x", "--set", "oidc.issuer=https://i"}, "oidc.audience is set together"},
+		"foreign cluster without accounts": {[]string{"--set", "database.existingSecret=x", "--set", "foreignCluster.issuer=https://t", "--set", "foreignCluster.cluster=c"}, "foreignCluster.serviceAccounts is required"},
+		"app without secret":               {[]string{"--set", "database.existingSecret=x", "--set", "githubApp.enabled=true", "--set", "githubApp.appId=1"}, "githubApp.enabled needs"},
+		"app without id":                   {[]string{"--set", "database.existingSecret=x", "--set", "githubApp.enabled=true", "--set", "githubApp.existingSecret=s"}, "githubApp.appId is required"},
+		"bad comments":                     {[]string{"--set", "database.existingSecret=x", "--set", "githubApp.comments=all"}, "githubApp.comments is off or agent-failures"},
+		"flight registry slash":            {[]string{"--set", "database.existingSecret=x", "--set", "gate.trustedRegistries[0]=ghcr.io/x"}, `must end in "/"`},
+		"bad digest":                       {[]string{"--set", "database.existingSecret=x", "--set", "image.digest=latest"}, "image.digest is sha256"},
+		"route without parent":             {[]string{"--set", "database.existingSecret=x", "--set", "httpRoutes.core.enabled=true"}, "parentRefs is required"},
+		"eso without store":                {[]string{"--set", "database.existingSecret=x", "--set", "externalSecrets.enabled=true"}, "secretStoreRef.name is required"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			out, err := helm(t, tc.args...)

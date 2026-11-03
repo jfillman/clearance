@@ -9,6 +9,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/jfillman/clearance/internal/decide/decidetest"
+	"github.com/jfillman/clearance/internal/vocab/vocabtest"
 	"net/http/httptest"
 	"os"
 	"reflect"
@@ -52,10 +54,7 @@ func TestGoldenAgainstPythonAPI(t *testing.T) {
 	defer rd.Close()
 	st := &PG{R: rd}
 	defs := NewDefinitions(loadAgents(t))
-	eng, packs, err := Engine([]string{"hangar"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	eng := decidetest.Engine(t)
 	gp := gate.DefaultPolicy().View()
 	auth := authn.AuthenticatorFunc(func(_ context.Context, token string) (authn.Principal, error) {
 		p, ok := map[string]authn.Principal{"audit": {ID: "user:auditor", Kind: authn.KindPerson},
@@ -66,7 +65,7 @@ func TestGoldenAgainstPythonAPI(t *testing.T) {
 		}
 		return p, nil
 	})
-	srv, err := New(Options{Store: st, Auth: auth, Log: quiet, Engine: eng, Packs: packs, GatePolicy: &gp,
+	srv, err := New(Options{Store: st, Auth: auth, Log: quiet, Engine: eng, GatePolicy: &gp,
 		Definitions: defs, Access: &Access{Delegates: []string{tower}, Notifiers: []string{tower},
 			Auditors: []string{"user:auditor"}, Directory: groups{"user:bob": {platform}},
 			Ownership: owns{"user:jfillman": {"gate-api"}}, Owners: defs.Owners}})
@@ -78,7 +77,7 @@ func TestGoldenAgainstPythonAPI(t *testing.T) {
 		req := httptest.NewRequest("GET", a.Path, nil)
 		req.Header.Set("Authorization", "Bearer "+a.Token)
 		if a.Who != nil {
-			req.Header.Set(authn.OnBehalfOfHeader, *a.Who)
+			req.Header.Set(vocabtest.Lab().OnBehalfOfHeader, *a.Who)
 		}
 		rec := httptest.NewRecorder()
 		srv.Handler().ServeHTTP(rec, req)

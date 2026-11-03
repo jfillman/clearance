@@ -89,17 +89,17 @@ func objectTier(ch ObjectChange, pol Policy) Reason {
 			return Reason{ch.Subject(), "metadata-only", 0}
 		}
 		if image {
-			if len(pol.FlightRegistries) > 0 {
+			if len(pol.TrustedRegistries) > 0 {
 				for _, i := range ch.Images {
 					from := false
-					for _, r := range pol.FlightRegistries {
+					for _, r := range pol.TrustedRegistries {
 						if strings.HasPrefix(i, r) {
 							from = true
 							break
 						}
 					}
 					if !from {
-						return Reason{ch.Subject(), "image:not-flight-registry", 2}
+						return Reason{ch.Subject(), "image:not-trusted-registry", 2}
 					}
 				}
 			}

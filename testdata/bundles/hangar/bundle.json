@@ -1,31 +1,8 @@
 {
+  "apiVersion": "clearance.policy/v1",
   "name": "hangar",
-  "rules": [
-    {
-      "id": "R022",
-      "name": "glidepath-app-not-allowed",
-      "expr": "ctx.has_glidepath_app && !ctx.glidepath_app_ok",
-      "message": "that app is not on this agent's Glidepath allowlist",
-      "hint": "Read only the apps your definition names under profile.glidepath.apps.",
-      "order": 180
-    },
-    {
-      "id": "R023",
-      "name": "airframe-app-not-allowed",
-      "expr": "ctx.has_airframe_app && !ctx.airframe_app_ok",
-      "message": "that app is not on this agent's Airframe allowlist",
-      "hint": "Read only the apps your definition names under profile.airframe.apps.",
-      "order": 190
-    },
-    {
-      "id": "R021",
-      "name": "cicd-scope",
-      "expr": "ctx.cicd_scope_problems > 0",
-      "message": "the cicd.yaml change is outside what an agent may change",
-      "hint": "Change only the fields Glidepath's contract marks open; see the GP-SCOPE rule in the decision.",
-      "order": 230
-    }
-  ],
+  "version": "1.0.0",
+  "description": "Hangar's policy over the Autopilot gateway's glidepath.* and airframe.* tools: R021 Glidepath's cicd.yaml field scope (read from glidepath-api's contract at load) on any file-writing tool, R022 and R023 the per-agent app allowlists (profile.glidepath.apps, profile.airframe.apps), and the tools' argument checks (R008).",
   "tools": [
     {
       "name": "glidepath.runs.list",
@@ -473,6 +450,229 @@
       "writes_files": false,
       "reads_repo": false,
       "receipt": []
+    }
+  ],
+  "pr_tools": [
+    "glidepath.cicd.propose"
+  ],
+  "profile_sections": [
+    "glidepath",
+    "airframe"
+  ],
+  "sources": [
+    {
+      "name": "glidepath",
+      "version_pointer": "/contractVersion",
+      "compatible": [
+        1
+      ]
+    }
+  ],
+  "vars": [
+    {
+      "name": "has_glidepath_app",
+      "type": "bool",
+      "expr": "tool.name.startsWith('glidepath.') && 'app' in args && type(args['app']) == string"
+    },
+    {
+      "name": "glidepath_app_ok",
+      "type": "bool",
+      "expr": "!(ctx.has_glidepath_app && args['app'] != '') || glob.any(args['app'], py.strlist(py.get(py.get(profile, 'glidepath'), 'apps')))"
+    },
+    {
+      "name": "has_airframe_app",
+      "type": "bool",
+      "expr": "tool.name.startsWith('airframe.') && 'app' in args && type(args['app']) == string"
+    },
+    {
+      "name": "airframe_app_ok",
+      "type": "bool",
+      "expr": "!(ctx.has_airframe_app && args['app'] != '') || glob.any(args['app'], py.strlist(py.get(py.get(profile, 'airframe'), 'apps')))"
+    }
+  ],
+  "arg_checks": [
+    {
+      "when": "tool.known && tool.name.startsWith('glidepath.')",
+      "checks": [
+        "'app' in args && !(type(args['app']) == string && args['app'].matches(r'\\A(?:[a-z0-9][a-z0-9-]{0,62})\\z'))",
+        "'result' in args && !(type(args['result']) == string && args['result'].matches(r'\\A(?:[0-9a-f-]{36})\\z'))",
+        "'taskRun' in args && !(type(args['taskRun']) == string && args['taskRun'].matches(r'\\A(?:[a-z0-9][a-z0-9.-]{0,252})\\z'))",
+        "'pipelinerun' in args && !(type(args['pipelinerun']) == string && args['pipelinerun'].matches(r'\\A(?:[a-z0-9][a-z0-9.-]{0,252})\\z'))",
+        "'chainId' in args && !(type(args['chainId']) == string && args['chainId'].matches(r'\\A(?:[A-Za-z0-9][A-Za-z0-9._-]{0,252})\\z'))",
+        "'env' in args && !(type(args['env']) == string && args['env'].matches(r'\\A(?:[A-Za-z0-9][A-Za-z0-9._-]{0,62})\\z'))",
+        "'cluster' in args && !(type(args['cluster']) == string && args['cluster'].matches(r'\\A(?:[A-Za-z0-9][A-Za-z0-9._-]{0,62})\\z'))",
+        "'sourceEnv' in args && !(type(args['sourceEnv']) == string && args['sourceEnv'].matches(r'\\A(?:[A-Za-z0-9][A-Za-z0-9._-]{0,62})\\z'))",
+        "'sourceCluster' in args && !(type(args['sourceCluster']) == string && args['sourceCluster'].matches(r'\\A(?:[A-Za-z0-9][A-Za-z0-9._-]{0,62})\\z'))",
+        "'sourceImageRepo' in args && !(type(args['sourceImageRepo']) == string && args['sourceImageRepo'].matches(r'\\A(?:[a-z0-9][a-z0-9._/:-]{0,254})\\z'))",
+        "'sourceImageTag' in args && !(type(args['sourceImageTag']) == string && args['sourceImageTag'].matches(r'\\A(?:[A-Za-z0-9_][A-Za-z0-9._-]{0,127})\\z'))",
+        "'container' in args && !(type(args['container']) == string && args['container'].matches(r'\\A(?:[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)\\z'))",
+        "'name' in args && !(type(args['name']) == string && args['name'].matches(r'\\A(?:(promote|rollback)-[a-z0-9-]{1,56})\\z'))",
+        "'image' in args && !(type(args['image']) == string && args['image'].matches(r'\\A(?:ghcr\\.io/[a-z0-9._/-]{1,255}(:[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?(@sha256:[0-9a-f]{64})?)\\z'))",
+        "'id' in args && !(type(args['id']) == string && args['id'].matches(r'\\A(?:[A-Za-z0-9_-]{1,128})\\z'))",
+        "'type' in args && !(type(args['type']) == string && args['type'].matches(r'\\A(?:[a-z0-9.]{1,256})\\z'))",
+        "'since' in args && !(type(args['since']) == string && args['since'].matches(r'\\A(?:[0-9A-Za-z:.+_-]{1,64})\\z'))",
+        "'targetReleaseId' in args && !(type(args['targetReleaseId']) == string && args['targetReleaseId'].matches(r'\\A(?:[\\x21-\\x7e]{1,256})\\z'))",
+        "'sinceHours' in args && !(type(args['sinceHours']) == int && args['sinceHours'] >= 1 && args['sinceHours'] <= 744)",
+        "'limit' in args && !(type(args['limit']) == int && args['limit'] >= 1 && args['limit'] <= 1000)",
+        "'timeoutSeconds' in args && !(type(args['timeoutSeconds']) == int && args['timeoutSeconds'] >= 1 && args['timeoutSeconds'] <= 120)",
+        "'dryRun' in args && type(args['dryRun']) != bool",
+        "'reason' in args && !(type(args['reason']) == string && py.len(py.strip(args['reason'])) >= 1 && py.len(py.strip(args['reason'])) <= 1024)",
+        "'patch' in args && !(type(args['patch']) == map && py.json_len(args['patch']) <= 262144)",
+        "'title' in args && !(type(args['title']) == string && py.len(py.strip(args['title'])) >= 1 && py.len(py.strip(args['title'])) <= 200)",
+        "'body' in args && !(type(args['body']) == string && py.len(args['body']) <= 4000)",
+        "'baseRef' in args && !(type(args['baseRef']) == string && args['baseRef'].matches(r'\\A(?:[A-Za-z0-9][A-Za-z0-9._/-]{0,255})\\z') && !args['baseRef'].contains('..'))",
+        "'branch' in args && !(type(args['branch']) == string && args['branch'].matches(r'\\A(?:[A-Za-z0-9][A-Za-z0-9._/-]{0,255})\\z') && !args['branch'].contains('..'))"
+      ]
+    },
+    {
+      "when": "tool.known && tool.name == 'glidepath.promote'",
+      "checks": [
+        "!([('sourceEnv' in args && args['sourceEnv'] != null && args['sourceEnv'] != ''), ('sourceCluster' in args && args['sourceCluster'] != null && args['sourceCluster'] != ''), ('sourceImageRepo' in args && args['sourceImageRepo'] != null && args['sourceImageRepo'] != ''), ('sourceImageTag' in args && args['sourceImageTag'] != null && args['sourceImageTag'] != '')].filter(g, g).size() == 2 && ((('sourceEnv' in args && args['sourceEnv'] != null && args['sourceEnv'] != '') && ('sourceCluster' in args && args['sourceCluster'] != null && args['sourceCluster'] != '')) || (('sourceImageRepo' in args && args['sourceImageRepo'] != null && args['sourceImageRepo'] != '') && ('sourceImageTag' in args && args['sourceImageTag'] != null && args['sourceImageTag'] != ''))))"
+      ]
+    },
+    {
+      "when": "tool.known && tool.name.startsWith('airframe.')",
+      "checks": [
+        "'app' in args && !(type(args['app']) == string && args['app'].matches(r'\\A(?:[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)\\n?\\z'))",
+        "'env' in args && !(type(args['env']) == string && args['env'].matches(r'\\A(?:[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)\\n?\\z'))",
+        "'name' in args && !(type(args['name']) == string && args['name'].matches(r'\\A(?:[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?)\\n?\\z'))",
+        "'kind' in args && !(type(args['kind']) == string && args['kind'].matches(r'\\A(?:[A-Za-z][A-Za-z0-9]{0,62})\\n?\\z'))",
+        "'rule' in args && !(type(args['rule']) == string && args['rule'].matches(r'\\A(?:[A-Za-z0-9][A-Za-z0-9._-]{0,127})\\n?\\z'))",
+        "'section' in args && !(type(args['section']) == string && args['section'] in ['chart', 'xrds', 'components', 'targets', 'kinds'])",
+        "'documents' in args && !(type(args['documents']) == list && size(args['documents']) >= 1 && size(args['documents']) <= 20 && args['documents'].all(d, type(d) == map && d.all(k, k == 'path' || k == 'content') && 'content' in d && type(d['content']) == string && path.norm(py.get(d, 'path')) != '' && path.base(path.norm(py.get(d, 'path'))).matches(r'\\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\.ya?ml\\n?\\z') && py.utf8len(d['content']) <= 262144))",
+        "'mode' in args && args['mode'] != 'values' && args['mode'] != 'xr'",
+        "'render' in args && type(args['render']) != bool",
+        "'spec' in args && type(args['spec']) != map",
+        "'baseCicd' in args && !(type(args['baseCicd']) == map || (type(args['baseCicd']) == string && py.len(args['baseCicd']) <= 262144))"
+      ]
+    }
+  ],
+  "documents": [
+    {
+      "name": "cicd_scope_problems",
+      "file": "cicd.yaml",
+      "rules": {
+        "source": "glidepath",
+        "pointer": "/scope/rules"
+      },
+      "whole_file": {
+        "rule": "GP-SCOPE-001",
+        "hint": "Send cicd.yaml as YAML (a mapping), with `before` set to its current content, so Clearance can tell which fields change."
+      },
+      "human": {
+        "rule": "GP-SCOPE-001",
+        "hint": "Ask a human to make this change, or leave the field as it was."
+      },
+      "loosened": {
+        "rule": "GP-SCOPE-002",
+        "hint": "An agent may turn a gate on or make it stricter, never the other way."
+      },
+      "keyed": [
+        {
+          "rule": "GP-SCOPE-003",
+          "at": "/deploy/environments",
+          "key": "name",
+          "default": [
+            {
+              "name": "dev",
+              "tier": "ground"
+            }
+          ],
+          "attribute": "tier",
+          "changed": {
+            "message": "environment '{key}' changed tier from {before} to {after}",
+            "hint": "Moving an environment between Ground and Flight changes which gates guard it. A human makes that change."
+          },
+          "protected": [
+            "flight"
+          ],
+          "protected_change": {
+            "message": "Flight environment '{key}' {what}",
+            "hint": "Flight environments are changed by a human. An agent may add or change Ground environments."
+          }
+        }
+      ],
+      "counted": [
+        {
+          "rule": "GP-SCOPE-002",
+          "at": "/pipelines",
+          "items": "steps",
+          "counters": [
+            {
+              "name": "check-rides",
+              "when": [
+                {
+                  "field": [
+                    "stage",
+                    "task"
+                  ],
+                  "equals": "test"
+                },
+                {
+                  "field": [
+                    "role"
+                  ],
+                  "equals": "check-ride"
+                }
+              ],
+              "fewer": {
+                "message": "flow '{key}' lost its check-ride step",
+                "hint": "The check ride is what the qa gate reads. Removing it is a human's change."
+              }
+            },
+            {
+              "name": "required-tests",
+              "when": [
+                {
+                  "field": [
+                    "stage",
+                    "task"
+                  ],
+                  "equals": "test"
+                },
+                {
+                  "field": [
+                    "required"
+                  ],
+                  "is_not": false
+                }
+              ],
+              "fewer": {
+                "message": "flow '{key}' has fewer required test steps ({before} -> {after})",
+                "hint": "Removing a required test, or setting required: false on one, loosens the flow. A human makes that change."
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "app": "(tool.name.startsWith('glidepath.') || tool.name.startsWith('airframe.') || tool.name == 'xr.request') ? ('app' in args && type(args['app']) == string ? string(args['app']) : '') : (tool.name.startsWith('repo.') && 'repo' in args && type(args['repo']) == string && args['repo'].contains('/') ? py.trim_prefix(string(args['repo']).substring(string(args['repo']).lastIndexOf('/') + 1), ['gitops-infra-', 'gitops-']) : '')",
+  "rules": [
+    {
+      "id": "R022",
+      "name": "glidepath-app-not-allowed",
+      "expr": "ctx.has_glidepath_app && !ctx.glidepath_app_ok",
+      "message": "that app is not on this agent's Glidepath allowlist",
+      "hint": "Read only the apps your definition names under profile.glidepath.apps.",
+      "order": 180
+    },
+    {
+      "id": "R023",
+      "name": "airframe-app-not-allowed",
+      "expr": "ctx.has_airframe_app && !ctx.airframe_app_ok",
+      "message": "that app is not on this agent's Airframe allowlist",
+      "hint": "Read only the apps your definition names under profile.airframe.apps.",
+      "order": 190
+    },
+    {
+      "id": "R021",
+      "name": "cicd-scope",
+      "expr": "ctx.cicd_scope_problems > 0",
+      "message": "the cicd.yaml change is outside what an agent may change",
+      "hint": "Change only the fields Glidepath's contract marks open; see the GP-SCOPE rule in the decision.",
+      "order": 230,
+      "problems": "cicd_scope_problems"
     }
   ]
 }

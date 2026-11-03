@@ -228,10 +228,28 @@ type Grant struct {
 	Deduped   bool      `json:"deduped,omitempty"`
 }
 
-// PolicyRef names the bundle that decided.
+// PolicyRef names the policy that decided: the core and bundle names, the digest over all of it, and each loaded
+// policy bundle with its own version.
 type PolicyRef struct {
-	Bundle  string `json:"bundle"`
-	Version string `json:"version"`
+	Bundle  string      `json:"bundle"`
+	Version string      `json:"version"`
+	Bundles []BundleRef `json:"bundles,omitempty"`
+}
+
+// BundleRef is one loaded policy bundle: its declared version, the digest of what was loaded, and the source
+// documents it read.
+type BundleRef struct {
+	Name    string      `json:"name"`
+	Version string      `json:"version"`
+	Digest  string      `json:"digest"`
+	Sources []SourceRef `json:"sources,omitempty"`
+}
+
+// SourceRef is a source document a bundle read at load.
+type SourceRef struct {
+	Name    string `json:"name"`
+	Version int64  `json:"version"`
+	Digest  string `json:"digest"`
 }
 
 // RecordRef names a stored evidence record.

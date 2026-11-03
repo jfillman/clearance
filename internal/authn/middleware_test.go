@@ -78,9 +78,9 @@ func TestFromEnv(t *testing.T) {
 		"CLEARANCE_AUDIENCE":    "core",
 		"CLEARANCE_OIDC_ISSUER": "https://dex.example/dex/", "CLEARANCE_OIDC_AUDIENCE": "clearance-people",
 		"CLEARANCE_OIDC_ALLOWED_USERS": " alice@example.com, ,*@corp.example ", "CLEARANCE_OIDC_USER_CLAIM": "preferred_username",
-		"TOWER_ISSUER": "https://hangarplatform.dev/oidc/hangar-prod/", "TOWER_CLUSTER": "hangar-prod",
-		"TOWER_SERVICE_ACCOUNTS":         "app-backstage-prod/backstage",
-		"CLEARANCE_GITHUB_OIDC_AUDIENCE": "clearance-gh", "CLEARANCE_GITHUB_OIDC_ALLOWED": "repo:jfillman/*",
+		"CLEARANCE_FOREIGN_ISSUER": "https://hangarplatform.dev/oidc/hangar-prod/", "CLEARANCE_FOREIGN_CLUSTER": "hangar-prod",
+		"CLEARANCE_FOREIGN_SERVICE_ACCOUNTS": "app-backstage-prod/backstage",
+		"CLEARANCE_GITHUB_OIDC_AUDIENCE":     "clearance-gh", "CLEARANCE_GITHUB_OIDC_ALLOWED": "repo:jfillman/*",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -118,8 +118,8 @@ func TestFromEnv(t *testing.T) {
 		"audience without issuer": {"CLEARANCE_OIDC_AUDIENCE": "a"},
 		"issuer without allowed":  {"CLEARANCE_OIDC_ISSUER": "https://i", "CLEARANCE_OIDC_AUDIENCE": "a"},
 		"blank allowed":           {"CLEARANCE_OIDC_ISSUER": "https://i", "CLEARANCE_OIDC_AUDIENCE": "a", "CLEARANCE_OIDC_ALLOWED_USERS": " , "},
-		"tower without cluster":   {"TOWER_ISSUER": "https://t", "TOWER_SERVICE_ACCOUNTS": "a/b"},
-		"tower without sas":       {"TOWER_ISSUER": "https://t", "TOWER_CLUSTER": "c"},
+		"tower without cluster":   {"CLEARANCE_FOREIGN_ISSUER": "https://t", "CLEARANCE_FOREIGN_SERVICE_ACCOUNTS": "a/b"},
+		"tower without sas":       {"CLEARANCE_FOREIGN_ISSUER": "https://t", "CLEARANCE_FOREIGN_CLUSTER": "c"},
 	} {
 		if _, err := FromEnv(env(bad)); err == nil {
 			t.Errorf("%s: accepted", name)

@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/jfillman/clearance/internal/decide"
-	"github.com/jfillman/clearance/internal/decide/packs/hangar"
+	"github.com/jfillman/clearance/internal/decide/decidetest"
 	"github.com/jfillman/clearance/internal/pycompat"
 )
 
@@ -91,20 +91,15 @@ func loadCorpus(t testing.TB) []line {
 	return out
 }
 
+// engines are the corpus deployment's engines: the core alone, and the core with the policy bundle the Python
+// pack's lines were recorded under (decidetest: testdata/bundles, or CLEARANCE_GOLDEN_BUNDLE), each with that
+// deployment's environment naming.
 func engines(t testing.TB) map[string]*decide.Engine {
-	hp, err := hangar.New()
+	core, err := decide.New(decide.Options{Environments: decidetest.Environments()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	core, err := decide.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	withHangar, err := decide.New(hp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return map[string]*decide.Engine{"": core, "hangar": withHangar}
+	return map[string]*decide.Engine{"": core, "hangar": decidetest.Engine(t)}
 }
 
 func engineFor(es map[string]*decide.Engine, l line) *decide.Engine {
@@ -142,13 +137,25 @@ func TestBundleMatchesPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hp, _ := hangar.New()
-	if got, want := normJSON(t, core), normJSON(t, json.RawMessage(l.Core)); !reflect.DeepEqual(got, want) {
-		t.Errorf("internal/decide/core.json differs from the Python rule set; run tools/golden/export_bundle.py")
+	b := decidetest.Bundle(t).Spec
+	// The Python core carried the environment naming and the pack's PR tool; the Go core takes the first from the
+	// deployment (decide.Environments) and the second from the bundle.
+	env := decidetest.Environments()
+	core.PRTools = append(core.PRTools, b.PRTools...)
+	got := normJSON(t, core).(map[string]any)
+	got["lower_envs"] = normJSON(t, env.LowerNames)
+	if want := normJSON(t, json.RawMessage(l.Core)); !reflect.DeepEqual(got, want) {
+		t.Errorf("internal/decide/core.json (plus the bundle's pr_tools and the environment naming) differs from the Python rule set")
 	}
-	h := decide.BundleData{Name: hp.Name(), Rules: hp.Rules(), Tools: hp.Tools()}
+	// The bundle's rules are the pack's, R021 reading its document's findings.
+	rules := make([]decide.Rule, len(b.Rules))
+	for i, r := range b.Rules {
+		r.Problems = ""
+		rules[i] = r
+	}
+	h := decide.BundleData{Name: b.Name, Rules: rules, Tools: b.Tools}
 	if got, want := normJSON(t, h), normJSON(t, json.RawMessage(l.Hangar)); !reflect.DeepEqual(got, want) {
-		t.Errorf("packs/hangar/hangar.json differs from the Python pack; run tools/golden/export_bundle.py")
+		t.Errorf("%s differs from the Python pack's tools and rules", decidetest.FixtureBundle())
 	}
 }
 
@@ -207,12 +214,11 @@ func TestReplayDetectsDrift(t *testing.T) {
 			core.Rules[i].Message += " (drifted)"
 		}
 	}
-	hp, _ := hangar.New()
-	drifted, err := decide.NewFromData(core, hp)
+	drifted, err := decide.NewFromData(core, decidetest.Options(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	plain, _ := decide.NewFromData(core)
+	plain, _ := decide.NewFromData(core, decide.Options{Environments: decidetest.Environments()})
 	es := map[string]*decide.Engine{"": plain, "hangar": drifted}
 	n := 0
 	for _, l := range loadCorpus(t)[1:] {

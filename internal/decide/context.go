@@ -2,12 +2,14 @@ package decide
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"sort"
 	"strings"
 
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
+	"github.com/google/cel-go/interpreter"
 
 	"github.com/jfillman/clearance/internal/pycompat"
 	"github.com/jfillman/clearance/internal/pyyaml"
@@ -60,8 +62,8 @@ func tierOf(name string) (int, bool) {
 	return 0, false
 }
 
-// buildContext is Policy.build_context: the CEL activation for one tool call, and what packs need to decide.
-func (e *Engine) buildContext(req *EvaluationRequest, args *pycompat.Map) (*activation, *CallInput, []any, error) {
+// buildContext is Policy.build_context: the CEL activation for one tool call, and each bundle's document findings.
+func (e *Engine) buildContext(req *EvaluationRequest, args *pycompat.Map) (*activation, *CallInput, [][][]Problem, error) {
 	tool := req.Resource.ID
 	s := req.Context.Session
 	sc := req.Context.Scope
@@ -196,31 +198,14 @@ func (e *Engine) buildContext(req *EvaluationRequest, args *pycompat.Map) (*acti
 	v[vArtifactBytes] = types.Int(artifactBytes)
 	v[vSessionKind] = types.Bool(sc.AgentKind == "session")
 
-	states := make([]any, len(e.b.packs))
-	for i, p := range e.b.packs {
-		pc, err := p.Context(in)
+	states := make([][][]Problem, len(e.b.bundles))
+	for i, cb := range e.b.bundles {
+		bad, probs, err := e.bundleContext(cb, in, files, v)
 		if err != nil {
 			return nil, in, nil, err
 		}
-		vars := p.Vars()
-		if len(pc.Values) != len(vars) {
-			return nil, in, nil, &EvalError{Class: ErrClassValue, Err: errors.New("pack context does not match its variables")}
-		}
-		base := e.b.packBase[i]
-		for j, val := range pc.Values {
-			switch x := val.(type) {
-			case bool:
-				v[base+j] = types.Bool(x)
-			case int64:
-				v[base+j] = types.Int(x)
-			case int:
-				v[base+j] = types.Int(x)
-			default:
-				return nil, in, nil, &EvalError{Class: ErrClassValue, Err: errors.New("pack context value is not a bool or int")}
-			}
-		}
-		missing += pc.Bad
-		states[i] = pc.State
+		missing += bad
+		states[i] = probs
 	}
 	v[vMissingArgs] = types.Int(missing)
 	return act, in, states, nil
@@ -270,4 +255,158 @@ func container(v any) bool {
 		return true
 	}
 	return false
+}
+
+// CallInput is what a bundle's context sees of one tool call.
+type CallInput struct {
+	Tool    string
+	Spec    *ToolSpec // nil: not a registered tool
+	Args    *pycompat.Map
+	Session *SessionState
+	Scope   *Scope
+	Profile any // Scope.Profile decoded (a *pycompat.Map), nil when absent
+	Globs   *scope.Globs
+}
+
+// Decision is a rule's verdict, before the engine adds spend and policy.
+type Decision struct {
+	Allow    bool
+	Rule     string
+	Name     string
+	Message  string
+	Hint     string
+	Tier     *int
+	Problems []Problem
+}
+
+// ctxActivation is the context expressions' variables for one call.
+type ctxActivation struct{ vals []ref.Val }
+
+var ctxSlotOf = func() map[string]int {
+	m := map[string]int{}
+	for i, n := range ctxVarNames {
+		m[n] = i
+	}
+	return m
+}()
+
+func (a *ctxActivation) ResolveName(name string) (any, bool) {
+	i, ok := ctxSlotOf[name]
+	if !ok {
+		return nil, false
+	}
+	return a.vals[i], true
+}
+
+func (a *ctxActivation) Parent() interpreter.Activation { return nil }
+
+// varActivation adds a bundle's computed vars (ctx.<name>) to the call's.
+type varActivation struct {
+	base  *ctxActivation
+	names map[string]int
+	vals  []ref.Val
+}
+
+func (a *varActivation) ResolveName(name string) (any, bool) {
+	if i, ok := a.names[name]; ok && a.vals[i] != nil {
+		return a.vals[i], true
+	}
+	return a.base.ResolveName(name)
+}
+
+func (a *varActivation) Parent() interpreter.Activation { return nil }
+
+func evalCtx(p *ctxProgram, act interpreter.Activation) (ref.Val, error) {
+	out, _, err := p.prg.Eval(act)
+	if err != nil {
+		return nil, &EvalError{Class: ErrClassCEL, Err: err}
+	}
+	if types.IsError(out) {
+		return nil, &EvalError{Class: ErrClassCEL, Err: fmt.Errorf("%v", out)}
+	}
+	return out, nil
+}
+
+// callActivation is the context expressions' view of a call.
+func callActivation(in *CallInput) *ctxActivation {
+	vals := make([]ref.Val, nCtx)
+	vals[cvToolName] = types.String(in.Tool)
+	vals[cvToolKnown] = types.Bool(in.Spec != nil)
+	tier, wf, rr := 0, false, false
+	if in.Spec != nil {
+		tier, wf, rr = in.Spec.Tier, in.Spec.WritesFiles, in.Spec.ReadsRepo
+	}
+	vals[cvToolTier] = types.Int(tier)
+	vals[cvToolWritesFiles] = types.Bool(wf)
+	vals[cvToolReadsRepo] = types.Bool(rr)
+	vals[cvArgs] = toCEL(in.Args)
+	vals[cvProfile] = toCEL(in.Profile)
+	return &ctxActivation{vals: vals}
+}
+
+// bundleContext computes one bundle's vars (into the rules' activation), its bad-argument count and its
+// documents' findings for a call.
+func (e *Engine) bundleContext(cb *compiledBundle, in *CallInput, files []any, v []ref.Val) (int, [][]Problem, error) {
+	base := callActivation(in)
+	act := &varActivation{base: base, names: map[string]int{}, vals: make([]ref.Val, len(cb.vars))}
+	for i, p := range cb.vars {
+		out, err := evalCtx(p, act)
+		if err != nil {
+			return 0, nil, err
+		}
+		act.vals[i] = out
+		act.names["ctx."+cb.b.Spec.Vars[i].Name] = i
+		v[cb.varSlots[i]] = out
+	}
+	bad := 0
+	for _, g := range cb.argChecks {
+		w, err := evalCtx(g.when, act)
+		if err != nil {
+			return 0, nil, err
+		}
+		if w != types.True {
+			continue
+		}
+		for _, c := range g.checks {
+			out, err := evalCtx(c, act)
+			if err != nil {
+				return 0, nil, err
+			}
+			if out == types.True {
+				bad++
+			}
+		}
+	}
+	probs := make([][]Problem, len(cb.b.docs))
+	for i, d := range cb.b.docs {
+		if len(files) > 0 && in.Spec != nil && in.Spec.WritesFiles {
+			found, err := d.Problems(files)
+			if err != nil {
+				return 0, nil, err
+			}
+			for _, q := range found {
+				probs[i] = append(probs[i], Problem{Pointer: q.Pointer, Rule: q.Rule, Message: q.Message, Hint: q.Hint})
+			}
+		}
+		v[cb.docSlots[i]] = types.Int(len(probs[i]))
+	}
+	return bad, probs, nil
+}
+
+// appOf is the application a call acts on, from the first bundle whose app expression names one.
+func (e *Engine) appOf(tool string, args *pycompat.Map) string {
+	in := &CallInput{Tool: tool, Spec: e.b.tools[tool], Args: args}
+	for _, cb := range e.b.bundles {
+		if cb.app == nil {
+			continue
+		}
+		out, err := evalCtx(cb.app, callActivation(in))
+		if err != nil {
+			continue
+		}
+		if s, ok := out.(types.String); ok && s != "" {
+			return string(s)
+		}
+	}
+	return ""
 }

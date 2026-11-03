@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
 
 	"github.com/google/cel-go/common/types"
@@ -22,28 +24,58 @@ type Engine struct {
 	globs *scope.Globs
 }
 
-// New compiles the core bundle and packs into an Engine. A rule that does not compile or type-check, whose
-// expression is not a bool, or whose worst-case cost is over MaxRuleCost fails the load, as does a tool or rule
-// registered twice.
-func New(packs ...Pack) (*Engine, error) {
+// New compiles the core rules and the deployment's policy bundles into an Engine. A rule or context expression that
+// does not compile or type-check, whose result is not of its type, or a rule whose worst-case cost is over
+// MaxRuleCost fails the load, as does a tool, rule, context key or bundle registered twice.
+func New(opt Options) (*Engine, error) {
 	core, err := Core()
 	if err != nil {
 		return nil, err
 	}
-	return NewFromData(core, packs...)
+	return NewFromData(core, opt)
 }
 
-// NewFromData is New with a core bundle other than the embedded one (tests of the load's failure modes).
-func NewFromData(core BundleData, packs ...Pack) (*Engine, error) {
-	b, err := compileBundle(core, packs)
+// NewFromData is New with a core rule set other than the embedded one (tests of the load's failure modes).
+func NewFromData(core BundleData, opt Options) (*Engine, error) {
+	b, err := compileBundle(core, opt)
 	if err != nil {
 		return nil, err
 	}
 	return &Engine{b: b, globs: &scope.Globs{}}, nil
 }
 
-// Policy names the compiled bundle.
-func (e *Engine) Policy() PolicyRef { return PolicyRef{Bundle: e.b.name, Version: e.b.version} }
+// Policy names what decides: the core and every bundle, the digest over all of it, and each bundle's own version.
+func (e *Engine) Policy() PolicyRef {
+	return PolicyRef{Bundle: e.b.name, Version: e.b.version, Bundles: append([]BundleRef(nil), e.b.refs...)}
+}
+
+// RuleBundle is the name of the bundle a rule came from, "" for a core rule.
+func (e *Engine) RuleBundle(id string) string { return e.b.ruleBundle[id] }
+
+// BundleNames are the loaded bundles' names, in load order.
+func (e *Engine) BundleNames() []string {
+	out := make([]string, len(e.b.refs))
+	for i, r := range e.b.refs {
+		out[i] = r.Name
+	}
+	return out
+}
+
+// PRTools are the tools whose receipt is a pull request: the core's and every bundle's.
+func (e *Engine) PRTools() []string { return append([]string(nil), e.b.prToolList...) }
+
+// ProfileSections are the definition profile sections whose `apps` list scopes an agent, from the bundles.
+func (e *Engine) ProfileSections() []string { return append([]string(nil), e.b.sections...) }
+
+// Tripwires are the T3 tool names no definition may grant.
+func (e *Engine) Tripwires() []string {
+	out := make([]string, 0, len(e.b.tripwires))
+	for t := range e.b.tripwires {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
+}
 
 // Tools is the registry, core tools then each pack's, in registration order.
 func (e *Engine) Tools() []ToolSpec { return append([]ToolSpec(nil), e.b.toolList...) }
@@ -60,7 +92,7 @@ func (e *Engine) Rules() []Rule {
 // Tool is a registered tool's spec, or nil.
 func (e *Engine) Tool(name string) *ToolSpec { return e.b.tools[name] }
 
-// Globs is the engine's compiled-glob cache, shared with its packs.
+// Globs is the engine's compiled-glob cache.
 func (e *Engine) Globs() *scope.Globs { return e.globs }
 
 // R000: anything that fails while deciding is a deny.
@@ -200,7 +232,7 @@ func (e *Engine) evaluateCall(ctx context.Context, req *EvaluationRequest, args 
 	return e.run(ctx, act, in, states), in.Spec
 }
 
-func (e *Engine) run(ctx context.Context, act *activation, in *CallInput, states []any) Decision {
+func (e *Engine) run(ctx context.Context, act *activation, in *CallInput, states [][][]Problem) Decision {
 	tier := 0
 	if t, ok := act.vals[vToolTier].(types.Int); ok {
 		tier = int(t)
@@ -218,12 +250,14 @@ func (e *Engine) run(ctx context.Context, act *activation, in *CallInput, states
 		if !hit {
 			continue
 		}
-		for pi, p := range e.b.packs {
-			if in == nil {
-				break
-			}
-			if d, ok := p.Decide(&r.Rule, in, states[pi]); ok {
-				return d
+		if ref, ok := e.b.problemsOf[r.ID]; ok && in != nil && states != nil {
+			if probs := states[ref.bundle][ref.doc]; len(probs) > 0 {
+				msgs := make([]string, len(probs))
+				for i, q := range probs {
+					msgs[i] = q.Message
+				}
+				return Decision{Rule: probs[0].Rule, Name: r.Name, Message: strings.Join(msgs, "; "),
+					Hint: probs[0].Hint, Tier: intp(tier), Problems: probs}
 			}
 		}
 		return Decision{Rule: r.ID, Name: r.Name, Message: r.Message, Hint: r.Hint, Tier: intp(tier)}
@@ -233,7 +267,7 @@ func (e *Engine) run(ctx context.Context, act *activation, in *CallInput, states
 
 // EvaluateActivation runs the rules over a raw activation shaped like the Python one ({"tool": {...},
 // "effective": {...}, "session": {...}, "cost": {...}, "ctx": {...}}), with no context building. It is the
-// diagnostic replay of a context the Python tests built or altered by hand; packs' structured decisions do not
+// diagnostic replay of a context the Python tests built or altered by hand; bundle documents' findings do not
 // apply. Values are pycompat dict-model values (pycompat.DecodeJSON).
 func (e *Engine) EvaluateActivation(ctx context.Context, raw *pycompat.Map) Decision {
 	act := &activation{slots: e.b.slots, vals: make([]ref.Val, len(e.b.slots))}
@@ -314,23 +348,31 @@ func celValue(v any) (ref.Val, error) {
 	return nil, &EvalError{Class: ErrClassValue, Err: errors.New("overflow")}
 }
 
-// envTierOf is policy.env_tier_of: which environment tier the arguments point at.
+// envTierOf is policy.env_tier_of: which environment tier the arguments point at, by the deployment's naming.
 func (e *Engine) envTierOf(spec *ToolSpec, args *pycompat.Map) string {
 	if spec.Target == "none" {
 		return "none"
 	}
+	env := &e.b.env
 	if v, ok := args.GetStr("project"); ok {
 		if p, ok := v.(string); ok {
-			if strings.HasSuffix(p, "-lower") {
-				return "lower"
+			for _, suf := range env.LowerProjectSuffixes {
+				if strings.HasSuffix(p, suf) {
+					return "lower"
+				}
 			}
 			return "upper"
 		}
 	}
 	if v, ok := args.GetStr("env"); ok {
-		if env, ok := v.(string); ok {
-			if e.b.lowerEnvs[env] || strings.HasPrefix(env, "pr-") || strings.HasPrefix(env, "agent-") {
+		if name, ok := v.(string); ok {
+			if slices.Contains(env.LowerNames, name) {
 				return "lower"
+			}
+			for _, pre := range env.LowerPrefixes {
+				if strings.HasPrefix(name, pre) {
+					return "lower"
+				}
 			}
 			return "upper"
 		}
@@ -338,8 +380,10 @@ func (e *Engine) envTierOf(spec *ToolSpec, args *pycompat.Map) string {
 	if v, ok := args.GetStr("repo"); ok {
 		if repo, ok := v.(string); ok {
 			parts := strings.Split(repo, "/")
-			if strings.HasPrefix(parts[len(parts)-1], "gitops-") {
-				return "upper"
+			for _, pre := range env.UpperRepoPrefixes {
+				if strings.HasPrefix(parts[len(parts)-1], pre) {
+					return "upper"
+				}
 			}
 			return "lower"
 		}

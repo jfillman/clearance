@@ -9,6 +9,40 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+Planned as v0.29.0 (R-5: policy bundles and Hangar's vocabulary out of the core). Breaking for a deployment of the Go
+core: `CLEARANCE_PACKS`, `CLEARANCE_FLIGHT_REGISTRIES` and `TOWER_*` are gone (set, the first two stop the start).
+
+### Added
+- Policy bundles (`clearance.policy/v1`, [docs/core.md](docs/core.md#policy-bundles)): a deployment's tools, CEL rules,
+  CEL context (vars, argument checks, the recorded app) and document field scope (`internal/docscope`), loaded from
+  `CLEARANCE_BUNDLES` by the core and clearance-api. A bundle's sources (for example a CI system's `GET /v1/contract`)
+  are fetched at start from `CLEARANCE_BUNDLE_SOURCES` (HTTP(S) with a projected token, or a file), with a
+  compatible-version check and `CLEARANCE_BUNDLE_SOURCE_WAIT` (default 60s) of retries, then the start fails: no
+  fallback copy.
+- Every decision names its policy: `context.policy.bundles` (each bundle's name, version, digest and the sources it
+  read), and each decision record carries `policy: {ref, version, engine}` (the evidence schema's Decision group).
+- The deployment's vocabulary as configuration (`internal/vocab`): `CLEARANCE_ON_BEHALF_OF_HEADER`,
+  `CLEARANCE_TRAILER_PREFIX`, `CLEARANCE_RUN_IDENTITY_NAMESPACE`, `CLEARANCE_BASELINE_DENY_PATHS`,
+  `CLEARANCE_BASELINE_DENY_FIELDS`, `CLEARANCE_GATE_OUTSIDE_GROUPS`, `CLEARANCE_GATE_OWNER_FALLBACK`,
+  `CLEARANCE_V0_PROVIDER`, and the environment naming `CLEARANCE_ENV_*`; chart values `policy.*` and `vocabulary.*`.
+- The Go client's `Options.OnBehalfOfHeader` and the Python client's `on_behalf_of_header`.
+- `tests/test_boundary.py`: a data-level check that the Go core's source names no Hangar product.
+
+### Changed
+- The Hangar pack (`internal/decide/packs/hangar`, its vendored Glidepath scope) is gone from the Go core. Its policy
+  is a bundle (Autopilot's `policy/hangar/bundle.json`); the corpus replays identically with it
+  (`testdata/bundles/hangar` is the test fixture).
+- Defaults are product-neutral: on-behalf-of header `X-Clearance-On-Behalf-Of` (was `X-Hangar-On-Behalf-Of`), trailer
+  prefix `Clearance-` (was `Hangar-`), run namespace `agent-runs` (was `autopilot-runs`), baseline deny paths
+  `CODEOWNERS`, `**/CODEOWNERS`, `.github/**` (the Tekton, AppProject and release-file globs and the deny fields are
+  Hangar's to set), no outside group or owner fallback (was `group:default/admins`), no `AGENT_LOGINS` (was
+  `hangar-autopilot-agents[bot]`), v0 rows projected as `unrecorded` (was `autopilot-gateway`), and the environment
+  naming knows only `dev`, `development`, `sandbox`, `scratch` (the `pr-`/`agent-` prefixes, `-lower` projects and
+  `gitops-` repos are Hangar's to set).
+- `CLEARANCE_FLIGHT_REGISTRIES` is `CLEARANCE_TRUSTED_REGISTRIES` (chart `gate.trustedRegistries`, gate policy
+  `trustedRegistries`, rule `image:not-trusted-registry`); `TOWER_*` are `CLEARANCE_FOREIGN_*` (chart
+  `foreignCluster.*`).
+
 ## [0.28.0] - 2026-11-03
 
 What the Autopilot gateway needs of the core before the hangar-dev cutover (R-3e).

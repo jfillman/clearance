@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"github.com/jfillman/clearance/internal/vocab"
 	"sort"
 	"strings"
 
@@ -27,7 +28,7 @@ var PersonRoles = []string{RolePerson, RoleDelegate, RoleAuditor}
 //	person    records of their own runs (sessions whose task they opened), records with no session that name them,
 //	          records of agents whose definition owner group they are in, records that act on an app they own;
 //	          changes on apps they own and changes their groups may clear
-//	delegate  everything the person named in X-Hangar-On-Behalf-Of may (CLEARANCE_DELEGATES, e.g. Tower)
+//	delegate  everything the person named in the on-behalf-of header may (CLEARANCE_DELEGATES, e.g. a portal)
 //	notifier  CLEARANCE_API_NOTIFIERS: kept so the role resolves as at api.py, but no Clearance read is a
 //	          notifier's since the inbox feed moved to the gateway (R-3)
 type Viewer struct {
@@ -72,14 +73,14 @@ type Access struct {
 // MaxOnBehalfOf is the longest person a delegate may name.
 const MaxOnBehalfOf = 200
 
-// Viewer is api.py Access.viewer for an authenticated principal and the X-Hangar-On-Behalf-Of header.
+// Viewer is api.py Access.viewer for an authenticated principal and the on-behalf-of header (vocab).
 func (a *Access) Viewer(ctx context.Context, p authn.Principal, onBehalfOf string) (*Viewer, *apiError) {
 	if onBehalfOf != "" {
 		if !pycompat.MatchAny(p.ID, a.Delegates) {
 			return nil, errorf(403, "%s may not act for a person", p.ID)
 		}
 		if !strings.HasPrefix(onBehalfOf, "user:") || len(onBehalfOf) > MaxOnBehalfOf {
-			return nil, errorf(400, "X-Hangar-On-Behalf-Of must name a person (user:<name>)")
+			return nil, errorf(400, "%s must name a person (user:<name>)", vocab.Get().OnBehalfOfHeader)
 		}
 		return a.person(ctx, onBehalfOf, p.ID), nil
 	}

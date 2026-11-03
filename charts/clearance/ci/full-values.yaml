@@ -7,13 +7,42 @@ providers:
 verifiers: ["platform-system/clearance-gate", "github:repo:jfillman/*"]
 delegates: ["tower/backstage"]
 admins: ["user:jfillman"]
-packs: [hangar]
+policy:
+  bundles:
+    - {name: hangar, configMap: clearance-bundle-hangar, key: bundle.json}
+  sources:
+    glidepath:
+      url: http://glidepath-api.platform-system.svc:8080/v1/contract
+      sendToken: true
+    offline:
+      configMap: clearance-source-offline
+      key: contract.json
+  sourceWait: 90s
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: platform-system}}
+          podSelector: {matchLabels: {app.kubernetes.io/name: glidepath-api}}
+      ports: [{protocol: TCP, port: 8080}]
+  environments:
+    lowerNames: [dev, development, sandbox, scratch]
+    lowerPrefixes: [pr-, agent-]
+    lowerProjectSuffixes: [-lower]
+    upperRepoPrefixes: [gitops-]
+vocabulary:
+  onBehalfOfHeader: X-Hangar-On-Behalf-Of
+  trailerPrefix: Hangar-
+  runIdentityNamespace: autopilot-runs
+  baselineDenyPaths: [".tekton/**", "**/.tekton/**", "CODEOWNERS", "**/CODEOWNERS", ".github/**", "**/appproject*.yaml", "**/AppProject*.yaml", "release.yaml", "**/release.yaml", "*.release.yaml", "**/*.release.yaml"]
+  baselineDenyFields: [/extraManifests, /networkPolicy, /httpRoute, /release, /releaseTracking, /rollout/image]
+  gateOutsideGroups: ["group:default/admins"]
+  gateOwnerFallback: "group:default/admins"
+  v0Provider: autopilot-gateway/unrecorded
 gate:
   expireSeconds: 30
   agentLogins: ["hangar-autopilot-agents[bot]"]
   modelRoutes: ["sonnet=claude-sonnet-4-5"]
   runtimeImagesExtra: ["ghcr.io/jfillman/runtime-*"]
-  flightRegistries: ["ghcr.io/riley-roooo/"]
+  trustedRegistries: ["ghcr.io/riley-roooo/"]
 agents:
   configMap: clearance-agents
 oidc:
@@ -22,7 +51,7 @@ oidc:
   allowedUsers: ["*@example.test"]
   userClaim: email
   jwksURL: https://dex.example.test/keys
-tower:
+foreignCluster:
   issuer: https://tower.example.test
   cluster: hangar-prod
   serviceAccounts: ["backstage/backstage"]

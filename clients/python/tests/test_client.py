@@ -313,9 +313,9 @@ def test_a_retry_that_succeeds(fake):
 def test_client_errors_are_distinct_and_not_retried(fake):
     f = fake(answer(403, {"error": "not a verifier", "rule": "DG-ROLE", "hint": "ask"}))
     with pytest.raises(cc.CoreRequestError) as e:
-        cc.CoreClient(f.url, token=GW).clear_change("ch-1", on_behalf_of="user:dana")
+        cc.CoreClient(f.url, token=GW, on_behalf_of_header="X-Lab-On-Behalf-Of").clear_change("ch-1", on_behalf_of="user:dana")
     assert (e.value.status, e.value.rule, e.value.hint) == (403, "DG-ROLE", "ask") and f.hits == 1
-    assert f.headers[0]["X-Hangar-On-Behalf-Of"] == "user:dana"
+    assert f.headers[0]["X-Lab-On-Behalf-Of"] == "user:dana"
     assert not isinstance(e.value, cc.CoreUnavailable)
 
 

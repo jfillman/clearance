@@ -29,6 +29,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"github.com/jfillman/clearance/internal/vocab"
 	"log/slog"
 	"os"
 	"regexp"
@@ -58,7 +59,6 @@ var (
 	commentModes = []string{"off", "agent-failures"}
 	callbackRx   = regexp.MustCompile(`^/repos/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/actions/runs/([0-9]+)/deployment_protection_rule\z`)
 	shaRx        = regexp.MustCompile(`^[0-9a-f]{40}\z`)
-	trailerRx    = regexp.MustCompile(`^` + regexp.QuoteMeta(provenance.TrailerPrefix) + `(Task|Session|Run|Agent): *([^ ]+) *\z`)
 )
 
 // Error is GitHubAppError: GitHub failed or refused; logged, never shown on the PR.
@@ -651,6 +651,7 @@ func (a *App) Gather(ctx context.Context, token, repo string, pr int64) (provena
 	commit, _ := c["commit"].(map[string]any)
 	msg, _ := commit["message"].(string)
 	trailers := map[string]any{}
+	trailerRx := regexp.MustCompile(`^` + regexp.QuoteMeta(vocab.Get().TrailerPrefix) + `(Task|Session|Run|Agent): *([^ ]+) *\z`)
 	for _, line := range strings.Split(strings.ReplaceAll(msg, "\r\n", "\n"), "\n") {
 		if m := trailerRx.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
 			trailers[strings.ToLower(m[1])] = m[2]

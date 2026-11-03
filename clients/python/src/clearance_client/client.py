@@ -44,7 +44,8 @@ DEFAULT_BREAKER_THRESHOLD = 5
 DEFAULT_BREAKER_COOLDOWN = 5.0
 DEFAULT_MAX_RESPONSE_BYTES = 4 << 20
 MAX_TOKEN_BYTES = 64 << 10
-ON_BEHALF_OF_HEADER = "X-Hangar-On-Behalf-Of"
+# The header a delegate names a person in: the core's CLEARANCE_ON_BEHALF_OF_HEADER (on_behalf_of_header).
+ON_BEHALF_OF_HEADER = "X-Clearance-On-Behalf-Of"
 
 # Breaker states (CoreClient.breaker_state).
 CLOSED, OPEN, HALF_OPEN = "closed", "open", "half-open"
@@ -139,7 +140,8 @@ class CoreClient:
 
     token is the bearer token, or a callable returning it; token_file is a file re-read on every request (a
     projected service-account token the kubelet rotates). provider is the registered provider name record()
-    sends (autopilot-gateway).
+    sends. on_behalf_of_header is the header the core reads a delegate's person from (its
+    CLEARANCE_ON_BEHALF_OF_HEADER).
     """
 
     def __init__(
@@ -159,6 +161,7 @@ class CoreClient:
         user_agent: str = f"clearance-core-client/{__version__}",
         clock: Callable[[], float] = time.monotonic,
         max_idle: int = 16,
+        on_behalf_of_header: str = ON_BEHALF_OF_HEADER,
     ):
         u = urllib.parse.urlsplit(base_url)
         if u.scheme not in ("http", "https") or not u.hostname:
@@ -183,6 +186,7 @@ class CoreClient:
         self._idle: list[http.client.HTTPConnection] = []
         self._idle_lock = threading.Lock()
         self._max_idle = max_idle
+        self._on_behalf_of_header = on_behalf_of_header
 
     # -- the routes ------------------------------------------------------------------------------------------------
 
@@ -278,7 +282,7 @@ class CoreClient:
         if payload is not None:
             headers["Content-Type"] = "application/json"
         if on_behalf_of:
-            headers[ON_BEHALF_OF_HEADER] = on_behalf_of
+            headers[self._on_behalf_of_header] = on_behalf_of
         is_probe = False
         if not probe:
             ok, is_probe = self._breaker.allow()
