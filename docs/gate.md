@@ -52,6 +52,8 @@ people), never loosen, the way `cicd.yaml`'s `governance` fields work.
 | **2** | Runtime shape: replicas, resources, Rollout strategy, `values-<env>.yaml`, NetworkPolicy, HTTPRoute, environment variables, probes | **one** person from the app's owner group, not the proposer |
 | **3** | Secrets and their references (Secret, ExternalSecret, SecretStore), RBAC (Role, RoleBinding, ServiceAccount), AppProject, migrations/jobs that write data, anything in `clearance.yaml` itself | **two** people: one from the owner group, one from outside it (a group `clearance.yaml` names: platform-leads, security), neither the proposer |
 
+Which registries count as Flight is deployment configuration, `CLEARANCE_FLIGHT_REGISTRIES` (prefixes ending in `/`). Unset, the product default, any registry counts and the `image:not-flight-registry` rule never fires. Hangar sets `ghcr.io/riley-roooo/` from the R-4 cutover (decided 2026-11-03): a bump to any other image, the third-party images Kyverno allows included, is tier 2 and waits for one owner.
+
 Tier is a floor: a change touching a tier-3 object is tier 3 however small the edit ("Secrets are tier 3 however
 small"). The classifier explains itself: every grant carries **why this tier** (the objects and rules that set it),
 which is what the Tower callout and the C1 detail show.

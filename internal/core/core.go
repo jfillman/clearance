@@ -16,6 +16,8 @@
 //	AGENT_LOGINS                  GitHub logins agents open PRs as (default hangar-autopilot-agents[bot])
 //	MODEL_ROUTES                  alias=upstream,...: the model aliases a definition release may name (unset: not checked)
 //	RUNTIME_IMAGES_EXTRA          globs a definition's runtime.image may match
+//	CLEARANCE_FLIGHT_REGISTRIES   comma-separated image prefixes, each ending in "/", a tier-1 image bump may come from;
+//	                              an image from anywhere else is tier 2 (image:not-flight-registry). Unset: any registry
 //	CLEARANCE_GITHUB_APP_ID, CLEARANCE_GITHUB_APP_KEY_FILE, CLEARANCE_GITHUB_APP_WEBHOOK_SECRET_FILE
 //	                              the Clearance GitHub App: all three or none
 //	CLEARANCE_GITHUB_APP_COMMENTS off | agent-failures
@@ -115,7 +117,14 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	}
 	cfg.Gate = gate.Config{Verifiers: list(get("CLEARANCE_VERIFIERS", "")),
 		Delegates: list(get("CLEARANCE_DELEGATES", "")), Admins: list(get("CLEARANCE_ADMINS", "")),
-		ImageAllow: list(get("RUNTIME_IMAGES_EXTRA", ""))}
+		ImageAllow: list(get("RUNTIME_IMAGES_EXTRA", "")), FlightRegistries: list(get("CLEARANCE_FLIGHT_REGISTRIES", ""))}
+	for _, r := range cfg.Gate.FlightRegistries {
+		// The check is a plain prefix test, so a prefix without its trailing slash would also admit a look-alike
+		// owner (ghcr.io/riley-roooo matches ghcr.io/riley-roooo-evil/...).
+		if !strings.HasSuffix(r, "/") || strings.ContainsAny(r, " \t") {
+			return cfg, fmt.Errorf("CLEARANCE_FLIGHT_REGISTRIES: %q is not a registry prefix ending in \"/\"", r)
+		}
+	}
 	if routes := get("MODEL_ROUTES", ""); routes != "" {
 		cfg.Gate.Models = []string{}
 		for _, pair := range list(routes) {

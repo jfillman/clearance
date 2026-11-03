@@ -19,6 +19,27 @@ from the Python engine with identical decisions; the store uses the Python core'
 [docs/core.md](docs/core.md). Until W1 switches over, the live hangar-dev gateway runs the Python core, and the
 tables below describe the Python modules it runs.
 
+## Install
+
+**Built, not deployed.** Clearance ships as one image, `ghcr.io/jfillman/clearance` (amd64 and arm64, a static Go
+binary on distroless nonroot, under 40 MB, with an SPDX SBOM and a keyless signature), and one Helm chart,
+`oci://ghcr.io/jfillman/charts/clearance`. It installs on any cluster with a Postgres database: no Airframe,
+Glidepath or Autopilot.
+
+```shell
+helm install clearance oci://ghcr.io/jfillman/charts/clearance --version <X.Y.Z> -n clearance --create-namespace \
+  --set database.existingSecret=clearance-db -f values.yaml
+helm test clearance -n clearance --logs     # the evidence chain verifies, read-only
+```
+
+The chart runs the core as exactly one replica (the one writer of the evidence chain; `Recreate`), clearance-api as
+two behind a PodDisruptionBudget, a default-deny NetworkPolicy, and optionally a CloudNativePG cluster with a
+read-only role, ExternalSecrets and Gateway API routes. Every pod is uid 65532, read-only root, no capabilities,
+seccomp `RuntimeDefault`; no secret value is a chart value. Every value, upgrades and the one-writer rule:
+[docs/install.md](docs/install.md). CI (`.github/workflows/chart.yaml`) lints and render-tests the chart and runs an
+install test on a fresh kind cluster (Postgres, the chart, a fake provider: health, a decision recorded, a change
+cleared by policy, chain verify, the image size and the core's idle memory).
+
 ## What it decides
 
 | Piece | Where | What it does |
@@ -86,9 +107,11 @@ tools/fuzz-all.sh 10s
 ## Releases
 
 A `vX.Y.Z` tag on `main`, cut after the version-bump PR merges and CI is green, runs `.github/workflows/release.yaml`:
-it checks that the tag, `pyproject.toml` and `CHANGELOG.md` agree, builds the wheel, and publishes a GitHub Release
-whose notes are the version's section of [CHANGELOG.md](CHANGELOG.md) (`tools/release_notes.py`; no section, no
-release). The version-bump PR adds that section; `tests/test_release.py` fails without it. `clearance.__version__` is
+it checks that the tag, `pyproject.toml` and `CHANGELOG.md` agree, builds the wheel, builds and pushes the
+multi-arch image (SPDX SBOM, keyless cosign signature), packages and pushes the chart at the tag's version, reruns
+the install test on the published chart and image, and publishes a GitHub Release whose notes are the version's
+section of [CHANGELOG.md](CHANGELOG.md) (`tools/release_notes.py`; no section, no release) plus the image index and
+chart digests. The version-bump PR adds that section; `tests/test_release.py` fails without it. `clearance.__version__` is
 the installed package's version.
 
 ## History
@@ -99,7 +122,7 @@ D16); its history came with it. Design: Hangar's `docs/autopilot/design.md`, sec
 ## Docs
 
 The TechDocs site is `mkdocs.yml` over `docs/` (home, the Go core, clearance-api, the deployment gate, the evidence
-record, the provider protocol and `clearance conformance`, the provenance App), published in Hangar's
+record, the provider protocol and `clearance conformance`, installing, the provenance App), published in Hangar's
 portal from `catalog-info.yaml` (`backstage.io/techdocs-ref: dir:.`). Preview locally with `pip install
 mkdocs-techdocs-core && mkdocs serve`.
 

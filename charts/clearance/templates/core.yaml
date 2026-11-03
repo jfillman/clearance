@@ -1,0 +1,144 @@
+{{- if .Values.core.replicas }}{{ fail "core.replicas is not a setting: the core is always one replica (the one writer of the evidence chain)" }}{{ end -}}
+{{- range .Values.gate.flightRegistries }}{{ if not (hasSuffix "/" .) }}{{ fail (printf "gate.flightRegistries: %q must end in \"/\"" .) }}{{ end }}{{ end -}}
+{{- if not (has (toString .Values.githubApp.comments) (list "off" "agent-failures")) }}{{ fail "githubApp.comments is off or agent-failures" }}{{ end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "clearance.coreName" . }}
+  labels:
+    {{- include "clearance.labels" . | nindent 4 }}
+    app.kubernetes.io/component: core
+spec:
+  # One writer: the core holds Postgres's advisory writer lock for its life, and a second core fails to start.
+  # Recreate stops the old pod before the new one starts, so an upgrade never runs two.
+  replicas: 1
+  strategy:
+    type: Recreate
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      {{- include "clearance.selector" (dict "ctx" . "component" "core") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "clearance.selector" (dict "ctx" . "component" "core") | nindent 8 }}
+        {{- with .Values.core.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
+      {{- with .Values.core.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "clearance.coreSA" . }}
+      # The core's own token (the API server's audience) authorizes its TokenReview calls.
+      automountServiceAccountToken: true
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 30
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.core.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext:
+        {{- include "clearance.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: core
+          image: {{ include "clearance.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["core"]
+          ports:
+            - {name: http, containerPort: 8080, protocol: TCP}
+          env:
+            - name: CLEARANCE_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "clearance.dbSecretName" . }}
+                  key: {{ include "clearance.dbSecretKey" . }}
+            {{- with .Values.providers }}
+            - name: CLEARANCE_PROVIDERS
+              value: {{ toJson . | quote }}
+            {{- end }}
+            {{- with .Values.verifiers }}
+            - name: CLEARANCE_VERIFIERS
+              value: {{ include "clearance.csv" . | quote }}
+            {{- end }}
+            - name: CLEARANCE_EXPIRE_SECONDS
+              value: {{ .Values.gate.expireSeconds | quote }}
+            {{- with .Values.gate.agentLogins }}
+            - name: AGENT_LOGINS
+              value: {{ include "clearance.csv" . | quote }}
+            {{- end }}
+            {{- with .Values.gate.modelRoutes }}
+            - name: MODEL_ROUTES
+              value: {{ include "clearance.csv" . | quote }}
+            {{- end }}
+            {{- if .Values.githubApp.enabled }}
+            - name: CLEARANCE_GITHUB_APP_ID
+              value: {{ required "githubApp.appId is required with githubApp.enabled" .Values.githubApp.appId | quote }}
+            - name: CLEARANCE_GITHUB_APP_KEY_FILE
+              value: /etc/clearance/github-app/{{ .Values.githubApp.privateKeyKey }}
+            - name: CLEARANCE_GITHUB_APP_WEBHOOK_SECRET_FILE
+              value: /etc/clearance/github-app/{{ .Values.githubApp.webhookSecretKey }}
+            - name: CLEARANCE_GITHUB_APP_COMMENTS
+              value: {{ .Values.githubApp.comments | quote }}
+            {{- with .Values.githubApp.api }}
+            - name: CLEARANCE_GITHUB_API
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
+            {{- include "clearance.sharedEnv" . | nindent 12 }}
+            {{- with .Values.core.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- include "clearance.probes" (dict "startupSeconds" (int .Values.core.startupSeconds)) | nindent 10 }}
+          resources:
+            {{- toYaml .Values.core.resources | nindent 12 }}
+          securityContext:
+            {{- include "clearance.securityContext" . | nindent 12 }}
+          volumeMounts:
+            {{- include "clearance.sharedMounts" . | nindent 12 }}
+            {{- if .Values.githubApp.enabled }}
+            - name: github-app
+              mountPath: /etc/clearance/github-app
+              readOnly: true
+            {{- end }}
+            {{- with .Values.core.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        {{- include "clearance.sharedVolumes" . | nindent 8 }}
+        {{- if .Values.githubApp.enabled }}
+        - name: github-app
+          secret:
+            secretName: {{ include "clearance.githubAppSecret" . }}
+            defaultMode: 0400
+            items:
+              - {key: {{ .Values.githubApp.privateKeyKey | quote }}, path: {{ .Values.githubApp.privateKeyKey | quote }}}
+              - {key: {{ .Values.githubApp.webhookSecretKey | quote }}, path: {{ .Values.githubApp.webhookSecretKey | quote }}}
+        {{- end }}
+        {{- with .Values.core.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.core.nodeSelector }}
+      nodeSelector: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.core.tolerations }}
+      tolerations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.core.affinity }}
+      affinity: {{ toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "clearance.coreName" . }}
+  labels:
+    {{- include "clearance.labels" . | nindent 4 }}
+    app.kubernetes.io/component: core
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "clearance.selector" (dict "ctx" . "component" "core") | nindent 4 }}
+  ports:
+    - {name: http, port: {{ .Values.service.port }}, targetPort: http, protocol: TCP}

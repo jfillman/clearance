@@ -1,0 +1,24 @@
+Clearance {{ .Chart.AppVersion }} is installed in {{ .Release.Namespace }}.
+
+  core: http://{{ include "clearance.coreName" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}   (one replica: the one writer)
+{{- if .Values.api.enabled }}
+  api:  http://{{ include "clearance.apiName" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}   ({{ .Values.api.replicas }} replicas)
+{{- end }}
+
+Callers authenticate with a projected service-account token for the audience "{{ .Values.audience }}".
+{{- if not .Values.providers }}
+
+WARNING: no providers are registered (values: providers), so nobody may evaluate or record.
+{{- end }}
+{{- if and .Values.networkPolicy.enabled (not .Values.networkPolicy.core.from) }}
+WARNING: networkPolicy.core.from is empty, so no pod can reach the core.
+{{- end }}
+{{- if and .Values.api.enabled (not .Values.database.reader.existingSecret) (not (and .Values.cnpg.enabled .Values.cnpg.reader.enabled)) }}
+NOTE: the api uses the core's database credentials (opened read-only). Prefer a read-only role:
+      database.reader.existingSecret.
+{{- end }}
+{{- if not .Values.backstage.url }}
+NOTE: no backstage.url, so the gate has no group directory: no person can clear a tier-2 or tier-3 change.
+{{- end }}
+
+Verify the evidence chain:  helm test {{ .Release.Name }} -n {{ .Release.Namespace }} --logs

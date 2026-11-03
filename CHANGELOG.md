@@ -11,8 +11,15 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ### Added
 - `CHANGELOG.md` (this file) and a release workflow: a `v*` tag on `main` builds the wheel and publishes a GitHub
-  Release with this file's section for the version as its notes, and fails when the section is missing. Image and
-  Helm chart jobs are placeholders until the Go image and chart exist.
+  Release with this file's section for the version as its notes, and fails when the section is missing.
+- Clearance's own image and Helm chart (R-2): `Dockerfile` (static `CGO_ENABLED=0 -trimpath` build onto
+  `gcr.io/distroless/static-debian12:nonroot` pinned by digest, uid 65532) and `charts/clearance` (the core as one
+  `Recreate` replica, clearance-api with 2 replicas and a PodDisruptionBudget, Services, default-deny NetworkPolicy,
+  optional CloudNativePG cluster with a read-only role, ExternalSecrets and HTTPRoutes, `helm test` chain verify,
+  a value for every core variable). The release workflow now pushes `ghcr.io/jfillman/clearance:vX.Y.Z` (amd64 and
+  arm64, SPDX SBOM, keyless signature) and `oci://ghcr.io/jfillman/charts/clearance`, and reruns the install test on
+  them. Chart CI (`.github/workflows/chart.yaml`): lint, render tests (`tools/charttest`), kubeconform, and an install
+  test on kind (`tools/chart-install-test`, `tools/installtest`). See [docs/install.md](docs/install.md).
 - `tools/release_notes.py`: print one version's section (the workflow's notes; exits 1 when there is none).
 - The Go core (R-1): one `clearance` binary (`core [--memory]`, `chain verify`, `register`, `conformance`, `version`); the
   decision engine on cel-go with a golden corpus replayed from the Python engine; the Postgres store extending the

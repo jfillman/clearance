@@ -1,0 +1,48 @@
+{{- if .Values.cnpg.enabled }}
+# Clearance's database: one CloudNativePG Cluster. CNPG creates the database and its owner and writes the owner's
+# DSN to <name>-app (key uri), which the core reads as CLEARANCE_DSN; no credential is written by hand.
+{{- $reader := .Values.cnpg.reader }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ include "clearance.pgName" . }}
+  labels:
+    {{- include "clearance.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  instances: {{ .Values.cnpg.instances }}
+  {{- with .Values.cnpg.imageName }}
+  imageName: {{ . }}
+  {{- end }}
+  storage:
+    size: {{ .Values.cnpg.storage.size }}
+    {{- with .Values.cnpg.storage.storageClass }}
+    storageClass: {{ . }}
+    {{- end }}
+  resources:
+    {{- toYaml .Values.cnpg.resources | nindent 4 }}
+  bootstrap:
+    initdb:
+      database: {{ .Values.cnpg.database }}
+      owner: {{ .Values.cnpg.owner }}
+      {{- if $reader.enabled }}
+      # The api's read-only role: created here so the owner's default privileges can name it before the core
+      # creates its tables; the managed role below gives it a login and its password.
+      postInitApplicationSQL:
+        - CREATE ROLE {{ $reader.name }} NOLOGIN
+        - GRANT CONNECT ON DATABASE {{ .Values.cnpg.database }} TO {{ $reader.name }}
+        - GRANT USAGE ON SCHEMA public TO {{ $reader.name }}
+        - ALTER DEFAULT PRIVILEGES FOR ROLE {{ .Values.cnpg.owner }} IN SCHEMA public GRANT SELECT ON TABLES TO {{ $reader.name }}
+      {{- end }}
+  {{- if $reader.enabled }}
+  managed:
+    roles:
+      - name: {{ $reader.name }}
+        ensure: present
+        login: true
+        inherit: true
+        connectionLimit: 20
+        passwordSecret:
+          name: {{ include "clearance.readerSecretName" . }}
+  {{- end }}
+{{- end }}

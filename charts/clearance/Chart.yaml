@@ -1,0 +1,19 @@
+apiVersion: v2
+name: clearance
+description: >-
+  Clearance: change assurance in the path of every change. The core (decisions, the evidence chain, the deployment
+  gate, provenance and the GitHub App webhook) and clearance-api (the read API), one image.
+type: application
+# The release workflow packages the chart at the tag's version (vX.Y.Z -> X.Y.Z) for both fields; these are the
+# development placeholders.
+version: 0.0.0-dev
+appVersion: 0.0.0-dev
+kubeVersion: ">=1.27.0-0"
+home: https://github.com/jfillman/clearance
+sources:
+  - https://github.com/jfillman/clearance
+keywords: [clearance, change-assurance, deployment-gate, evidence, policy]
+annotations:
+  # Optional dependencies, used only when their values are on: CloudNativePG (cnpg.enabled), External Secrets
+  # Operator (externalSecrets.enabled), Gateway API (httpRoutes.*.enabled). Nothing from Airframe or Glidepath.
+  clearance.hangarplatform.dev/optional-crds: postgresql.cnpg.io/v1, external-secrets.io/v1, gateway.networking.k8s.io/v1

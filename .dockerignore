@@ -1,0 +1,22 @@
+# Keep the build context to what the Go build reads (the Dockerfile COPYs a fixed list anyway).
+.git
+.github
+.venv
+**/__pycache__
+brand
+charts
+clients
+contract
+docs
+register
+src
+testdata
+tests
+tools/golden
+tools/pyclient
+tools/contract
+*.md
+*.toml
+uv.lock
+mkdocs.yml
+catalog-info.yaml
