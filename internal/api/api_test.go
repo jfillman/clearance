@@ -782,6 +782,8 @@ func TestTheAPIListsChangesThePersonMayClearOrOwns(t *testing.T) {
 			t.Errorf("by tier (the key is text, as api.py): %s", b)
 		}
 		h.status(t, 400, "GET", "/v1/clearances/counts?by=nope", "audit", "")
+		h.status(t, 400, "GET", "/v1/clearances/counts?state=odd", "audit", "")
+		h.status(t, 400, "GET", "/v1/clearances/counts?since=nope", "audit", "")
 		h.status(t, 400, "GET", "/v1/clearances?state=odd", "audit", "")
 		h.status(t, 400, "GET", "/v1/clearances?pr=x", "audit", "")
 		h.status(t, 400, "GET", "/v1/clearances?since=nope", "audit", "")
