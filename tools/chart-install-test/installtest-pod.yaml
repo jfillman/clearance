@@ -1,0 +1,44 @@
+# The fake provider: the service account clearance-test/fake-provider (registered by ci/install-values.yaml as a
+# provider, a verifier and an auditor), with a projected token for the core's audience.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: clearance-test
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fake-provider
+  namespace: clearance-test
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: installtest
+  namespace: clearance-test
+  labels: {app: installtest}
+spec:
+  serviceAccountName: fake-provider
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    seccompProfile: {type: RuntimeDefault}
+  containers:
+    - name: installtest
+      image: ${INSTALLTEST_IMAGE}
+      imagePullPolicy: Never
+      args: ["--core", "http://clearance-core.clearance.svc:8080", "--api", "${API_URL}", "--token-file", "/var/run/clearance/token"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities: {drop: ["ALL"]}
+      volumeMounts:
+        - {name: token, mountPath: /var/run/clearance, readOnly: true}
+  volumes:
+    - name: token
+      projected:
+        sources:
+          - serviceAccountToken: {path: token, audience: clearance, expirationSeconds: 3600}

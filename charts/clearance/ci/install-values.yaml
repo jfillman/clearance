@@ -1,0 +1,22 @@
+# The install test (.github/workflows/chart.yaml, tools/chart-install-test): kind, a plain Postgres
+# (tools/chart-install-test/postgres.yaml, Secret clearance-db), and a fake provider: the pod
+# clearance-test/installtest running as the service account clearance-test/fake-provider.
+database:
+  existingSecret: clearance-db
+providers:
+  - {name: installtest, version: "0.1.0", principals: ["clearance-test/fake-provider"]}
+verifiers: ["clearance-test/fake-provider"]
+api:
+  auditors: ["clearance-test/fake-provider"]
+networkPolicy:
+  core:
+    from:
+      - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: clearance-test}}
+        podSelector: {matchLabels: {app: installtest}}
+  api:
+    from:
+      - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: clearance-test}}
+        podSelector: {matchLabels: {app: installtest}}
+  postgres:
+    to:
+      - podSelector: {matchLabels: {app: postgres}}
