@@ -12,7 +12,8 @@ Clearance installs alone: the core knows nothing about Airframe, Glidepath or an
 
 **Built, not deployed.** The core is being ported to Go: one module (`go.mod`), one static binary `clearance` with the
 subcommands `core` (the HTTP API: decisions, outcomes, provider records, the gate, provenance, the GitHub App),
-`chain verify`, `register`, `conformance` (Proposal: R-1f, in progress) and `version`. Its contract is
+`chain verify`, `register`, `conformance` ([docs/provider-protocol.md](docs/provider-protocol.md)) and `version`, plus the Go and Python clients
+(`client`, `clients/python`). Its contract is
 [`contract/clearance-core.json`](contract/clearance-core.json); the decision engine replays a golden corpus recorded
 from the Python engine with identical decisions; the store uses the Python core's tables and writer lock. See
 [docs/core.md](docs/core.md). Until W1 switches over, the live hangar-dev gateway runs the Python core, and the
@@ -90,7 +91,7 @@ D16); its history came with it. Design: Hangar's `docs/autopilot/design.md`, sec
 ## Docs
 
 The TechDocs site is `mkdocs.yml` over `docs/` (home, the Go core, clearance-api, the deployment gate, the evidence
-record, the provenance App), published in Hangar's
+record, the provider protocol and `clearance conformance`, the provenance App), published in Hangar's
 portal from `catalog-info.yaml` (`backstage.io/techdocs-ref: dir:.`). Preview locally with `pip install
 mkdocs-techdocs-core && mkdocs serve`.
 

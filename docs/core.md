@@ -18,7 +18,7 @@ session. It is one Go module, `github.com/jfillman/clearance`, built as one stat
 | `clearance core` | Serves the core over HTTP (the API below) from the environment. `--memory` runs it on an in-memory store (tests and local runs; nothing is kept). `--insecure-dev-auth`, with `--memory` only, accepts `Bearer <principal>` as that principal. `--listen` overrides `CLEARANCE_LISTEN`. SIGTERM shuts it down gracefully (20 s for requests in flight). | Built |
 | `clearance chain verify` | Verifies an evidence chain from genesis, from a JSONL dump (`--file`, `-` for stdin) or a read-only Postgres connection (`--dsn`, default `$CLEARANCE_DSN`). `--anchor <count>:<head>` checks that a checkpoint taken elsewhere is still held, which catches truncation. | Built |
 | `clearance register` | The Go port of `register.py`: a customer's CI registers what it deploys with the deployment gate (the diff of two rendered manifest directories), authenticated by the workflow's GitHub Actions OIDC token or `--token-file`. Same flags as the Python command, except that `--paths-from-git` with a base is refused, because the binary does not shell out. Without it, the paths are the files that differ between `--before` and `--after`. | Built |
-| `clearance conformance` | Runs a fake target and a fake change against a gate provider and proves hold, clear, release and an outcome whose digest matches the cleared subject (R-1f). | Proposal (R-1f, in progress) |
+| `clearance conformance` | `--provider <url> --role runtime\|deployment`: starts an in-memory core and a fake target, drives the provider through a fake call or a fake change, and proves hold, clear, release and an outcome whose digest matches the cleared subject, one PASS or FAIL line per rule ([provider-protocol.md](provider-protocol.md)). | Built (R-1f) |
 | `clearance version` | Prints the build version (`-ldflags "-X main.version=vX.Y.Z"`, else the module version). | Built |
 
 ## The API
@@ -75,6 +75,13 @@ A JSON array (at most 64 KiB), strictly decoded. Without it no caller may evalua
   the server indexes `outcome_of` at start and keeps the index while it is the one writer.
 - **Provider records.** Sealed with the provider's name and version. Only `provider` and `ts` are verified;
   everything else is claimed. Each kind has its required fields and its boundary (`internal/server/records.go`).
+
+### Clients
+
+`client` (Go, the standard library only) and `clients/python` (generated from the contract, released with each tag)
+call this API. Both report an unreachable core as a distinct error (`client.ErrCoreUnavailable`) that the caller's
+outage policy acts on: by default, fail closed. The Python client (`clearance_client.CoreClient`) is what the
+Autopilot gateway calls once R-3 moves it; in tests, `clearance core --memory` stands in for a deployed core (R-1e).
 
 Record fields and the verified and claimed tags are the clearance.evidence/v1 shape ([evidence.md](evidence.md)).
 Arguments are stored only as a hash (`args_sha256`, `canon.ArgsDigest`).

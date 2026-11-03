@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "clearance-core-client"
+# The version is the clearance release's (the tag vX.Y.Z), generated into _version.py by tools/pyclient.
+dynamic = ["version"]
+description = "Python client of the Clearance core's HTTP API, generated from contract/clearance-core.json"
+readme = "README.md"
+requires-python = ">=3.11"
+# Standard library only.
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[tool.hatch.version]
+path = "src/clearance_client/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/clearance_client"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/clearance_client", "README.md", "pyproject.toml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
