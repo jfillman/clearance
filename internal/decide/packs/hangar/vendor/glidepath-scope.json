@@ -1,0 +1,186 @@
+{
+  "rules": [
+    {
+      "pattern": "/apiVersion",
+      "agentScope": "human"
+    },
+    {
+      "pattern": "/kind",
+      "agentScope": "human"
+    },
+    {
+      "pattern": "/secrets",
+      "agentScope": "human",
+      "why": "Names the Infisical keys mounted into pipeline steps. An agent must not widen what its own pipeline can read."
+    },
+    {
+      "pattern": "/governance/allowedCommitSigners",
+      "agentScope": "human",
+      "why": "Who may sign a released commit. The provenance gate reads it; an agent must never add itself."
+    },
+    {
+      "pattern": "/deploy/target",
+      "agentScope": "human",
+      "why": "Switches the deploy path and the cloud identity it assumes."
+    },
+    {
+      "pattern": "/deploy/releaseFile",
+      "agentScope": "human",
+      "why": "The file a release writes; a wrong path deploys nowhere or somewhere else."
+    },
+    {
+      "pattern": "/deploy/chart",
+      "agentScope": "human"
+    },
+    {
+      "pattern": "/deploy/ecs",
+      "agentScope": "human"
+    },
+    {
+      "pattern": "/deploy/lambda",
+      "agentScope": "human"
+    },
+    {
+      "pattern": "/deploy/azureContainerApps",
+      "agentScope": "human"
+    },
+    {
+      "pattern": "/deploy/environments/*/ecs",
+      "agentScope": "human"
+    },
+    {
+      "pattern": "/deploy/environments/*/lambda",
+      "agentScope": "human"
+    },
+    {
+      "pattern": "/deploy/environments/*/azureContainerApps",
+      "agentScope": "human"
+    },
+    {
+      "pattern": "/deploy/environments/*/chart",
+      "agentScope": "human"
+    },
+    {
+      "pattern": "/deploy/environments/*/cluster",
+      "agentScope": "human"
+    },
+    {
+      "pattern": "/deploy/environments/*/production",
+      "agentScope": "human"
+    },
+    {
+      "pattern": "/api",
+      "agentScope": "human",
+      "why": "The spec the api-compat release gate compares; moving it changes what the gate checks."
+    },
+    {
+      "pattern": "/pipelines/*/steps/*/cluster",
+      "agentScope": "human"
+    },
+    {
+      "pattern": "/pipelines/*/steps/*/gitopsRepo",
+      "agentScope": "human"
+    },
+    {
+      "pattern": "/pipelines/*/steps/*/manifestPath",
+      "agentScope": "human"
+    },
+    {
+      "pattern": "/pipelines/*/*/cluster",
+      "agentScope": "human"
+    },
+    {
+      "pattern": "/pipelines/*/*/gitopsRepo",
+      "agentScope": "human"
+    },
+    {
+      "pattern": "/pipelines/*/*/manifestPath",
+      "agentScope": "human"
+    },
+    {
+      "pattern": "/governance/sast",
+      "agentScope": "tighten",
+      "order": "bool",
+      "default": false
+    },
+    {
+      "pattern": "/governance/imageScan",
+      "agentScope": "tighten",
+      "order": "bool",
+      "default": false
+    },
+    {
+      "pattern": "/governance/policyCheck",
+      "agentScope": "tighten",
+      "order": "bool",
+      "default": false
+    },
+    {
+      "pattern": "/governance/sbom",
+      "agentScope": "tighten",
+      "order": "bool",
+      "default": false
+    },
+    {
+      "pattern": "/governance/githubMerge/mode",
+      "agentScope": "tighten",
+      "order": [
+        "",
+        "merger",
+        "strict"
+      ],
+      "default": ""
+    },
+    {
+      "pattern": "/governance/githubMerge/requiredApprovals",
+      "agentScope": "tighten",
+      "order": "int",
+      "default": 0
+    },
+    {
+      "pattern": "/pipelines/*/steps/*/required",
+      "agentScope": "tighten",
+      "order": "bool",
+      "default": true
+    },
+    {
+      "pattern": "/pipelines/*/*/required",
+      "agentScope": "tighten",
+      "order": "bool",
+      "default": true
+    },
+    {
+      "pattern": "/build",
+      "agentScope": "open"
+    },
+    {
+      "pattern": "/test",
+      "agentScope": "open"
+    },
+    {
+      "pattern": "/ephemeralEnvironments",
+      "agentScope": "open"
+    },
+    {
+      "pattern": "/notifications",
+      "agentScope": "open"
+    },
+    {
+      "pattern": "/deploy/strategy",
+      "agentScope": "open"
+    },
+    {
+      "pattern": "/deploy/environments",
+      "agentScope": "open"
+    },
+    {
+      "pattern": "/pipelines",
+      "agentScope": "open"
+    }
+  ],
+  "structural": {
+    "GP-SCOPE-002": "a flow loses a check-ride step or a required test step",
+    "GP-SCOPE-003": "a Flight environment is added, removed or changed, or an environment changes tier"
+  },
+  "implementation": "tools/cicd_scope.py"
+}
