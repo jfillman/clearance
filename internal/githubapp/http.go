@@ -1,9 +1,10 @@
 package githubapp
 
 import (
-	"encoding/json"
 	"io"
 	"net/http"
+
+	"github.com/jfillman/clearance/internal/httpjson"
 )
 
 // MaxWebhookBody is GitHub's own payload cap (25 MiB).
@@ -22,26 +23,18 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 
 func (h *Handler) webhook(w http.ResponseWriter, r *http.Request) {
 	if h.App == nil {
-		writeJSON(w, http.StatusNotFound, map[string]any{"error": "this Clearance runs no GitHub App"})
+		httpjson.Write(w, http.StatusNotFound, map[string]any{"error": "this Clearance runs no GitHub App"})
 		return
 	}
 	raw, err := io.ReadAll(io.LimitReader(r.Body, MaxWebhookBody+1))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"result": "not JSON"})
+		httpjson.Write(w, http.StatusBadRequest, map[string]any{"result": "not JSON"})
 		return
 	}
 	if len(raw) > MaxWebhookBody {
-		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": "body too large"})
+		httpjson.Write(w, http.StatusRequestEntityTooLarge, map[string]any{"error": "body too large"})
 		return
 	}
 	status, word := h.App.Accept(r.Header.Get("X-GitHub-Event"), raw, r.Header.Get("X-Hub-Signature-256"))
-	writeJSON(w, status, map[string]any{"result": word})
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	enc := json.NewEncoder(w)
-	enc.SetEscapeHTML(false)
-	_ = enc.Encode(v)
+	httpjson.Write(w, status, map[string]any{"result": word})
 }

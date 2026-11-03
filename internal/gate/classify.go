@@ -2,6 +2,7 @@ package gate
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/jfillman/clearance/internal/pycompat"
@@ -202,7 +203,7 @@ func Classify(req ChangeRequest, baseline Policy, tools review.Registry, problem
 	if tier == 1 {
 		var missing []string
 		for _, c := range checksOK {
-			if v, ok := req.Checks[c.name]; !ok || !contains(c.ok, v) {
+			if v, ok := req.Checks[c.name]; !ok || !slices.Contains(c.ok, v) {
 				missing = append(missing, c.name)
 			}
 		}

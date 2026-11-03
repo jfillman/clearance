@@ -6,6 +6,7 @@ import (
 	"math"
 	"math/big"
 	"os"
+	"regexp"
 	"testing"
 )
 
@@ -164,4 +165,21 @@ func TestDecodeJSON(t *testing.T) {
 	if _, err := DecodeJSON(deep); err == nil {
 		t.Error("deep nesting must fail")
 	}
+}
+
+// FuzzFnmatchTranslate: every pattern translates to an expression Go compiles (so no glob silently matches nothing
+// for a reason Python would not have), and matching never panics.
+func FuzzFnmatchTranslate(f *testing.F) {
+	for _, p := range []string{"a*c", "[z-a]", "[!z-a]", "[a-cz-x]", "[]-]", "[!]]", "[", "[[:alpha:]]", "[a&&b]", "é[é-ü]"} {
+		f.Add(p, "abc")
+	}
+	f.Fuzz(func(t *testing.T, pat, name string) {
+		if len(pat) > 256 {
+			return
+		}
+		if _, err := regexp.Compile(FnmatchTranslate(pat)); err != nil {
+			t.Fatalf("%q -> %s: %v", pat, FnmatchTranslate(pat), err)
+		}
+		_ = Match(name, pat)
+	})
 }

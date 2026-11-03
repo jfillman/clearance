@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -217,7 +218,7 @@ func Parse(doc map[string]any) (AgentDefinition, error) {
 	p := doc["profile"].(map[string]any)
 	lim := p["limits"].(map[string]any)
 	tools := strs(p["tools"])
-	if contains(tools, "human.request") {
+	if slices.Contains(tools, "human.request") {
 		tools = append(tools, "human.request.get") // an agent that may ask may read its own answers
 	}
 	limits := Limits{
@@ -407,15 +408,6 @@ func integer(v any) int64 {
 	}
 	i, _ := pycompat.AsInt(v)
 	return i
-}
-
-func contains(xs []string, x string) bool {
-	for _, y := range xs {
-		if y == x {
-			return true
-		}
-	}
-	return false
 }
 
 func dedupe(xs []string) []string {

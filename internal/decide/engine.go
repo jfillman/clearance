@@ -234,7 +234,7 @@ func (e *Engine) run(ctx context.Context, act *activation, in *CallInput, states
 // EvaluateActivation runs the rules over a raw activation shaped like the Python one ({"tool": {...},
 // "effective": {...}, "session": {...}, "cost": {...}, "ctx": {...}}), with no context building. It is the
 // diagnostic replay of a context the Python tests built or altered by hand; packs' structured decisions do not
-// apply. Values are pyval values (DecodeJSON).
+// apply. Values are pycompat dict-model values (pycompat.DecodeJSON).
 func (e *Engine) EvaluateActivation(ctx context.Context, raw *pycompat.Map) Decision {
 	act := &activation{slots: e.b.slots, vals: make([]ref.Val, len(e.b.slots))}
 	for i := range raw.Len() {

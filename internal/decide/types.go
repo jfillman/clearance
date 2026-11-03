@@ -256,7 +256,7 @@ func (i Int) Big() *big.Int {
 	return big.NewInt(i.n)
 }
 
-// Value is the value as a pyval integer (int64 or *big.Int).
+// Value is the value as a pycompat integer (int64 or *big.Int).
 func (i Int) Value() any {
 	if i.b != nil {
 		return i.b

@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -74,7 +75,7 @@ func (v tokenVerifier) verify(ctx context.Context, token, rejected string) (map[
 		return nil, refuse(rejected)
 	}
 	// The alg is checked before the key is looked up, so a token with a disallowed alg never triggers a fetch.
-	if !contains(v.algs, t.Alg()) {
+	if !slices.Contains(v.algs, t.Alg()) {
 		return nil, refuse(rejected)
 	}
 	key, err := v.keys.Key(ctx, t.Kid())

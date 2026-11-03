@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -122,21 +123,12 @@ func parseRegisterArgs(argv []string, env map[string]string, stderr io.Writer) (
 		fmt.Fprintf(stderr, "clearance register: the following arguments are required: %s\n", strings.Join(missing, ", "))
 		return nil, exitUsage
 	}
-	if !contains(gate.ProposerKinds, a.proposerKind) {
+	if !slices.Contains(gate.ProposerKinds, a.proposerKind) {
 		fmt.Fprintf(stderr, "clearance register: argument --proposer-kind: invalid choice: %s (choose from %s)\n",
 			pycompat.Repr(a.proposerKind), strings.Join(gate.ProposerKinds, ", "))
 		return nil, exitUsage
 	}
 	return a, -1
-}
-
-func contains(xs []string, s string) bool {
-	for _, x := range xs {
-		if x == s {
-			return true
-		}
-	}
-	return false
 }
 
 // checksBody is the checks object in register.py's order: render first, then each --check (a repeat updates it).

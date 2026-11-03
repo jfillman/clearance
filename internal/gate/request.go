@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -132,7 +133,7 @@ func ParseRequest(v any) (ChangeRequest, error) {
 	if err != nil {
 		return r, err
 	}
-	if !contains(ProposerKinds, r.ProposerKind) {
+	if !slices.Contains(ProposerKinds, r.ProposerKind) {
 		return r, bad("proposerKind is person, agent or unknown")
 	}
 	r.Owner = s("owner", groupRx, false, "")
@@ -191,7 +192,7 @@ func ParseRequest(v any) (ChangeRequest, error) {
 			op = v
 		}
 		opS, _ := op.(string)
-		if !contains(ops, opS) {
+		if !slices.Contains(ops, opS) {
 			return r, bad("objects[].op is added, changed or removed")
 		}
 		fields, okf := listOfStrings(o, "fields", func(s string) bool { return strings.HasPrefix(s, "/") })
@@ -297,13 +298,4 @@ func listOfStrings(d map[string]any, k string, want func(string) bool) ([]string
 		out = append(out, s)
 	}
 	return out, true
-}
-
-func contains(list []string, s string) bool {
-	for _, x := range list {
-		if x == s {
-			return true
-		}
-	}
-	return false
 }

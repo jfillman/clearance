@@ -122,7 +122,7 @@ func strp(s *string) any {
 
 func itoa(n int) string { return I(int64(n)).String() }
 
-// digest is audit.args_digest over a pyval value.
+// digest is audit.args_digest over a dict-model value (pycompat).
 func digest(v any) string {
 	d, err := canon.ArgsDigest(pycompat.ToJSON(v))
 	if err != nil {

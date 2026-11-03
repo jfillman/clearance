@@ -13,6 +13,7 @@ import (
 	"io"
 	"math"
 	"math/big"
+	"slices"
 	"strings"
 	"time"
 )
@@ -95,7 +96,7 @@ func (t *JWT) Kid() string { s, _ := t.Header["kid"].(string); return s }
 // other algorithm is implemented, so none, HMAC and every other alg are refused whatever algs says.
 func (t *JWT) verifySignature(key crypto.PublicKey, algs []string) error {
 	alg := t.Alg()
-	if !contains(algs, alg) {
+	if !slices.Contains(algs, alg) {
 		return refuse("the specified alg value is not allowed")
 	}
 	if _, crit := t.Header["crit"]; crit {
@@ -216,13 +217,4 @@ func (c claimChecks) verify(claims map[string]any, now time.Time) error {
 		return refuse("invalid audience claim")
 	}
 	return nil
-}
-
-func contains(xs []string, x string) bool {
-	for _, y := range xs {
-		if y == x {
-			return true
-		}
-	}
-	return false
 }
