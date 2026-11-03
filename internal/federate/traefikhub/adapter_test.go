@@ -229,7 +229,7 @@ func TestTheCoreHoldsFederatedRecordsToObservation(t *testing.T) {
 		"a rule":                    func(e *client.ProviderEvent) { e.Rule = client.String("R021") },
 		"a tier":                    func(e *client.ProviderEvent) { e.Tier = &tier },
 		"an effect":                 func(e *client.ProviderEvent) { e.Effect = map[string]any{"pr": 1} },
-		"a tool":                    func(e *client.ProviderEvent) { e.Tool = client.String("repo.read") },
+		"a tool (refused by event)": func(e *client.ProviderEvent) { e.Tool = client.String("repo.read") },
 		"no coverage":               func(e *client.ProviderEvent) { e.Coverage = nil },
 		"no result":                 func(e *client.ProviderEvent) { e.Result = nil },
 	} {

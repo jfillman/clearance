@@ -31,7 +31,7 @@ func FuzzIngest(f *testing.F) {
 		for _, r := range recs {
 			e := r.Record
 			if r.Kind != traefikhub.Kind || e.Decision == nil || (*e.Decision != "allow" && *e.Decision != "deny") ||
-				e.Result == nil || *e.Result == "" && false || e.Coverage == nil || e.Rule != nil || e.Tier != nil {
+				e.Result == nil || *e.Result == "" || e.Coverage == nil || e.Rule != nil || e.Tier != nil {
 				t.Fatalf("%+v", r)
 			}
 			switch *e.Coverage {

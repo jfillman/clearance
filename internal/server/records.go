@@ -222,7 +222,7 @@ func (s *Server) checkOutageRead(e *ProviderEvent) error {
 
 // checkFederated holds a federated.decision to what an observer can say: another PDP's verdict, attributed to a task
 // only when the source correlated one, and nothing that would read as the core's decision (a rule or tier) or as
-// a write (an effect, an outcome, a change).
+// a write (an effect, an outcome, a change). A tool is refused before this, by event (only tool.call carries one).
 func checkFederated(e *ProviderEvent) error {
 	switch {
 	case *e.Coverage != CoverageObserved && *e.Coverage != CoverageAttributed:
@@ -234,8 +234,6 @@ func checkFederated(e *ProviderEvent) error {
 		return fmt.Errorf("a %s record carries no rule or tier: the core decided nothing", FederatedKind)
 	case e.Effect != nil || e.Outcome != nil || e.Change != nil:
 		return fmt.Errorf("a %s record is a decision: no effect, outcome or change", FederatedKind)
-	case e.Tool != nil:
-		return fmt.Errorf("tool is set on a %s record only (a %s record's tool is its kind)", OutageKind, FederatedKind)
 	}
 	return nil
 }
