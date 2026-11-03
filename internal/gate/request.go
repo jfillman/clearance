@@ -49,6 +49,8 @@ type ChangeRequest struct {
 	Objects                 []ObjectChange
 	Checks                  Checks
 	Policy                  map[string]any // the repo's clearance.yaml at head, if any (nil = none)
+	PolicyCommit            string         // the commit that last changed that clearance.yaml ("" = not said)
+	Admission               *Admission     // the verifier's offline admission result (nil = none sent)
 	Agent                   *string
 	// Definition is an agent definition's release: {name, path, old, new}; old nil = a new agent, new nil = removed.
 	Definition map[string]any
@@ -61,7 +63,7 @@ func (r ChangeRequest) ID() string {
 }
 
 var requestKeys = setOf("app", "env", "cluster", "repo", "pr", "head", "base", "proposer", "proposerKind", "owner",
-	"protected", "treeDigest", "paths", "linesChanged", "objects", "checks", "policy", "agent", "definition")
+	"protected", "treeDigest", "paths", "linesChanged", "objects", "checks", "policy", "policyCommit", "admission", "agent", "definition")
 var objectKeys = setOf("apiVersion", "kind", "namespace", "name", "op", "fields", "images", "digest")
 var definitionKeys = setOf("name", "path", "old", "new")
 
@@ -246,6 +248,28 @@ func ParseRequest(v any) (ChangeRequest, error) {
 			return r, bad("policy (clearance.yaml) is an object")
 		}
 		r.Policy = m
+	}
+	if v := d["policyCommit"]; v != nil && v != "" {
+		str, isStr := v.(string)
+		if !isStr || !shaRx.MatchString(str) {
+			return r, bad("policyCommit is the 40-hex commit that last changed clearance.yaml")
+		}
+		if r.Policy == nil {
+			return r, bad("policyCommit names the commit of the clearance.yaml sent as policy; there is none")
+		}
+		r.PolicyCommit = str
+	}
+	if v := d["admission"]; v != nil {
+		a, aerr := parseAdmission(v)
+		if aerr != nil {
+			return r, aerr
+		}
+		// The admission result is a check result: checks.admission, when sent, is its verdict.
+		if cur, present := r.Checks["admission"]; present && cur != a.Verdict {
+			return r, bad("checks.admission (%s) is not admission.verdict (%s)", pycompat.Repr(cur), pycompat.Repr(a.Verdict))
+		}
+		r.Checks["admission"] = a.Verdict
+		r.Admission = a
 	}
 	if v := d["agent"]; v != nil {
 		str, isStr := v.(string)

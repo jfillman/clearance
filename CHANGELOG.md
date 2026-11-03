@@ -9,6 +9,16 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Added
+- C-8: every deployment decision records its policy. Each `deploy.*` record carries a `policy` group:
+  `ref` (`clearance.yaml@<commit>`, `clearance.yaml@sha256:<digest>` or `baseline`), `version` (the gate baseline
+  plus the `clearance.yaml` digest), and the offline admission result the verifier sent: `engine`
+  (`kyverno/<version>`, or `none`), `verdict` (`pass`, `warn`, `fail`, `skipped`, `error`, or `not-evaluated`) and
+  `bundle` (the rule set, `<repo>//<path>@<commit>`). `POST /v1/clearances` takes `policyCommit` and
+  `admission {engine, verdict, bundle, deny, warn}` (`checks.admission` must agree with the verdict); the change
+  keeps `policy_ref` and `admission` (optional in the contract: older rows have neither). The verdict is recorded,
+  not enforced. The evidence schema's `policy` gains `verdict` and `bundle` (docs/gate.md "The policy in the record").
+
 ## [0.30.0] - 2026-11-03
 
 R-3: the Python package is gone. Breaking for anyone who installs `clearance` from this repository with pip (or
