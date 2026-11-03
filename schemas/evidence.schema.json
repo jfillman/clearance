@@ -1,0 +1,569 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clearance.hangarplatform.dev/schemas/evidence/v1.json",
+  "title": "clearance.evidence/v1",
+  "description": "One Clearance evidence record (docs/evidence.md). Flat: every field is a top-level key, grouped by x-clearance-group into Identities, Source, Target, Provenance, Decision, Outcome, Coverage, Assurance, Intent and Integrity, and tagged verified or claimed by the record's own lists. Fields not listed here are allowed and are claimed unless the writer verified them. The chain rule is the same for every version.",
+  "x-clearance-revision": 1,
+  "x-clearance-groups": [
+    "identities",
+    "source",
+    "target",
+    "provenance",
+    "decision",
+    "outcome",
+    "coverage",
+    "assurance",
+    "intent",
+    "integrity"
+  ],
+  "type": "object",
+  "required": [
+    "schema",
+    "seq",
+    "ts",
+    "prev_hash",
+    "hash",
+    "boundary",
+    "coverage",
+    "provider",
+    "subject",
+    "tool",
+    "verified",
+    "claimed"
+  ],
+  "properties": {
+    "schema": {
+      "enum": [
+        "clearance.evidence/v1",
+        "clearance.evidence/v0-draft"
+      ],
+      "x-clearance-group": "integrity",
+      "description": "The record shape it was written in. Writers emit clearance.evidence/v1; v0-draft appears only on rows written before the freeze (seq 0-611 on hangar-dev), served projected."
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0,
+      "x-clearance-group": "integrity",
+      "description": "Position in the chain, from 0, no gaps."
+    },
+    "ts": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
+      "x-clearance-group": "integrity",
+      "description": "When the writer recorded it, UTC, second precision."
+    },
+    "prev_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "x-clearance-group": "integrity",
+      "description": "hash of record seq-1; 64 zeros for seq 0."
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "x-clearance-group": "integrity",
+      "description": "SHA-256 over the canonical JSON (sorted keys, no whitespace, UTF-8) of the stored record without hash."
+    },
+    "verified": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true,
+      "x-clearance-group": "integrity",
+      "description": "The fields the writer established itself, sorted."
+    },
+    "claimed": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true,
+      "x-clearance-group": "integrity",
+      "description": "The fields something else asserted, sorted. verified + claimed name every field outside the envelope."
+    },
+    "boundary": {
+      "enum": [
+        "runtime",
+        "deployment"
+      ],
+      "x-clearance-group": "target",
+      "description": "Which boundary wrote it: the runtime gateway (a call) or the deployment gate (a change)."
+    },
+    "provider": {
+      "type": "object",
+      "required": [
+        "name",
+        "version"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9.-]{0,62}$"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "conformance": {
+          "type": "string",
+          "description": "Reserved: the conformance suite version the provider passed (R-1f)."
+        }
+      },
+      "x-clearance-group": "identities",
+      "description": "The registered provider that wrote the record. Set by the writer from its registration, never by the event. The Python gateway is autopilot-gateway."
+    },
+    "subject": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "digests"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "tool-call",
+                "manifest-tree",
+                "terraform-plan",
+                "definition"
+              ]
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "digests": {
+              "type": "object",
+              "minProperties": 1,
+              "maxProperties": 16,
+              "propertyNames": {
+                "pattern": "^[A-Za-z][A-Za-z0-9]{0,31}$"
+              },
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            }
+          }
+        }
+      ],
+      "x-clearance-group": "source",
+      "description": "What the record is about, in in-toto subject style: kind and digests keyed by algorithm (sha256, gitCommit). Null when the record has no subject (an unregistered deployment)."
+    },
+    "app": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-clearance-group": "target",
+      "description": "The application the record acts on, for correlation and ownership."
+    },
+    "task_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-clearance-group": "identities",
+      "description": "The task tree the record belongs to; correlates runtime and deployment records."
+    },
+    "session": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-clearance-group": "identities"
+    },
+    "parent": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-clearance-group": "identities",
+      "description": "The parent session in a run tree."
+    },
+    "principal": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-clearance-group": "identities",
+      "description": "The authenticated caller: a workload, a person (user:<login>), an App installation (app:<id>), a pin (pin:<ns>/<xr>) or policy."
+    },
+    "agent": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-clearance-group": "identities",
+      "description": "The agent definition acting."
+    },
+    "initiator": {
+      "type": "object",
+      "properties": {
+        "sub": {
+          "type": "string"
+        },
+        "iss": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sub"
+      ],
+      "x-clearance-group": "identities",
+      "description": "The initiating human, by IdP subject and issuer. Optional."
+    },
+    "model_version": {
+      "type": "string",
+      "minLength": 1,
+      "x-clearance-group": "identities",
+      "description": "Reserved for AP-C1 (A-4): the pinned model version of a run record."
+    },
+    "tool": {
+      "type": "string",
+      "minLength": 1,
+      "x-clearance-group": "source",
+      "description": "The operation: a tool name (repo.pr.open), or the record's event type (session.open, model.call, deploy.request, provenance.verify)."
+    },
+    "args_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9a-f]{64}$",
+      "x-clearance-group": "source",
+      "description": "SHA-256 of the canonical JSON of the call's arguments. Arguments are never stored."
+    },
+    "change": {
+      "type": "object",
+      "x-clearance-group": "source",
+      "description": "The gate's view of a change (deployment records): id, app, env, cluster, head, tree, tier, state, objects."
+    },
+    "source": {
+      "type": "object",
+      "properties": {
+        "repo": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "images": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "x-clearance-group": "source",
+      "description": "Optional: repository, revision and image digests behind the subject."
+    },
+    "target": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-clearance-group": "target",
+      "description": "What the call is aimed at: an environment tier, a model, a repo#pr, a pin, a request id."
+    },
+    "destination": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string"
+        },
+        "environment": {
+          "type": "string"
+        },
+        "application": {
+          "type": "string"
+        }
+      },
+      "x-clearance-group": "target",
+      "description": "Optional: cluster, environment and Argo application a change lands in."
+    },
+    "provenance": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "enum": [
+            "confirmed-agent",
+            "probable-agent",
+            "confirmed-human",
+            "unknown"
+          ]
+        },
+        "signals": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "tag"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "tag": {
+                "enum": [
+                  "verified",
+                  "claimed"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "x-clearance-group": "provenance",
+      "description": "Optional: provenance confidence and the signals behind it, each tagged."
+    },
+    "decision": {
+      "enum": [
+        "allow",
+        "deny",
+        null
+      ],
+      "x-clearance-group": "decision",
+      "description": "The verdict."
+    },
+    "tier": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        }
+      ],
+      "x-clearance-group": "decision"
+    },
+    "rule": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-clearance-group": "decision",
+      "description": "The rule that decided (a deny rule id, or the rule an allow noted)."
+    },
+    "rules": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "x-clearance-group": "decision",
+      "description": "Optional: every rule that fired, in order."
+    },
+    "reason": {
+      "type": "string",
+      "x-clearance-group": "decision",
+      "description": "Optional: the plain-language reason, apart from the result."
+    },
+    "policy": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "engine": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "x-clearance-group": "decision",
+      "description": "Optional: the policy bundle ref and version and the engine that evaluated it (R-5 fills it)."
+    },
+    "approvals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "sub",
+          "iss"
+        ],
+        "properties": {
+          "sub": {
+            "type": "string"
+          },
+          "iss": {
+            "type": "string"
+          },
+          "via": {
+            "type": "string"
+          },
+          "at": {
+            "type": "string"
+          }
+        }
+      },
+      "x-clearance-group": "decision",
+      "description": "Optional: approver subjects with issuer, channel and time."
+    },
+    "token": {
+      "type": "string",
+      "x-clearance-group": "decision",
+      "description": "Optional: the clearance token reference."
+    },
+    "preflight": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "enum": [
+            "pass",
+            "fail",
+            "not-run"
+          ]
+        },
+        "definition": {
+          "type": "string"
+        },
+        "cases": {
+          "type": "integer"
+        }
+      },
+      "x-clearance-group": "decision",
+      "description": "Reserved for AP-C1 (A-4, A-6): the Preflight result of the run's definition."
+    },
+    "result": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-clearance-group": "outcome",
+      "description": "The call's result line, or the reason of a deny (v0 semantics, kept)."
+    },
+    "effect": {
+      "type": "object",
+      "x-clearance-group": "outcome",
+      "description": "The receipt of a write the writer made itself (repo, pr)."
+    },
+    "outcome": {
+      "type": "object",
+      "properties": {
+        "applied": {
+          "type": "boolean"
+        },
+        "observed_revision": {
+          "type": "string"
+        },
+        "digests": {
+          "type": "object"
+        },
+        "health": {
+          "type": "string"
+        },
+        "rollback": {
+          "type": "object",
+          "properties": {
+            "available": {
+              "type": "boolean"
+            },
+            "used": {
+              "type": "boolean"
+            },
+            "to": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "x-clearance-group": "outcome",
+      "description": "Optional: deployment result, observed revision and digest, health, rollback."
+    },
+    "coverage": {
+      "type": "string",
+      "x-clearance-group": "coverage",
+      "description": "How the event was observed: authorized-and-verified, observed-not-attributed, out-of-band-detected or coverage-unavailable (an enum in v1; v0-draft rows carry what they were written with)."
+    },
+    "assurance": {
+      "enum": [
+        "checkpointed",
+        "recorded-not-checkpointed",
+        "not-recorded"
+      ],
+      "x-clearance-group": "assurance",
+      "readOnly": true,
+      "description": "Kept beside the record, never hashed: whether its hash is under a witnessed checkpoint. Added by a reader (clearance-api)."
+    },
+    "intent": {
+      "type": "object",
+      "required": [
+        "capture",
+        "sha256"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "capture": {
+          "enum": [
+            "redacted",
+            "full"
+          ]
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "x-clearance-group": "intent",
+      "description": "Why, as stated by the agent or the change: redacted (the default) keeps only the SHA-256 of the text; full keeps the text, where the deployment opts in."
+    },
+    "projected": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "x-clearance-group": "integrity",
+      "readOnly": true,
+      "description": "Added by a reader: the fields it derived for a v0-draft row (provider, subject). They are not covered by hash; drop them, assurance and projected before re-hashing."
+    }
+  },
+  "additionalProperties": true,
+  "if": {
+    "properties": {
+      "schema": {
+        "const": "clearance.evidence/v0-draft"
+      }
+    }
+  },
+  "then": {
+    "required": [
+      "projected"
+    ],
+    "properties": {
+      "projected": {
+        "contains": {
+          "const": "provider"
+        }
+      }
+    }
+  },
+  "else": {
+    "properties": {
+      "coverage": {
+        "enum": [
+          "authorized-and-verified",
+          "observed-not-attributed",
+          "out-of-band-detected",
+          "coverage-unavailable"
+        ]
+      }
+    }
+  }
+}

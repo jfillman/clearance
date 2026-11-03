@@ -19,7 +19,7 @@ func run(args ...string) (int, string, string) {
 
 func TestChainVerifyFile(t *testing.T) {
 	code, out, _ := run("--file", extended)
-	if code != 0 || out != "ok 8 head 0715e32f906cb7fea89e530e627e0ba2d92ef7d9dff09cc287d9f35deecb1f1c\n" {
+	if code != 0 || out != "ok 8 head b78fc5cfa8cdf2ad248df9c47c28ee9bcb6ab24c47e32b5c941debaeec967f16\n" {
 		t.Fatalf("code %d out %q", code, out)
 	}
 	raw, err := os.ReadFile(extended)

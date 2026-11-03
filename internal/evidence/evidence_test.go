@@ -44,10 +44,13 @@ var GoEvents = []map[string]any{
 	{"ts": "2026-11-02T11:00:01Z", "tool": "model.call", "spend": map[string]any{"usd": 0.0123, "tokens": 1500},
 		"ratio": 1e-05, "big": json.Number("123456789012345678901234567890"), "note": "café   \U0001f600 <&> \x7f \t\n\"\\"},
 	{"ts": "2026-11-02T11:00:02Z", "tool": "repo.pr.open", "effect": map[string]any{"repo": "jfillman/x", "pr": 8},
-		"coverage": "observed", "labels": []string{"b", "a"}, "env": map[string]string{"￿": "1", "\U00010000": "2"}},
+		"coverage": "observed-not-attributed", "labels": []string{"b", "a"}, "env": map[string]string{"￿": "1", "\U00010000": "2"}},
 	{"ts": "2026-11-02T11:00:03Z", "tool": "deploy.clear", "boundary": "deployment",
 		"floats": []any{0.1, 1.5, 100.0, 1e-7, 2.5e-300, 9999999999999998.0, json.Number("1.50"), json.Number("1E2")}},
 }
+
+// goWriter seals GoEvents.
+var goWriter = Writer{Provider: Provider{Name: "clearance", Version: "0.0.0-test"}}
 
 func mustDigest(v any) string {
 	d, err := canon.ArgsDigest(v)
@@ -87,7 +90,7 @@ func TestExtendPythonChain(t *testing.T) {
 	}
 	head := v.Checkpoint()
 	for _, e := range GoEvents {
-		rec, full, err := Seal(head, e)
+		rec, full, err := Seal(head, e, goWriter)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -116,15 +119,174 @@ func TestExtendPythonChain(t *testing.T) {
 }
 
 func TestFields(t *testing.T) {
-	f := Fields(map[string]any{"tool": "x", "zeta": 1, "app": "a", "coverage": "observed", "seq": 3})
+	w := Writer{Provider: Provider{Name: "fixture-provider", Version: "1.2.3"}}
+	f, err := Fields(map[string]any{"tool": "x", "zeta": json.Number("1"), "app": "a", "coverage": "observed-not-attributed"}, w)
+	if err != nil {
+		t.Fatal(err)
+	}
 	got, _ := canon.Canonical(f)
-	want := `{"boundary":"runtime","claimed":["zeta"],"coverage":"observed","schema":"clearance.evidence/v0-draft","verified":["app","tool"]}`
+	// test_evidence.py test_evidence_is_the_envelope_seal_adds: the same envelope.
+	want := `{"boundary":"runtime","claimed":["zeta"],"coverage":"observed-not-attributed","provider":{"name":"fixture-provider","version":"1.2.3"},"schema":"clearance.evidence/v1","subject":null,"verified":["app","provider","subject","tool"]}`
 	if string(got) != want {
 		t.Fatalf("got %s", got)
 	}
-	f = Fields(map[string]any{"boundary": nil})
-	if b, ok := f["boundary"]; !ok || b != nil {
-		t.Fatal("a present boundary (even null) is kept, as event.get does")
+	if _, err := Fields(map[string]any{"boundary": nil}, w); !errors.Is(err, ErrInvalid) {
+		t.Fatal("v1 refuses a null boundary")
+	}
+}
+
+func lines(t *testing.T, path string) [][]byte {
+	t.Helper()
+	var out [][]byte
+	for _, l := range bytes.Split(must(os.ReadFile(path)), []byte("\n")) {
+		if len(bytes.TrimSpace(l)) > 0 {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// v1Writer is python_chain.py writer(): the Writer a v1-events.jsonl line names.
+func v1Writer(t *testing.T, w map[string]any) Writer {
+	p := w["provider"].(map[string]any)
+	out := Writer{Provider: Provider{Name: p["name"].(string), Version: p["version"].(string)}}
+	if c, ok := w["intent_capture"].(string); ok {
+		out.IntentCapture = c
+	}
+	switch w["verified"] {
+	case nil, "gateway":
+	case "provider":
+		out.Verified = ProviderVerified
+	default:
+		t.Fatalf("verified %v", w["verified"])
+	}
+	return out
+}
+
+// TestPythonV1Identical seals v1-events.jsonl after the v0-draft python-chain.jsonl, as python_chain.py write-v1
+// did with audit.AuditLog: every line must be the bytes Python wrote (python-v1.jsonl), so the Go and Python
+// writers produce the same record for the same event, across the v0 to v1 boundary.
+func TestPythonV1Identical(t *testing.T) {
+	want := lines(t, "testdata/python-v1.jsonl")
+	base := readJSONL(t, "testdata/python-chain.jsonl")
+	v := NewVerifier()
+	for _, r := range base {
+		if err := v.Add(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	head := v.Checkpoint()
+	n := len(base)
+	for i, l := range lines(t, "testdata/v1-events.jsonl") {
+		x, err := canon.Parse(l)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := x.(map[string]any)
+		rec, full, err := Seal(head, m["event"].(map[string]any), v1Writer(t, m["writer"].(map[string]any)))
+		if err != nil {
+			t.Fatalf("event %d: %v", i, err)
+		}
+		if !bytes.Equal(full, want[n+i]) {
+			t.Fatalf("event %d: Go sealed\n%s\nPython sealed\n%s", i, full, want[n+i])
+		}
+		if err := v.Add(rec); err != nil {
+			t.Fatal(err)
+		}
+		head = v.Checkpoint()
+	}
+	if int(head.Count) != len(want) {
+		t.Fatalf("count %d, want %d", head.Count, len(want))
+	}
+}
+
+// TestProjectMatchesPython: Project of each v0-draft row is audit.project's (python-projected.jsonl), and Stored
+// gives back the row that was hashed.
+func TestProjectMatchesPython(t *testing.T) {
+	want := lines(t, "testdata/python-projected.jsonl")
+	for i, r := range readJSONL(t, "testdata/python-chain.jsonl") {
+		p := Project(r)
+		got, _ := canon.Canonical(p)
+		if !bytes.Equal(got, want[i]) {
+			t.Fatalf("row %d: Go projected\n%s\nPython projected\n%s", i, got, want[i])
+		}
+		if ok, _ := Verify([]map[string]any{Stored(p)}); i == 0 && !ok {
+			t.Fatal("Stored(Project(row 0)) does not verify")
+		}
+	}
+	rec, _, err := Seal(Start, map[string]any{"tool": "x"}, goWriter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := Project(rec); len(p["projected"].([]any)) != 0 || p["provider"].(map[string]any)["name"] != "clearance" {
+		t.Fatalf("a v1 record projects as itself: %v", p)
+	}
+}
+
+func TestSubjectAndIntent(t *testing.T) {
+	tree, head := strings.Repeat("c", 64), strings.Repeat("a", 40)
+	for _, c := range []struct {
+		ev   map[string]any
+		want string // canonical subject
+		tag  string // verified or claimed
+	}{
+		{map[string]any{"tool": "repo.pr.open", "args_sha256": tree}, `{"digests":{"sha256":"` + tree + `"},"kind":"tool-call","name":"repo.pr.open"}`, "verified"},
+		{map[string]any{"tool": "deploy.clear", "boundary": "deployment", "change": map[string]any{"app": "g", "env": "prod", "tree": tree, "head": head}},
+			`{"digests":{"gitCommit":"` + head + `","sha256":"` + tree + `"},"kind":"manifest-tree","name":"g/prod"}`, "claimed"},
+		{map[string]any{"tool": "deploy.request", "boundary": "deployment", "args_sha256": tree}, `null`, "verified"},
+		{map[string]any{"tool": "deploy.answer", "boundary": "deployment", "change": map[string]any{"tree": Genesis}}, `null`, "verified"},
+		{map[string]any{"tool": "definition.load", "target": "r@1 p", "args_sha256": tree}, `{"digests":{"sha256":"` + tree + `"},"kind":"definition","name":"r@1 p"}`, "verified"},
+		{map[string]any{"tool": "x", "subject": map[string]any{"kind": "terraform-plan", "digests": map[string]string{"sha256": "f"}}}, `{"digests":{"sha256":"f"},"kind":"terraform-plan"}`, "claimed"},
+	} {
+		rec, _, err := Seal(Start, c.ev, goWriter)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, _ := canon.Canonical(rec["subject"])
+		if string(got) != c.want {
+			t.Errorf("%v: subject %s, want %s", c.ev["tool"], got, c.want)
+		}
+		tagged := false
+		for _, k := range rec[c.tag].([]any) {
+			tagged = tagged || k == "subject"
+		}
+		if !tagged {
+			t.Errorf("%v: subject not %s", c.ev["tool"], c.tag)
+		}
+	}
+	rec, full, err := Seal(Start, map[string]any{"tool": "x", "intent": "use hunter2"}, goWriter)
+	if err != nil || bytes.Contains(full, []byte("hunter2")) || rec["intent"].(map[string]any)["capture"] != "redacted" {
+		t.Fatalf("intent is redacted by default: %s %v", full, err)
+	}
+	full2 := Writer{Provider: goWriter.Provider, IntentCapture: "full"}
+	if rec, _, _ := Seal(Start, map[string]any{"tool": "x", "intent": "use hunter2"}, full2); rec["intent"].(map[string]any)["text"] != "use hunter2" {
+		t.Fatal("full capture keeps the text")
+	}
+}
+
+func TestSealRejectsInvalid(t *testing.T) {
+	for _, c := range []struct {
+		ev map[string]any
+		w  Writer
+	}{
+		{map[string]any{"boundary": "build"}, goWriter},
+		{map[string]any{"coverage": "observed"}, goWriter},
+		{map[string]any{"subject": map[string]any{"kind": "image", "digests": map[string]any{"sha256": "x"}}}, goWriter},
+		{map[string]any{"subject": map[string]any{"kind": "tool-call", "digests": map[string]any{}}}, goWriter},
+		{map[string]any{"subject": map[string]any{"kind": "tool-call", "digests": map[string]any{"sha-256": "x"}}}, goWriter},
+		{map[string]any{"subject": "tool-call"}, goWriter},
+		{map[string]any{"intent": map[string]any{"text": "x"}}, goWriter},
+		{map[string]any{"intent": strings.Repeat("x", MaxIntent+1)}, goWriter},
+		{map[string]any{}, Writer{Provider: Provider{Name: "Has Space", Version: "1"}}},
+		{map[string]any{}, Writer{Provider: Provider{Name: "ok"}}},
+		{map[string]any{}, Writer{Provider: Provider{Name: "ok", Version: "1"}, IntentCapture: "summary"}},
+	} {
+		if _, _, err := Seal(Start, c.ev, c.w); !errors.Is(err, ErrInvalid) {
+			t.Errorf("Seal(%v, %v) = %v, want ErrInvalid", c.ev, c.w, err)
+		}
+	}
+	if _, _, err := Seal(Start, map[string]any{"provider": map[string]any{"name": "me"}}, goWriter); !errors.Is(err, ErrEnvelopeField) {
+		t.Errorf("an event may not name its provider: %v", err)
 	}
 }
 
@@ -144,12 +306,12 @@ func TestSealRejects(t *testing.T) {
 		{map[string]any{"x": "a\x00b"}, ErrNotStorable},
 		{map[string]any{"a\x00": 1}, ErrNotStorable},
 	} {
-		if _, _, err := Seal(Start, c.ev); !errors.Is(err, c.want) {
+		if _, _, err := Seal(Start, c.ev, goWriter); !errors.Is(err, c.want) {
 			t.Errorf("Seal(%v) = %v, want %v", c.ev, err, c.want)
 		}
 	}
-	for _, ok := range []map[string]any{{"coverage": "x", "boundary": "deployment"}, {"x": 9999999999999998.0}, {"x": 1e-300}, {"x": json.Number("-0")}} {
-		if _, _, err := Seal(Start, ok); err != nil {
+	for _, ok := range []map[string]any{{"coverage": "coverage-unavailable", "boundary": "deployment"}, {"x": 9999999999999998.0}, {"x": 1e-300}, {"x": json.Number("-0")}} {
+		if _, _, err := Seal(Start, ok, goWriter); err != nil {
 			t.Errorf("Seal(%v): %v", ok, err)
 		}
 	}
@@ -159,7 +321,7 @@ func chain(t *testing.T, n int) []map[string]any {
 	head := Start
 	var out []map[string]any
 	for i := 0; i < n; i++ {
-		rec, _, err := Seal(head, map[string]any{"tool": "t", "i": i})
+		rec, _, err := Seal(head, map[string]any{"tool": "t", "i": i}, goWriter)
 		if err != nil {
 			t.Fatal(err)
 		}

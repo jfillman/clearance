@@ -128,7 +128,7 @@ func (t *tx) lock() error {
 	return nil
 }
 
-func (t *tx) Append(ctx context.Context, event store.Event) (store.Record, error) {
+func (t *tx) Append(ctx context.Context, event store.Event, w evidence.Writer) (store.Record, error) {
 	if err := t.lock(); err != nil {
 		return nil, err
 	}
@@ -136,7 +136,7 @@ func (t *tx) Append(ctx context.Context, event store.Event) (store.Record, error
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	rec, full, err := evidence.Seal(t.head, event)
+	rec, full, err := evidence.Seal(t.head, event, w)
 	if err != nil {
 		return nil, err
 	}
