@@ -161,7 +161,6 @@ type compiledBundle struct {
 	b         *Bundle
 	vars      []*ctxProgram
 	varSlots  []int // rule-activation slot of each var
-	ctxSlots  []int // context-activation slot of each var (after the fixed ones)
 	argChecks []compiledArgCheck
 	docSlots  []int
 	app       *ctxProgram
@@ -311,7 +310,6 @@ func compileBundle(core BundleData, opt Options) (*bundle, error) {
 			}
 			cb.vars = append(cb.vars, prg)
 			cb.varSlots = append(cb.varSlots, slot)
-			cb.ctxSlots = append(cb.ctxSlots, nCtx+len(ctxNames))
 			ctxNames = append(ctxNames, "ctx."+v.Name)
 			ctxTypes = append(ctxTypes, typ)
 		}
@@ -356,7 +354,13 @@ func compileBundle(core BundleData, opt Options) (*bundle, error) {
 			}
 		}
 		if spec.App != "" {
-			if cb.app, err = compileCtx(cenv, spec.App, cel.StringType, "policy bundle "+spec.Name+": app"); err != nil {
+			// The app is computed for the record from the call alone: it may not read ctx.* (an expression that
+			// does fails the load here, rather than recording no app).
+			aenv, err := ctxEnv(globs, nil, nil)
+			if err != nil {
+				return nil, err
+			}
+			if cb.app, err = compileCtx(aenv, spec.App, cel.StringType, "policy bundle "+spec.Name+": app"); err != nil {
 				return nil, err
 			}
 		}

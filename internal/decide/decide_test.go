@@ -235,6 +235,7 @@ func TestABadPolicyBundleFailsTheLoad(t *testing.T) {
 			m["arg_checks"].([]any)[0].(map[string]any)["checks"] = []any{"nope.x"}
 		}), "does not compile"},
 		"app is not a string": {edit(func(m map[string]any) { m["app"] = "1" }), "not string"},
+		"app reads a var":     {edit(func(m map[string]any) { m["app"] = "ctx.has_glidepath_app ? 'x' : ''" }), "does not compile"},
 		"problems from no document": {edit(func(m map[string]any) {
 			for _, r := range m["rules"].([]any) {
 				if r.(map[string]any)["id"] == "R021" {

@@ -229,7 +229,7 @@ data). A bundle holds:
 | `vars` | `ctx.<name>` variables, `{name, type: bool or int, expr}`, CEL over the call, in order. |
 | `arg_checks` | `{when, checks}`: for a call `when` selects, each check that is true is one bad argument (R008). |
 | `documents` | Field scope over a file a file-writing tool carries (`internal/docscope`): the file name, pointer rules (inline, or from a source at a JSON pointer), the rule id and hint of each finding class, and structural invariants (a keyed collection whose attribute may not change and whose protected items may not change at all; counted items per entry that may not decrease). `ctx.<name>` is its finding count. |
-| `app` | CEL string: the application a call acts on, recorded as `app`. |
+| `app` | CEL string over the call alone (no `ctx.*`): the application a call acts on, recorded as `app`. |
 | `rules` | Deny-if rules (`id, name, expr, message, hint, order`, optional `problems` naming a document) placed among the core's by `order`. A rule with `problems` decides with that document's findings: the first finding's rule id and hint, every message, all of them as `problems`. |
 
 **Context expressions** (vars, arg checks, app) are CEL, compiled and type-checked once at load like the rules,
