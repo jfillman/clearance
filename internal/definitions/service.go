@@ -1,0 +1,94 @@
+package definitions
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/jfillman/clearance/internal/pycompat"
+	"github.com/jfillman/clearance/internal/store"
+)
+
+// Service is Gateway.apply_cluster_definitions: the loader's hand-off, recorded and persisted.
+type Service struct {
+	Registry *Registry
+	Store    store.Store
+	Clock    func() time.Time
+	mu       sync.Mutex
+}
+
+// Apply makes loaded + rejected the cluster set, records what changed (definition.load for a new or re-pinned
+// definition, definition.unload for a pin that is gone, definition.reject for a pin that did not load, once each)
+// and replaces the stored rows, all in one transaction. Nothing is recorded when the poll found the same set.
+// The in-memory set is swapped only once the transaction commits.
+func (s *Service) Apply(ctx context.Context, loaded []Loaded, rejected []Rejected) (Changes, error) {
+	if s.Registry == nil {
+		return Changes{}, ErrNotRegistry
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Registry.mu.Lock()
+	defer s.Registry.mu.Unlock()
+	p := s.Registry.plan(loaded, rejected)
+	ch := p.changes
+	if !ch.Any() {
+		return ch, nil
+	}
+	now := s.Clock()
+	err := s.Store.Atomic(ctx, func(tx store.Tx) error {
+		rec := func(tool, name string, src Source, decision string, rule any, result string) error {
+			_, err := tx.Append(ctx, Event(now, tool, name, src, decision, rule, result))
+			return err
+		}
+		for _, n := range ch.Added {
+			if err := rec("definition.load", n, ch.Sources[n], "allow", nil, "loaded "+ch.Sources[n].Pin()); err != nil {
+				return err
+			}
+		}
+		for _, n := range ch.Changed {
+			if err := rec("definition.load", n, ch.Sources[n], "allow", nil, "re-pinned "+ch.Sources[n].Pin()); err != nil {
+				return err
+			}
+		}
+		for _, n := range ch.Removed {
+			if err := rec("definition.unload", n, ch.Sources[n], "allow", nil, "pin removed "+ch.Sources[n].Pin()); err != nil {
+				return err
+			}
+		}
+		for _, r := range ch.Rejected {
+			if err := rec("definition.reject", r.Name, r.Source, "deny", "DF-PIN", r.Reason); err != nil {
+				return err
+			}
+		}
+		rows := records(p.cluster, p.rejected)
+		defs := make([]store.Definition, 0, len(rows))
+		for _, row := range rows {
+			raw, err := json.Marshal(row)
+			if err != nil {
+				return err
+			}
+			defs = append(defs, store.Definition{Name: row.Name, State: row.State, Record: raw})
+		}
+		return tx.ReplaceDefinitions(ctx, defs)
+	})
+	if err != nil {
+		return Changes{}, fmt.Errorf("definitions: %w", err)
+	}
+	s.Registry.commit(p)
+	return ch, nil
+}
+
+// Event is _definition_record's event: the pin as principal, the agent, the source's pin as target.
+func Event(now time.Time, tool, name string, src Source, decision string, rule any, result string) store.Event {
+	principal := "platform"
+	if src.Kind == "cluster" {
+		principal = fmt.Sprintf("pin:%s/%s", pycompat.Str(strOrNone(src.Namespace)), pycompat.Str(strOrNone(src.XR)))
+	}
+	return store.Event{
+		"ts": pycompat.ISO(now), "task_id": nil, "session": nil, "parent": nil, "principal": principal,
+		"agent": name, "tool": tool, "tier": nil, "decision": decision, "rule": rule, "target": src.Pin(),
+		"args_sha256": pycompat.ArgsDigest(src.View()), "result": result,
+	}
+}
