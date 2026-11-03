@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/jfillman/clearance/internal/definitions"
-	"github.com/jfillman/clearance/internal/definitions/deftest"
 	"github.com/jfillman/clearance/internal/pycompat"
 	"github.com/jfillman/clearance/internal/store"
 	"github.com/jfillman/clearance/internal/store/memory"
@@ -56,7 +55,7 @@ func doc(name, owner, sa string) map[string]any {
 }
 
 func bundled(t *testing.T) map[string]definitions.Definition {
-	d, err := deftest.Parse(doc("triage-agent", ownerG, "holmesgpt/holmes"))
+	d, err := parseDef(doc("triage-agent", ownerG, "holmesgpt/holmes"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +63,7 @@ func bundled(t *testing.T) map[string]definitions.Definition {
 }
 
 func fromPin(d any, s definitions.Source, reserved func(string) bool) (*definitions.Loaded, *definitions.Rejected) {
-	return definitions.FromPin(d, s, ownerG, reserved, deftest.Parse)
+	return definitions.FromPin(d, s, ownerG, reserved, parseDef)
 }
 
 func TestAGoodPinLoadsWithItsSource(t *testing.T) {
@@ -210,7 +209,7 @@ func TestApplyRecordsRebuildsFromTheStore(t *testing.T) {
 	srcReg.ReplaceCluster([]definitions.Loaded{*good}, []definitions.Rejected{{Name: "bad-one", Source: src(func(s *definitions.Source) { s.XR = definitions.Str("bad-one") }), Reason: "schema: x"}})
 	rows := rowsOf(t, srcReg.Records())
 	reader := definitions.NewRegistry(nil)
-	ch := reader.ApplyRecords(rows, deftest.Parse)
+	ch := reader.ApplyRecords(rows, parseDef)
 	if !reflect.DeepEqual(ch.Added, []string{"gate-triage"}) || len(ch.Rejected) != 1 || ch.Rejected[0].Name != "bad-one" {
 		t.Fatal(ch)
 	}
@@ -220,7 +219,7 @@ func TestApplyRecordsRebuildsFromTheStore(t *testing.T) {
 		t.Fatal(d, s)
 	}
 	rows[0]["doc"].(map[string]any)["profile"].(map[string]any)["tierCeiling"] = "T9" // shown, not dropped
-	ch = definitions.NewRegistry(nil).ApplyRecords(rows, deftest.Parse)
+	ch = definitions.NewRegistry(nil).ApplyRecords(rows, parseDef)
 	var names []string
 	for _, r := range ch.Rejected {
 		names = append(names, r.Name)

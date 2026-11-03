@@ -336,7 +336,7 @@ func newGate(t *testing.T) *fixture {
 	st := memory.New()
 	svc := gate.NewService(gate.Config{Verifiers: []string{"app-*-cicd/pipeline-runner"}, Delegates: []string{tower},
 		Admins: []string{"user:root"}}, st, c.now)
-	svc.Owners, svc.Directory, svc.Tools, svc.Parse = owners{}, groups{}, deftest.Tools(), deftest.Parse
+	svc.Owners, svc.Directory, svc.Tools, svc.Parse = owners{}, groups{}, deftest.Tools(), parseDef
 	return &fixture{svc, st, c, context.Background()}
 }
 
@@ -772,7 +772,8 @@ func defDoc(t *testing.T) map[string]any {
    "network": "clearance+model", "compute": "small",
    "limits": {"ttlMinutes": 20, "toolCalls": 60, "githubCalls": 40, "openPrs": 1, "modelTokens": 400000, "children": 0}},
  "runtime": {"image": "ghcr.io/jfillman/autopilot-agent-runtime@sha256:` + strings.Repeat("a", 64) + `", "framework": "generic", "instructions": "Find out why."},
- "triggers": [{"type": "event", "source": "glidepath", "maxPerHour": 4}]}`))
+ "triggers": [{"type": "event", "source": "glidepath", "bindingKey": "gate-api.pipelinerun.finished",
+   "match": {"subject.content.outcome": "failure"}, "maxPerHour": 4}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}

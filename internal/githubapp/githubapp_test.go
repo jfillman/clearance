@@ -180,7 +180,7 @@ func newEnv(t *testing.T) *env {
 	coding := definitions.Definition{Name: "coding-agent", ReposAllow: []string{"jfillman/*"}, DenyPaths: deftest.BaselineDenyPaths}
 	prov := &provenance.Service{Store: st, Clock: clock, Defs: definitions.NewRegistry(map[string]definitions.Definition{"coding-agent": coding})}
 	g := gate.NewService(gate.Config{Verifiers: []string{"app-*-cicd/pipeline-runner"}}, st, clock)
-	g.Directory, g.Tools, g.Parse = groups{}, deftest.Tools(), deftest.Parse
+	g.Directory, g.Tools, g.Parse = groups{}, deftest.Tools(), parseDef
 	return &env{st, prov, g, dir, clk}
 }
 
