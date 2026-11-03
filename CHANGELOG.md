@@ -11,7 +11,7 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [0.29.0] - 2026-11-03
 
-R-5: policy bundles and Hangar's vocabulary out of the core). Breaking for a deployment of the Go
+R-5: policy bundles and Hangar's vocabulary out of the core. Breaking for a deployment of the Go
 core: `CLEARANCE_PACKS`, `CLEARANCE_FLIGHT_REGISTRIES` and `TOWER_*` are gone (set, the first two stop the start).
 
 ### Added
