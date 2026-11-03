@@ -11,6 +11,8 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"math"
+	"math/big"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -20,10 +22,10 @@ import (
 	"sync"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
-	"gopkg.in/yaml.v3"
 
 	"github.com/jfillman/clearance/internal/definitions"
 	"github.com/jfillman/clearance/internal/pycompat"
+	"github.com/jfillman/clearance/internal/pyyaml"
 )
 
 //go:embed agent-definition.schema.json
@@ -303,26 +305,67 @@ func LoadDir(dir string) (map[string]AgentDefinition, error) {
 	return out, nil
 }
 
-// DecodeYAML reads one YAML document as JSON values (yaml.safe_load, then the JSON data model: string keys,
-// numbers as json.Number). A document that is not a mapping, or holds a value JSON has no form for, is refused.
+// DecodeYAML reads one YAML document as JSON values: yaml.safe_load (internal/pyyaml, PyYAML's YAML 1.1 rules:
+// `yes` is True, a key set twice keeps its last value), then the JSON data model (string keys, numbers as
+// json.Number). A document that is not a mapping, or holds a value JSON has no form for (a non-string key, a date,
+// NaN or an infinity), is refused.
 func DecodeYAML(raw []byte) (map[string]any, error) {
-	var v any
-	if err := yaml.Unmarshal(raw, &v); err != nil {
+	v, err := pyyaml.SafeLoad(string(raw))
+	if err != nil {
 		return nil, err
 	}
-	j, err := json.Marshal(v)
+	j, err := jsonValue(v)
 	if err != nil {
 		return nil, fmt.Errorf("not JSON-shaped: %w", err)
 	}
-	out, err := pycompat.Decode(bytes.NewReader(j))
-	if err != nil {
-		return nil, err
-	}
-	m, ok := out.(map[string]any)
+	m, ok := j.(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("the document is not a mapping")
 	}
 	return m, nil
+}
+
+// jsonValue is a safe_load value in the JSON data model, or an error for one JSON cannot hold.
+func jsonValue(v any) (any, error) {
+	switch x := v.(type) {
+	case nil, bool, string:
+		return x, nil
+	case int64:
+		return json.Number(strconv.FormatInt(x, 10)), nil
+	case *big.Int:
+		return json.Number(x.String()), nil
+	case float64:
+		if math.IsNaN(x) || math.IsInf(x, 0) {
+			return nil, fmt.Errorf("%s has no JSON form", pycompat.FloatRepr(x))
+		}
+		return json.Number(pycompat.FloatRepr(x)), nil
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			j, err := jsonValue(e)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = j
+		}
+		return out, nil
+	case *pycompat.Map:
+		out := make(map[string]any, x.Len())
+		for i := range x.Len() {
+			k, e := x.At(i)
+			ks, ok := k.(string)
+			if !ok {
+				return nil, fmt.Errorf("the key %s is not a string", pycompat.Repr(k))
+			}
+			j, err := jsonValue(e)
+			if err != nil {
+				return nil, err
+			}
+			out[ks] = j
+		}
+		return out, nil
+	}
+	return nil, fmt.Errorf("a %s has no JSON form", pycompat.TypeName(v))
 }
 
 func list(v any) []any { l, _ := v.([]any); return l }

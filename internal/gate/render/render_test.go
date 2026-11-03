@@ -57,7 +57,7 @@ func TestLoadDirMatchesRegisterPy(t *testing.T) {
 }
 
 func TestSafeLoaderRefusals(t *testing.T) {
-	for _, doc := range []string{"a: =\n", "a: !!python/object:os.system x\n", "a: !custom x\n"} {
+	for _, doc := range []string{"a: =\n", "a: !!python/object:os.system x\n", "a: !custom x\n", "a: 2026-02-31\n", "a: !!bool foo\n"} {
 		if err := Add(Set{}, []byte(doc)); err == nil {
 			t.Errorf("%q loaded; PyYAML's SafeLoader refuses it", doc)
 		}

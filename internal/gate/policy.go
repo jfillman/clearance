@@ -205,7 +205,7 @@ func (p Policy) Tightened(repoPolicy any) (Policy, error) {
 	}
 	t3f, t3p := append([]string(nil), p.Tier3Fields...), append([]string(nil), p.Tier3Paths...)
 	var tiers map[string]any
-	if v := rp["tiers"]; truthy(v) {
+	if v := rp["tiers"]; pycompat.Truthy(v) {
 		m, ok := v.(map[string]any)
 		if !ok {
 			return p, gerr("DG-POLICY", "clearance.yaml: tiers names 2 and 3 only (tiers 0 and 1 cannot be widened)", "", 400)
@@ -263,7 +263,7 @@ func (p Policy) Tightened(repoPolicy any) (Policy, error) {
 	for t, a := range p.Approvers {
 		appr[t] = a
 	}
-	if v := rp["approvers"]; truthy(v) {
+	if v := rp["approvers"]; pycompat.Truthy(v) {
 		m, ok := v.(map[string]any)
 		if !ok {
 			return p, gerr("DG-POLICY", "clearance.yaml: approvers.{2,3}.{owner,outside} only", "", 400)
@@ -319,26 +319,6 @@ func sortedKeys(m map[string]any) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-// truthy is Python's truth value of a JSON value (`x or {}`).
-func truthy(v any) bool {
-	switch x := v.(type) {
-	case nil:
-		return false
-	case bool:
-		return x
-	case string:
-		return x != ""
-	case []any:
-		return len(x) > 0
-	case map[string]any:
-		return len(x) > 0
-	}
-	if f, ok := pycompat.Number(v); ok {
-		return f.Sign() != 0
-	}
-	return true
 }
 
 // globs is gate._globs: fnmatchcase, and a "**/" glob also matches at the top level.
