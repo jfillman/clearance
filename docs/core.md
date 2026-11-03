@@ -104,6 +104,7 @@ All configuration comes from the environment. An empty variable counts as unset.
 | `AGENT_LOGINS` | GitHub logins agents open PRs as (default `hangar-autopilot-agents[bot]`). |
 | `MODEL_ROUTES` | `alias=upstream,...`: the model aliases a definition release may name. When unset they are not checked. |
 | `RUNTIME_IMAGES_EXTRA` | Globs a definition's `runtime.image` may match. |
+| `CLEARANCE_FLIGHT_REGISTRIES` | Comma-separated image prefixes, each ending in `/`, that a tier-1 image bump may come from; an image bump from anywhere else is tier 2 (`image:not-flight-registry`) and held for the owner group. Unset: any registry (the product default). Hangar sets `ghcr.io/riley-roooo/` (decided 2026-11-03, live from the R-4 cutover). |
 | `CLEARANCE_GITHUB_APP_ID`, `CLEARANCE_GITHUB_APP_KEY_FILE`, `CLEARANCE_GITHUB_APP_WEBHOOK_SECRET_FILE` | The Clearance GitHub App. Set all three or none. The key and secret are read from files. |
 | `CLEARANCE_GITHUB_APP_COMMENTS` | `off` (default) or `agent-failures`. |
 | `CLEARANCE_GITHUB_API` | The GitHub API base (default `https://api.github.com`). |
