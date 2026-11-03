@@ -60,7 +60,7 @@ jobs:
       - id: api
         name: does the image have `clearance api`?
         run: |
-          if docker run --rm clearance:ci 2>&1 | grep -qE '^  api( |$)'; then
+          if docker run --rm clearance:ci help 2>&1 | grep -qE '^  api( |$)'; then
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           else
             echo "enabled=false" >> "$GITHUB_OUTPUT"

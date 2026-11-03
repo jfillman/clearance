@@ -187,7 +187,7 @@ jobs:
         env:
           IMAGE: ${{ needs.image.outputs.ref }}:${{ github.ref_name }}
         run: |
-          if docker run --rm "$IMAGE" 2>&1 | grep -qE '^  api( |$)'; then echo "enabled=true" >> "$GITHUB_OUTPUT"
+          if docker run --rm "$IMAGE" help 2>&1 | grep -qE '^  api( |$)'; then echo "enabled=true" >> "$GITHUB_OUTPUT"
           else echo "enabled=false" >> "$GITHUB_OUTPUT"; echo "::warning::no 'clearance api' in this image"; fi
       - uses: helm/kind-action@v1.15.0
         with:
