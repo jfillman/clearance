@@ -1,0 +1,76 @@
+# Every optional piece on: render tests only (CNPG, ESO and Gateway API CRDs are not in the test cluster).
+image:
+  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+providers:
+  - {name: autopilot-gateway, version: "0.3.27", principals: ["autopilot-system/autopilot-gateway"]}
+  - {name: argo-gate, version: "0.1.0", principals: ["hangar-prod/argocd/clearance-sync"], kinds: [deploy.outcome, deploy.exception]}
+verifiers: ["platform-system/clearance-gate", "github:repo:jfillman/*"]
+delegates: ["tower/backstage"]
+admins: ["user:jfillman"]
+packs: [hangar]
+gate:
+  expireSeconds: 30
+  agentLogins: ["hangar-autopilot-agents[bot]"]
+  modelRoutes: ["sonnet=claude-sonnet-4-5"]
+  runtimeImagesExtra: ["ghcr.io/jfillman/runtime-*"]
+  flightRegistries: ["ghcr.io/riley-roooo/"]
+agents:
+  configMap: clearance-agents
+oidc:
+  issuer: https://dex.example.test
+  audience: clearance
+  allowedUsers: ["*@example.test"]
+  userClaim: email
+  jwksURL: https://dex.example.test/keys
+tower:
+  issuer: https://tower.example.test
+  cluster: hangar-prod
+  serviceAccounts: ["backstage/backstage"]
+  jwksURL: https://tower.example.test/openid/v1/jwks
+githubActions:
+  audience: clearance
+  allowed: ["repo:jfillman/*"]
+githubApp:
+  enabled: true
+  appId: "123456"
+  comments: agent-failures
+  api: https://api.github.com
+backstage:
+  url: http://backstage.backstage.svc:7007
+cnpg:
+  enabled: true
+externalSecrets:
+  enabled: true
+  secretStoreRef: {name: infisical, kind: ClusterSecretStore}
+  githubApp:
+    privateKey: {key: clearance/github-app, property: private-key}
+    webhookSecret: {key: clearance/github-app, property: webhook-secret}
+  reader:
+    password: {key: clearance/pg-reader, property: password}
+api:
+  auditors: ["user:auditor"]
+  notifiers: ["tower/backstage"]
+  gatewayURL: http://autopilot-gateway.autopilot-system.svc:8080
+networkPolicy:
+  core:
+    from:
+      - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: autopilot-system}}
+        podSelector: {matchLabels: {app.kubernetes.io/name: autopilot-gateway}}
+  api:
+    from:
+      - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: backstage}}
+  kubeAPIServer:
+    cidrs: ["10.96.0.1/32", "172.18.0.2/32"]
+  extraEgress:
+    - to: [{ipBlock: {cidr: 0.0.0.0/0}}]
+      ports: [{protocol: TCP, port: 443}]
+httpRoutes:
+  core:
+    enabled: true
+    parentRefs: [{name: traefik-gateway, namespace: traefik}]
+    hostnames: [clearance.example.test]
+    matches: [{path: {type: Exact, value: /v1/github/webhook}}]
+  api:
+    enabled: true
+    parentRefs: [{name: traefik-gateway, namespace: traefik}]
+    hostnames: [clearance-api.example.test]

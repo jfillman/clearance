@@ -1,0 +1,65 @@
+# The install test's database: one plain postgres:17 pod with an emptyDir, in the release namespace. The chart's
+# CNPG option is not used here (no operator in the test cluster); the Secret clearance-db (key uri) and the
+# password Secret clearance-db-password are created by run.sh with a random password.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  labels: {app: postgres}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: postgres}
+  template:
+    metadata:
+      labels: {app: postgres}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: postgres
+          image: postgres:17.6@sha256:00bc86618629af00d2937fdc5a5d63db3ff8450acf52f0636ec813c7f4902929
+          env:
+            - {name: POSTGRES_DB, value: clearance}
+            - {name: POSTGRES_USER, value: clearance}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: clearance-db-password, key: password}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+          ports:
+            - {containerPort: 5432}
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "clearance", "-d", "clearance"]
+            periodSeconds: 2
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+spec:
+  selector: {app: postgres}
+  ports:
+    - {port: 5432, targetPort: 5432}
+---
+# Postgres takes connections only from the release's core, api and test pods (the chart's default-deny does not
+# select this pod; this is the test cluster's equivalent of the chart's CNPG policy).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres
+spec:
+  podSelector:
+    matchLabels: {app: postgres}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - {key: app.kubernetes.io/component, operator: In, values: [core, api, test]}
+      ports:
+        - {protocol: TCP, port: 5432}

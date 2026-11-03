@@ -137,7 +137,7 @@ The routes that serve records (`GET /v1/evidence`, `GET /v1/evidence/{seq}`, `GE
 `GET /v1/provenance`) project; filters and counts read the stored fields, which both versions share. The contract
 (`contract/clearance-api.json`) is unchanged.
 
-R-2's Go clearance-api must do the same: run every served record through `evidence.Project` and add `assurance`
+The Go clearance-api (R-2b, `internal/api`) does the same: it runs every served record through `evidence.Project` and adds `assurance`
 beside it; `evidence.Project` is byte-identical to `audit.project` on all 612 hangar-dev rows (below).
 
 ## The record check (hangar-dev, 2026-11-03)

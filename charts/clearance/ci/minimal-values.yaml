@@ -1,0 +1,3 @@
+# The smallest install: an existing DSN Secret, nothing optional.
+database:
+  existingSecret: clearance-db

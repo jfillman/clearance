@@ -1,0 +1,268 @@
+# Clearance chart values. docs/install.md explains each group; docs/core.md is the source of truth for the
+# environment variables these become. No secret value belongs in this file: secrets are referenced by the name of
+# an existing Secret (or created by an ExternalSecret) and mounted as files where the core reads a *_FILE.
+
+image:
+  repository: ghcr.io/jfillman/clearance
+  # Default: "v" + the chart's appVersion (the release that packaged this chart).
+  tag: ""
+  # sha256:... of the image index. When set it is used instead of the tag (pin by digest in production).
+  digest: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+commonLabels: {}
+
+# -- Who may call the core ----------------------------------------------------------------------------------------
+
+# CLEARANCE_PROVIDERS: the registered providers. Without one, nobody may evaluate or record. Each entry is
+# {name, version, principals: [<namespace>/<serviceaccount> globs], kinds?: [...], intent_capture?: redacted|full}.
+providers: []
+#  - name: autopilot-gateway
+#    version: "0.3.27"
+#    principals: ["autopilot-system/autopilot-gateway"]
+# CLEARANCE_VERIFIERS: principal globs that may register changes and ask for provenance (gate providers, CI).
+verifiers: []
+# CLEARANCE_DELEGATES: principal globs that may act for a person they name (X-Hangar-On-Behalf-Of), e.g. a portal.
+delegates: []
+# CLEARANCE_ADMINS: principal globs (user:<login>) that may deny any held change.
+admins: []
+# CLEARANCE_PACKS: policy packs to load ("hangar" is the only one today). Default none: the core rules only.
+packs: []
+# CLEARANCE_AUDIENCE: the audience callers' projected service-account tokens carry (TokenReview), and the audience
+# of a foreign (Tower) cluster's tokens.
+audience: clearance
+
+# -- The deployment gate and definitions --------------------------------------------------------------------------
+gate:
+  # CLEARANCE_EXPIRE_SECONDS: how often holding changes past their TTL are expired.
+  expireSeconds: 60
+  # AGENT_LOGINS: GitHub logins agents open PRs as (empty: the core's default, hangar-autopilot-agents[bot]).
+  agentLogins: []
+  # MODEL_ROUTES: alias=upstream pairs a definition release may name (empty: model aliases are not checked).
+  modelRoutes: []
+  # RUNTIME_IMAGES_EXTRA: globs a definition's runtime.image may match.
+  runtimeImagesExtra: []
+  # CLEARANCE_FLIGHT_REGISTRIES: image prefixes, each ending in "/", a tier-1 image bump may come from; a bump from
+  # anywhere else is tier 2 (image:not-flight-registry). Empty: any registry (the product default).
+  flightRegistries: []
+
+# Bundled agent definitions (*.yaml) from a ConfigMap you manage, mounted at /etc/clearance/agents and named in
+# CLEARANCE_AGENTS_DIR for the core and the api. Empty: none.
+agents:
+  configMap: ""
+
+# -- People and other identities ---------------------------------------------------------------------------------
+oidc:
+  # CLEARANCE_OIDC_ISSUER and CLEARANCE_OIDC_AUDIENCE: people's OIDC issuer and their ID tokens' audience, together.
+  issuer: ""
+  audience: ""
+  # CLEARANCE_OIDC_JWKS_URL (default <issuer>/keys) and CLEARANCE_OIDC_USER_CLAIM (default email).
+  jwksURL: ""
+  userClaim: ""
+  # CLEARANCE_OIDC_ALLOWED_USERS: globs on the claim. Required with an issuer.
+  allowedUsers: []
+
+# Another cluster's workloads (TOWER_*): its service-account issuer, its name, the <namespace>/<sa> globs it may use.
+tower:
+  issuer: ""
+  cluster: ""
+  serviceAccounts: []
+  jwksURL: ""
+
+# GitHub Actions callers (clearance register in a customer's CI): off while audience is empty.
+githubActions:
+  # CLEARANCE_GITHUB_OIDC_AUDIENCE
+  audience: ""
+  # CLEARANCE_GITHUB_OIDC_ALLOWED: globs on the token's sub (empty: the core's default, repo:*).
+  allowed: []
+
+# The Clearance GitHub App (CLEARANCE_GITHUB_APP_*). The private key and webhook secret come from a Secret, mounted
+# as files; set existingSecret, or externalSecrets.githubApp to have one created.
+githubApp:
+  enabled: false
+  appId: ""
+  existingSecret: ""
+  privateKeyKey: private-key.pem
+  webhookSecretKey: webhook-secret
+  # CLEARANCE_GITHUB_APP_COMMENTS: off | agent-failures
+  comments: "off"
+  # CLEARANCE_GITHUB_API (empty: https://api.github.com)
+  api: ""
+
+# Tower's Backstage: the gate's group directory and app owners. Empty url: nobody is in any group, so no person
+# can clear a tier-2/3 change. The core and the api send a projected service-account token for tokenAudience,
+# mounted at /var/run/clearance/backstage-token (BACKSTAGE_TOKEN_FILE).
+backstage:
+  url: ""
+  tokenAudience: backstage
+  tokenExpirationSeconds: 3600
+
+# -- Postgres ------------------------------------------------------------------------------------------------------
+# The core is the only writer of the database (an advisory writer lock); the api reads with a read-only role.
+database:
+  # A Secret holding the core's DSN (CLEARANCE_DSN). Default with cnpg.enabled: <fullname>-pg-app, key uri.
+  existingSecret: ""
+  key: uri
+  reader:
+    # A Secret holding the api's read-only DSN (CLEARANCE_API_DSN). Default with cnpg.reader.enabled:
+    # <fullname>-pg-reader, key uri. Otherwise the core's Secret (opened read-only; prefer a reader role).
+    existingSecret: ""
+    key: uri
+
+# An optional CloudNativePG Cluster (needs the CNPG operator). CNPG writes the owner's DSN to <fullname>-pg-app.
+cnpg:
+  enabled: false
+  instances: 1
+  imageName: ""
+  database: clearance
+  owner: clearance
+  storage:
+    size: 2Gi
+    storageClass: ""
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {memory: 512Mi}
+  # The read-only role for the api: clearance_reader, SELECT on the clearance_* tables (default privileges of the
+  # owner). Its Secret (basic-auth: username, password, and uri for the api) is passwordSecret, or the one
+  # externalSecrets.reader creates.
+  reader:
+    enabled: true
+    name: clearance_reader
+    passwordSecret: ""
+  # The CNPG operator's namespace, allowed to reach the instances when networkPolicy.enabled.
+  operatorNamespace: cnpg-system
+
+# -- External Secrets Operator (optional) ------------------------------------------------------------------------
+externalSecrets:
+  enabled: false
+  apiVersion: external-secrets.io/v1
+  secretStoreRef:
+    name: ""
+    kind: ClusterSecretStore
+  refreshInterval: 1h
+  # Each is {key, property?} in the store. Empty key: no ExternalSecret for it.
+  # -> Secret <fullname>-github-app (githubApp.privateKeyKey, githubApp.webhookSecretKey)
+  githubApp:
+    privateKey: {key: "", property: ""}
+    webhookSecret: {key: "", property: ""}
+  # -> Secret <fullname>-db, key uri: the core's DSN for a Postgres outside this chart
+  database:
+    dsn: {key: "", property: ""}
+  # -> Secret <fullname>-pg-reader (basic-auth + uri): the CNPG reader role's password
+  reader:
+    password: {key: "", property: ""}
+
+# -- Workloads -----------------------------------------------------------------------------------------------------
+# The core: always one replica, Recreate. Two cores would fork the evidence chain; the second fails to take the
+# writer lock and does not start.
+core:
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {memory: 256Mi}
+  # How long the core may take to start: it verifies the whole chain from genesis before it listens.
+  startupSeconds: 300
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  priorityClassName: ""
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
+
+# clearance-api: the read API (`clearance api`), stateless, two replicas behind a PodDisruptionBudget.
+api:
+  enabled: true
+  replicas: 2
+  pdb:
+    enabled: true
+    minAvailable: 1
+  # CLEARANCE_API_AUDITORS and CLEARANCE_API_NOTIFIERS: principal globs.
+  auditors: []
+  notifiers: []
+  # CLEARANCE_GATEWAY_URL: the Autopilot gateway (where the runtime's writes go), named in /v1/contract. Empty: none.
+  gatewayURL: ""
+  # CLEARANCE_API_POOL: the read pool's size.
+  pool: 5
+  # CLEARANCE_API_DEFINITIONS_INTERVAL: seconds between re-reads of the stored agent definitions.
+  definitionsInterval: 30
+  resources:
+    requests: {cpu: 25m, memory: 64Mi}
+    limits: {memory: 256Mi}
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  priorityClassName: ""
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
+
+service:
+  type: ClusterIP
+  port: 8080
+
+# The core and the api authenticate in-cluster callers by TokenReview, which needs the system:auth-delegator
+# ClusterRole. Turn off only if you bind it yourself.
+rbac:
+  authDelegator: true
+
+# -- NetworkPolicy -----------------------------------------------------------------------------------------------
+# Default-deny ingress and egress for every pod of the release, then only what each needs.
+networkPolicy:
+  enabled: true
+  core:
+    # NetworkPolicyPeers allowed to call the core on its port: providers, verifiers, the Gateway's namespace for
+    # the GitHub App webhook. Empty: no pod may (the core is unreachable).
+    from: []
+  api:
+    # NetworkPolicyPeers allowed to call clearance-api (a portal, auditors, the Gateway's namespace).
+    from: []
+  dns:
+    namespace: kube-system
+    podSelector: {k8s-app: kube-dns}
+  # The Kubernetes API server, for TokenReview. It is not a pod, so it is an ipBlock: narrow cidrs to your API
+  # server's endpoint addresses (kubectl get endpoints kubernetes) where you can.
+  kubeAPIServer:
+    cidrs: ["0.0.0.0/0"]
+    ports: [443, 6443]
+  # Postgres: NetworkPolicyPeers and the port. With cnpg.enabled the chart's own instances are added.
+  postgres:
+    to: []
+    port: 5432
+  # Further egress rules (NetworkPolicyEgressRule) for the core and the api: the OIDC JWKS, Backstage, the GitHub
+  # API, a foreign cluster's JWKS.
+  extraEgress: []
+
+# -- Gateway API routes (optional) -------------------------------------------------------------------------------
+httpRoutes:
+  core:
+    enabled: false
+    parentRefs: []
+    hostnames: []
+    # HTTPRouteMatches; default every path. To expose only the GitHub App webhook publicly:
+    # [{path: {type: Exact, value: /v1/github/webhook}}]
+    matches: []
+  api:
+    enabled: false
+    parentRefs: []
+    hostnames: []
+    matches: []
+
+# `helm test`: a pod that runs `clearance chain verify` against the database (read-only).
+tests:
+  chainVerify: true

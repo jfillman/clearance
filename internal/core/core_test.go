@@ -35,6 +35,8 @@ func TestConfigFromEnv(t *testing.T) {
 		{"CLEARANCE_GITHUB_APP_ID": "1"},
 		{"CLEARANCE_GITHUB_APP_COMMENTS": "all"},
 		{"CLEARANCE_OIDC_ISSUER": "https://dex"},
+		{"CLEARANCE_FLIGHT_REGISTRIES": "ghcr.io/riley-roooo"},
+		{"CLEARANCE_FLIGHT_REGISTRIES": "ghcr.io/a b/"},
 	} {
 		if _, err := FromEnv(env(bad)); err == nil {
 			t.Errorf("accepted %v", bad)
@@ -97,5 +99,22 @@ func TestRunServesAndShutsDownOnCancel(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not stop")
+	}
+}
+
+// Hangar's Flight registry (decided 2026-11-03): an image bump from it stays tier 1, anything else is tier 2. Unset
+// keeps the product default, any registry.
+func TestFlightRegistriesFromEnv(t *testing.T) {
+	cfg, err := FromEnv(env(map[string]string{"CLEARANCE_DSN": "postgres://x",
+		"CLEARANCE_FLIGHT_REGISTRIES": "ghcr.io/riley-roooo/, registry.example/flight/"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(cfg.Gate.FlightRegistries, "|") != "ghcr.io/riley-roooo/|registry.example/flight/" {
+		t.Fatalf("%q", cfg.Gate.FlightRegistries)
+	}
+	cfg, err = FromEnv(env(map[string]string{"CLEARANCE_DSN": "postgres://x"}))
+	if err != nil || len(cfg.Gate.FlightRegistries) != 0 {
+		t.Fatalf("default: %q %v", cfg.Gate.FlightRegistries, err)
 	}
 }

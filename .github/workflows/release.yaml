@@ -1,7 +1,8 @@
 name: release
 # A vX.Y.Z tag on main publishes that version: the wheel, and a GitHub Release whose notes are the version's
-# CHANGELOG.md section. The tag is cut by hand after the version-bump PR merges and main's CI is green (never off a
-# red main). Image and Helm chart jobs are placeholders until the Go image and chart exist (package R-2).
+# CHANGELOG.md section, the Go image (ghcr.io/jfillman/clearance) and the Helm chart (oci://ghcr.io/jfillman/charts/
+# clearance), and reruns the chart's install test on the published chart and image before the Release is made. The
+# tag is cut by hand after the version-bump PR merges and main's CI is green (never off a red main).
 on:
   push:
     tags: ["v*.*.*"]
@@ -56,33 +57,156 @@ jobs:
           path: dist/
           if-no-files-found: error
 
-  # Placeholder (R-2): the Go image, ghcr.io/jfillman/clearance:vX.Y.Z, static onto distroless nonroot, pinned by
-  # digest, with an SBOM and a keyless signature. Enable when the Dockerfile lands.
+  # The Go image: ghcr.io/jfillman/clearance:vX.Y.Z, amd64 and arm64 (the Go build cross-compiles, so no QEMU), static
+  # onto distroless nonroot pinned by digest, reproducible (SOURCE_DATE_EPOCH = the tagged commit's time, layer
+  # timestamps rewritten to it). BuildKit attaches an SPDX SBOM and provenance attestation to the index; the index is
+  # signed keyless with this workflow's GitHub OIDC identity, and a standalone SPDX SBOM is attested and attached to
+  # the GitHub Release.
   image:
-    if: false
     needs: check
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
       id-token: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      ref: ${{ steps.ref.outputs.ref }}
     steps:
-      - run: echo "R-2 builds, pushes, signs and attests the image here"
+      - uses: actions/checkout@v4
+      - id: ref
+        run: |
+          echo "ref=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/clearance" >> "$GITHUB_OUTPUT"
+          echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@v4.4.1
+      - uses: docker/login-action@v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: build
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          build-args: VERSION=${{ github.ref_name }}
+          outputs: type=image,name=${{ steps.ref.outputs.ref }}:${{ github.ref_name }},push=true,rewrite-timestamp=true
+          sbom: true
+          provenance: mode=max
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+      - uses: sigstore/cosign-installer@v4.1.1
+      - name: sign the image index (keyless) and verify the signature
+        env:
+          IMAGE: ${{ steps.ref.outputs.ref }}@${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes "$IMAGE"
+          cosign verify "$IMAGE" \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yaml@${GITHUB_REF}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com > /dev/null
+      - uses: anchore/sbom-action@v0.24.0
+        with:
+          image: ${{ steps.ref.outputs.ref }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: clearance-${{ github.ref_name }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: attest the SPDX SBOM (keyless)
+        env:
+          IMAGE: ${{ steps.ref.outputs.ref }}@${{ steps.build.outputs.digest }}
+        run: cosign attest --yes --type spdxjson --predicate "clearance-${GITHUB_REF_NAME}.spdx.json" "$IMAGE"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: clearance-${{ github.ref_name }}.spdx.json
+          if-no-files-found: error
 
-  # Placeholder (R-2): the Helm chart, packaged at the tag's version and pushed as an OCI artifact. Enable when the
-  # chart lands.
+  # The Helm chart at the tag's version (vX.Y.Z -> X.Y.Z, for version and appVersion, so the chart's default image
+  # tag is this release's), pushed as an OCI artifact to oci://ghcr.io/jfillman/charts/clearance and signed keyless.
   chart:
-    if: false
-    needs: check
+    needs: [check, image]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+      id-token: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
     steps:
-      - run: echo "R-2 packages and pushes the chart here"
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4.3.0
+        with:
+          version: v3.21.3
+      - uses: sigstore/cosign-installer@v4.1.1
+      - id: push
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "$GH_TOKEN" | helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          helm lint charts/clearance --strict -f charts/clearance/ci/minimal-values.yaml
+          helm package charts/clearance --version "$VERSION" --app-version "$VERSION" -d dist
+          helm push "dist/clearance-${VERSION}.tgz" "oci://ghcr.io/${owner}/charts" 2>&1 | tee push.log
+          digest=$(sed -n 's/^Digest: //p' push.log)
+          test -n "$digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "$GH_TOKEN" | cosign login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          cosign sign --yes "ghcr.io/${owner}/charts/clearance@${digest}"
+
+  # The card's done bar on the published artifacts: helm install oci://ghcr.io/jfillman/charts/clearance on a fresh
+  # kind cluster (no Airframe, no Glidepath) passes the install test, with the published image.
+  install-test:
+    needs: [check, image, chart]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4.3.0
+        with:
+          version: v3.21.3
+      - uses: docker/login-action@v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: pull the published image (by digest) and build the installtest client
+        env:
+          REF: ${{ needs.image.outputs.ref }}
+          DIGEST: ${{ needs.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker pull "${REF}@${DIGEST}"
+          docker tag "${REF}@${DIGEST}" "${REF}:${GITHUB_REF_NAME}"
+          docker build --target installtest -t installtest:ci .
+          echo "${{ github.token }}" | helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - id: api
+        env:
+          IMAGE: ${{ needs.image.outputs.ref }}:${{ github.ref_name }}
+        run: |
+          if docker run --rm "$IMAGE" help 2>&1 | grep -qE '^  api( |$)'; then echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else echo "enabled=false" >> "$GITHUB_OUTPUT"; echo "::warning::no 'clearance api' in this image"; fi
+      - uses: helm/kind-action@v1.15.0
+        with:
+          version: v0.33.0
+          node_image: kindest/node:v1.35.8@sha256:07b2536e30b803ed61d1677a79df6115f798ce64c80f9e22f6ed45afd09323c0
+          cluster_name: clearance
+      - run: kind load docker-image "${{ needs.image.outputs.ref }}:${{ github.ref_name }}" installtest:ci --name clearance
+      - name: install test
+        env:
+          CHART: oci://ghcr.io/${{ github.repository_owner }}/charts/clearance
+          CHART_VERSION: ${{ needs.check.outputs.version }}
+          IMAGE_REPO: ${{ needs.image.outputs.ref }}
+          IMAGE_TAG: ${{ github.ref_name }}
+          INSTALLTEST_IMAGE: installtest:ci
+          API: ${{ steps.api.outputs.enabled }}
+        run: tools/chart-install-test/run.sh
 
   release:
-    needs: [check, wheel]
+    needs: [check, wheel, image, chart, install-test]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -92,11 +216,25 @@ jobs:
         with:
           name: dist
           path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: sbom
+          path: dist
       - name: publish the GitHub Release with the changelog section as its notes
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.check.outputs.version }}
+          IMAGE: ${{ needs.image.outputs.ref }}
+          IMAGE_DIGEST: ${{ needs.image.outputs.digest }}
+          CHART_DIGEST: ${{ needs.chart.outputs.digest }}
         run: |
           python3 tools/release_notes.py "$VERSION" CHANGELOG.md > notes.md
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          cat >> notes.md <<EOF
+
+          ### Artifacts
+          - Image: \`${IMAGE}:${GITHUB_REF_NAME}\`, index digest \`${IMAGE_DIGEST}\` (linux/amd64, linux/arm64; SPDX SBOM and keyless signature)
+          - Chart: \`helm install clearance oci://ghcr.io/${owner}/charts/clearance --version ${VERSION}\`, digest \`${CHART_DIGEST}\`
+          EOF
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag \
             --title "Clearance $GITHUB_REF_NAME" --notes-file notes.md

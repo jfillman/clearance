@@ -1,7 +1,146 @@
-# clearance-api: Clearance's read API (spec, draft 2026-10-30)
+# clearance-api: Clearance's read API
 
-Status: **phase 1 built** (v0.13.0, `api.py`; policy, explain and counts in v0.14.0); open questions decided 2026-10-30. AP-B2 follow-on (Hangar roadmap M3). Owner decision 2026-10-30: build after Tower's Agent
-requests; spec first.
+Status: **Built** in Go (R-2b, `clearance api`, `internal/api`), not deployed: hangar-dev still runs the Python
+`api.py` (v0.26.1, served by `autopilot-gateway api`) until the cutover (R-4). This page's first section is the Go
+API; the sections after it are the design as built in Python (v0.13.0 to v0.25.0), kept because api.py serves Hangar
+until R-4 and because every route the Go API kept has the same path, parameters, answer and status codes.
+
+## The Go clearance-api (R-2b)
+
+`clearance api` is a subcommand of the one `clearance` binary and the chart's `api` Deployment (two replicas). It
+reads what the core committed through `pg.OpenReader`: its own read-only DSN, no writer lock, no migration, every
+session `default_transaction_read_only`, `statement_timeout` 5 s, a pool of `CLEARANCE_API_POOL` (5) connections.
+It writes nothing. After R-3 the Autopilot gateway serves its own read API for the runtime (sessions, runs, agents,
+the inbox, trigger history, results), so the Go API serves only Clearance's own reads.
+
+### What you get
+
+- Evidence: list (filters, `seq` cursor), one record, the chain check, counts by rule, tool, agent, app or decision.
+  Every record goes through `evidence.Project` (v0-draft rows gain `provider` and `subject`, named in `projected`)
+  with `assurance` beside it ([evidence.md](evidence.md)).
+- PR receipts and the agent-gate verdicts (`provenance.verify` records) for a repo or a PR.
+- The deployment gate: changes, counts, one change, and the gate's baseline policy.
+- The decision policy as data (rules in evaluation order with their pack, the tool registry, the packs) and the
+  dry-run explainer, which runs the real engine (`decide.(*Engine).Decide` and the new `decide.(*Engine).Trace`, the
+  port of `Policy.trace`) on a fresh session of a definition. Records nothing, spends nothing.
+- The agent definitions Clearance decides with (`GET /v1/definitions`): the bundled set and the cluster pins the core
+  stored in `clearance_definitions`, each with its `source`; the pins that did not load under `rejected`.
+
+### Guardrails
+
+- GET only; a request with a body is 413, another method on a known path 405, an unknown path 404 (JSON errors).
+- Every query parameter is checked against the route's list: an unknown or a repeated one is 400 (api.py ignored
+  them). `limit` is capped at 200 (not refused); `since`/`until` must look like ISO times.
+- Every route but `/healthz`, `/readyz` and `/v1/contract` needs a bearer token (`internal/authn.FromEnv`: TokenReview,
+  people's OIDC, the Tower cluster's foreign workloads). Roles exactly as api.py (Who sees what, below).
+- Server timeouts: read-header 5 s, read 10 s, write 30 s, idle 120 s, a 25 s deadline on every handler, 64 KiB of
+  headers (the explainer's `args` are capped at 16 KiB).
+- One access-log line per request: method, path, status, bytes, duration, principal. Never the query (the
+  explainer's `args` are in it), a header or a token. A store failure is 503 `read failed`, the cause logged only.
+
+### Routes: every api.py route, and where it went
+
+| api.py operation | Path | Go `clearance api` |
+|---|---|---|
+| listEvidence | `GET /v1/evidence` | **ported**; adds `outcomes` (below) |
+| getEvidence | `GET /v1/evidence/{seq}` | **ported** |
+| verifyEvidence | `GET /v1/evidence/verify` | **ported** (auditors) |
+| countEvidence | `GET /v1/evidence/counts` | **ported**; takes every list filter, adds `outcomes` |
+| getPolicy | `GET /v1/policy` | **ported** |
+| explainPolicy | `GET /v1/policy/explain` | **ported** (`decide.(*Engine).Trace`) |
+| listReceipts | `GET /v1/receipts` | **ported** |
+| listProvenance | `GET /v1/provenance` | **ported** |
+| listClearances | `GET /v1/clearances` | **ported** |
+| countClearances | `GET /v1/clearances/counts` | **ported** |
+| getClearance | `GET /v1/clearances/{id}` | **ported** |
+| getClearancePolicy | `GET /v1/clearance-policy` | **ported** |
+| getContract | `GET /v1/contract` | **ported**; names `core` (`CLEARANCE_CORE_URL`) beside `gateway` |
+| (healthz, readyz) | `GET /healthz`, `/readyz` | **ported**; readyz checks the database |
+| (new) listDefinitions | `GET /v1/definitions` | **new**: the definitions Clearance holds, api.py's agent view without the gateway's `hold` |
+| listAgents, getAgent | `GET /v1/agents`, `/v1/agents/{name}` | **left for the gateway (R-3)**: they carry the trigger hold (control.py) and are the runtime's view; `/v1/definitions` is Clearance's part of them |
+| listSessions, getSession | `GET /v1/sessions`, `/v1/sessions/{id}` | **left for the gateway (R-3)**: sessions are runtime state |
+| getSessionResult | `GET /v1/sessions/{id}/result` | **left for the gateway (R-3)**: run results |
+| getTask | `GET /v1/tasks/{task_id}` | **left for the gateway (R-3)**: the run tree |
+| listHumanRequests | `GET /v1/human/requests` | **left for the gateway (R-3)**: the human inbox and its notifier feed |
+| listEvents | `GET /v1/events` | **left for the gateway (R-3)**: trigger history |
+| listRuntimes | `GET /v1/runtimes` | **left for the gateway (R-3)**: the runtime catalog is Autopilot's |
+
+Nothing was dropped. Of the Backstage plugins' reads (backstage `plugins/clearance`, `plugins/clearance-react`,
+`plugins/autopilot` on main), the Go API serves `/v1/evidence`, `/v1/evidence/counts`, `/v1/evidence/verify`,
+`/v1/policy`, `/v1/policy/explain`, `/v1/receipts`, `/v1/clearances`, `/v1/clearances/{id}`, `/v1/clearances/counts`;
+`/v1/agents`, `/v1/agents/{name}`, `/v1/sessions`, `/v1/sessions/{id}`, `/v1/sessions/{id}/result`, `/v1/events`,
+`/v1/human/requests` and `/v1/runtimes` move to the gateway's read API with R-3. The Clearance backend's proxy forwards
+only the operations in its vendored contract, so its copy is refreshed with R-3/R-4.
+
+### Differences from api.py on the ported routes
+
+- **A person's own records** are found from the chain, not the gateway's `clearance_sessions` (which moves to the
+  gateway's database): a record in a session is the person's when the first `session.open` record of its task names
+  them. Every session spawned under a run shares its task and its principal, so this is the session row's
+  principal; on the 612-record hangar-dev chain it gives exactly api.py's answers (Verifying, below).
+- **Outcome records** (`outcomes`): the Go core writes two records per allowed call, the decision and then the
+  outcome the provider reports (`outcome_of`), which copies the decision's tool, agent, rule and app. Counts default
+  to `outcomes=exclude`, one per decision or event, and say so in the answer (`"outcomes": "exclude"`); `include`
+  counts both, `only` the outcomes. The list defaults to `include` (every record; `exclude` and `only` filter).
+  v0-draft rows have no outcomes, so every count over them is unchanged.
+- **Counts take every list filter** (`task`, `session`, `principal`, `rule` too). api.py ignored them, so Tower's
+  Evidence page total with a rule filter counted every rule; now it counts what the list shows.
+- **Strict queries**: an unknown or repeated parameter is 400; `since`/`until` on evidence must be ISO times.
+  Comparison is still as text against the record's `ts`, as api.py, so a `ts` with no fraction sorts after every
+  fraction of its own second (Tower's `toISOString` is second-granular here).
+- **Receipts by repo** escape LIKE's `_` and `%` (api.py matched `a_b` as any character).
+- **A change whose `requirement.outsideGroups` is JSON null** is scoped as having none (api.py's COALESCE did not
+  catch a JSON null, and the query failed for a person).
+- **verify** also checks the `seq`, `hash` and `prev_hash` columns against the record (`pg.Reader.Verify`);
+  `bad_seq` is the position where the chain broke.
+- **503 bodies** say `read failed` without the exception class.
+- **notifier**: the role resolves as at api.py, but no Clearance read is a notifier's (the inbox feed is the gateway's).
+
+### Environment (`internal/api` Config)
+
+| Variable | Default | |
+|---|---|---|
+| `CLEARANCE_API_DSN` | (required) | the read-only role's DSN |
+| `CLEARANCE_API_AUDITORS` | none | principal globs: every read, the chain check, `full=1` |
+| `CLEARANCE_API_NOTIFIERS` | none | principal globs: the notifier role |
+| `CLEARANCE_DELEGATES` | none | principal globs that may name a person in `X-Hangar-On-Behalf-Of` |
+| `CLEARANCE_AGENTS_DIR` | none | the bundled definitions; cluster pins come from `clearance_definitions` |
+| `CLEARANCE_API_DEFINITIONS_INTERVAL` | 30 | seconds between re-reads of the stored definitions |
+| `CLEARANCE_API_POOL` | 5 | Postgres connections per replica (1 to 50) |
+| `CLEARANCE_PACKS` | none | the policy packs the core runs (`hangar`), for `/v1/policy` and the explainer |
+| `CLEARANCE_CORE_URL` | none | where Clearance's writes go, named in `/v1/contract` as `core` |
+| `CLEARANCE_GATEWAY_URL` | none | where the runtime's writes go, named in `/v1/contract` as `gateway` |
+| `BACKSTAGE_URL`, `BACKSTAGE_TOKEN_FILE` | none, `/var/run/clearance/backstage-token` | a person's groups (memberOf) and the apps they own (Components by `spec.owner`, `backstage.Ownership`) |
+| `CLEARANCE_LISTEN` | `:$PORT` | listen address; `PORT` defaults to 8080 |
+
+plus the authenticator's (`authn.EnvVars`: `CLEARANCE_AUDIENCE`, `CLEARANCE_OIDC_*`, `TOWER_*`,
+`CLEARANCE_GITHUB_OIDC_*`). The chart sets each (`api.*` values; `tools/charttest` fails when one is missing).
+
+### Indexes
+
+The schema has the primary key on `seq`, `clearance_evidence_receipt` and the `clearance_changes` indexes; this
+package adds none (the core owns the schema). The list is paged by `seq DESC` on the primary key and every filter is
+applied on the way; at the lab's size that is well inside the statement timeout. Before the chain is large, the
+core's schema should gain (a migration, not done here):
+
+- `clearance_evidence ((record->>'task_id'), seq) WHERE record->>'tool' = 'session.open'`: a person's own tasks
+  (the `opened` CTE).
+- `clearance_evidence ((record->>'agent'), seq)`, `((record->>'app'), seq)`, `((record->>'tool'), seq)`,
+  `((record->>'session'))`, `((record->>'task_id'))`, `((record->>'ts'))`: the hot filters (the "Decided" list
+  below named them for api.py too; they were never created).
+- `clearance_evidence ((record->>'target')) WHERE record->>'tool' = 'provenance.verify'`: verdicts by PR.
+- `clearance_changes ((record->>'updated_at'))`: the changes list's order and cursor (api.py orders by the record's
+  `updated_at`, not the indexed column).
+
+### Verifying against api.py
+
+`internal/api` runs every HTTP test on an in-memory read adapter and on Postgres (`CLEARANCE_TEST_DSN`).
+`tools/api-golden/golden_py.py` loads a chain dump into a scratch database (`clr_golden`, with a sessions table as
+the gateway wrote it), asks Python api.py a list of requests as an auditor, a person, a delegate and a person with
+no records, and writes the answers; `CLEARANCE_API_GOLDEN=<answers.json> go test ./internal/api -run Golden` serves
+the same database through the Go API and compares every answer. On the 612-record hangar-dev dump (2026-11-03):
+368 answers (evidence pages and filters, counts by every key, single records, verify, receipts and verdicts by repo
+and PR, the policy, the gate policy, six dry runs), all identical.
 
 ## Why
 
@@ -191,10 +330,12 @@ and counted.
 
 ## The contract
 
-`contract/clearance-api.json`, generated from the route table (`tools/gen_api_contract.py`, with a `--check` CI
-step, as glidepath does): every operation's method, path, parameters, roles and response schema. Tower's backend
-vendors it with a drift test, as Clearance vendors the `scope` section of `glidepath-contract.json`. `/v1` changes are additive only; a
-breaking change is `/v2`.
+`contract/clearance-api.json` is generated from the Go route table and answer types (`go generate ./internal/api`,
+`tools/contract -api`; `TestTheCommittedContractIsCurrent` fails when it drifts). It keeps api.py's shape (`api`,
+`version`, `notes`, `operations` with operationId, method, path, roles, params, summary), which Tower's backend
+vendors and forwards by, and adds `responses` (each operation's answer schemas by status) and `schemas`, reflected
+from the Go types. `tests/test_api.py` checks that api.py still serves every operation the Go contract shares with
+it, with the same method, path and roles. `/v1` changes are additive only; a breaking change is `/v2`.
 
 ## Hangar deployment (apron `55-autopilot/clearance`)
 

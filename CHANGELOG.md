@@ -9,10 +9,28 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-11-03
+
 ### Added
 - `CHANGELOG.md` (this file) and a release workflow: a `v*` tag on `main` builds the wheel and publishes a GitHub
-  Release with this file's section for the version as its notes, and fails when the section is missing. Image and
-  Helm chart jobs are placeholders until the Go image and chart exist.
+  Release with this file's section for the version as its notes, and fails when the section is missing.
+- Clearance's own image and Helm chart (R-2): `Dockerfile` (static `CGO_ENABLED=0 -trimpath` build onto
+  `gcr.io/distroless/static-debian12:nonroot` pinned by digest, uid 65532) and `charts/clearance` (the core as one
+  `Recreate` replica, clearance-api with 2 replicas and a PodDisruptionBudget, Services, default-deny NetworkPolicy,
+  optional CloudNativePG cluster with a read-only role, ExternalSecrets and HTTPRoutes, `helm test` chain verify,
+  a value for every core variable). The release workflow now pushes `ghcr.io/jfillman/clearance:vX.Y.Z` (amd64 and
+  arm64, SPDX SBOM, keyless signature) and `oci://ghcr.io/jfillman/charts/clearance`, and reruns the install test on
+  them. Chart CI (`.github/workflows/chart.yaml`): lint, render tests (`tools/charttest`), kubeconform, and an install
+  test on kind (`tools/chart-install-test`, `tools/installtest`). See [docs/install.md](docs/install.md).
+- `clearance api` (R-2b): Clearance's read API in Go (`internal/api`), on the read-only Postgres store: evidence
+  (filters, `seq` cursor, chain verify, counts), receipts and provenance verdicts, the gate's changes and policy, the
+  policy as data and the dry-run explainer (`decide.(*Engine).Trace`), and the new `GET /v1/definitions`. Same paths,
+  parameters, answers and codes as api.py for every route kept, identical on the 612-record hangar-dev chain; the
+  runtime's reads move to the gateway (R-3). Counts exclude the core's outcome records by default (`outcomes`).
+  `contract/clearance-api.json` is now generated from the Go handlers, and `tools/gen_api_contract.py` is gone
+  ([docs/clearance-api.md](docs/clearance-api.md)).
+- `CLEARANCE_FLIGHT_REGISTRIES` (chart value `gate.flightRegistries`): the image prefixes a tier-1 image bump may come
+  from; unset, the default, is any registry. Hangar sets `ghcr.io/riley-roooo/` from the R-4 cutover.
 - `tools/release_notes.py`: print one version's section (the workflow's notes; exits 1 when there is none).
 - The Go core (R-1): one `clearance` binary (`core [--memory]`, `chain verify`, `register`, `conformance`, `version`); the
   decision engine on cel-go with a golden corpus replayed from the Python engine; the Postgres store extending the
@@ -252,7 +270,8 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   scope, narrow-only limits, CEL policy, sessions, the hash-chained audit log and the gateway; the Hangar pack's
   `glidepath.*` and `airframe.*` tools over glidepath-api and a GET-only Kubernetes adapter.
 
-[Unreleased]: https://github.com/jfillman/clearance/compare/v0.26.1...HEAD
+[Unreleased]: https://github.com/jfillman/clearance/compare/v0.27.0...HEAD
+[0.27.0]: https://github.com/jfillman/clearance/compare/v0.26.1...v0.27.0
 [0.26.1]: https://github.com/jfillman/clearance/compare/v0.26.0...v0.26.1
 [0.26.0]: https://github.com/jfillman/clearance/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/jfillman/clearance/compare/v0.24.2...v0.25.0

@@ -46,10 +46,19 @@ def access(defs):
                       directory=Groups(), ownership=Owns())
 
 
-def test_the_committed_contract_is_current():
-    assert json.loads((ROOT / "contract" / "clearance-api.json").read_text()) == api.contract()
-    ops = {o["operationId"] for o in api.contract()["operations"]}
-    assert {"listSessions", "listEvidence", "verifyEvidence", "listHumanRequests", "getTask"} <= ops
+def test_the_committed_contract_is_the_go_apis_and_api_py_serves_it():
+    """contract/clearance-api.json is generated from the Go `clearance api` (internal/api, R-2). Until the cutover
+    (R-4) api.py still serves Hangar: every operation both serve has the same method, path and roles, and api.py
+    takes no parameter the Go API refuses; the runtime's operations stay api.py's until the gateway serves them (R-3)."""
+    go = {o["operationId"]: o for o in json.loads((ROOT / "contract" / "clearance-api.json").read_text())["operations"]}
+    py = {o["operationId"]: o for o in api.contract()["operations"]}
+    assert {"listEvidence", "verifyEvidence", "countEvidence", "listClearances", "getPolicy"} <= set(go)
+    shared = set(go) & set(py)
+    assert shared == set(go) - {"listDefinitions"}
+    for op in shared:
+        assert (go[op]["method"], go[op]["path"], go[op]["roles"]) == (py[op]["method"], py[op]["path"], py[op]["roles"]), op
+        assert set(py[op]["params"]) <= set(go[op]["params"]), op
+    assert {"listSessions", "listHumanRequests", "getTask", "listAgents", "listEvents"} <= set(py) - set(go)
 
 
 def test_hangar_app_of():
