@@ -24,7 +24,7 @@ module table: [github.com/jfillman/clearance](https://github.com/jfillman/cleara
 - **Policy** (`tiers.py`, `scope.py`, `limits.py`, `policy.py`, `pack.py`, `packs/hangar`): the rules, core plus a
   pack per platform. Anything that fails to evaluate denies.
 - **Sessions and evidence** (`session.py`, `audit.py`, `pg.py`): budgets, the breaker, the run tree; one hash-chained
-  record per decision; Postgres as the one writer.
+  record per decision in the clearance.evidence/v1 shape ([evidence.md](evidence.md)); Postgres as the one writer.
 - **The gateway** (`dispatch.py`, `server.py`, `backends.py`, `modelproxy.py`): authenticate, decide, record, spend,
   call, record. The MCP surface for agents, the model proxy for their model calls, the human inbox, and the person
   controls (freeze, end, hold, release) through the delegate model.

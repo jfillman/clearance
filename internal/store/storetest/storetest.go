@@ -21,6 +21,9 @@ import (
 	"github.com/jfillman/clearance/internal/store"
 )
 
+// Writer seals the conformance suite's records: a fixture provider, the default verified set (the evidence tests' goWriter, so go-extended.jsonl is the same chain).
+var Writer = evidence.Writer{Provider: evidence.Provider{Name: "clearance", Version: "0.0.0-test"}}
+
 // Opener returns a fresh, empty store holding seed (an already valid chain) as its first records.
 type Opener func(t *testing.T, seed []store.Record) store.Store
 
@@ -56,7 +59,7 @@ func appendOne(t *testing.T, s store.Store, ev store.Event) store.Record {
 	var rec store.Record
 	if err := s.Atomic(bg, func(tx store.Tx) error {
 		var err error
-		rec, err = tx.Append(bg, ev)
+		rec, err = tx.Append(bg, ev, Writer)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -141,7 +144,7 @@ func testTxIsolation(t *testing.T, open Opener) {
 	s := open(t, nil)
 	appendOne(t, s, store.Event{"tool": "a"})
 	err := s.Atomic(bg, func(tx store.Tx) error {
-		r, err := tx.Append(bg, store.Event{"tool": "b"})
+		r, err := tx.Append(bg, store.Event{"tool": "b"}, Writer)
 		if err != nil {
 			return err
 		}
@@ -200,7 +203,7 @@ func testRollback(t *testing.T, open Opener) {
 	setDefs(t, s, store.Definition{Name: "d", State: "active", Record: json.RawMessage(`{"v":1}`)})
 	err := s.Atomic(bg, func(tx store.Tx) error {
 		for i := 0; i < 2; i++ {
-			if _, err := tx.Append(bg, store.Event{"tool": "doomed", "i": i}); err != nil {
+			if _, err := tx.Append(bg, store.Event{"tool": "doomed", "i": i}, Writer); err != nil {
 				return err
 			}
 		}
@@ -241,7 +244,7 @@ func testPanic(t *testing.T, open Opener) {
 			}
 		}()
 		_ = s.Atomic(bg, func(tx store.Tx) error {
-			if _, err := tx.Append(bg, store.Event{"tool": "a"}); err != nil {
+			if _, err := tx.Append(bg, store.Event{"tool": "a"}, Writer); err != nil {
 				return err
 			}
 			panic("in fn")
@@ -260,7 +263,7 @@ func testTxAfterDone(t *testing.T, open Opener) {
 	if err := s.Atomic(bg, func(tx store.Tx) error { kept = tx; return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := kept.Append(bg, store.Event{"tool": "late"}); err == nil {
+	if _, err := kept.Append(bg, store.Event{"tool": "late"}, Writer); err == nil {
 		t.Fatal("Append on a finished tx: want an error")
 	}
 	if _, _, err := kept.Head(bg); err == nil {
@@ -272,16 +275,16 @@ func testTxAfterDone(t *testing.T, open Opener) {
 func testRejects(t *testing.T, open Opener) {
 	s := open(t, nil)
 	err := s.Atomic(bg, func(tx store.Tx) error {
-		if _, err := tx.Append(bg, store.Event{"seq": 5}); !errors.Is(err, evidence.ErrEnvelopeField) {
+		if _, err := tx.Append(bg, store.Event{"seq": 5}, Writer); !errors.Is(err, evidence.ErrEnvelopeField) {
 			return fmt.Errorf("envelope field: %v", err)
 		}
 		for _, ev := range []store.Event{{"x": 1e16}, {"x": math.Copysign(0, -1)}, {"x": math.NaN()}, {"x": "\x00"}} {
-			if _, err := tx.Append(bg, ev); !errors.Is(err, evidence.ErrNotStorable) {
+			if _, err := tx.Append(bg, ev, Writer); !errors.Is(err, evidence.ErrNotStorable) {
 				return fmt.Errorf("%v: %v", ev, err)
 			}
 		}
 		// A refused event leaves the transaction usable.
-		_, err := tx.Append(bg, store.Event{"tool": "ok", "coverage": "observed", "boundary": "deployment"})
+		_, err := tx.Append(bg, store.Event{"tool": "ok", "coverage": "observed-not-attributed", "boundary": "deployment"}, Writer)
 		return err
 	})
 	if err != nil {
@@ -466,7 +469,7 @@ func testConcurrent(t *testing.T, open Opener) {
 		go func(i int) {
 			defer wg.Done()
 			errs <- s.Atomic(bg, func(tx store.Tx) error {
-				_, err := tx.Append(bg, store.Event{"tool": "c", "i": i})
+				_, err := tx.Append(bg, store.Event{"tool": "c", "i": i}, Writer)
 				if err == nil && i%5 == 0 {
 					return errBoom // some roll back, interleaved with commits
 				}
@@ -491,7 +494,7 @@ func testCancelled(t *testing.T, open Opener) {
 	ctx, cancel := context.WithCancel(bg)
 	cancel()
 	if err := s.Atomic(ctx, func(tx store.Tx) error {
-		_, err := tx.Append(ctx, store.Event{"tool": "x"})
+		_, err := tx.Append(ctx, store.Event{"tool": "x"}, Writer)
 		return err
 	}); err == nil {
 		t.Fatal("Atomic on a cancelled context: want an error")
@@ -510,7 +513,7 @@ var GoEvents = []store.Event{
 	{"ts": "2026-11-02T11:00:01Z", "tool": "model.call", "spend": map[string]any{"usd": 0.0123, "tokens": 1500},
 		"ratio": 1e-05, "big": json.Number("123456789012345678901234567890"), "note": "café   \U0001f600 <&> \x7f \t\n\"\\"},
 	{"ts": "2026-11-02T11:00:02Z", "tool": "repo.pr.open", "effect": map[string]any{"repo": "jfillman/x", "pr": 8},
-		"coverage": "observed", "labels": []string{"b", "a"}, "env": map[string]string{"￿": "1", "\U00010000": "2"}},
+		"coverage": "observed-not-attributed", "labels": []string{"b", "a"}, "env": map[string]string{"￿": "1", "\U00010000": "2"}},
 	{"ts": "2026-11-02T11:00:03Z", "tool": "deploy.clear", "boundary": "deployment",
 		"floats": []any{0.1, 1.5, 100.0, 1e-7, 2.5e-300, 9999999999999998.0, json.Number("1.50"), json.Number("1E2")}},
 }
