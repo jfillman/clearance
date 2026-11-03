@@ -3,7 +3,7 @@ package decide
 import (
 	"slices"
 
-	"github.com/jfillman/clearance/internal/decide/pyval"
+	"github.com/jfillman/clearance/internal/pycompat"
 )
 
 // model is Gateway.model_authorize and ModelProxy._decide.
@@ -35,9 +35,9 @@ func (e *Engine) model(req *EvaluationRequest) (Decision, Spend) {
 	case networks[s.Limits.Network] < networks["clearance+model"]:
 		return deny("M004", "this run's network mode does not include the model proxy")
 	case !slices.Contains(s.Limits.Models, model):
-		return deny("M005", "model "+pyval.StrRepr(model)+" is not on this session's allowlist")
+		return deny("M005", "model "+pycompat.StrRepr(model)+" is not on this session's allowlist")
 	case !slices.Contains(c.Models.Routes, model):
-		return deny("M006", "no route for model "+pyval.StrRepr(model))
+		return deny("M006", "no route for model "+pycompat.StrRepr(model))
 	}
 	est := *req.Action.Properties.EstTokens
 	if est.Cmp(I(0)) < 0 || est.Cmp(s.remaining("model_tokens")) > 0 {

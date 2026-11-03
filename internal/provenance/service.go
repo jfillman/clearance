@@ -11,10 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"encoding/json"
-
 	"github.com/jfillman/clearance/internal/authn"
 	"github.com/jfillman/clearance/internal/evidence"
+	"github.com/jfillman/clearance/internal/httpjson"
 	"github.com/jfillman/clearance/internal/pycompat"
 	"github.com/jfillman/clearance/internal/store"
 )
@@ -140,21 +139,21 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 func (h *Handler) serve(w http.ResponseWriter, r *http.Request) {
 	p, ok := authn.From(r.Context())
 	if !ok {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "a bearer token is required"})
+		httpjson.Write(w, http.StatusUnauthorized, map[string]any{"error": "a bearer token is required"})
 		return
 	}
 	raw, err := io.ReadAll(io.LimitReader(r.Body, MaxBody+1))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "the body could not be read"})
+		httpjson.Write(w, http.StatusBadRequest, map[string]any{"error": "the body could not be read"})
 		return
 	}
 	if len(raw) > MaxBody {
-		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": "body too large"})
+		httpjson.Write(w, http.StatusRequestEntityTooLarge, map[string]any{"error": "body too large"})
 		return
 	}
 	body, err := pycompat.Decode(bytes.NewReader(raw))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "the body is not JSON"})
+		httpjson.Write(w, http.StatusBadRequest, map[string]any{"error": "the body is not JSON"})
 		return
 	}
 	out, err := h.Svc.Provenance(r.Context(), p, body)
@@ -162,25 +161,17 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request) {
 	var br *BadRequest
 	switch {
 	case errors.As(err, &nv):
-		writeJSON(w, http.StatusForbidden, map[string]any{"error": nv.Message})
+		httpjson.Write(w, http.StatusForbidden, map[string]any{"error": nv.Message})
 	case errors.As(err, &br):
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": br.Message})
+		httpjson.Write(w, http.StatusBadRequest, map[string]any{"error": br.Message})
 	case err != nil:
 		if h.Log != nil {
 			h.Log.Error("provenance: failed", "error", err.Error())
 		}
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "internal error"})
+		httpjson.Write(w, http.StatusInternalServerError, map[string]any{"error": "internal error"})
 	default:
-		writeJSON(w, http.StatusOK, out)
+		httpjson.Write(w, http.StatusOK, out)
 	}
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	enc := json.NewEncoder(w)
-	enc.SetEscapeHTML(false)
-	_ = enc.Encode(v)
 }
 
 // appendAs is tx.Append with the writer first, so the event literal can close the call.

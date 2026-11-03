@@ -80,7 +80,8 @@
 //
 // Python semantics the decision depends on are reproduced exactly: dict order and key equality, True == 1 == 1.0,
 // repr in messages, str.lower/strip/len, `$` before a final newline in re.match, fnmatch, posixpath.normpath,
-// PyYAML's YAML 1.1 safe_load (pyyaml), json.dumps lengths. The golden corpus (testdata/golden, recorded by
+// PyYAML's YAML 1.1 safe_load (internal/pyyaml), json.dumps lengths (internal/pycompat holds those helpers;
+// internal/scope is scope.py). The golden corpus (testdata/golden, recorded by
 // tools/golden/record.py over the whole Python test suite and the fixture agents' calls) replays through this
 // package with identical decisions, rule ids, names, messages, hints, tiers, problems, spend, grants and record
 // fields; CEL_DIFFERENCES.md lists where cel-python and cel-go part (only for ill-typed contexts a request

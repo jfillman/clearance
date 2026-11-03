@@ -8,6 +8,17 @@ correct itself against a deterministic gate instead of guessing.
 It is a Hangar product (https://hangarplatform.dev). Autopilot, Hangar's agent runtime, is its native consumer, but
 Clearance installs alone: the core knows nothing about Airframe, Glidepath or any other platform.
 
+## Go core
+
+**Built, not deployed.** The core is being ported to Go: one module (`go.mod`), one static binary `clearance` with the
+subcommands `core` (the HTTP API: decisions, outcomes, provider records, the gate, provenance, the GitHub App),
+`chain verify`, `register`, `conformance` ([docs/provider-protocol.md](docs/provider-protocol.md)) and `version`, plus the Go and Python clients
+(`client`, `clients/python`). Its contract is
+[`contract/clearance-core.json`](contract/clearance-core.json); the decision engine replays a golden corpus recorded
+from the Python engine with identical decisions; the store uses the Python core's tables and writer lock. See
+[docs/core.md](docs/core.md). Until W1 switches over, the live hangar-dev gateway runs the Python core, and the
+tables below describe the Python modules it runs.
+
 ## What it decides
 
 | Piece | Where | What it does |
@@ -29,7 +40,7 @@ Clearance installs alone: the core knows nothing about Airframe, Glidepath or an
 | PR provenance | `provenance.py`, `server.py` (`POST /v1/provenance`) | each PR Clearance opens leaves a receipt in its hashed record (`effect`: repo, PR, the commit it made, the paths it carried); a CI gate posts a PR's head, changed paths, author and `Hangar-*` trailers and gets two verdicts: **identity** (confirmed; or AI001 trailers with no record, AI002 an agents' login with no record, AI003 commits added after the agent's, AI004 edited trailers) and **scope** (AS001 a path the agent's commit did not carry, AS002 a path the definition denies now, AS003 the repo left `repos.allow`, AS004 the definition is gone); a PR with none of that is `not-agent` and passes. Only principals matching the deployment's `verifiers` globs may ask; every verdict is a record |
 | Deployment gate | `gate.py`, `dispatch.py` (`register_change`, `clear_change`, `deny_change`), `pg.py` `PgChanges`, `api.py` | the second boundary ([docs/gate.md](docs/gate.md)): a change to a protected environment, classified 0 to 3 from its rendered diff against a baseline a repo's `clearance.yaml` may only tighten; tiers 0 and 1 cleared by policy, 2 and 3 held for the owner group and an outside group (never the proposer, never twice); `deploy.*` records in the deployment boundary; 7-day TTL; a new head supersedes |
 | GitHub App | `github_app.py`, `server.py` (`POST /v1/github/webhook`), `contract/github-app-manifest.json` | Clearance's own GitHub App ([docs/provenance-app.md](docs/provenance-app.md)): GitHub's PR webhooks, signature-checked; a one-repo read-only installation token; the same `provenance.verify`; check runs `Clearance / agent-identity` and `Clearance / agent-scope`; PR comments off by default. Phase 2a (v0.22.0): a custom deployment protection rule, answering a GitHub Actions deployment from the deployment gate's change (approved, rejected, or waiting on people) |
-| `clearance register` | `register.py` (the `clearance` console script), `register/action.yml`, `auth.GitHubActionsAuthenticator` | Phase 2b: a customer's CI registers what it deploys with the deployment gate (the diff of two rendered manifest directories), authenticated by the workflow's GitHub Actions OIDC token, for its own repository only (`DG-REPO`) |
+| `clearance register` | `register.py` (the `clearance` console script), `register/action.yml`, `auth.GitHubActionsAuthenticator`; ported to the Go binary's `clearance register` (docs/core.md) | Phase 2b: a customer's CI registers what it deploys with the deployment gate (the diff of two rendered manifest directories), authenticated by the workflow's GitHub Actions OIDC token, for its own repository only (`DG-REPO`) |
 | Who is calling | `auth.py` | interim, until ID-JAG: service-account tokens by TokenReview for the `clearance` audience (principal `<namespace>/<name>`), people's OIDC ID tokens against the issuer's JWKS (RS256/ES256 only; principal `user:<email>`), and only the people its `allowed` globs name (a valid token from an issuer that federates GitHub is anyone with a GitHub account; empty allows nobody), routed by issuer and cached briefly (never past `exp`, never a failure). Another cluster's service accounts (`ForeignWorkloadAuthenticator`, e.g. Tower's backend on hangar-prod) are verified against that cluster's public issuer and named `<cluster>/<namespace>/<sa>`, only for the service accounts it allows |
 
 ## Packs
@@ -65,6 +76,13 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[test]'
 No cluster is needed. `tests/test_pg.py` needs a scratch Postgres in `CLEARANCE_TEST_DSN` (CI runs one) and skips without it. The Glidepath contract drift test reads a glidepath checkout under `HANGAR_TECH` and skips
 without one (CI clones it).
 
+The Go core:
+
+```shell
+go test -race ./...      # internal/store/pg's tests use CLEARANCE_TEST_DSN the same way
+tools/fuzz-all.sh 10s
+```
+
 ## History
 
 This code was the `clearance` package inside https://github.com/jfillman/autopilot until 2026-10-29 (Hangar decision
@@ -72,8 +90,8 @@ D16); its history came with it. Design: Hangar's `docs/autopilot/design.md`, sec
 
 ## Docs
 
-The TechDocs site is `mkdocs.yml` over `docs/` (home, clearance-api, the deployment gate, the evidence record, the
-provider protocol and `clearance conformance`), published in Hangar's
+The TechDocs site is `mkdocs.yml` over `docs/` (home, the Go core, clearance-api, the deployment gate, the evidence
+record, the provider protocol and `clearance conformance`, the provenance App), published in Hangar's
 portal from `catalog-info.yaml` (`backstage.io/techdocs-ref: dir:.`). Preview locally with `pip install
 mkdocs-techdocs-core && mkdocs serve`.
 

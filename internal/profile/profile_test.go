@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -315,5 +316,22 @@ func FuzzParse(f *testing.F) {
 func TestDeftestsBaselineIsTheRealOne(t *testing.T) {
 	if strings.Join(deftest.BaselineDenyPaths, "|") != strings.Join(profile.BaselineDenyPaths, "|") {
 		t.Fatal("deftest.BaselineDenyPaths drifted from profile.BaselineDenyPaths")
+	}
+}
+
+// DecodeYAML is yaml.safe_load (PyYAML's YAML 1.1), as profile.load_dir reads a definition.
+func TestDecodeYAMLIsSafeLoad(t *testing.T) {
+	m, err := profile.DecodeYAML([]byte("a: no\na: on\nb: 1e3\nc: 0o17\nd: 010\ne: 1.0\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"a": true, "b": "1e3", "c": "0o17", "d": json.Number("8"), "e": json.Number("1.0")}
+	if !reflect.DeepEqual(m, want) {
+		t.Fatalf("got %#v, want %#v", m, want)
+	}
+	for _, doc := range []string{"1: x\n", "a: 2026-01-02\n", "a: .nan\n", "- a\n", "a: 2026-02-31\n"} {
+		if _, err := profile.DecodeYAML([]byte(doc)); err == nil {
+			t.Errorf("%q: decoded; it has no JSON form or is not a mapping", doc)
+		}
 	}
 }

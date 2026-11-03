@@ -13,6 +13,7 @@ package definitions
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 
@@ -438,7 +439,7 @@ func (r *Registry) plan(loaded []Loaded, rejected []Rejected) plan {
 		}
 	}
 	for _, l := range next {
-		if contains(ch.Added, l.Name()) || contains(ch.Changed, l.Name()) {
+		if slices.Contains(ch.Added, l.Name()) || slices.Contains(ch.Changed, l.Name()) {
 			ch.Sources[l.Name()] = l.Source
 		}
 	}
@@ -455,15 +456,6 @@ func anyDoc(m map[string]any) any {
 func containsRejected(list []Rejected, x Rejected) bool {
 	for _, y := range list {
 		if x.Equal(y) {
-			return true
-		}
-	}
-	return false
-}
-
-func contains(list []string, s string) bool {
-	for _, x := range list {
-		if x == s {
 			return true
 		}
 	}

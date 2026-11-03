@@ -3,7 +3,6 @@ package review
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/jfillman/clearance/internal/authn"
 	"github.com/jfillman/clearance/internal/definitions"
+	"github.com/jfillman/clearance/internal/httpjson"
 	"github.com/jfillman/clearance/internal/pycompat"
 )
 
@@ -122,12 +122,12 @@ func (h *Handler) Review(_ context.Context, p authn.Principal, body map[string]a
 func (h *Handler) review(w http.ResponseWriter, r *http.Request) {
 	p, ok := authn.From(r.Context())
 	if !ok {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "a bearer token is required"})
+		httpjson.Write(w, http.StatusUnauthorized, map[string]any{"error": "a bearer token is required"})
 		return
 	}
 	body, status, msg := ReadBody(r, MaxBody)
 	if status != 0 {
-		writeJSON(w, status, map[string]any{"error": msg})
+		httpjson.Write(w, status, map[string]any{"error": msg})
 		return
 	}
 	out, err := h.Review(r.Context(), p, body, r.Header.Get(authn.OnBehalfOfHeader))
@@ -135,13 +135,13 @@ func (h *Handler) review(w http.ResponseWriter, r *http.Request) {
 	var br BadRequest
 	switch {
 	case errors.As(err, &na):
-		writeJSON(w, http.StatusForbidden, map[string]any{"error": na.Error()})
+		httpjson.Write(w, http.StatusForbidden, map[string]any{"error": na.Error()})
 	case errors.As(err, &br):
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": br.Error()})
+		httpjson.Write(w, http.StatusBadRequest, map[string]any{"error": br.Error()})
 	case err != nil:
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "internal error"})
+		httpjson.Write(w, http.StatusInternalServerError, map[string]any{"error": "internal error"})
 	default:
-		writeJSON(w, http.StatusOK, out)
+		httpjson.Write(w, http.StatusOK, out)
 	}
 }
 
@@ -166,12 +166,4 @@ func ReadBody(r *http.Request, max int64) (map[string]any, int, string) {
 		return map[string]any{}, 0, ""
 	}
 	return m, 0, ""
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	enc := json.NewEncoder(w)
-	enc.SetEscapeHTML(false)
-	_ = enc.Encode(v)
 }

@@ -1,10 +1,12 @@
-package pyval
+package pycompat
 
 import (
+	"bytes"
 	"encoding/json"
 	"math"
 	"math/big"
 	"os"
+	"regexp"
 	"testing"
 )
 
@@ -14,6 +16,10 @@ type vectors struct {
 	Lower     [][2]string          `json:"lower"`
 	Strip     [][2]string          `json:"strip"`
 	DumpsLen  [][2]json.RawMessage `json:"dumps_len"`
+	// DumpsSorted is [value, [compact, compact+ascii, spaced+ascii]] for json.dumps(sort_keys=True).
+	DumpsSorted [][2]json.RawMessage `json:"dumps_sorted"`
+	// Fnmatch is [name, pattern, fnmatch.fnmatchcase(name, pattern)].
+	Fnmatch [][3]json.RawMessage `json:"fnmatch"`
 }
 
 // TestAgainstPython checks repr, lower, strip and json.dumps length against values Python produced
@@ -65,6 +71,40 @@ func TestAgainstPython(t *testing.T) {
 			t.Errorf("DumpsLen(%s) = %d, Python %d", c[0], got, want)
 		}
 	}
+	if len(v.DumpsSorted) == 0 || len(v.Fnmatch) == 0 {
+		t.Fatal("vectors.json has no dumps_sorted or fnmatch cases: regenerate it")
+	}
+	for _, c := range v.DumpsSorted {
+		var want [3]string
+		_ = json.Unmarshal(c[1], &want)
+		opts := [3]Options{{}, {ASCII: true}, {ASCII: true, Spaced: true}}
+		// Both value models: the dict model (DecodeJSON) and the JSON model (Decode).
+		dict, err := DecodeJSON(c[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		plain, err := Decode(bytes.NewReader(c[0]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, o := range opts {
+			for _, val := range []any{dict, plain} {
+				if got, err := Dumps(val, o); err != nil || string(got) != want[i] {
+					t.Errorf("Dumps(%s, %+v) = %s, %v; Python %s", c[0], o, got, err, want[i])
+				}
+			}
+		}
+	}
+	for _, c := range v.Fnmatch {
+		var name, pat string
+		var want bool
+		_ = json.Unmarshal(c[0], &name)
+		_ = json.Unmarshal(c[1], &pat)
+		_ = json.Unmarshal(c[2], &want)
+		if got := Match(name, pat); got != want {
+			t.Errorf("Match(%q, %q) = %v, fnmatchcase %v (regexp %s)", name, pat, got, want, FnmatchTranslate(pat))
+		}
+	}
 }
 
 func TestPythonEquality(t *testing.T) {
@@ -86,11 +126,11 @@ func TestPythonEquality(t *testing.T) {
 		{Date{2024, 1, 1}, DateTime{Y: 2024, M: 1, D: 1}, false, false},
 		{DateTime{Y: 2024, M: 1, D: 1, H: 5, Aware: true}, DateTime{Y: 2024, M: 1, D: 1, Aware: true, Offset: -5 * 3600}, true, true},
 	} {
-		if got := Eq(c.a, c.b); got != c.eq {
-			t.Errorf("Eq(%v, %v) = %v", c.a, c.b, got)
+		if got := Equal(c.a, c.b); got != c.eq {
+			t.Errorf("Equal(%v, %v) = %v", c.a, c.b, got)
 		}
-		if got := EqIn(c.a, c.b); got != c.in {
-			t.Errorf("EqIn(%v, %v) = %v", c.a, c.b, got)
+		if got := EqualIn(c.a, c.b); got != c.in {
+			t.Errorf("EqualIn(%v, %v) = %v", c.a, c.b, got)
 		}
 	}
 	// Keys that compare equal are one key: {1: x, True: y} is {1: 'y'}.
@@ -125,4 +165,21 @@ func TestDecodeJSON(t *testing.T) {
 	if _, err := DecodeJSON(deep); err == nil {
 		t.Error("deep nesting must fail")
 	}
+}
+
+// FuzzFnmatchTranslate: every pattern translates to an expression Go compiles (so no glob silently matches nothing
+// for a reason Python would not have), and matching never panics.
+func FuzzFnmatchTranslate(f *testing.F) {
+	for _, p := range []string{"a*c", "[z-a]", "[!z-a]", "[a-cz-x]", "[]-]", "[!]]", "[", "[[:alpha:]]", "[a&&b]", "é[é-ü]"} {
+		f.Add(p, "abc")
+	}
+	f.Fuzz(func(t *testing.T, pat, name string) {
+		if len(pat) > 256 {
+			return
+		}
+		if _, err := regexp.Compile(FnmatchTranslate(pat)); err != nil {
+			t.Fatalf("%q -> %s: %v", pat, FnmatchTranslate(pat), err)
+		}
+		_ = Match(name, pat)
+	})
 }

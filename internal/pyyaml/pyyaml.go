@@ -1,9 +1,14 @@
-// Package pyyaml is PyYAML's yaml.safe_load for the values Clearance's policy diffs (AF-9a field scope, the
-// GP-SCOPE cicd.yaml check): the YAML 1.1 implicit types PyYAML resolves (yes/no/on/off booleans, 0o-less octal,
-// base-60 integers, `1.` floats, timestamps), merge keys, and dicts with PyYAML's key rules.
+// Package pyyaml is PyYAML's yaml.safe_load and yaml.safe_load_all (SafeLoader), the one YAML 1.1 loader of the Go
+// core: the decision engine's policy diffs (AF-9a field scope, the GP-SCOPE cicd.yaml check) and `clearance
+// register`'s rendered manifests (internal/gate/render) both read through it. It resolves the YAML 1.1 implicit
+// types PyYAML resolves (yes/no/on/off booleans, 0o-less octal, base-60 integers, `1.` floats, timestamps), applies
+// merge keys, and builds dicts with PyYAML's key rules, into pycompat's dict model (*pycompat.Map, Date, DateTime).
 //
-// Parsing is go.yaml.in/yaml/v3's; only resolution and construction are PyYAML's. Two kinds of failure:
-// *Error is a yaml.YAMLError (the caller treats the file as unparseable, as the Python does), and *ValueError is
+// Parsing is go.yaml.in/yaml/v3's; only resolution and construction are PyYAML's. One known difference: yaml.v3
+// does not report the non-specific tag `!`, so `! '123'` loads as the string '123' where PyYAML resolves it from
+// its text (the int 123). `! 123` and `! [1]` load as PyYAML loads them.
+//
+// Two kinds of failure: *Error is a yaml.YAMLError (the caller treats the file as unparseable, as the Python does), and *ValueError is
 // an exception PyYAML raises that is not a YAMLError (a timestamp with day 31 in February), which the Python
 // engine does not catch; the Go engine fails closed on it (R000).
 package pyyaml
@@ -18,7 +23,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/jfillman/clearance/internal/decide/pyval"
+	"github.com/jfillman/clearance/internal/pycompat"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -35,6 +40,31 @@ func (e *ValueError) Error() string { return "ValueError: " + e.Msg }
 // MaxNodes bounds the work one document may cause (aliases can expand a small text into a large tree). PyYAML
 // has no bound; past it the Go engine denies (R000) rather than diffing.
 const MaxNodes = 200_000
+
+// SafeLoadAll is yaml.safe_load_all(text): every document of the stream, in order (an empty document is None).
+// maxNodes bounds each document as MaxNodes bounds SafeLoad's (0 means MaxNodes).
+func SafeLoadAll(text string, maxNodes int) ([]any, error) {
+	if maxNodes <= 0 {
+		maxNodes = MaxNodes
+	}
+	dec := yaml.NewDecoder(strings.NewReader(text))
+	var out []any
+	for {
+		var doc yaml.Node
+		if err := dec.Decode(&doc); err != nil {
+			if errors.Is(err, io.EOF) {
+				return out, nil
+			}
+			return nil, &Error{Msg: err.Error()}
+		}
+		c := &constructor{max: maxNodes}
+		v, err := c.construct(&doc, 0)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+}
 
 // SafeLoad is yaml.safe_load(text).
 func SafeLoad(text string) (any, error) {
@@ -53,15 +83,15 @@ func SafeLoad(text string) (any, error) {
 		}
 		return nil, &Error{Msg: "expected a single document in the stream"}
 	}
-	c := &constructor{}
+	c := &constructor{max: MaxNodes}
 	return c.construct(&doc, 0)
 }
 
-type constructor struct{ nodes int }
+type constructor struct{ nodes, max int }
 
 func (c *constructor) construct(n *yaml.Node, depth int) (any, error) {
 	c.nodes++
-	if c.nodes > MaxNodes || depth > 256 {
+	if c.nodes > c.max || depth > 256 {
 		// Not a YAMLError: a caller that treats an unparseable file as out of scope must not let an alias bomb
 		// through that way, so this fails closed (R000) instead.
 		return nil, &ValueError{Msg: "document too large"}
@@ -80,7 +110,7 @@ func (c *constructor) construct(n *yaml.Node, depth int) (any, error) {
 	case yaml.ScalarNode:
 		return c.scalar(n)
 	case yaml.SequenceNode:
-		if n.Style&yaml.TaggedStyle != 0 && n.Tag != "!!seq" {
+		if tagged(n) && n.Tag != "!!seq" {
 			return nil, unsupportedTag(n)
 		}
 		out := make([]any, 0, len(n.Content))
@@ -93,14 +123,14 @@ func (c *constructor) construct(n *yaml.Node, depth int) (any, error) {
 		}
 		return out, nil
 	case yaml.MappingNode:
-		if n.Style&yaml.TaggedStyle != 0 && n.Tag != "!!map" {
+		if tagged(n) && n.Tag != "!!map" {
 			return nil, unsupportedTag(n)
 		}
 		pairs, err := c.flatten(n, depth)
 		if err != nil {
 			return nil, err
 		}
-		m := pyval.NewMap(len(pairs) / 2)
+		m := pycompat.NewMap(len(pairs) / 2)
 		for i := 0; i+1 < len(pairs); i += 2 {
 			k, err := c.construct(pairs[i], depth+1)
 			if err != nil {
@@ -135,7 +165,7 @@ func isMerge(k *yaml.Node) bool {
 	if k.Kind != yaml.ScalarNode {
 		return false
 	}
-	if k.Style&yaml.TaggedStyle != 0 {
+	if tagged(k) {
 		return k.Tag == "!!merge"
 	}
 	return plain(k) && k.Value == "<<"
@@ -185,6 +215,8 @@ func (c *constructor) flatten(n *yaml.Node, depth int) ([]*yaml.Node, error) {
 	return append(merge, own...), nil
 }
 
+func tagged(n *yaml.Node) bool { return n.Style&yaml.TaggedStyle != 0 }
+
 func plain(n *yaml.Node) bool {
 	return n.Style&(yaml.DoubleQuotedStyle|yaml.SingleQuotedStyle|yaml.LiteralStyle|yaml.FoldedStyle) == 0
 }
@@ -233,7 +265,7 @@ func resolve(v string) string {
 func (c *constructor) scalar(n *yaml.Node) (any, error) {
 	tag := "!!str"
 	switch {
-	case n.Style&yaml.TaggedStyle != 0:
+	case tagged(n):
 		tag = n.Tag
 	case plain(n):
 		tag = resolve(n.Value)
@@ -251,7 +283,8 @@ func (c *constructor) scalar(n *yaml.Node) (any, error) {
 		case "no", "false", "off":
 			return false, nil
 		}
-		return nil, &Error{Msg: fmt.Sprintf("bad bool %q", v)} // KeyError in PyYAML; not reachable for an implicit bool
+		// PyYAML's bool_values[value.lower()] raises KeyError (`!!bool foo`): not a YAMLError, so fail closed.
+		return nil, &ValueError{Msg: fmt.Sprintf("KeyError: %q", v)}
 	case "!!int":
 		return constructInt(v)
 	case "!!float":
@@ -356,9 +389,9 @@ func constructTimestamp(v string) (any, error) {
 		return nil, &ValueError{Msg: "day is out of range for month"}
 	}
 	if m[4] == "" {
-		return pyval.Date{Y: y, M: mo, D: d}, nil
+		return pycompat.Date{Y: y, M: mo, D: d}, nil
 	}
-	t := pyval.DateTime{Y: y, M: mo, D: d, H: atoi(m[4]), Min: atoi(m[5]), S: atoi(m[6])}
+	t := pycompat.DateTime{Y: y, M: mo, D: d, H: atoi(m[4]), Min: atoi(m[5]), S: atoi(m[6])}
 	if t.H > 23 || t.Min > 59 || t.S > 59 {
 		return nil, &ValueError{Msg: "time component out of range"}
 	}

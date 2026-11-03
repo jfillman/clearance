@@ -103,30 +103,30 @@ func Add(s Set, data []byte) error {
 		return err
 	}
 	for _, raw := range docs {
-		doc, ok := raw.(*omap)
-		if !ok || !truthy(doc.vals["kind"]) || !truthy(doc.vals["apiVersion"]) {
+		doc, ok := raw.(*pycompat.Map)
+		if !ok || !pycompat.Truthy(get(doc, "kind")) || !pycompat.Truthy(get(doc, "apiVersion")) {
 			continue
 		}
-		items := []*omap{doc}
-		if kind, _ := doc.vals["kind"].(string); strings.HasSuffix(kind, "List") {
-			if list, ok := doc.vals["items"].([]any); ok {
+		items := []*pycompat.Map{doc}
+		if kind, _ := get(doc, "kind").(string); strings.HasSuffix(kind, "List") {
+			if list, ok := get(doc, "items").([]any); ok {
 				items = nil
 				for _, it := range list {
-					if m, ok := it.(*omap); ok {
+					if m, ok := it.(*pycompat.Map); ok {
 						items = append(items, m)
 					}
 				}
 			}
 		}
 		for _, d := range items {
-			meta, _ := d.vals["metadata"].(*omap)
-			get := func(k string) string {
-				if meta == nil || !truthy(meta.vals[k]) {
+			meta := get(d, "metadata")
+			field := func(k string) string {
+				if !pycompat.Truthy(get(meta, k)) {
 					return ""
 				}
-				return pycompat.Str(plain(meta.vals[k]))
+				return pycompat.Str(plain(get(meta, k)))
 			}
-			key := Key{pycompat.Str(plain(d.vals["apiVersion"])), pycompat.Str(plain(d.vals["kind"])), get("namespace"), get("name")}
+			key := Key{pycompat.Str(plain(get(d, "apiVersion"))), pycompat.Str(plain(get(d, "kind"))), field("namespace"), field("name")}
 			if key[3] != "" {
 				out := Doc{Value: plain(d), ordered: d}
 				s[key] = out
@@ -134,26 +134,6 @@ func Add(s Set, data []byte) error {
 		}
 	}
 	return nil
-}
-
-func truthy(v any) bool {
-	switch x := v.(type) {
-	case nil:
-		return false
-	case bool:
-		return x
-	case string:
-		return x != ""
-	case []any:
-		return len(x) > 0
-	case *omap:
-		return len(x.keys) > 0
-	case int64:
-		return x != 0
-	case float64:
-		return x != 0
-	}
-	return true
 }
 
 func escape(k string) string { return strings.ReplaceAll(strings.ReplaceAll(k, "~", "~0"), "/", "~1") }
@@ -217,12 +197,13 @@ func Images(d Doc) []string {
 	var walk func(any)
 	walk = func(x any) {
 		switch v := x.(type) {
-		case *omap:
-			for _, k := range v.keys {
-				if s, ok := v.vals[k].(string); ok && k == "image" {
+		case *pycompat.Map:
+			for i := range v.Len() {
+				k, e := v.At(i)
+				if s, ok := e.(string); ok && k == "image" {
 					found = append(found, s)
 				} else {
-					walk(v.vals[k])
+					walk(e)
 				}
 			}
 		case []any:

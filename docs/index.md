@@ -28,6 +28,9 @@ module table: [github.com/jfillman/clearance](https://github.com/jfillman/cleara
 - **The gateway** (`dispatch.py`, `server.py`, `backends.py`, `modelproxy.py`): authenticate, decide, record, spend,
   call, record. The MCP surface for agents, the model proxy for their model calls, the human inbox, and the person
   controls (freeze, end, hold, release) through the delegate model.
+- **The Go core** (`cmd/clearance`, `internal/`, `contract/clearance-core.json`): the decision service, the recorder
+  and the gate in Go, one `clearance` binary. Built, not deployed: the live gateway runs the Python modules above
+  until W1 ([core.md](core.md)).
 - **The read API** (`api.py`, `contract/clearance-api.json`): clearance-api, a separate read-only process over the
   same tables: agents, sessions, evidence, counts, PR receipts, the inbox feed, the policy as data, the event history
   ([clearance-api.md](clearance-api.md)).

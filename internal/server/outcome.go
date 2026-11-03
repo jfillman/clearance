@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"path"
 	"regexp"
 	"slices"
 	"strconv"
@@ -15,6 +14,7 @@ import (
 	"github.com/jfillman/clearance/internal/evidence"
 	"github.com/jfillman/clearance/internal/provenance"
 	"github.com/jfillman/clearance/internal/pycompat"
+	"github.com/jfillman/clearance/internal/scope"
 	"github.com/jfillman/clearance/internal/store"
 )
 
@@ -246,14 +246,11 @@ func (b *OutcomeRequest) validate() (map[string]any, error) {
 	return out, nil
 }
 
-// normalPath is scope.normalize: relative, inside the repository, no NUL or backslash, posix-normalised.
+// normalPath is scope.normalize (internal/scope) on a path of at most 4096 bytes.
 func normalPath(p string) (string, bool) {
-	if p == "" || len(p) > 4096 || strings.ContainsAny(p, "\x00\\") || strings.HasPrefix(p, "/") {
+	if len(p) > 4096 {
 		return "", false
 	}
-	n := path.Clean(p)
-	if n == "." || n == ".." || strings.HasPrefix(n, "../") {
-		return "", false
-	}
-	return n, true
+	n, err := scope.Normalize(p)
+	return n, err == nil
 }

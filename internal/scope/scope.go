@@ -1,4 +1,5 @@
-// Package scope is scope.py: path and repo scope, and AF-9a's field scope over JSON pointers.
+// Package scope is scope.py: path and repo scope, and AF-9a's field scope over JSON pointers. The decision engine
+// and provenance both use it (one port of scope.py; fnmatch.fnmatchcase itself is pycompat's).
 //
 // Globs are compiled to the regular expressions the Python builds and matched with Python's `re.match`
 // semantics, where `$` also matches just before a final newline.
@@ -9,11 +10,12 @@ import (
 	"path"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode/utf8"
 
-	"github.com/jfillman/clearance/internal/decide/pyval"
+	"github.com/jfillman/clearance/internal/pycompat"
 )
 
 // ErrBadPath is scope.BadPath.
@@ -86,8 +88,6 @@ type Globs struct {
 
 const maxCached = 4096
 
-var neverMatch = regexp.MustCompile(`[^\x00-\x{10FFFF}]`)
-
 func (c *Globs) get(m *map[string]*regexp.Regexp, key string, build func() string) *regexp.Regexp {
 	c.mu.RLock()
 	re, ok := (*m)[key]
@@ -97,7 +97,7 @@ func (c *Globs) get(m *map[string]*regexp.Regexp, key string, build func() strin
 	}
 	re, err := regexp.Compile(build())
 	if err != nil {
-		re = neverMatch // an fnmatch class Go cannot compile (a reversed range): it matches nothing
+		re = pycompat.NeverMatch // fail closed: a glob that does not compile matches nothing
 	}
 	c.mu.Lock()
 	if *m == nil || len(*m) >= maxCached {
@@ -137,6 +137,25 @@ func (c *Globs) PathViolations(paths []any, deny []string) int {
 	return bad
 }
 
+// PathViolationList is scope.path_violations(paths, deny): the paths themselves, in order.
+func (c *Globs) PathViolationList(paths []string, deny []string) []string {
+	var bad []string
+	for _, p := range paths {
+		n, err := Normalize(p)
+		if err != nil {
+			bad = append(bad, p)
+			continue
+		}
+		for _, g := range deny {
+			if c.Path(g).MatchString(n) {
+				bad = append(bad, p)
+				break
+			}
+		}
+	}
+	return bad
+}
+
 // RepoAllowed is scope.repo_allowed.
 func (c *Globs) RepoAllowed(repo string, allow []string) bool {
 	if strings.Count(repo, "/") != 1 || strings.HasPrefix(repo, "/") || strings.HasSuffix(repo, "/") {
@@ -151,7 +170,7 @@ func (c *Globs) RepoAllowed(repo string, allow []string) bool {
 }
 
 func ptrEscape(k any) string {
-	return strings.ReplaceAll(strings.ReplaceAll(pyval.Str(k), "~", "~0"), "/", "~1")
+	return strings.ReplaceAll(strings.ReplaceAll(pycompat.Str(k), "~", "~0"), "/", "~1")
 }
 
 // DiffPointers is scope.diff_pointers.
@@ -162,13 +181,13 @@ func DiffPointers(before, after any) map[string]struct{} {
 }
 
 func diffPointers(before, after any, prefix string, out map[string]struct{}) {
-	if pyval.Eq(before, after) {
+	if pycompat.Equal(before, after) {
 		return
 	}
-	bm, bIsMap := before.(*pyval.Map)
-	am, aIsMap := after.(*pyval.Map)
+	bm, bIsMap := before.(*pycompat.Map)
+	am, aIsMap := after.(*pycompat.Map)
 	if bIsMap && aIsMap {
-		keys := pyval.NewMap(bm.Len() + am.Len())
+		keys := pycompat.NewMap(bm.Len() + am.Len())
 		for _, k := range bm.Keys() {
 			keys.Set(k, nil)
 		}
@@ -176,14 +195,14 @@ func diffPointers(before, after any, prefix string, out map[string]struct{}) {
 			keys.Set(k, nil)
 		}
 		ks := append([]any(nil), keys.Keys()...)
-		sort.SliceStable(ks, func(i, j int) bool { return pyval.Str(ks[i]) < pyval.Str(ks[j]) })
+		sort.SliceStable(ks, func(i, j int) bool { return pycompat.Str(ks[i]) < pycompat.Str(ks[j]) })
 		for _, k := range ks {
 			ptr := prefix + "/" + ptrEscape(k)
 			bv, inB := bm.Get(k)
 			av, inA := am.Get(k)
 			if !inB || !inA {
 				out[ptr] = struct{}{}
-			} else if !pyval.Eq(bv, av) {
+			} else if !pycompat.Equal(bv, av) {
 				diffPointers(bv, av, ptr, out)
 			}
 		}
@@ -193,8 +212,8 @@ func diffPointers(before, after any, prefix string, out map[string]struct{}) {
 	al, aIsList := after.([]any)
 	if bIsList && aIsList && len(bl) == len(al) {
 		for i := range bl {
-			if !pyval.Eq(bl[i], al[i]) {
-				diffPointers(bl[i], al[i], prefix+"/"+itoa(i), out)
+			if !pycompat.Equal(bl[i], al[i]) {
+				diffPointers(bl[i], al[i], prefix+"/"+strconv.Itoa(i), out)
 			}
 		}
 		return
@@ -238,11 +257,4 @@ func (c *Globs) FieldOutsideAllow(pointers map[string]struct{}, allow []string) 
 		}
 	}
 	return n
-}
-
-func itoa(i int) string {
-	if i < 10 {
-		return string(rune('0' + i))
-	}
-	return itoa(i/10) + string(rune('0'+i%10))
 }

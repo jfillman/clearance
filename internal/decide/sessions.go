@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jfillman/clearance/internal/decide/pyval"
+	"github.com/jfillman/clearance/internal/pycompat"
 )
 
 // maxDepth is session.MAX_DEPTH.
@@ -90,12 +90,12 @@ func parseEnum(v any, what string) (*int, error) {
 	if what == "network" {
 		n, found = networkNames[strings.NewReplacer("+", "_", "-", "_").Replace(strings.ToUpper(s))]
 		if !found {
-			return nil, &requestError{msg: "unknown network mode " + pyval.StrRepr(s)}
+			return nil, &requestError{msg: "unknown network mode " + pycompat.StrRepr(s)}
 		}
 	} else {
 		n, found = computeNames[strings.ToUpper(s)]
 		if !found {
-			return nil, &requestError{msg: "unknown compute class " + pyval.StrRepr(s)}
+			return nil, &requestError{msg: "unknown compute class " + pycompat.StrRepr(s)}
 		}
 	}
 	return &n, nil
@@ -103,10 +103,10 @@ func parseEnum(v any, what string) (*int, error) {
 
 // parseLimitRequest is LimitRequest.from_dict.
 func parseLimitRequest(v any) (*limitRequest, error) {
-	if !pyval.Truthy(v) {
+	if !pycompat.Truthy(v) {
 		return &limitRequest{}, nil
 	}
-	d, ok := v.(*pyval.Map)
+	d, ok := v.(*pycompat.Map)
 	if !ok {
 		return nil, &requestError{msg: "requested limits must be an object"}
 	}
@@ -123,14 +123,14 @@ func parseLimitRequest(v any) (*limitRequest, error) {
 		for i, u := range unknown {
 			l[i] = u
 		}
-		return nil, &requestError{msg: "unknown limit fields: " + pyval.Repr(l)}
+		return nil, &requestError{msg: "unknown limit fields: " + pycompat.Repr(l)}
 	}
 	r := &limitRequest{}
-	if t, _ := d.GetStr("tier_ceiling"); pyval.Truthy(t) {
+	if t, _ := d.GetStr("tier_ceiling"); pycompat.Truthy(t) {
 		s, _ := t.(string)
 		n, ok := tierOf(s)
 		if !ok {
-			return nil, &requestError{msg: "unknown tier ceiling " + pyval.Repr(t)}
+			return nil, &requestError{msg: "unknown tier ceiling " + pycompat.Repr(t)}
 		}
 		r.tier = &n
 	}
@@ -159,12 +159,12 @@ func parseLimitRequest(v any) (*limitRequest, error) {
 		}
 		r.hasModels = true
 	}
-	if n, _ := d.GetStr("network"); pyval.Truthy(n) {
+	if n, _ := d.GetStr("network"); pycompat.Truthy(n) {
 		if r.network, err = parseEnum(n, "network"); err != nil {
 			return nil, err
 		}
 	}
-	if c, _ := d.GetStr("compute"); pyval.Truthy(c) {
+	if c, _ := d.GetStr("compute"); pycompat.Truthy(c) {
 		if r.compute, err = parseEnum(c, "compute"); err != nil {
 			return nil, err
 		}
@@ -359,7 +359,7 @@ func decodeRaw(raw []byte) (any, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
-	return pyval.DecodeJSON(raw)
+	return pycompat.DecodeJSON(raw)
 }
 
 // grant is SessionStore.open for a top-level session.

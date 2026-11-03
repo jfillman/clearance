@@ -2,13 +2,13 @@ package gate
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 
 	"github.com/jfillman/clearance/internal/authn"
+	"github.com/jfillman/clearance/internal/httpjson"
 	"github.com/jfillman/clearance/internal/pycompat"
 )
 
@@ -34,21 +34,21 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 	p, ok := authn.From(r.Context())
 	if !ok {
-		WriteJSON(w, http.StatusUnauthorized, map[string]any{"error": "a bearer token is required"})
+		httpjson.Write(w, http.StatusUnauthorized, map[string]any{"error": "a bearer token is required"})
 		return
 	}
 	raw, err := io.ReadAll(io.LimitReader(r.Body, MaxRegisterBody+1))
 	if err != nil {
-		WriteJSON(w, http.StatusBadRequest, map[string]any{"error": "the body could not be read"})
+		httpjson.Write(w, http.StatusBadRequest, map[string]any{"error": "the body could not be read"})
 		return
 	}
 	if len(raw) > MaxRegisterBody {
-		WriteJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": "body too large"})
+		httpjson.Write(w, http.StatusRequestEntityTooLarge, map[string]any{"error": "body too large"})
 		return
 	}
 	body, err := pycompat.Decode(bytes.NewReader(raw))
 	if err != nil {
-		WriteJSON(w, http.StatusBadRequest, map[string]any{"error": "the body is not JSON"})
+		httpjson.Write(w, http.StatusBadRequest, map[string]any{"error": "the body is not JSON"})
 		return
 	}
 	out, err := h.Svc.Register(r.Context(), p, body)
@@ -56,13 +56,13 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	WriteJSON(w, http.StatusOK, out)
+	httpjson.Write(w, http.StatusOK, out)
 }
 
 func (h *Handler) clear(w http.ResponseWriter, r *http.Request) {
 	p, ok := authn.From(r.Context())
 	if !ok {
-		WriteJSON(w, http.StatusUnauthorized, map[string]any{"error": "a bearer token is required"})
+		httpjson.Write(w, http.StatusUnauthorized, map[string]any{"error": "a bearer token is required"})
 		return
 	}
 	out, err := h.Svc.Clear(r.Context(), p, r.PathValue("change_id"), r.Header.Get(authn.OnBehalfOfHeader))
@@ -70,23 +70,23 @@ func (h *Handler) clear(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	WriteJSON(w, http.StatusOK, out)
+	httpjson.Write(w, http.StatusOK, out)
 }
 
 func (h *Handler) deny(w http.ResponseWriter, r *http.Request) {
 	p, ok := authn.From(r.Context())
 	if !ok {
-		WriteJSON(w, http.StatusUnauthorized, map[string]any{"error": "a bearer token is required"})
+		httpjson.Write(w, http.StatusUnauthorized, map[string]any{"error": "a bearer token is required"})
 		return
 	}
 	body, status, msg := PersonBody(r)
 	if status != 0 {
-		WriteJSON(w, status, map[string]any{"error": msg})
+		httpjson.Write(w, status, map[string]any{"error": msg})
 		return
 	}
 	for k := range body {
 		if k != "reason" {
-			WriteJSON(w, http.StatusBadRequest, map[string]any{"error": "unknown field " + pycompat.Repr(k)})
+			httpjson.Write(w, http.StatusBadRequest, map[string]any{"error": "unknown field " + pycompat.Repr(k)})
 			return
 		}
 	}
@@ -95,7 +95,7 @@ func (h *Handler) deny(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	WriteJSON(w, http.StatusOK, out)
+	httpjson.Write(w, http.StatusOK, out)
 }
 
 func (h *Handler) fail(w http.ResponseWriter, err error) {
@@ -104,16 +104,16 @@ func (h *Handler) fail(w http.ResponseWriter, err error) {
 	var nv *NotVerifier
 	switch {
 	case errors.As(err, &nv):
-		WriteJSON(w, http.StatusForbidden, map[string]any{"error": nv.Message})
+		httpjson.Write(w, http.StatusForbidden, map[string]any{"error": nv.Message})
 	case errors.As(err, &bc):
-		WriteJSON(w, http.StatusBadRequest, map[string]any{"error": bc.Message})
+		httpjson.Write(w, http.StatusBadRequest, map[string]any{"error": bc.Message})
 	case errors.As(err, &ge):
-		WriteJSON(w, ge.Status, ErrorBody{ge.Message, ge.Rule, ge.Hint})
+		httpjson.Write(w, ge.Status, ErrorBody{ge.Message, ge.Rule, ge.Hint})
 	default:
 		if h.Log != nil {
 			h.Log.Error("gate: operation failed", "error", err.Error())
 		}
-		WriteJSON(w, http.StatusInternalServerError, map[string]any{"error": "internal error"})
+		httpjson.Write(w, http.StatusInternalServerError, map[string]any{"error": "internal error"})
 	}
 }
 
@@ -145,13 +145,4 @@ func PersonBody(r *http.Request) (map[string]any, int, string) {
 		return map[string]any{}, 0, ""
 	}
 	return m, 0, ""
-}
-
-// WriteJSON writes v as the response.
-func WriteJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	enc := json.NewEncoder(w)
-	enc.SetEscapeHTML(false)
-	_ = enc.Encode(v)
 }

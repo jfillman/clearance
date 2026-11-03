@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jfillman/clearance/internal/canon"
 )
 
 func TestFloatRepr(t *testing.T) {
@@ -79,7 +81,7 @@ func TestArgsDigestOfAStructIsItsObject(t *testing.T) {
 		t.Fatal("digest")
 	}
 	// audit.args_digest({"rule": "DG-POLICY"}) in Python
-	if got := ArgsDigest(map[string]any{"rule": "DG-POLICY"}); got != SHA256Hex([]byte(`{"rule":"DG-POLICY"}`)) {
+	if got := ArgsDigest(map[string]any{"rule": "DG-POLICY"}); got != canon.SHA256Hex([]byte(`{"rule":"DG-POLICY"}`)) {
 		t.Fatal(got)
 	}
 }

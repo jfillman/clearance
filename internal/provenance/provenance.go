@@ -16,6 +16,7 @@ import (
 
 	"github.com/jfillman/clearance/internal/definitions"
 	"github.com/jfillman/clearance/internal/pycompat"
+	"github.com/jfillman/clearance/internal/scope"
 	"github.com/jfillman/clearance/internal/store"
 )
 
@@ -94,7 +95,7 @@ func ParseRequest(v any) (Request, error) {
 		author = s
 	}
 	known := map[string]string{}
-	if v := d["trailers"]; truthy(v) {
+	if v := d["trailers"]; pycompat.Truthy(v) {
 		m, ok := v.(map[string]any)
 		if !ok {
 			return Request{}, &BadRequest{"trailers is an object of strings"}
@@ -118,25 +119,6 @@ func ParseRequest(v any) (Request, error) {
 		}
 	}
 	return Request{strings.ToLower(repo), pr, head, paths, author, known}, nil
-}
-
-func truthy(v any) bool {
-	switch x := v.(type) {
-	case nil:
-		return false
-	case bool:
-		return x
-	case string:
-		return x != ""
-	case []any:
-		return len(x) > 0
-	case map[string]any:
-		return len(x) > 0
-	}
-	if f, ok := pycompat.Number(v); ok {
-		return f.Sign() != 0
-	}
-	return true
 }
 
 // Body is the request as a JSON object (what provenance_from_app digests: repo, pr, head, author, paths, trailers).
@@ -304,11 +286,12 @@ func scopeOf(req Request, rec store.Record, eff map[string]any, defs Lookup) Che
 		return c
 	}
 	violations := []Violation{}
+	var globs scope.Globs // compiled once per check: no cache outlives the call
 	allow := make([]string, len(d.ReposAllow))
 	for i, a := range d.ReposAllow {
 		allow[i] = strings.ToLower(a)
 	}
-	if !repoAllowed(req.Repo, allow) {
+	if !globs.RepoAllowed(req.Repo, allow) {
 		violations = append(violations, Violation{"", "AS003", fmt.Sprintf("%s is not in %s's repos.allow", req.Repo, d.Name)})
 	}
 	carried := map[string]bool{}
@@ -320,11 +303,11 @@ func scopeOf(req Request, rec store.Record, eff map[string]any, defs Lookup) Che
 		}
 	}
 	for _, p := range req.Paths {
-		if !carried[normal(p)] {
+		if !carried[scope.Normal(p)] {
 			violations = append(violations, Violation{p, "AS001", "changed, but not in the agent's commit"})
 		}
 	}
-	for _, p := range pathViolations(req.Paths, d.DenyPaths) {
+	for _, p := range globs.PathViolationList(req.Paths, d.DenyPaths) {
 		violations = append(violations, Violation{p, "AS002", fmt.Sprintf("denied to %s (path-not-allowed, R015)", d.Name)})
 	}
 	if len(violations) == 0 {

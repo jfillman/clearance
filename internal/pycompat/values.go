@@ -2,159 +2,188 @@ package pycompat
 
 import (
 	"encoding/json"
-	"fmt"
+	"math"
 	"math/big"
-	"regexp"
-	"sort"
 	"strconv"
-	"strings"
-	"sync"
-	"time"
-	"unicode"
 )
 
-// Str is Python's str() of a JSON value: a string itself, None, True/False, an int's digits, a float's repr, and
-// repr() for a list or dict (a dict's keys in sorted order: Go maps keep no insertion order).
-func Str(v any) string {
-	if s, ok := v.(string); ok {
-		return s
-	}
-	return Repr(v)
-}
-
-// Repr is Python's repr() of a JSON value.
-func Repr(v any) string {
+// numeric is v as the Python number it is, in the dict model's types (bool, int64, *big.Int, float64), and
+// whether it is one. A json.Number becomes an int or a float by its literal, as json.loads decides (a float literal
+// too large for a float64 is ±inf, as in Python); a Go int becomes an int64.
+func numeric(v any) (any, bool) {
 	switch x := v.(type) {
-	case nil:
-		return "None"
-	case bool:
-		if x {
-			return "True"
-		}
-		return "False"
-	case string:
-		return quote(x)
-	case json.Number:
-		s, err := NumberString(x)
-		if err != nil {
-			return string(x)
-		}
-		return s
-	case float64:
-		return FloatRepr(x)
+	case bool, int64, *big.Int, float64:
+		return v, true
 	case int:
-		return strconv.Itoa(x)
-	case int64:
-		return strconv.FormatInt(x, 10)
-	case *big.Int:
-		return x.String()
-	case []any:
-		parts := make([]string, len(x))
-		for i, e := range x {
-			parts[i] = Repr(e)
-		}
-		return "[" + strings.Join(parts, ", ") + "]"
-	case []string:
-		parts := make([]string, len(x))
-		for i, e := range x {
-			parts[i] = quote(e)
-		}
-		return "[" + strings.Join(parts, ", ") + "]"
-	case map[string]any:
-		keys := make([]string, 0, len(x))
-		for k := range x {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		parts := make([]string, len(keys))
-		for i, k := range keys {
-			parts[i] = quote(k) + ": " + Repr(x[k])
-		}
-		return "{" + strings.Join(parts, ", ") + "}"
-	}
-	return fmt.Sprint(v)
-}
-
-// quote is repr(str): single quotes unless the text holds a single quote and no double one.
-func quote(s string) string {
-	q := byte('\'')
-	if strings.ContainsRune(s, '\'') && !strings.ContainsRune(s, '"') {
-		q = '"'
-	}
-	var b strings.Builder
-	b.WriteByte(q)
-	for _, r := range s {
-		switch {
-		case r == rune(q) || r == '\\':
-			b.WriteByte('\\')
-			b.WriteRune(r)
-		case r == '\n':
-			b.WriteString(`\n`)
-		case r == '\r':
-			b.WriteString(`\r`)
-		case r == '\t':
-			b.WriteString(`\t`)
-		case r < 0x20 || r == 0x7f:
-			fmt.Fprintf(&b, `\x%02x`, r)
-		case r > 0x7f && !unicode.IsPrint(r):
-			if r > 0xffff {
-				fmt.Fprintf(&b, `\U%08x`, r)
-			} else if r > 0xff {
-				fmt.Fprintf(&b, `\u%04x`, r)
-			} else {
-				fmt.Fprintf(&b, `\x%02x`, r)
-			}
-		default:
-			b.WriteRune(r)
-		}
-	}
-	b.WriteByte(q)
-	return b.String()
-}
-
-// Number is a JSON number's value as Python compares it: an int (exact) or a float.
-func Number(v any) (*big.Float, bool) {
-	switch x := v.(type) {
+		return int64(x), true
 	case json.Number:
-		if IsInt(x) {
-			z, ok := new(big.Int).SetString(string(x), 10)
-			if !ok {
-				return nil, false
-			}
-			return new(big.Float).SetInt(z), true
-		}
-		f, err := strconv.ParseFloat(string(x), 64)
+		n, err := parseNumber(string(x))
 		if err != nil {
 			return nil, false
 		}
-		return big.NewFloat(f), true
-	case float64:
-		if x != x {
-			return nil, false
-		}
-		return big.NewFloat(x), true
-	case int:
-		return new(big.Float).SetInt64(int64(x)), true
-	case int64:
-		return new(big.Float).SetInt64(x), true
-	case *big.Int:
-		return new(big.Float).SetInt(x), true
-	case bool: // Python: True == 1
-		if x {
-			return big.NewFloat(1), true
-		}
-		return big.NewFloat(0), true
+		return n, true
 	}
 	return nil, false
 }
 
-// Equal is Python's == over JSON values: numbers by value (1 == 1.0, True == 1), lists in order, dicts by key.
-func Equal(a, b any) bool {
-	if na, ok := Number(a); ok {
-		if nb, ok := Number(b); ok {
-			return na.Cmp(nb) == 0
+// IsInt reports whether v is a Python int that is not a bool: an int64, *big.Int or Go int, or a json.Number
+// whose literal json.loads makes an int (no '.', 'e' or 'E').
+func IsInt(v any) bool {
+	switch x := v.(type) {
+	case int64, *big.Int, int:
+		return true
+	case json.Number:
+		return isIntLiteral(string(x))
+	}
+	return false
+}
+
+// Number is a number's value as Python compares it, exactly: an int, a float (not NaN), or a bool (True == 1).
+// A float literal too large for a float64 is ±Inf, as Python's float() makes it.
+func Number(v any) (*big.Float, bool) {
+	n, ok := numeric(v)
+	if !ok {
+		return nil, false
+	}
+	switch x := n.(type) {
+	case bool:
+		if x {
+			return big.NewFloat(1), true
 		}
-		return false
+		return big.NewFloat(0), true
+	case int64:
+		return new(big.Float).SetInt64(x), true
+	case *big.Int:
+		return new(big.Float).SetInt(x), true
+	case float64:
+		if math.IsNaN(x) {
+			return nil, false
+		}
+		return big.NewFloat(x), true // ±Inf is a big.Float too
+	}
+	return nil, false
+}
+
+// AsInt is isinstance(v, int) and not isinstance(v, bool), with v's value when it fits an int64.
+func AsInt(v any) (int64, bool) {
+	if !IsInt(v) {
+		return 0, false
+	}
+	switch x := v.(type) {
+	case int64:
+		return x, true
+	case int:
+		return int64(x), true
+	case json.Number:
+		n, err := strconv.ParseInt(string(x), 10, 64)
+		return n, err == nil
+	}
+	return 0, false
+}
+
+func toRat(v any) (*big.Rat, bool) {
+	switch x := v.(type) {
+	case bool:
+		if x {
+			return big.NewRat(1, 1), true
+		}
+		return new(big.Rat), true
+	case int64:
+		return new(big.Rat).SetInt64(x), true
+	case *big.Int:
+		return new(big.Rat).SetInt(x), true
+	case float64:
+		if math.IsNaN(x) || math.IsInf(x, 0) {
+			return nil, false
+		}
+		return new(big.Rat).SetFloat64(x), true
+	}
+	return nil, false
+}
+
+// NumCmp compares two numbers exactly, as Python does (an int and a float are compared without rounding).
+// ok is false when either is not a number or is NaN.
+func NumCmp(a, b any) (int, bool) {
+	a, aok := numeric(a)
+	b, bok := numeric(b)
+	if !aok || !bok {
+		return 0, false
+	}
+	if fa, isF := a.(float64); isF && math.IsNaN(fa) {
+		return 0, false
+	}
+	if fb, isF := b.(float64); isF && math.IsNaN(fb) {
+		return 0, false
+	}
+	if ia, ok := smallInt(a); ok {
+		if ib, ok := smallInt(b); ok {
+			switch {
+			case ia < ib:
+				return -1, true
+			case ia > ib:
+				return 1, true
+			}
+			return 0, true
+		}
+	}
+	fa, aInf := infSign(a)
+	fb, bInf := infSign(b)
+	if aInf || bInf {
+		switch {
+		case fa < fb:
+			return -1, true
+		case fa > fb:
+			return 1, true
+		}
+		return 0, true
+	}
+	ra, _ := toRat(a)
+	rb, _ := toRat(b)
+	return ra.Cmp(rb), true
+}
+
+func smallInt(v any) (int64, bool) {
+	switch x := v.(type) {
+	case bool:
+		if x {
+			return 1, true
+		}
+		return 0, true
+	case int64:
+		return x, true
+	}
+	return 0, false
+}
+
+func infSign(v any) (float64, bool) {
+	if f, ok := v.(float64); ok && math.IsInf(f, 0) {
+		return f, true
+	}
+	return 0, false
+}
+
+// Equal is Python `a == b` at the top level, over either value model: numbers by value (True == 1 == 1.0, an int
+// and a float exactly), lists in order, dicts (a *Map or a map[string]any) by key whatever their order. NaN is never
+// equal to anything at the top level.
+func Equal(a, b any) bool { return eq(a, b, true) }
+
+// EqualIn is Python's comparison of two container elements (`x is y or x == y`): PyYAML's one shared NaN object
+// equals itself there.
+func EqualIn(a, b any) bool { return eq(a, b, false) }
+
+func eq(a, b any, direct bool) bool {
+	if na, ok := numeric(a); ok {
+		nb, ok := numeric(b)
+		if !ok {
+			return false
+		}
+		fa, aF := na.(float64)
+		fb, bF := nb.(float64)
+		if aF && bF && math.IsNaN(fa) && math.IsNaN(fb) {
+			return !direct
+		}
+		c, ok := NumCmp(na, nb)
+		return ok && c == 0
 	}
 	switch x := a.(type) {
 	case nil:
@@ -168,7 +197,20 @@ func Equal(a, b any) bool {
 			return false
 		}
 		for i := range x {
-			if !Equal(x[i], y[i]) {
+			if !eq(x[i], y[i], false) {
+				return false
+			}
+		}
+		return true
+	case *Map:
+		y, ok := b.(*Map)
+		if !ok || x.Len() != y.Len() {
+			return false
+		}
+		for i := range x.Len() {
+			k, v := x.At(i)
+			w, found := y.Get(k)
+			if !found || !eq(v, w, false) {
 				return false
 			}
 		}
@@ -179,160 +221,79 @@ func Equal(a, b any) bool {
 			return false
 		}
 		for k, v := range x {
-			w, ok := y[k]
-			if !ok || !Equal(v, w) {
+			w, found := y[k]
+			if !found || !eq(v, w, false) {
 				return false
 			}
 		}
 		return true
+	case Date:
+		y, ok := b.(Date)
+		return ok && x == y
+	case DateTime:
+		y, ok := b.(DateTime)
+		if !ok || x.Aware != y.Aware {
+			return false
+		}
+		return x.instant() == y.instant()
 	}
 	return false
 }
 
-// AsInt is isinstance(v, int) and not isinstance(v, bool) for a JSON value, with its value when it fits int64.
-func AsInt(v any) (int64, bool) {
+// Truthy is Python bool(v), over either value model.
+func Truthy(v any) bool {
+	if n, ok := numeric(v); ok {
+		v = n
+	}
 	switch x := v.(type) {
-	case json.Number:
-		if !IsInt(x) {
-			return 0, false
-		}
-		n, err := strconv.ParseInt(string(x), 10, 64)
-		return n, err == nil
-	case int:
-		return int64(x), true
+	case nil:
+		return false
+	case bool:
+		return x
 	case int64:
-		return x, true
+		return x != 0
+	case *big.Int:
+		return x.Sign() != 0
+	case float64:
+		return x != 0
+	case string:
+		return x != ""
+	case []any:
+		return len(x) > 0
+	case []string:
+		return len(x) > 0
+	case *Map:
+		return x.Len() > 0
+	case map[string]any:
+		return len(x) > 0
 	}
-	return 0, false
+	return true
 }
 
-// -- fnmatch.fnmatchcase ------------------------------------------------------------------------------------------
-
-var globCache sync.Map // pattern -> *regexp.Regexp
-
-// Match is fnmatch.fnmatchcase(name, pattern): `*` matches anything (slashes included), `?` one character,
-// `[seq]` and `[!seq]` a set; the whole name must match.
-func Match(name, pattern string) bool {
-	if re, ok := globCache.Load(pattern); ok {
-		return re.(*regexp.Regexp).MatchString(name)
+// TypeName is Python type(v).__name__.
+func TypeName(v any) string {
+	if n, ok := numeric(v); ok {
+		v = n
 	}
-	re := regexp.MustCompile(translate(pattern))
-	globCache.Store(pattern, re)
-	return re.MatchString(name)
+	switch v.(type) {
+	case nil:
+		return "NoneType"
+	case bool:
+		return "bool"
+	case int64, *big.Int:
+		return "int"
+	case float64:
+		return "float"
+	case string:
+		return "str"
+	case []any, []string:
+		return "list"
+	case *Map, map[string]any:
+		return "dict"
+	case Date:
+		return "date"
+	case DateTime:
+		return "datetime"
+	}
+	return "object"
 }
-
-// MatchAny is any(fnmatchcase(name, g) for g in globs).
-func MatchAny(name string, globs []string) bool {
-	for _, g := range globs {
-		if Match(name, g) {
-			return true
-		}
-	}
-	return false
-}
-
-// translate is fnmatch.translate.
-func translate(pat string) string {
-	var b strings.Builder
-	b.WriteString(`(?s)\A`)
-	rs := []rune(pat)
-	for i := 0; i < len(rs); {
-		c := rs[i]
-		i++
-		switch c {
-		case '*':
-			for i < len(rs) && rs[i] == '*' {
-				i++
-			}
-			b.WriteString(".*")
-		case '?':
-			b.WriteString(".")
-		case '[':
-			j := i
-			if j < len(rs) && rs[j] == '!' {
-				j++
-			}
-			if j < len(rs) && rs[j] == ']' {
-				j++
-			}
-			for j < len(rs) && rs[j] != ']' {
-				j++
-			}
-			if j >= len(rs) {
-				b.WriteString(`\[`)
-				continue
-			}
-			stuff := string(rs[i:j])
-			i = j + 1
-			if stuff == "" {
-				b.WriteString(`[^\s\S]`) // Python: an empty set never matches
-				continue
-			}
-			if stuff == "!" {
-				b.WriteString(".")
-				continue
-			}
-			neg := strings.HasPrefix(stuff, "!")
-			if neg {
-				stuff = stuff[1:]
-			}
-			var set strings.Builder
-			for _, r := range stuff {
-				if r == '\\' || r == ']' || r == '[' || r == '^' {
-					set.WriteByte('\\')
-				}
-				set.WriteRune(r)
-			}
-			if neg {
-				b.WriteString("[^" + set.String() + "]")
-			} else {
-				b.WriteString("[" + set.String() + "]")
-			}
-		default:
-			b.WriteString(regexp.QuoteMeta(string(c)))
-		}
-	}
-	b.WriteString(`\z`)
-	return b.String()
-}
-
-// -- time ------------------------------------------------------------------------------------------------------------
-
-// ISO is audit.iso: UTC, whole seconds, "Z".
-func ISO(t time.Time) string { return t.UTC().Format("2006-01-02T15:04:05Z") }
-
-// Isoformat is datetime.isoformat() of an aware datetime: microseconds only when non-zero, "+HH:MM".
-func Isoformat(t time.Time) string {
-	if t.Nanosecond()/1000 != 0 {
-		return t.Format("2006-01-02T15:04:05.000000-07:00")
-	}
-	return t.Format("2006-01-02T15:04:05-07:00")
-}
-
-// ParseIsoformat is datetime.fromisoformat for the forms Isoformat and ISO write.
-func ParseIsoformat(s string) (time.Time, error) {
-	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.999999-07:00", "2006-01-02T15:04:05"} {
-		if t, err := time.Parse(layout, s); err == nil {
-			return t, nil
-		}
-	}
-	return time.Time{}, fmt.Errorf("not an ISO timestamp: %q", s)
-}
-
-// Truncate cuts s to n characters (code points), as Python's s[:n].
-func Truncate(s string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	i := 0
-	for j := range s {
-		if i == n {
-			return s[:j]
-		}
-		i++
-	}
-	return s
-}
-
-// Len is Python's len(str): code points.
-func Len(s string) int { return len([]rune(s)) }

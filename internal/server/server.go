@@ -35,6 +35,7 @@ import (
 	"github.com/jfillman/clearance/internal/decide"
 	"github.com/jfillman/clearance/internal/gate"
 	"github.com/jfillman/clearance/internal/githubapp"
+	"github.com/jfillman/clearance/internal/httpjson"
 	"github.com/jfillman/clearance/internal/provenance"
 	"github.com/jfillman/clearance/internal/review"
 	"github.com/jfillman/clearance/internal/store"
@@ -326,7 +327,7 @@ type ErrorResponse struct {
 	Error string `json:"error"`
 }
 
-func writeJSON(w http.ResponseWriter, status int, v any) { gate.WriteJSON(w, status, v) }
+func writeJSON(w http.ResponseWriter, status int, v any) { httpjson.Write(w, status, v) }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, ErrorResponse{Error: msg})

@@ -10,9 +10,9 @@ import (
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/interpreter"
 
-	"github.com/jfillman/clearance/internal/decide/pyval"
-	"github.com/jfillman/clearance/internal/decide/pyyaml"
-	"github.com/jfillman/clearance/internal/decide/scope"
+	"github.com/jfillman/clearance/internal/pycompat"
+	"github.com/jfillman/clearance/internal/pyyaml"
+	"github.com/jfillman/clearance/internal/scope"
 )
 
 // Engine decides. It is built once per bundle version (New) and is safe for concurrent use; Decide is a pure
@@ -192,7 +192,7 @@ func (a *activation) ResolveName(name string) (any, bool) {
 func (a *activation) Parent() interpreter.Activation { return nil }
 
 // evaluateCall builds the context and runs the rules.
-func (e *Engine) evaluateCall(ctx context.Context, req *EvaluationRequest, args *pyval.Map) (Decision, *ToolSpec) {
+func (e *Engine) evaluateCall(ctx context.Context, req *EvaluationRequest, args *pycompat.Map) (Decision, *ToolSpec) {
 	act, in, states, err := e.buildContext(req, args)
 	if err != nil {
 		return failClosed(err), in.Spec
@@ -234,13 +234,13 @@ func (e *Engine) run(ctx context.Context, act *activation, in *CallInput, states
 // EvaluateActivation runs the rules over a raw activation shaped like the Python one ({"tool": {...},
 // "effective": {...}, "session": {...}, "cost": {...}, "ctx": {...}}), with no context building. It is the
 // diagnostic replay of a context the Python tests built or altered by hand; packs' structured decisions do not
-// apply. Values are pyval values (DecodeJSON).
-func (e *Engine) EvaluateActivation(ctx context.Context, raw *pyval.Map) Decision {
+// apply. Values are pycompat dict-model values (pycompat.DecodeJSON).
+func (e *Engine) EvaluateActivation(ctx context.Context, raw *pycompat.Map) Decision {
 	act := &activation{slots: e.b.slots, vals: make([]ref.Val, len(e.b.slots))}
 	for i := range raw.Len() {
 		k, v := raw.At(i)
 		group, ok1 := k.(string)
-		m, ok2 := v.(*pyval.Map)
+		m, ok2 := v.(*pycompat.Map)
 		if !ok1 || !ok2 {
 			continue
 		}
@@ -295,7 +295,7 @@ func celValue(v any) (ref.Val, error) {
 			out[i] = cv
 		}
 		return types.NewRefValList(types.DefaultTypeAdapter, out), nil
-	case *pyval.Map:
+	case *pycompat.Map:
 		out := make(map[ref.Val]ref.Val, x.Len())
 		for i := range x.Len() {
 			k, e := x.At(i)
@@ -315,7 +315,7 @@ func celValue(v any) (ref.Val, error) {
 }
 
 // envTierOf is policy.env_tier_of: which environment tier the arguments point at.
-func (e *Engine) envTierOf(spec *ToolSpec, args *pyval.Map) string {
+func (e *Engine) envTierOf(spec *ToolSpec, args *pycompat.Map) string {
 	if spec.Target == "none" {
 		return "none"
 	}

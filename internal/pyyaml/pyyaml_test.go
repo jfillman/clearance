@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/jfillman/clearance/internal/decide/pyval"
+	"github.com/jfillman/clearance/internal/pycompat"
 )
 
 // TestAgainstPyYAML: yaml.safe_load's value (as repr) or failure class, from tools/golden/gen_vectors.py.
@@ -30,16 +30,16 @@ func TestAgainstPyYAML(t *testing.T) {
 		switch {
 		case want.Error == "YAMLError":
 			if !errors.As(err, &ye) {
-				t.Errorf("SafeLoad(%q): want a YAMLError, got %v, %v", doc, pyval.Repr(v), err)
+				t.Errorf("SafeLoad(%q): want a YAMLError, got %v, %v", doc, pycompat.Repr(v), err)
 			}
 		case want.Error != "":
 			if !errors.As(err, &ve) {
-				t.Errorf("SafeLoad(%q): want %s, got %v, %v", doc, want.Error, pyval.Repr(v), err)
+				t.Errorf("SafeLoad(%q): want %s, got %v, %v", doc, want.Error, pycompat.Repr(v), err)
 			}
 		case err != nil:
 			t.Errorf("SafeLoad(%q): %v, want %s", doc, err, want.Repr)
 		default:
-			if got := pyval.Repr(v); got != want.Repr {
+			if got := pycompat.Repr(v); got != want.Repr {
 				t.Errorf("SafeLoad(%q) = %s, PyYAML %s", doc, got, want.Repr)
 			}
 		}

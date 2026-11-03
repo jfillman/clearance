@@ -15,7 +15,7 @@ import (
 
 	"github.com/jfillman/clearance/internal/decide"
 	"github.com/jfillman/clearance/internal/decide/packs/hangar"
-	"github.com/jfillman/clearance/internal/decide/pyval"
+	"github.com/jfillman/clearance/internal/pycompat"
 )
 
 const corpusPath = "../../../testdata/golden/corpus.jsonl"
@@ -240,11 +240,11 @@ func replay(t testing.TB, ctx context.Context, es map[string]*decide.Engine, l l
 		}
 	}
 	if l.Kind == "activation" {
-		v, err := pyval.DecodeJSON(l.Activation)
+		v, err := pycompat.DecodeJSON(l.Activation)
 		if err != nil {
 			return []string{err.Error()}
 		}
-		d := e.EvaluateActivation(ctx, v.(*pyval.Map))
+		d := e.EvaluateActivation(ctx, v.(*pycompat.Map))
 		diff("allow", d.Allow, l.Python.Allow)
 		diff("rule", d.Rule, str(l.Python.Rule))
 		diff("message", d.Message, str(l.Python.Message))
@@ -433,11 +433,11 @@ func TestCELTypeProbes(t *testing.T) {
 			continue
 		}
 		n++
-		v, err := pyval.DecodeJSON(l.Activation)
+		v, err := pycompat.DecodeJSON(l.Activation)
 		if err != nil {
 			t.Fatal(err)
 		}
-		d := engineFor(es, l).EvaluateActivation(context.Background(), v.(*pyval.Map))
+		d := engineFor(es, l).EvaluateActivation(context.Background(), v.(*pycompat.Map))
 		same := d.Allow == l.Python.Allow && d.Rule == str(l.Python.Rule)
 		t.Logf("%s: python %s %q, go %s %q, same=%v", l.Source[strings.LastIndex(l.Source, "["):], verdict(l.Python.Allow),
 			str(l.Python.Rule), verdict(d.Allow), d.Rule, same)

@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -147,7 +148,7 @@ func (a *WorkloadAuthenticator) Authenticate(ctx context.Context, token string) 
 	if err != nil {
 		return Principal{}, refuse("token review failed")
 	}
-	if !st.Authenticated || !contains(st.Audiences, a.Audience) {
+	if !st.Authenticated || !slices.Contains(st.Audiences, a.Audience) {
 		return Principal{}, refuse("token not authenticated for this audience")
 	}
 	name := st.User.Username

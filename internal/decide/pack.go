@@ -1,8 +1,8 @@
 package decide
 
 import (
-	"github.com/jfillman/clearance/internal/decide/pyval"
-	"github.com/jfillman/clearance/internal/decide/scope"
+	"github.com/jfillman/clearance/internal/pycompat"
+	"github.com/jfillman/clearance/internal/scope"
 )
 
 // Pack is the policy for a family of tools not every deployment has (pack.py): tools, rules placed among the core
@@ -22,7 +22,7 @@ type Pack interface {
 	// Decide turns a matched rule into a structured decision; ok false leaves the rule's own.
 	Decide(rule *Rule, in *CallInput, state any) (d Decision, ok bool)
 	// AppOf is the application a call acts on, recorded as `app`; "" when it names none.
-	AppOf(tool string, args *pyval.Map) string
+	AppOf(tool string, args *pycompat.Map) string
 }
 
 // PackContext is what a pack's Context returns.
@@ -36,10 +36,10 @@ type PackContext struct {
 type CallInput struct {
 	Tool    string
 	Spec    *ToolSpec // nil: not a registered tool
-	Args    *pyval.Map
+	Args    *pycompat.Map
 	Session *SessionState
 	Scope   *Scope
-	Profile any // Scope.Profile decoded (a *pyval.Map), nil when absent
+	Profile any // Scope.Profile decoded (a *pycompat.Map), nil when absent
 	Globs   *scope.Globs
 }
 

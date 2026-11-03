@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -122,21 +123,12 @@ func parseRegisterArgs(argv []string, env map[string]string, stderr io.Writer) (
 		fmt.Fprintf(stderr, "clearance register: the following arguments are required: %s\n", strings.Join(missing, ", "))
 		return nil, exitUsage
 	}
-	if !contains(gate.ProposerKinds, a.proposerKind) {
+	if !slices.Contains(gate.ProposerKinds, a.proposerKind) {
 		fmt.Fprintf(stderr, "clearance register: argument --proposer-kind: invalid choice: %s (choose from %s)\n",
 			pycompat.Repr(a.proposerKind), strings.Join(gate.ProposerKinds, ", "))
 		return nil, exitUsage
 	}
 	return a, -1
-}
-
-func contains(xs []string, s string) bool {
-	for _, x := range xs {
-		if x == s {
-			return true
-		}
-	}
-	return false
 }
 
 // checksBody is the checks object in register.py's order: render first, then each --check (a repeat updates it).
@@ -447,13 +439,13 @@ func registerMain(ctx context.Context, argv []string, env map[string]string, pos
 	if status >= 300 {
 		why := ""
 		for _, k := range []string{"message", "error", "detail"} {
-			if v := out[k]; truthy(v) {
+			if v := out[k]; pycompat.Truthy(v) {
 				why = pycompat.Str(v)
 				break
 			}
 		}
 		rule := ""
-		if truthy(out["rule"]) {
+		if pycompat.Truthy(out["rule"]) {
 			rule = pycompat.Str(out["rule"])
 		}
 		fmt.Fprintln(stderr, strings.TrimRight(fmt.Sprintf("clearance register: refused (%d) %s %s", status, rule, why), " \t\n"))
@@ -461,7 +453,7 @@ func registerMain(ctx context.Context, argv []string, env map[string]string, pos
 	}
 	state := out["state"]
 	line := fmt.Sprintf("%s %s tier %s", pycompat.Str(out["id"]), pycompat.Str(state), pycompat.Str(out["tier"]))
-	if truthy(out["cleared_by"]) {
+	if pycompat.Truthy(out["cleared_by"]) {
 		line += " cleared_by " + pycompat.Str(out["cleared_by"])
 	}
 	fmt.Fprintln(stdout, line)
@@ -478,7 +470,7 @@ func registerMain(ctx context.Context, argv []string, env map[string]string, pos
 			group = v
 		}
 		msg := fmt.Sprintf("holding for people: %s from %s", pycompat.Str(owner), pycompat.Str(group))
-		if truthy(req["outside"]) {
+		if pycompat.Truthy(req["outside"]) {
 			var gs []string
 			if l, ok := req["outsideGroups"].([]any); ok {
 				for _, g := range l {
@@ -490,27 +482,8 @@ func registerMain(ctx context.Context, argv []string, env map[string]string, pos
 		fmt.Fprintln(stdout, msg)
 		return exitHolding
 	}
-	if truthy(out["deny_reason"]) {
+	if pycompat.Truthy(out["deny_reason"]) {
 		fmt.Fprintf(stderr, "denied: %s\n", pycompat.Str(out["deny_reason"]))
 	}
 	return exitDenied
-}
-
-func truthy(v any) bool {
-	switch x := v.(type) {
-	case nil:
-		return false
-	case bool:
-		return x
-	case string:
-		return x != ""
-	case []any:
-		return len(x) > 0
-	case map[string]any:
-		return len(x) > 0
-	}
-	if f, ok := pycompat.Number(v); ok {
-		return f.Sign() != 0
-	}
-	return true
 }
