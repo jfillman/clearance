@@ -24,3 +24,30 @@ jobs:
       # Fuzz the parsers (section 12): every Fuzz* target in the module, 10s each (tools/fuzz-all.sh finds them).
       - run: tools/fuzz-all.sh 10s
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+  # The Python client (clients/python): generated from the contract, tested against a real `clearance core --memory`.
+  python-client:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      # The generated models and version are current (the Go test in tools/pyclient checks the same).
+      - run: go run ./tools/pyclient -check
+      - run: go build -o "$RUNNER_TEMP/clearance" ./cmd/clearance
+      - run: pip install -e "clients/python[test]" build
+      - run: pytest -q clients/python
+        env:
+          CLEARANCE_BIN: ${{ runner.temp }}/clearance
+      # The wheel builds, carries the generated modules, and its version is the clearance release's.
+      - run: |
+          python -m build clients/python -o "$RUNNER_TEMP/dist"
+          python -m zipfile -l "$RUNNER_TEMP"/dist/*.whl | grep -q 'clearance_client/_models.py'
+          v=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' clients/python/src/clearance_client/_version.py)
+          ls "$RUNNER_TEMP"/dist/clearance_core_client-"$v"-py3-none-any.whl
