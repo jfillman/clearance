@@ -14,7 +14,7 @@ module table: [github.com/jfillman/clearance](https://github.com/jfillman/cleara
 | Boundary | Question | State |
 |---|---|---|
 | **Runtime** | May this agent make this call, now, with this budget, and what happened? | Built: tiers and tripwires, path and field scope, narrow-only limits, CEL policy rules (R000 to R024), sessions and the run tree, the hash-chained evidence record, the gateway, the model proxy, the human inbox, PR provenance for the agent gates, person controls, definitions pinned from the cluster. |
-| **Deployment** | May this change land in a protected environment, and can we prove it did so under policy? | Designed: [the deployment gate](gate.md). Grants bound to the reviewed tree, tiers 0 to 3 from the rendered diff, cleared by policy or by named people, soft at merge then hard at admission. |
+| **Deployment** | May this change land in a protected environment, and can we prove it did so under policy? | Core built (v0.19.0, [the deployment gate](gate.md)): changes tiered 0 to 3 from the rendered diff, cleared by policy or by named people, a 7-day TTL, a new head supersedes, `deploy.*` records. Fed by Glidepath's `clearance-gate-` check (advisory on Hangar) and by `clearance register` (v0.23.0); answered to GitHub Actions deployments by the App's protection rule (v0.22.0). Not built: admission (the pulled grant and the Kyverno policy), `deploy.exception`, outcome records. |
 
 ## What is where
 
@@ -27,16 +27,21 @@ module table: [github.com/jfillman/clearance](https://github.com/jfillman/cleara
   record per decision; Postgres as the one writer.
 - **The gateway** (`dispatch.py`, `server.py`, `backends.py`, `modelproxy.py`): authenticate, decide, record, spend,
   call, record. The MCP surface for agents, the model proxy for their model calls, the human inbox, and the person
-  controls (freeze, end, hold, release) through the delegate model.
+  controls (freeze, end, hold, release) through the delegate model, and run results (`results.py`).
+- **The deployment gate** (`gate.py`, `review.py`, `register.py`): changes to protected environments, tiered and
+  cleared; definition releases reviewed through the same gate.
+- **The GitHub App** (`github_app.py`): check runs on PRs and the deployment protection rule.
 - **The read API** (`api.py`, `contract/clearance-api.json`): clearance-api, a separate read-only process over the
   same tables: agents, sessions, evidence, counts, PR receipts, the inbox feed, the policy as data, the event history
   ([clearance-api.md](clearance-api.md)).
 
 ## On GitHub
 
-The verdicts on agent PRs reach GitHub through a CI check today (Hangar's `agent-gates-`). The
-[provenance App](provenance-app.md) is the proposed product surface: Clearance's own GitHub App posting its own check
-runs and gating GitHub Actions deployments (design pass, not built).
+The [provenance App](provenance-app.md) is built and live on Hangar as **Hangar Clearance**: Clearance's own GitHub
+App posting its own check runs (`Clearance / agent-identity`, `Clearance / agent-scope`, phase 1, v0.21.0), answering
+GitHub Actions deployments from the deployment gate as a custom deployment protection rule (phase 2a, v0.22.0), with
+`clearance register` as the CI step that registers what a workflow deploys (phase 2b, v0.23.0). On Hangar it runs
+beside Glidepath's `agent-gates-` check until their verdicts agree.
 
 ## Where it shows up
 
@@ -45,5 +50,7 @@ and in Tower's Agent and Clearance tabs per app. Design: the Hangar repo's `docs
 
 ## Releases
 
-Tagged `vX.Y.Z`; Autopilot pins the tag and ships the gateway image. Recent: v0.15.0 event history, v0.16.0 the
-glidepath.cicd tools, v0.17.0 person controls, v0.18.0 definitions pinned by `Agent` XRs.
+Tagged `vX.Y.Z` on `main`; each tag publishes a GitHub Release whose notes are its section of
+[CHANGELOG.md](https://github.com/jfillman/clearance/blob/main/CHANGELOG.md). Autopilot pins the tag and ships the
+gateway image. Recent: v0.23.0 `clearance register` and agent descriptions, v0.24.0 the Glidepath live and release
+tools, v0.25.0 run results, v0.26.0 streaming through the model proxy, v0.26.1 the current release.

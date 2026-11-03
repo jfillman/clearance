@@ -1,0 +1,102 @@
+name: release
+# A vX.Y.Z tag on main publishes that version: the wheel, and a GitHub Release whose notes are the version's
+# CHANGELOG.md section. The tag is cut by hand after the version-bump PR merges and main's CI is green (never off a
+# red main). Image and Helm chart jobs are placeholders until the Go image and chart exist (package R-2).
+on:
+  push:
+    tags: ["v*.*.*"]
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: v
+        name: the tag, pyproject's version and CHANGELOG.md agree, and the tag is on main
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          project=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
+          if [ "$project" != "$version" ]; then
+            echo "::error::tag $tag but pyproject.toml says $project"; exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$tag ($GITHUB_SHA) is not on main"; exit 1
+          fi
+          python3 tools/release_notes.py "$version" CHANGELOG.md > /dev/null
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  wheel:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: build the wheel and sdist
+        run: |
+          pip install build
+          python -m build --outdir dist
+          # the same contents check as CI: the schema and the vendored Glidepath scope ship in the wheel
+          python -m zipfile -l dist/*.whl | grep -q 'clearance/schemas/agent-definition.schema.json'
+          python -m zipfile -l dist/*.whl | grep -q 'clearance/packs/hangar/vendor/glidepath-scope.json'
+          (cd dist && sha256sum * > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  # Placeholder (R-2): the Go image, ghcr.io/jfillman/clearance:vX.Y.Z, static onto distroless nonroot, pinned by
+  # digest, with an SBOM and a keyless signature. Enable when the Dockerfile lands.
+  image:
+    if: false
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - run: echo "R-2 builds, pushes, signs and attests the image here"
+
+  # Placeholder (R-2): the Helm chart, packaged at the tag's version and pushed as an OCI artifact. Enable when the
+  # chart lands.
+  chart:
+    if: false
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - run: echo "R-2 packages and pushes the chart here"
+
+  release:
+    needs: [check, wheel]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: publish the GitHub Release with the changelog section as its notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          python3 tools/release_notes.py "$VERSION" CHANGELOG.md > notes.md
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "Clearance $GITHUB_REF_NAME" --notes-file notes.md
