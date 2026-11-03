@@ -1,0 +1,23 @@
+name: go
+on: [push, pull_request]
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    # A scratch Postgres for the record store's tests (CLEARANCE_TEST_DSN; they skip without it).
+    services:
+      postgres:
+        image: postgres:17
+        env: {POSTGRES_PASSWORD: test, POSTGRES_DB: clearance}
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: test -z "$(gofmt -l .)"
+      - run: go test -race ./...
+        env:
+          CLEARANCE_TEST_DSN: postgres://postgres:test@localhost:5432/clearance?sslmode=disable
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
