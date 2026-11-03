@@ -3,10 +3,10 @@ kind: Component
 metadata:
   name: clearance
   description: >-
-    Policy, audit and session gateway for AI agent workloads: every tool call decided against the agent's
-    definition and its session's limits, recorded as hash-chained evidence, budgeted, then made. The runtime
-    boundary is built; the deployment gate's core and the GitHub App (check runs, deployment protection rule,
-    clearance register) are built; admission is not (docs/gate.md). Autopilot is its native consumer.
+    Change assurance in the path of every change: the decision service an AI agent gateway asks before every call
+    (CEL rules, tiers, scope, narrow-only limits, policy bundles), the hash-chained evidence recorder, the deployment
+    gate and its providers, and the GitHub App (check runs, deployment protection rule, clearance register). One Go
+    binary; it decides and records, the gateway (Autopilot) enforces. Admission is not built (docs/gate.md).
   annotations:
     github.com/project-slug: jfillman/clearance
     backstage.io/techdocs-ref: dir:.

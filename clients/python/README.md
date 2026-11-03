@@ -1,7 +1,7 @@
 # clearance-core-client
 
-The Python client of the Clearance core's HTTP API (`contract/clearance-core.json`). Built: the Autopilot gateway
-calls the core through it from R-3 on. Standard library only (no runtime dependencies), Python 3.11+.
+The Python client of the Clearance core's HTTP API (`contract/clearance-core.json`). Built and deployed: the Autopilot
+gateway calls the core through it (R-3). Standard library only (no runtime dependencies), Python 3.11+.
 
 ```python
 from clearance_client import CoreClient, CoreUnavailable, CoreRequestError, EvaluationRequest
@@ -71,10 +71,9 @@ the breaker, its failure opens it for another cooldown.
 client in the same PR. Answers are decoded strictly: an unknown field, a missing required one or a wrong JSON type
 is `BadResponse`.
 
-The version is the clearance release: the generator reads `[project].version` of the repo's root
-`pyproject.toml`, which is the version the `vX.Y.Z` tag names. When the Python core leaves the repo (R-3), or
-clearance#42's CHANGELOG.md becomes the release source, change `ReleaseVersion` in `tools/pyclient` to read that
-instead; the version bump PR runs the generator.
+The version is the clearance release: the generator reads the repo's root `VERSION` file (`internal/release`),
+which is the version the `vX.Y.Z` tag names (the release workflow checks the two agree). The version bump PR edits
+`VERSION` and runs the generator.
 
 ## Tests and the release
 
@@ -86,8 +85,9 @@ The tests run a real core: they `go build ./cmd/clearance` (or use `CLEARANCE_BI
 `clearance core --memory --insecure-dev-auth` on a free port. CI: the `python-client` job in
 `.github/workflows/go.yaml`, which also builds the wheel.
 
-For whoever wires the release workflow (R-8): on a `v*` tag, build with `uv build clients/python` (or
-`python -m build clients/python`), check that the wheel's version equals the tag without its `v`, and attach
-`clients/python/dist/*.whl` and the sdist to the release. Autopilot then pins
-`clearance-core-client @ https://github.com/jfillman/clearance/releases/download/vX.Y.Z/clearance_core_client-X.Y.Z-py3-none-any.whl`
-(or a git URL with `#subdirectory=clients/python`) by the same tag.
+The release workflow (`.github/workflows/release.yaml`) builds this wheel and sdist on each `vX.Y.Z` tag
+(`python -m build clients/python`), checks that the wheel is `clearance_core_client-X.Y.Z-py3-none-any.whl`, and
+attaches both, with `SHA256SUMS`, to the GitHub Release. It is the only Python the release ships (from v0.30.0; the
+`clearance` package before it is gone). Autopilot pins it by the same tag, as a git URL with
+`#subdirectory=clients/python`, or
+`clearance-core-client @ https://github.com/jfillman/clearance/releases/download/vX.Y.Z/clearance_core_client-X.Y.Z-py3-none-any.whl`.

@@ -40,11 +40,25 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: Install clearance at this action's ref
+    # The Go `clearance` binary, built from this action's own checkout (github.action_path is the action's ref, so the
+    # binary is exactly the ref the workflow pinned). No Python and no network fetch of the source.
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: ${{ github.action_path }}/../go.mod
+        cache-dependency-path: ${{ github.action_path }}/../go.sum
+    - name: Build clearance at this action's ref
       shell: bash
       env:
+        SRC: ${{ github.action_path }}/..
         ACTION_REF: ${{ github.action_ref }}
-      run: python3 -m pip install --quiet --disable-pip-version-check "clearance @ git+https://github.com/jfillman/clearance@${ACTION_REF:-main}"
+      run: |
+        set -euo pipefail
+        bin="$RUNNER_TEMP/clearance-register/bin"
+        mkdir -p "$bin"
+        (cd "$SRC" && CGO_ENABLED=0 GOFLAGS=-mod=readonly go build -trimpath \
+          -ldflags "-s -w -X main.version=${ACTION_REF:-dev}" -o "$bin/clearance" ./cmd/clearance)
+        echo "$bin" >> "$GITHUB_PATH"
+        "$bin/clearance" version
     - name: Register the change
       id: register
       shell: bash

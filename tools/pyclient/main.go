@@ -1,6 +1,6 @@
 // Command pyclient generates the Python client's models (clients/python/src/clearance_client/_models.py) from the
 // core's contract (contract/clearance-core.json), and its version (_version.py) from the clearance release
-// version. It is deterministic: the same inputs give the same bytes, and its test fails when the committed files
+// version (the repository's VERSION file, internal/release). It is deterministic: the same inputs give the same bytes, and its test fails when the committed files
 // differ from a fresh generation.
 //
 //	go run ./tools/pyclient            # from the module root: rewrite the generated files
@@ -10,7 +10,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -19,14 +18,15 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/jfillman/clearance/internal/release"
 )
 
 // Paths, relative to the module root.
 const (
-	ContractPath  = "contract/clearance-core.json"
-	PyprojectPath = "pyproject.toml"
-	ModelsPath    = "clients/python/src/clearance_client/_models.py"
-	VersionPath   = "clients/python/src/clearance_client/_version.py"
+	ContractPath = "contract/clearance-core.json"
+	ModelsPath   = "clients/python/src/clearance_client/_models.py"
+	VersionPath  = "clients/python/src/clearance_client/_version.py"
 )
 
 func main() {
@@ -65,11 +65,7 @@ func GenerateFrom(root string) (map[string][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	pyproject, err := os.ReadFile(filepath.Join(root, PyprojectPath))
-	if err != nil {
-		return nil, err
-	}
-	version, err := ReleaseVersion(pyproject)
+	version, err := release.Version(root)
 	if err != nil {
 		return nil, err
 	}
@@ -78,34 +74,6 @@ func GenerateFrom(root string) (map[string][]byte, error) {
 		return nil, err
 	}
 	return map[string][]byte{ModelsPath: models, VersionPath: Version(version)}, nil
-}
-
-var (
-	sectionRx = regexp.MustCompile(`^\s*\[([^\]]+)\]\s*$`)
-	versionRx = regexp.MustCompile(`^\s*version\s*=\s*"([^"]+)"\s*$`)
-	pep440Rx  = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+)?(\.dev[0-9]+)?$`)
-)
-
-// ReleaseVersion is [project].version of the repo's pyproject.toml: the clearance release version, which the tag
-// vX.Y.Z names. (When the Python core leaves the repo, the version moves with it; see clients/python/README.md.)
-func ReleaseVersion(pyproject []byte) (string, error) {
-	section := ""
-	for _, line := range strings.Split(string(pyproject), "\n") {
-		if m := sectionRx.FindStringSubmatch(line); m != nil {
-			section = strings.TrimSpace(m[1])
-			continue
-		}
-		if section != "project" {
-			continue
-		}
-		if m := versionRx.FindStringSubmatch(line); m != nil {
-			if !pep440Rx.MatchString(m[1]) {
-				return "", fmt.Errorf("pyproject.toml: version %q is not X.Y.Z", m[1])
-			}
-			return m[1], nil
-		}
-	}
-	return "", errors.New("pyproject.toml: no [project] version")
 }
 
 // Version is _version.py.

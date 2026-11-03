@@ -1,28 +1,35 @@
 # Clearance
 
-Clearance is a policy, audit and session gateway for AI agent workloads. Every tool call an agent makes passes
-through it: Clearance checks the call against the agent's definition and its session's limits, records the decision,
-spends the budget and only then calls the backend. A denial carries a stable rule id and a fix hint, so an agent can
-correct itself against a deterministic gate instead of guessing.
+Clearance is change assurance in the path of every change. It decides and records; it enforces nothing itself and
+is not a gateway. An AI agent gateway (Autopilot's) asks it for a decision before every tool call, model call, session
+open and spawn, and writes each outcome through it; a deployment gate's providers (the Argo CD sync, the GitHub App's
+deployment protection rule, `clearance register` in CI) ask it whether a change may land in a protected environment.
+Every decision carries a stable rule id and a fix hint, and every record goes into one hash-chained evidence chain.
 
-It is a Hangar product (https://hangarplatform.dev). Autopilot, Hangar's agent runtime, is its native consumer, but
-Clearance installs alone: the core knows nothing about Airframe, Glidepath or any other platform.
+It is a Hangar product (https://hangarplatform.dev). Autopilot, Hangar's agent gateway and runtime, is its native
+consumer, but Clearance installs alone: the core knows nothing about Airframe, Glidepath, Autopilot or any other
+platform, and imports nothing from them.
 
-## Go core
+## The core
 
-**Built, not deployed.** The core is being ported to Go: one module (`go.mod`), one static binary `clearance` with the
-subcommands `core` (the HTTP API: decisions, outcomes, provider records, the gate, provenance, the GitHub App),
-`chain verify`, `register`, `conformance` ([docs/provider-protocol.md](docs/provider-protocol.md)) and `version`, plus the Go and Python clients
-(`client`, `clients/python`). Its contract is
-[`contract/clearance-core.json`](contract/clearance-core.json); the decision engine replays a golden corpus recorded
-from the Python engine with identical decisions; the store uses the Python core's tables and writer lock. See
-[docs/core.md](docs/core.md). Until W1 switches over, the live hangar-dev gateway runs the Python core, and the
-tables below describe the Python modules it runs.
+**Built and deployed** (on hangar-dev since 2026-11-03). One Go module (`go.mod`), one static binary `clearance` with
+the subcommands `core` (the HTTP API: decisions, outcomes, provider records, the gate, provenance, the GitHub App),
+`api` (clearance-api, the read-only API), `chain verify`, `register`, `conformance`
+([docs/provider-protocol.md](docs/provider-protocol.md)) and `version`, plus the Go and Python clients (`client`,
+`clients/python`). Its contract is [`contract/clearance-core.json`](contract/clearance-core.json). See
+[docs/core.md](docs/core.md).
+
+There is no Python Clearance any more. The Python package (`src/clearance`) left in v0.30.0: its gateway half
+(the MCP surface, sessions, the run tree, limits, tool dispatch, the model proxy, the inbox, person controls, run
+results, runtimes) is Autopilot's (`src/autopilot/engine/`, R-3), and its decision, record, gate and provenance
+half is this Go module. [CHANGELOG.md](CHANGELOG.md) (0.30.0) maps each module to where it went. The one Python
+here is the generated client, `clients/python` (`clearance-core-client`).
 
 ## Install
 
-**Built, not deployed.** Clearance ships as one image, `ghcr.io/jfillman/clearance` (amd64 and arm64, a static Go
-binary on distroless nonroot, under 40 MB, with an SPDX SBOM and a keyless signature), and one Helm chart,
+**Built and deployed** (hangar-dev runs chart 0.29.0 since 2026-11-03). Clearance ships as one image,
+`ghcr.io/jfillman/clearance` (amd64 and arm64, a static Go binary on distroless nonroot, under 40 MB, with an SPDX
+SBOM and a keyless signature), and one Helm chart,
 `oci://ghcr.io/jfillman/charts/clearance`. It installs on any cluster with a Postgres database: no Airframe,
 Glidepath or Autopilot.
 
@@ -40,29 +47,21 @@ seccomp `RuntimeDefault`; no secret value is a chart value. Every value, upgrade
 install test on a fresh kind cluster (Postgres, the chart, a fake provider: health, a decision recorded, a change
 cleared by policy, chain verify, the image size and the core's idle memory).
 
-## What it decides
+## What it decides and records
 
 | Piece | Where | What it does |
 |---|---|---|
-| Tool tiers and tripwires | `tiers.py` | T0 read, T1 reversible write, T2 propose only (a human merges); T3 names are tripwires that are denied, audited and trip the session's breaker |
-| Path and repo scope | `scope.py` | traversal-safe path globs and repo allowlists (for every tool that writes files or reads a repo: `repo.pr.open*`, `repo.file.get`); JSON-pointer field scope |
-| Narrow-only limits | `limits.py` | requested limits, and a child run's limits, can only narrow what they inherit |
-| Agent definitions | `profile.py`, `schemas/agent-definition.schema.json` | durable, schema-validated; baseline deny paths cannot be removed. From v0.23.0 each has a one-line `description`, and `runs_in` follows from the runtime: `cluster` with a runtime image, `client` without one (a person's MCP client is the agent; Clearance enforces the envelope, but not the model budget or instructions). Placeholder digests are refused |
-| Sessions and the run tree | `session.py`, `dispatch.py` (`expire`) | budgets, expiry, the breaker, parent-reserved child budgets; `Gateway.expire()` closes sessions past their deadline and deletes their runs (and their children's), each deletion a record in the same commit, a failed one recorded and retried next sweep (Hangar D20) |
-| Policy | `policy.py`, `pack.py` | CEL deny rules with ids, an explicit order and fix hints, core plus each pack's; anything that fails to evaluate denies (R000) |
-| Audit | `audit.py` | one record per decision, hash-chained, in the clearance.evidence/v1 shape ([docs/evidence.md](docs/evidence.md), `schemas/evidence.schema.json`: schema version, boundary, coverage, provider, subject, intent redacted by default, each field tagged verified or claimed; v0-draft rows stay as written and are projected on read); detects an edited, deleted or reordered record, and truncation against an anchored checkpoint |
-| Durable store | `pg.py` (extra `pg`) | Postgres for sessions and evidence on one connection: an operation's records and the sessions it changed commit together; one writer (advisory lock); the chain is verified from genesis on start, so an edited row stops Clearance; each record's assurance state is kept beside it (`recorded-not-checkpointed` until the ledger exists) |
-| Artifacts | `pg.py` `PgArtifacts` | `artifact.put`/`artifact.get` on the same connection: text per task (a run tree shares it, nothing else sees it), 256 KiB each, 32 and 2 MiB per task, gone 7 days after the last write; a write commits with its call's evidence |
-| Human inbox | `inbox.py`, `pg.py` `PgInbox`, `server.py` `/v1/human/*` | `human.request` asks a person and returns at once (non-blocking: whether to wait is the agent's choice); `human.request.get` (granted with it) reads the answer. The session's owner or a member of the definition's `owner` group (a Backstage group ref, resolved by the deployment's `Directory`) answers, signed in themselves or through a delegate (Gateway `delegates`, e.g. Tower's backend) naming them with `X-Hangar-On-Behalf-Of`: `GET /v1/human/requests`, `POST /v1/human/requests/{id}/answer`. One answer per request, recorded as `human.answer` (who, and through what); a request expires with its session; at most 5 pending per session |
-| Read API | `api.py` (`create_api_app`, `contract/clearance-api.json`) | clearance-api ([docs/clearance-api.md](docs/clearance-api.md)): a separate read-only process over the gateway's tables, through its own read-only DSN (connections forced read-only, 5 s statement timeout, a small pool). Agents, sessions, run trees, evidence (filters, `seq` cursor, chain verify, counts by rule/tool/agent/app), PR receipts and gate verdicts, the inbox and its feed, the policy as data and a dry-run explainer (`Policy.trace`). Roles: person (own sessions, their teams' agents, records on apps they own), delegate, notifier, auditor. Every record now carries `app` when its call names one (`Pack.app_of`) |
-| Gateway | `dispatch.py`, `backends.py` | authenticate, decide, audit, spend, call, audit. Handlers are registered per tool; the run tree goes through an injected run backend. A run backend that names the identity its runs authenticate as (`principal(session)`) lets a run act as its own session, and only that session; records still name the run |
-| Model access | `modelproxy.py`, `server.py` (`create_model_app`) | model allowlist, network mode and token budget, decided by `Gateway.model_authorize` on the same store and chain as tool calls; `create_model_app` is the HTTP forwarder: Anthropic's Messages API, plain or streaming (v0.26.0: server-sent events relayed as they arrive, their usage charged when the stream ends; Claude Code and the Agent SDK always stream) for runs, which send their model-proxy token as `x-api-key` and their session in `x-hangar-session`; the provider key is read from a file per call, only the body is forwarded (with `model` rewritten to the route's) and, of the client's headers, `anthropic-beta` less OAuth's, and actual usage is charged back, weighted by what each kind of token costs (`USAGE_WEIGHTS`: a prompt-cache read is 0.1, a cache write 1.25, input and output 1), so a run that caches its resent conversation is charged for what it costs; an overrun trips the breaker |
-| MCP surface | `server.py` | `tools_list` (with `session`: only the tools that session may call and this deployment runs), `agents_list`, `session_open`, `call` and `run_finish` (v0.25.0: an in-cluster run hands back its result as it exits; kept 30 days, `results.py`) on the mcp SDK v2, over stdio or streamable HTTP (`create_http_app`: bearer auth before any tool runs, the caller's own token per call, `GET /healthz`) |
-| PR provenance | `provenance.py`, `server.py` (`POST /v1/provenance`) | each PR Clearance opens leaves a receipt in its hashed record (`effect`: repo, PR, the commit it made, the paths it carried); a CI gate posts a PR's head, changed paths, author and `Hangar-*` trailers and gets two verdicts: **identity** (confirmed; or AI001 trailers with no record, AI002 an agents' login with no record, AI003 commits added after the agent's, AI004 edited trailers) and **scope** (AS001 a path the agent's commit did not carry, AS002 a path the definition denies now, AS003 the repo left `repos.allow`, AS004 the definition is gone); a PR with none of that is `not-agent` and passes. Only principals matching the deployment's `verifiers` globs may ask; every verdict is a record |
-| Deployment gate | `gate.py`, `dispatch.py` (`register_change`, `clear_change`, `deny_change`), `pg.py` `PgChanges`, `api.py` | the second boundary ([docs/gate.md](docs/gate.md)): a change to a protected environment, classified 0 to 3 from its rendered diff against a baseline a repo's `clearance.yaml` may only tighten; tiers 0 and 1 cleared by policy, 2 and 3 held for the owner group and an outside group (never the proposer, never twice); `deploy.*` records in the deployment boundary; 7-day TTL; a new head supersedes |
-| GitHub App | `github_app.py`, `server.py` (`POST /v1/github/webhook`), `contract/github-app-manifest.json` | Clearance's own GitHub App ([docs/provenance-app.md](docs/provenance-app.md)): GitHub's PR webhooks, signature-checked; a one-repo read-only installation token; the same `provenance.verify`; check runs `Clearance / agent-identity` and `Clearance / agent-scope`; PR comments off by default. Phase 2a (v0.22.0): a custom deployment protection rule, answering a GitHub Actions deployment from the deployment gate's change (approved, rejected, or waiting on people) |
-| `clearance register` | `register.py` (the `clearance` console script), `register/action.yml`, `auth.GitHubActionsAuthenticator`; ported to the Go binary's `clearance register` (docs/core.md) | Phase 2b: a customer's CI registers what it deploys with the deployment gate (the diff of two rendered manifest directories), authenticated by the workflow's GitHub Actions OIDC token, for its own repository only (`DG-REPO`) |
-| Who is calling | `auth.py` | interim, until ID-JAG: service-account tokens by TokenReview for the `clearance` audience (principal `<namespace>/<name>`), people's OIDC ID tokens against the issuer's JWKS (RS256/ES256 only; principal `user:<email>`), and only the people its `allowed` globs name (a valid token from an issuer that federates GitHub is anyone with a GitHub account; empty allows nobody), routed by issuer and cached briefly (never past `exp`, never a failure). Another cluster's service accounts (`ForeignWorkloadAuthenticator`, e.g. Tower's backend on hangar-prod) are verified against that cluster's public issuer and named `<cluster>/<namespace>/<sa>`, only for the service accounts it allows |
+| The decision service | `internal/decide`, `internal/scope`, `internal/docscope`, `POST /access/v1/evaluation` | An AuthZEN-shaped evaluation for `tool.call`, `model.call`, `session.open` and `session.spawn`: the shared tier vocabulary (T0 to T3, tripwires), path, repo and field scope, the narrow-only rule, CEL deny rules with ids, an explicit order and fix hints (core rules plus a deployment's [policy bundles](#policy-bundles)); anything that fails to evaluate denies (R000). A pure function: the caller's request carries the state it reads, and the answer carries the spend the gateway applies |
+| Agent definitions as a subject | `internal/profile`, `internal/definitions`, `internal/review` | Validates a definition against the agent-definition schema (Autopilot's, embedded byte for byte), decides each cluster pin, and tiers a definition change (`POST /v1/definitions/review`) |
+| The evidence record and the recorder | `internal/evidence`, `internal/store`, `schemas/evidence.schema.json` | One record per decision, outcome and provider record, in the clearance.evidence/v1 shape ([docs/evidence.md](docs/evidence.md)), hash-chained; Postgres with one writer (an advisory lock), verified from genesis on start; `clearance chain verify` offline |
+| The deployment gate | `internal/gate`, `POST /v1/clearances` | A change to a protected environment, tiered 0 to 3 from its rendered diff against a baseline a repo's `clearance.yaml` may only tighten; tiers 0 and 1 cleared by policy, 2 and 3 held for the owner group and an outside group ([docs/gate.md](docs/gate.md)) |
+| Provenance and the GitHub App | `internal/provenance`, `internal/githubapp` | Agent-identity and agent-scope verdicts for a PR from the receipts in the chain; Clearance's own GitHub App: check runs and the deployment protection rule ([docs/provenance-app.md](docs/provenance-app.md)) |
+| `clearance register` | `cmd/clearance/register.go`, `register/action.yml` | A customer's CI registers what it deploys with the gate, authenticated by the workflow's GitHub Actions OIDC token; the GitHub Action builds the Go binary at its own ref |
+| clearance-api | `internal/api`, `contract/clearance-api.json` | The read-only API over evidence, receipts and verdicts, clearances, the policy and its explainer, definitions ([docs/clearance-api.md](docs/clearance-api.md)) |
+| Who is calling | `internal/authn`, `internal/directory` | Service-account tokens by TokenReview, people's OIDC ID tokens, GitHub Actions OIDC, another cluster's workloads; groups from a Backstage catalog |
+
+What Clearance does not hold, by design and checked by `internal/boundary`: no session store, no MCP server, no tool
+registry or dispatch, no model proxy, no inbox, no runtime catalog. Those are the gateway's.
 
 ## Policy bundles
 
@@ -71,42 +70,35 @@ their argument checks, and field scope over a file its CI owns (read live from t
 **policy bundle**: a `clearance.policy/v1` JSON file the core loads from configuration (`CLEARANCE_BUNDLES`) and
 names, with its version, in every decision. The deployment's other names (the on-behalf-of header, the commit-trailer
 prefix, baseline deny paths, environment naming, group refs) are configuration too. The core's source carries no
-platform's names; `tests/test_boundary.py` checks that. See [docs/core.md, Policy bundles](docs/core.md#policy-bundles).
+platform's names; `internal/boundary` checks that. See [docs/core.md, Policy bundles](docs/core.md#policy-bundles).
 Hangar's bundle ships with Autopilot (`policy/hangar/bundle.json`) and Apron deploys it.
-
-The Python package below (`src/clearance`, `clearance.packs.hangar`) is the pre-R-3 gateway, kept until R-3 removes it.
 
 ## Tests
 
 ```shell
-python3 -m venv .venv && .venv/bin/pip install -e '.[test]'
-.venv/bin/python -m pytest -q
-```
-
-No cluster is needed. `tests/test_pg.py` needs a scratch Postgres in `CLEARANCE_TEST_DSN` (CI runs one) and skips without it. The Glidepath contract drift test reads a glidepath checkout under `HANGAR_TECH` and skips
-without one (CI clones it).
-
-The Go core:
-
-```shell
-go test -race ./...      # internal/store/pg's tests use CLEARANCE_TEST_DSN the same way
+go test -race ./...      # the Postgres tests use CLEARANCE_TEST_DSN and skip without it
 tools/fuzz-all.sh 10s
+cd clients/python && pip install -e '.[test]' && CLEARANCE_BIN=... pytest -q   # the Python client, against a real core
 ```
+
+No cluster is needed. `internal/profile`'s schema check compares with Autopilot's copy when `CLEARANCE_AGENT_SCHEMA`
+names it (CI checks Autopilot out) and skips without it.
 
 ## Releases
 
 A `vX.Y.Z` tag on `main`, cut after the version-bump PR merges and CI is green, runs `.github/workflows/release.yaml`:
-it checks that the tag, `pyproject.toml` and `CHANGELOG.md` agree, builds the wheel, builds and pushes the
-multi-arch image (SPDX SBOM, keyless cosign signature), packages and pushes the chart at the tag's version, reruns
-the install test on the published chart and image, and publishes a GitHub Release whose notes are the version's
-section of [CHANGELOG.md](CHANGELOG.md) (`tools/release_notes.py`; no section, no release) plus the image index and
-chart digests. The version-bump PR adds that section; `tests/test_release.py` fails without it. `clearance.__version__` is
-the installed package's version.
+it checks that the tag, the `VERSION` file and `CHANGELOG.md` agree (`tools/releasenotes`) and that the Python
+client was generated at that version, builds the Python client's wheel and sdist, builds and pushes the multi-arch
+image (SPDX SBOM, keyless cosign signature), packages and pushes the chart at the tag's version, reruns the install
+test on the published chart and image, and publishes a GitHub Release whose notes are the version's section of
+[CHANGELOG.md](CHANGELOG.md) (no section, no release) plus the image index and chart digests. The version-bump PR
+edits `VERSION`, runs `go run ./tools/pyclient` and adds that section; `internal/release`'s test fails without it.
 
 ## History
 
 This code was the `clearance` package inside https://github.com/jfillman/autopilot until 2026-10-29 (Hangar decision
-D16); its history came with it. Design: Hangar's `docs/autopilot/design.md`, section 0.1.
+D16); its history came with it. The Go core replaced the Python core in W1 (R-1 to R-5), and the gateway half went
+back to Autopilot in R-3 (decision of 2026-11-02: Clearance decides and records, the gateway enforces). Design: Hangar's `docs/autopilot/design.md`, section 0.1.
 
 ## Docs
 
@@ -117,4 +109,5 @@ mkdocs-techdocs-core && mkdocs serve`.
 
 ## Specs
 
-- [clearance-api](docs/clearance-api.md): the read API (sessions, evidence, agents, the inbox feed) as a separate read-only process. Phase 1 in v0.13.0; person controls (the write path) in v0.17.0; definitions pinned by `Agent` XRs in v0.18.0 (`definitions.py`); the deployment gate's core in v0.19.0 (`gate.py`, [docs/gate.md](docs/gate.md)); definition review and definition releases through the gate in v0.20.0 (`review.py`).
+- [clearance-api](docs/clearance-api.md): the read API, the Go port and the design as built in Python (v0.13.0 to v0.25.0).
+- [The deployment gate](docs/gate.md), [the evidence record](docs/evidence.md), [the provider protocol](docs/provider-protocol.md).

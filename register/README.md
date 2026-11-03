@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
         with: { fetch-depth: 2 }
       - run: ./render.sh prod HEAD~1 > /tmp/before && ./render.sh prod HEAD > /tmp/after   # your renderer
-      - uses: jfillman/clearance/register@v0.23.0
+      - uses: jfillman/clearance/register@v0.30.0
         with:
           url: https://clearance.example.com
           app: shop
@@ -39,3 +39,10 @@ jobs:
 Clearance must list the workflow as a verifier: its principal is `github:<sub>`, for example
 `github:repo:acme/shop:ref:refs/heads/main`, so `CLEARANCE_VERIFIERS` takes `github:repo:acme/*`. The environment
 name is matched lowercased, so `env` is the GitHub environment's name.
+
+**How it runs.** The action builds the Go `clearance` binary from its own checkout, at the ref you pin
+(`actions/setup-go` with the repo's `go.mod`, then `go build ./cmd/clearance`; a few seconds with the module cache),
+puts it on `PATH` and runs `clearance register`. From v0.30.0 there is no Python: v0.29.0 and earlier installed the
+Python package with pip. The inputs are unchanged. `args` passes further `clearance register` flags through; the Go
+binary refuses `--paths-from-git`, which only the Python command had (paths are the files that differ between
+`before` and `after`). Pin a tag: the binary is exactly that tag's code.

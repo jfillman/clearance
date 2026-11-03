@@ -9,6 +9,62 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+R-3: the Python package is gone. Breaking for anyone who installs `clearance` from this repository with pip (or
+`uv`), imports it, or runs its `clearance` console script: there is no Python `clearance` any more. Clearance is the
+Go module and its one binary; the gateway half of the old package is Autopilot's. Nothing deployed changes: hangar-dev
+has run the Go core and clearance-api, and the Autopilot gateway's own copies of the gateway modules, since the
+cutover of 2026-11-03.
+
+### Removed
+- `src/clearance`, the Python package (last at v0.29.0), its tests (`tests/*.py`), `pyproject.toml` and `uv.lock`.
+  Where each module went:
+  - **To Autopilot** (`src/autopilot/engine/`, R-3a to R-3c): the MCP surface (`server.py`), sessions, the run tree,
+    budgets and spend (`dispatch.py`, `session.py`, `limits.py`), the tool registry (`tiers.py`; the tier vocabulary
+    stays shared), the model proxy (`modelproxy.py`), the backend protocols (`backends.py`), agent definitions and
+    their schema (`profile.py`, `schemas/agent-definition.schema.json`, `definitions.py`'s loader), the runtime
+    catalog (`runtimes.py`), the human inbox (`inbox.py`), person controls (`control.py`), run results
+    (`results.py`), trigger history (`events.py`), artifacts and the gateway's tables (`pg.py`'s runtime half,
+    `src/autopilot/engine/pg.py`), and the runtime's reads of `api.py` (`src/autopilot/read_api.py`, served by
+    `autopilot-gateway api`).
+  - **To the Go core** (this repository): policy, scope and the CEL rules (`policy.py`, `scope.py` to
+    `internal/decide`, `internal/scope`), the evidence record and recorder (`audit.py`, `pg.py`'s evidence half to
+    `internal/evidence`, `internal/store`), the deployment gate (`gate.py` to `internal/gate`), definition review
+    and pins as a gate subject (`review.py`, `definitions.py` to `internal/review`, `internal/definitions`,
+    `internal/profile`), provenance (`provenance.py` to `internal/provenance`), the GitHub App (`github_app.py` to
+    `internal/githubapp`), who is calling (`auth.py` to `internal/authn`, `internal/directory`), Clearance's reads
+    (`api.py` to `clearance api`, `internal/api`) and `clearance register` (`register.py` to
+    `cmd/clearance/register.go`).
+  - **To a policy bundle** (R-5): packs (`pack.py`, `packs/hangar`) are policy bundles a deployment loads; Hangar's
+    ships with Autopilot (`policy/hangar/bundle.json`).
+- The Python recorders that imported the package: `tools/golden/export_bundle.py`, `record.py`,
+  `golden_recorder.py`, `test_fixture_calls.py`, `tools/api-golden/golden_py.py` and
+  `internal/evidence/testdata/python_chain.py`. What they recorded stays as frozen fixtures (the golden corpus, the
+  evidence chains, the API answers); they are at v0.29.0 for anyone who needs to re-record against the Python engine.
+  `tools/golden/gen_vectors.py` and `internal/canon/testdata/gen_vectors.py` stay (standard library and PyYAML only).
+- The `test` workflow (the pytest job) and the release's `clearance` wheel.
+
+### Changed
+- `register/action.yml` builds the Go `clearance` binary from the action's own checkout at its ref (`actions/setup-go`
+  with the repo's `go.mod`) and runs `clearance register`, instead of pip-installing the Python package. Its inputs and
+  outputs are unchanged. `args` reaches the Go command, which refuses `--paths-from-git` (only the Python command had
+  it). A workflow pinned to an older tag (for example `@v0.24.1`) keeps installing that tag's Python package.
+- The release version is the `VERSION` file (was `pyproject.toml`'s `[project].version`): `tools/pyclient` reads it for
+  the Python client's `_version.py`, and the release workflow checks the tag against it.
+- The release notes come from `go run ./tools/releasenotes` (was `tools/release_notes.py`), which also checks the tag
+  (`-check-tag`); `internal/release`'s test is the changelog check `tests/test_release.py` was.
+- The release ships the Python client's wheel and sdist (`clearance_core_client-X.Y.Z`) with `SHA256SUMS`, and checks
+  the client was generated at the tag's version.
+- The agent-definition schema check (`internal/profile`) compares the embedded copy with Autopilot's
+  (`CLEARANCE_AGENT_SCHEMA`; CI checks out jfillman/autopilot), not with the Python package's.
+
+### Added
+- `internal/boundary`: the core holds no session store, MCP server or tool dispatch. `go list -deps` of the core names
+  no MCP or model-provider SDK; no package is named for a gateway part; no identifier is a session store, dispatcher,
+  MCP handler, tool registry, model proxy or inbox; no literal is the `/mcp` endpoint, an MCP method or a model API
+  route. R-5's check that the core names no Hangar product (`tests/test_boundary.py`) is ported here, unchanged in
+  what it checks.
+- CI: a `register-action` job builds and dry-runs the register action.
+
 ## [0.29.0] - 2026-11-03
 
 R-5: policy bundles and Hangar's vocabulary out of the core. Breaking for a deployment of the Go

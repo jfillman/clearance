@@ -7,9 +7,9 @@ the schema froze are read, and the record check on real hangar-dev records.
 Status: **Built** (R-6). The schema is published at
 [`schemas/evidence.schema.json`](../schemas/evidence.schema.json) (`$id`
 `https://clearance.hangarplatform.dev/schemas/evidence/v1.json`, embedded in the Go binary as
-`github.com/jfillman/clearance/schemas.EvidenceV1`). Both writers emit v1: the Python gateway
-(`audit.py` `seal`, used by `AuditLog` and `pg.PgAuditLog`) and the Go core (`internal/evidence.Seal`, used by
-`store/memory` and `store/pg`). The api projects v0-draft rows. Signing, the Tessera ledger and assurance states
+`github.com/jfillman/clearance/schemas.EvidenceV1`). The Go core is the one writer
+(`internal/evidence.Seal`, used by `store/memory` and `store/pg`). Until v0.29.0 the Python gateway (`audit.py`
+`seal`) wrote the same v1 envelope; that package left the repository in v0.30.0, and its fixtures below are frozen. The api projects v0-draft rows. Signing, the Tessera ledger and assurance states
 other than `recorded-not-checkpointed` are later packages (C-series); this page says where they attach.
 
 ## What you get
@@ -62,9 +62,9 @@ Required in every v1 record: `schema`, `seq`, `ts`, `prev_hash`, `hash`, `bounda
 
 ### How the envelope is built
 
-One function per language builds it, and both build the same bytes for the same event and Writer
-(`internal/evidence/testdata/python_chain.py` writes `python-v1.jsonl`; Go's `TestPythonV1Identical` must
-reproduce it byte for byte; Python's `test_the_go_fixtures_are_what_this_writer_writes` regenerates it):
+One function builds it. The Python writer built the same bytes for the same event and Writer:
+`internal/evidence/testdata/python-v1.jsonl` is what it wrote (by `python_chain.py`, at v0.29.0 and before), and
+Go's `TestPythonV1Identical` must reproduce it byte for byte:
 
 - An event may set `boundary`, `coverage`, `subject` and `intent`. It may not set `seq`, `schema`, `verified`,
   `claimed`, `prev_hash`, `hash` or `provider`. Unknown `boundary` or `coverage` values are refused (v0-draft
@@ -202,9 +202,8 @@ Run on 2026-11-03 against copies of the dump; the dump itself is not in the repo
 | Projection of all 612 rows | Python `audit.project` and Go `evidence.Project` byte-identical on 612 of 612; `stored(project(r))` re-verifies the chain; 0 schema errors |
 
 In CI the same boundary runs on the four-record v0-draft fixture (`internal/evidence/testdata/python-chain.jsonl`):
-`TestPythonV1Identical`, `TestExtendPythonChain`, `TestV0ChainExtendedWithV1`, the store conformance suite, and
-`tests/test_evidence.py::test_verify_crosses_the_v0_to_v1_boundary`. Every record any Python test seals is checked
-against the schema (`tests/conftest.py` `every_record_is_v1`).
+`TestPythonV1Identical`, `TestExtendPythonChain`, `TestV0ChainExtendedWithV1` and the store conformance suite. (The
+Python checks in the table, and `python_chain.py`, ran at v0.29.0; they left with the Python package in v0.30.0.)
 
 To repeat it on a fresh dump:
 
@@ -213,5 +212,4 @@ psql "$CLEARANCE_DSN" -Atc "select record::text from clearance_evidence order by
 CLEARANCE_LIVE_CHAIN=$PWD/chain.jsonl CLEARANCE_LIVE_OUT=$PWD/extended.jsonl \
   go test -count=1 -run TestV0ChainExtendedWithV1 ./internal/store/memory/
 go run ./cmd/clearance chain verify --file extended.jsonl
-(cd internal/evidence/testdata && uv run python python_chain.py verify "$OLDPWD/extended.jsonl" --schema)
 ```

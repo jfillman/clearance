@@ -1,9 +1,10 @@
 # clearance-api: Clearance's read API
 
-Status: **Built** in Go (R-2b, `clearance api`, `internal/api`), not deployed: hangar-dev still runs the Python
-`api.py` (v0.26.1, served by `autopilot-gateway api`) until the cutover (R-4). This page's first section is the Go
-API; the sections after it are the design as built in Python (v0.13.0 to v0.25.0), kept because api.py serves Hangar
-until R-4 and because every route the Go API kept has the same path, parameters, answer and status codes.
+Status: **Built and deployed** in Go (R-2b, `clearance api`, `internal/api`): the `clearance-api` Deployment on
+hangar-dev runs it since the cutover of 2026-11-03. The Python `api.py` it replaced left the repository in v0.30.0
+(the runtime's reads moved to Autopilot's gateway API). This page's first section is the Go API; the sections after it
+are the design as built in Python (v0.13.0 to v0.25.0), kept for the record and because every route the Go API kept
+has the same path, parameters, answer and status codes.
 
 ## The Go clearance-api (R-2b)
 
@@ -136,9 +137,9 @@ core's schema should gain (a migration, not done here):
 ### Verifying against api.py
 
 `internal/api` runs every HTTP test on an in-memory read adapter and on Postgres (`CLEARANCE_TEST_DSN`).
-`tools/api-golden/golden_py.py` loads a chain dump into a scratch database (`clr_golden`, with a sessions table as
-the gateway wrote it), asks Python api.py a list of requests as an auditor, a person, a delegate and a person with
-no records, and writes the answers; `CLEARANCE_API_GOLDEN=<answers.json> go test ./internal/api -run Golden` serves
+`tools/api-golden/golden_py.py` (at v0.29.0 and before; it imported the Python package) loaded a chain dump into a
+scratch database (`clr_golden`, with a sessions table as the gateway wrote it), asked Python api.py a list of
+requests as an auditor, a person, a delegate and a person with no records, and wrote the answers; `CLEARANCE_API_GOLDEN=<answers.json> go test ./internal/api -run Golden` serves
 the same database through the Go API and compares every answer. On the 612-record hangar-dev dump (2026-11-03):
 368 answers (evidence pages and filters, counts by every key, single records, verify, receipts and verdicts by repo
 and PR, the policy, the gate policy, six dry runs), all identical.
@@ -335,8 +336,8 @@ and counted.
 `tools/contract -api`; `TestTheCommittedContractIsCurrent` fails when it drifts). It keeps api.py's shape (`api`,
 `version`, `notes`, `operations` with operationId, method, path, roles, params, summary), which Tower's backend
 vendors and forwards by, and adds `responses` (each operation's answer schemas by status) and `schemas`, reflected
-from the Go types. `tests/test_api.py` checks that api.py still serves every operation the Go contract shares with
-it, with the same method, path and roles. `/v1` changes are additive only; a breaking change is `/v2`.
+from the Go types. Until v0.29.0 `tests/test_api.py` checked that api.py served every operation the Go contract
+shares with it, with the same method, path and roles; it held when the Python package left. `/v1` changes are additive only; a breaking change is `/v2`.
 
 ## Hangar deployment (apron `55-autopilot/clearance`)
 

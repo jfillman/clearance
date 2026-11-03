@@ -12,6 +12,13 @@ jobs:
         options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
+      # Autopilot's agent-definition schema, which internal/profile embeds byte for byte (CLEARANCE_AGENT_SCHEMA).
+      - uses: actions/checkout@v4
+        with:
+          repository: jfillman/autopilot
+          ref: main
+          path: .autopilot
+          sparse-checkout: src/autopilot/engine/schemas
       - uses: actions/setup-go@v5
         with:
           # The newest 1.26 patch: govulncheck fails on standard-library vulnerabilities fixed in later patches.
@@ -21,6 +28,7 @@ jobs:
       - run: go test -race ./...
         env:
           CLEARANCE_TEST_DSN: postgres://postgres:test@localhost:5432/clearance?sslmode=disable
+          CLEARANCE_AGENT_SCHEMA: ${{ github.workspace }}/.autopilot/src/autopilot/engine/schemas/agent-definition.schema.json
       # Fuzz the parsers (section 12): every Fuzz* target in the module, 10s each (tools/fuzz-all.sh finds them).
       - run: tools/fuzz-all.sh 10s
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
@@ -51,3 +59,22 @@ jobs:
           python -m zipfile -l "$RUNNER_TEMP"/dist/*.whl | grep -q 'clearance_client/_models.py'
           v=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' clients/python/src/clearance_client/_version.py)
           ls "$RUNNER_TEMP"/dist/clearance_core_client-"$v"-py3-none-any.whl
+  # The register action (register/action.yml) builds the Go binary at its own ref and runs it: a dry run, which
+  # validates the request the gate would get and stops before fetching an OIDC token or calling Clearance.
+  register-action:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          mkdir -p "$RUNNER_TEMP/after"
+          printf 'apiVersion: v1\nkind: ConfigMap\nmetadata: {name: probe, namespace: shop}\ndata: {a: "1"}\n' > "$RUNNER_TEMP/after/cm.yaml"
+      - id: register
+        uses: ./register
+        with:
+          url: http://clearance.invalid
+          app: probe
+          env: prod
+          cluster: ci
+          after: ${{ runner.temp }}/after
+          args: --check ci=pass --dry-run
+      - run: test -n "${{ steps.register.outputs.result }}" && command -v clearance

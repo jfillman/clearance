@@ -1,9 +1,11 @@
 # The Go core (`clearance`)
 
-**Status: Built, not deployed.** The Go core is written and tested in this repository (R-1 of the Clearance and
-Autopilot build). Nothing runs it yet: the live hangar-dev gateway still runs the Python core (`src/clearance`)
-until W1 switches the decision and record path over. The Python modules stay in the repository, and stay true, until
-R-3 moves the gateway to `autopilot`.
+**Status: Built and deployed.** The Go core is the only Clearance there is. It was written in this repository (R-1
+of the Clearance and Autopilot build) and has served the decision and record path on hangar-dev since the cutover of
+2026-11-03 (v0.29.0, Deployments `clearance-core` and `clearance-api` in `autopilot-system`). The Python package
+that came before it (`src/clearance`) is gone from v0.30.0: the gateway half moved to Autopilot (R-3), and the core
+half is this module. [CHANGELOG.md](https://github.com/jfillman/clearance/blob/main/CHANGELOG.md) (0.30.0) says
+where each module went.
 
 The core decides and records. A gateway (Autopilot's) or a gate provider (the Argo CD sync, the GitHub App, `clearance
 register`) asks it for a decision and writes its records through it; the core enforces nothing itself and holds no
@@ -17,7 +19,7 @@ session. It is one Go module, `github.com/jfillman/clearance`, built as one stat
 |---|---|---|
 | `clearance core` | Serves the core over HTTP (the API below) from the environment. `--memory` runs it on an in-memory store (tests and local runs; nothing is kept). `--insecure-dev-auth`, with `--memory` only, accepts `Bearer <principal>` as that principal and serves the chain at `GET /v1/dev/records` (below). `--listen` overrides `CLEARANCE_LISTEN`. `--max-clock-skew` overrides `CLEARANCE_MAX_CLOCK_SKEW`; `0` (off) is accepted only with `--memory`. SIGTERM shuts it down gracefully (20 s for requests in flight). | Built |
 | `clearance chain verify` | Verifies an evidence chain from genesis, from a JSONL dump (`--file`, `-` for stdin) or a read-only Postgres connection (`--dsn`, default `$CLEARANCE_DSN`). `--anchor <count>:<head>` checks that a checkpoint taken elsewhere is still held, which catches truncation. | Built |
-| `clearance register` | The Go port of `register.py`: a customer's CI registers what it deploys with the deployment gate (the diff of two rendered manifest directories), authenticated by the workflow's GitHub Actions OIDC token or `--token-file`. Same flags as the Python command, except that `--paths-from-git` with a base is refused, because the binary does not shell out. Without it, the paths are the files that differ between `--before` and `--after`. | Built |
+| `clearance register` | A customer's CI registers what it deploys with the deployment gate (the diff of two rendered manifest directories), authenticated by the workflow's GitHub Actions OIDC token or `--token-file`. The flags of the Python command it replaced (v0.29.0 and before), except that `--paths-from-git` with a base is refused, because the binary does not shell out. The `register/action.yml` GitHub Action builds this binary at its own ref. Without it, the paths are the files that differ between `--before` and `--after`. | Built |
 | `clearance conformance` | `--provider <url> --role runtime\|deployment`: starts an in-memory core and a fake target, drives the provider through a fake call or a fake change, and proves hold, clear, release and an outcome whose digest matches the cleared subject, one PASS or FAIL line per rule ([provider-protocol.md](provider-protocol.md)). | Built (R-1f) |
 | `clearance version` | Prints the build version (`-ldflags "-X main.version=vX.Y.Z"`, else the module version). | Built |
 
@@ -111,7 +113,7 @@ A JSON array (at most 64 KiB), strictly decoded. Without it no caller may evalua
 `client` (Go, the standard library only) and `clients/python` (generated from the contract, released with each tag)
 call this API. Both report an unreachable core as a distinct error (`client.ErrCoreUnavailable`) that the caller's
 outage policy acts on: by default, fail closed. The Python client (`clearance_client.CoreClient`) is what the
-Autopilot gateway calls once R-3 moves it; in tests, `clearance core --memory` stands in for a deployed core (R-1e).
+Autopilot gateway calls (R-3); in tests, `clearance core --memory` stands in for a deployed core (R-1e).
 
 Record fields and the verified and claimed tags are the clearance.evidence/v1 shape ([evidence.md](evidence.md)).
 Arguments are stored only as a hash (`args_sha256`, `canon.ArgsDigest`).
@@ -177,8 +179,9 @@ message, hint, tier, the spend the caller must apply, and the record fields to w
 every piece of state the decision reads, and `now`, so `Decide` does no I/O and reads no clock. The package
 documentation (`internal/decide/doc.go`) has the request and response shapes and the four actions.
 
-- **Rules are data.** The core's live in `internal/decide/core.json`, exported from the Python rule set by
-  `tools/golden/export_bundle.py`, so rule text and hints match the Python character for character. A deployment's
+- **Rules are data.** The core's live in `internal/decide/core.json`, exported from the Python rule set (by
+  `tools/golden/export_bundle.py`, at v0.29.0 and before), so rule text and hints match the Python character for
+  character. It is now the source: a change to a core rule is an edit to `core.json`. A deployment's
   own rules are a [policy bundle](#policy-bundles) it loads. They are compiled once at load with cel-go against typed variables. A rule that does not
   compile, is not a bool, reads an undeclared field, or has a worst-case cost over `MaxRuleCost` (100,000) fails the
   load. Each evaluation is also cut off at that cost. Anything that fails to evaluate denies with R000.
@@ -187,36 +190,31 @@ documentation (`internal/decide/doc.go`) has the request and response shapes and
   `posixpath.normpath`, PyYAML's YAML 1.1 `safe_load`, and `json.dumps` lengths. They live in `internal/pycompat` (one
   home for every Python behaviour the core reproduces), `internal/pyyaml` (the core's one YAML loader, also used by
   `clearance register` and the definition loader) and `internal/scope` (`scope.py`). Each has vectors that Python
-  generated (`tools/golden/gen_vectors.py`).
+  generated (`tools/golden/gen_vectors.py`, standard library and PyYAML only, so it still runs: `python3 -I
+  tools/golden/gen_vectors.py` with PyYAML installed).
 - **Where cel-python and cel-go differ** is listed in
   [`internal/decide/CEL_DIFFERENCES.md`](https://github.com/jfillman/clearance/blob/main/internal/decide/CEL_DIFFERENCES.md).
   No rule evaluates differently for a request the API can carry. The only differences are for ill-typed contexts
   that a typed request cannot reach, and for inputs where the Python engine raises and the Go engine fails closed.
-- **The golden corpus.** `testdata/golden/corpus.jsonl` is recorded from the Python engine over the whole Python
+- **The golden corpus.** `testdata/golden/corpus.jsonl` was recorded from the Python engine over the whole Python
   test suite plus the fixture agents' calls (`tools/golden/test_fixture_calls.py`). It replays through the Go engine
   (`internal/decide/golden`), with the policy bundle the corpus deployment loads (`testdata/bundles/hangar`, or the
   file `CLEARANCE_GOLDEN_BUNDLE` names), with identical decisions, rule ids, names, messages, hints, tiers, problems, spend,
   grants and record fields. The same package benchmarks the decide path against its budget of 2 ms p99 in-process.
 
-To re-record after a change to the Python rules or engine (from the repository root, with the Python test extras
-installed):
-
-```shell
-PYTHONPATH=src .venv/bin/python tools/golden/export_bundle.py   # the Go engine's embedded core rules
-.venv/bin/python tools/golden/record.py                         # testdata/golden/corpus.jsonl (HANGAR_TECH defaults to ../)
-PYTHONPATH=src .venv/bin/python tools/golden/gen_vectors.py     # pycompat and pyyaml reference vectors
-go test ./internal/decide/... ./internal/pycompat ./internal/pyyaml
-```
-
-The replay fails if the embedded core rules, or the fixture bundle's tools and rules, drift from the export on the
-corpus's first line.
+The corpus is frozen: the Python engine it was recorded from left the repository in v0.30.0, and its recorders
+(`tools/golden/export_bundle.py`, `record.py`, `golden_recorder.py`, `test_fixture_calls.py`) went with it. They are
+at the v0.29.0 tag, with the package they import, for anyone who needs to re-record against that engine. The corpus
+is now a regression fixture for the Go engine: the replay fails if the embedded core rules, or the fixture bundle's
+tools and rules, drift from the export on the corpus's first line, so a deliberate rule change updates the corpus
+lines it changes in the same PR.
 
 ## Policy bundles
 
 Built (v0.29.0). A deployment's policy is a **policy bundle**: a JSON file (`apiVersion: clearance.policy/v1`) that
 the core and clearance-api load from configuration (`CLEARANCE_BUNDLES`) and name, with its version, in every
 decision. Nothing about any deployment is compiled into Clearance: the core's source carries no platform's names
-(`tests/test_boundary.py` checks every string literal and identifier of the Go core and every line of its embedded
+(`internal/boundary` checks every string literal and identifier of the Go core and every line of its embedded
 data). A bundle holds:
 
 | Field | What it is |
@@ -314,6 +312,25 @@ go test -race ./...          # the Postgres tests need CLEARANCE_TEST_DSN and sk
 tools/fuzz-all.sh 10s        # every Fuzz* target, as CI runs them
 ```
 
-CI (`.github/workflows/go.yaml`) runs vet, gofmt, the race tests, the fuzz targets and govulncheck. The contract is
-regenerated with `go generate ./internal/server`. The image (`Dockerfile`) and the Helm chart (`charts/clearance`) are
+CI (`.github/workflows/go.yaml`) runs vet, gofmt, the race tests, the fuzz targets and govulncheck; it checks out
+Autopilot's agent-definition schema so `internal/profile` can prove its embedded copy is byte for byte the same
+(`CLEARANCE_AGENT_SCHEMA`; the test skips without it), and builds and dry-runs the `register` action. The contract is
+regenerated with `go generate ./internal/server`. The release version is the `VERSION` file (`internal/release`):
+`tools/pyclient` writes it into the Python client, and the release workflow checks the tag against it
+(`go run ./tools/releasenotes -check-tag vX.Y.Z`).
+
+### The boundary (`internal/boundary`)
+
+What the core is not, as tests over its non-test source (`internal/`, `cmd/`, `client/`) and the Python client:
+
+- **No session store, MCP server or tool dispatch.** `go list -deps` of the core names no MCP SDK and no model
+  provider's SDK; no package is named for a gateway part (sessions, dispatch, MCP, the model proxy, the inbox,
+  runtimes, triggers); no identifier is a session store, dispatcher, MCP handler, tool registry, model proxy or
+  inbox; no string literal is the `/mcp` endpoint, an MCP method or a model API route. `SessionState` (a session as
+  the gateway reports it in a decision request) and the actions `session.open` and `session.spawn` are decision
+  vocabulary and stay. Those are Autopilot's (R-3).
+- **No Hangar vocabulary** (R-5): no string literal or identifier, and no line of an embedded data file, names Hangar
+  or one of its products, with one recorded exception (the embedded agent-definition schema).
+
+Comments are not checked: they may say where a port came from. Each check has a test that it finds what it should. The image (`Dockerfile`) and the Helm chart (`charts/clearance`) are
 in [install.md](install.md); every variable above is a chart value, and `tools/charttest` fails when one is not.

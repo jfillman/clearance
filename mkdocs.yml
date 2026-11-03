@@ -1,5 +1,5 @@
 site_name: 'Clearance'
-site_description: 'Policy, audit and session gateway for AI agent workloads: every tool call decided, recorded and budgeted'
+site_description: 'Change assurance in the path of every change: every agent call and every deployment decided and recorded'
 
 nav:
   - Home: index.md

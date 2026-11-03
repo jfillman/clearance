@@ -64,13 +64,20 @@ func write(t *testing.T, dir, name string, d map[string]any) {
 	}
 }
 
-func TestSchemaIsByteIdenticalToThePythonCopy(t *testing.T) {
-	py, err := os.ReadFile("../../src/clearance/schemas/agent-definition.schema.json")
+// The agent-definition schema is Autopilot's (it owns agent definitions); the gate embeds a byte-identical copy so it
+// can tier a definition change. CLEARANCE_AGENT_SCHEMA names Autopilot's copy (CI checks out jfillman/autopilot and
+// sets it to src/autopilot/engine/schemas/agent-definition.schema.json); without it the check is skipped.
+func TestSchemaIsByteIdenticalToAutopilots(t *testing.T) {
+	path := os.Getenv("CLEARANCE_AGENT_SCHEMA")
+	if path == "" {
+		t.Skip("set CLEARANCE_AGENT_SCHEMA to Autopilot's agent-definition.schema.json")
+	}
+	theirs, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(py) == 0 || !bytes.Equal(py, profile.SchemaJSON()) {
-		t.Fatal("internal/profile/agent-definition.schema.json drifted from src/clearance/schemas; copy it again")
+	if len(theirs) == 0 || !bytes.Equal(theirs, profile.SchemaJSON()) {
+		t.Fatalf("internal/profile/agent-definition.schema.json drifted from %s; copy it again", path)
 	}
 }
 
