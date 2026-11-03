@@ -261,3 +261,24 @@ The gate is ported to Go with behaviour unchanged: `internal/gate` (classificati
 `internal/gate/render` (`clearance register`'s manifest diff, reading YAML the way PyYAML's SafeLoader does). Each gate
 operation is one store transaction: the change row and its `deploy.*` records commit together. One tightening: an unknown
 field in a request body is refused (400) where the Python core ignored it. The Python gate keeps serving until W1.
+
+**Who is in a group (Built, not deployed).** The Go core reads the owner group and people's groups from Tower's
+Backstage catalog, as the Python deployment does (`internal/directory/backstage`, ported from autopilot `reads.py`
+`BackstageDirectory` and `BackstageAppOwners`). A person `user:<login>`'s groups are the `memberOf` relations of
+`user:default/<login>` (`GET /api/catalog/entities/by-name/user/default/<login>`), cached 60 s; a change registered
+without an owner gets its app's Component `spec.owner` (`.../by-name/component/default/<app>`), a bare name read as
+`group:default/<name>` and a user owner ignored, cached 300 s. Configuration, the same variables as autopilot
+`serve.py` so apron's values carry over:
+
+| Variable | Meaning |
+| --- | --- |
+| `BACKSTAGE_URL` | Tower's Backstage (http or https). Unset: no directory and no owner lookup, so nobody is in any group and **no person can clear a tier-2 or tier-3 change**; the core logs this at startup |
+| `BACKSTAGE_TOKEN_FILE` | the bearer token, re-read on every call (default `/var/run/clearance/backstage-token`, a projected service-account token for the `backstage` audience). Never logged |
+
+It fails closed for clearing: Backstage down, refusing, slow (10 s deadline per call), redirecting, answering more
+than 1 MiB or answering something that is not an entity is no groups and no owner, cached for the TTL like any
+answer, so a person cannot clear until it answers again; an unknown owner falls back to the outside group, which
+nobody is in either while Backstage is down. Differences from the Python transport: the per-call deadline is 10 s
+(was 30 s; the Go gate asks inside its lock and the operation's transaction), redirects are not followed (the token
+stays with the configured URL), the answer is capped at 1 MiB (was 16 MiB), a malformed answer is no groups where
+Python raised, and each cache holds at most 4096 entries.

@@ -20,6 +20,11 @@
 //	                              the Clearance GitHub App: all three or none
 //	CLEARANCE_GITHUB_APP_COMMENTS off | agent-failures
 //	CLEARANCE_GITHUB_API          the GitHub API base (default https://api.github.com)
+//	BACKSTAGE_URL                 Tower's Backstage (http/https): the gate's group directory (a person's memberOf
+//	                              groups) and app owners (a Component's spec.owner). Unset: neither, so nobody is in
+//	                              any group and no person can clear a tier-2/3 change (autopilot serve.py likewise)
+//	BACKSTAGE_TOKEN_FILE          the bearer token for Backstage, re-read on every call (default
+//	                              /var/run/clearance/backstage-token: a projected token for the backstage audience)
 //
 // and the authenticator's (authn.EnvVars: CLEARANCE_AUDIENCE, CLEARANCE_OIDC_*, TOWER_*, CLEARANCE_GITHUB_OIDC_*).
 // An empty variable is an unset one.
@@ -33,6 +38,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,6 +48,7 @@ import (
 	"github.com/jfillman/clearance/internal/decide"
 	"github.com/jfillman/clearance/internal/decide/packs/hangar"
 	"github.com/jfillman/clearance/internal/definitions"
+	"github.com/jfillman/clearance/internal/directory/backstage"
 	"github.com/jfillman/clearance/internal/evidence"
 	"github.com/jfillman/clearance/internal/gate"
 	"github.com/jfillman/clearance/internal/githubapp"
@@ -78,6 +85,12 @@ type Config struct {
 	Auth        authn.Authenticator
 	// MaxClockSkew is server.Options.MaxClockSkew.
 	MaxClockSkew time.Duration
+	// BackstageURL is Tower's Backstage, the gate's Directory and Owners ("": neither).
+	BackstageURL string
+	// BackstageTokenFile is read on every Backstage call (default backstage.DefaultTokenFile).
+	BackstageTokenFile string
+	// BackstageTimeout is each Backstage call's deadline (<= 0: backstage.DefaultTimeout).
+	BackstageTimeout time.Duration
 }
 
 // FromEnv reads Config from getenv, the authenticator included (authn.FromEnv).
@@ -138,6 +151,15 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		if cfg.GitHubApp, err = githubapp.ReadConfig(parts[0], parts[1], parts[2], comments,
 			get("CLEARANCE_GITHUB_API", githubapp.API)); err != nil {
 			return cfg, err
+		}
+	}
+	cfg.BackstageURL = get("BACKSTAGE_URL", "")
+	cfg.BackstageTokenFile = get("BACKSTAGE_TOKEN_FILE", backstage.DefaultTokenFile)
+	if cfg.BackstageURL != "" {
+		u, err := url.Parse(cfg.BackstageURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil ||
+			u.RawQuery != "" || u.Fragment != "" {
+			return cfg, errors.New("BACKSTAGE_URL must be an http(s) URL with a host and no credentials, query or fragment")
 		}
 	}
 	if cfg.Auth, err = authn.FromEnv(getenv); err != nil {
@@ -261,6 +283,18 @@ func (c *Core) wire(ctx context.Context) error {
 
 	g := gate.NewService(cfg.Gate, c.Store, c.clock)
 	g.Writer, g.Tools, g.Parse = writer, tools, parse
+	if cfg.BackstageURL != "" {
+		tokenFile := cfg.BackstageTokenFile
+		if tokenFile == "" {
+			tokenFile = backstage.DefaultTokenFile
+		}
+		cat := backstage.NewCatalog(cfg.BackstageURL, tokenFile, cfg.BackstageTimeout, c.log)
+		g.Directory = backstage.NewDirectory(cat, 0, c.clock)
+		g.Owners = backstage.NewOwners(cat, 0, c.clock)
+	} else {
+		c.log.WarnContext(ctx, "gate: no BACKSTAGE_URL, so no group directory and no app owners: "+
+			"nobody is in any group and no person can clear a tier-2 or tier-3 change")
+	}
 	c.Gate = g
 	prov := &provenance.Service{Config: provenance.Config{Verifiers: cfg.Gate.Verifiers, AgentLogins: cfg.AgentLogins},
 		Store: c.Store, Clock: c.clock, Defs: reg, Writer: writer}
@@ -340,7 +374,8 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 	go func() { serveErr <- hs.Serve(ln) }()
 	pol := c.Engine.Policy()
 	log.Info("clearance core serving", "addr", ln.Addr().String(), "memory", cfg.Memory, "policy", pol.Bundle,
-		"policy_version", pol.Version, "providers", len(cfg.Providers), "github_app", c.App != nil)
+		"policy_version", pol.Version, "providers", len(cfg.Providers), "github_app", c.App != nil,
+		"backstage", cfg.BackstageURL != "")
 	if ready != nil {
 		ready(ln.Addr().String())
 	}
