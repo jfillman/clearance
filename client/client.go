@@ -163,6 +163,25 @@ func (c *Client) Record(ctx context.Context, req *RecordRequest) (*RecordRef, er
 	return &out, nil
 }
 
+// PublishDefinitions replaces the core's set of cluster-pinned agent definitions with the provider's (the
+// provider is registered with definitions: true). req.Provider empty is Options.Provider. A publish of the same
+// set changes and records nothing, so it is retried as an evaluation is.
+func (c *Client) PublishDefinitions(ctx context.Context, req *DefinitionsRequest) (*DefinitionsResult, error) {
+	body := *req
+	if body.Provider == "" {
+		body.Provider = c.opt.Provider
+	}
+	if body.Pins == nil {
+		body.Pins = []PinnedDefinition{}
+	}
+	var out DefinitionsResult
+	if err := c.call(ctx, call{op: "publishDefinitions", method: "PUT", path: "/v1/definitions", body: &body,
+		retry: retryAny}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // RegisterChange registers (or re-evaluates) a change; the caller is a verifier. Registering is idempotent, so it
 // is retried as an evaluation is.
 func (c *Client) RegisterChange(ctx context.Context, req *ChangeRequest) (*Change, error) {

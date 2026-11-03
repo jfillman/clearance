@@ -36,7 +36,7 @@ provider works without them.
 
 | Provider | Role | Status |
 | --- | --- | --- |
-| Autopilot gateway (`autopilot-gateway`) | runtime | Built in Python, deciding in-process today; it calls the Go core from R-3 and is tested then, and again as the Go port (A-9) |
+| Autopilot gateway (`autopilot-gateway`) | runtime | Built in Python; it calls the Go core from R-3b (autopilot#71) and is tested then, and again as the Go port (A-9) |
 | Argo CD gate: CMP, grant-sync agent, PreSync wait (G-ARGO-3, -4, -5) | deployment | Proposal; G-ARGO-9 requires conformance |
 | Terraform gate: `clearance hold`, `release`, `report` (G-TF-3) | deployment | Proposal |
 | Clearance GitHub App, deployment protection rule | deployment | Built inside the core (`internal/githubapp`); it answers GitHub's callback rather than applying, so it is not driven by this suite |
@@ -55,6 +55,8 @@ The core knows its providers from `CLEARANCE_PROVIDERS` (`server.Provider`):
   it from the registration, never from the request). `clearance` is the core's own name and is refused.
 - `principals` are globs on the authenticated principal. A caller is the first provider whose globs match it.
 - `kinds` narrows which `POST /v1/records` kinds it may write (default: all).
+- `definitions: true` lets it publish its cluster-pinned agent definitions (`PUT /v1/definitions`, below). At most
+  one provider has it.
 - A deployment provider registers changes, so its principal must also match `CLEARANCE_VERIFIERS`.
 
 Every call carries `Authorization: Bearer <token>`: in a cluster an audience-bound projected service-account token,
@@ -93,22 +95,75 @@ The gateway's loop, for every tool call, model call, session open and spawn:
    ```
 
    `result` is the call's result line (`ok`, `error:<Kind>`, a handler's refusal). `effect` is only for a tool with a
-   receipt or that writes files (it is what provenance later reads). `receipt` is flat scalars. The core links the
+   receipt or that writes files (it is what provenance later reads). `receipt` is flat scalars. A handler that
+   refused after the core allowed (a rule the core cannot see) also sends `"refusal": {"rule": "HR-003", "message":
+   "..."}`, claimed on the record beside the decision's own `decision` and `rule`; a refusal carries no effect. The core links the
    record to the decision with `outcome_of {seq, hash}` and copies the decision's identity fields (verified). It
    refuses a second outcome (409), an outcome for a deny (409), and an outcome for another provider's decision (403).
 5. **Write the runtime records** the provider owns: `POST /v1/records` with
-   `{"provider": "<name>", "kind": "<kind>", "record": {...}}`. Kinds and what each must carry:
+   `{"provider": "<name>", "kind": "<kind>", "record": {...}}`. Kinds and what each must carry
+   (<a id="record-kinds"></a>`internal/server/records.go`; each is what the Python gateway recorded for it at
+   clearance v0.26.1):
 
-   | Kind | Must carry |
-   | --- | --- |
-   | `session.open` | session, task_id, principal, agent, result |
-   | `run.launch`, `run.delete`, `session.freeze` | session, principal, agent, result |
-   | `human.answer` | principal, target, result |
-   | `trigger.hold` | principal, agent, target, result |
+   | Kind | Must carry | What it is |
+   | --- | --- | --- |
+   | `session.open` | session, task_id, principal, agent, result | a session the provider opened itself |
+   | `run.launch`, `run.delete`, `session.freeze` | session, principal, agent, result | a run created or deleted; a person froze a session |
+   | `run.finish` | session, task_id, principal, agent, args_sha256, result | a run handed back its result (`run_finish`), or the sweep closed one that ended without it (`no-result`); the status, never the text |
+   | `session.end` | session, principal, agent, target, result | a person ended a session (`ended: <reason>[ via <delegate>]`) |
+   | `human.answer` | principal, target, result | a person answered a human request |
+   | `trigger.hold`, `trigger.release` | principal, agent, target, result | a person held or released an agent's triggers |
+   | `tool.call` | session, task_id, principal, agent, tool, tier, args_sha256, result, coverage | a T0 read the provider ran while the core was unreachable (below) |
 
-   Only `provider` and `ts` are verified on these; everything else is claimed.
+   Only `provider` and `ts` are verified on these; everything else is claimed. `definition.load`, `definition.unload`
+   and `definition.reject` are not provider kinds: the core writes them when the provider publishes its definitions.
 6. **Fail closed.** A connection error, a timeout or a 5xx from the core is a deny for the call in hand. The one
-   exception is the recorded switch in R-3's outage policy; until it exists there is none.
+   exception is the recorded switch in R-3's outage policy (`GATEWAY_OUTAGE_ALLOW_READS`): a T0 read the provider
+   can stand behind on its own may run while the core is unreachable. It is kept in the provider's outbox and
+   posted in order once the core answers, as a `tool.call` record: `tool` is the tool called, `tier` 0,
+   `coverage: coverage-unavailable`, `decision` allow if set, and no `rule`, `subject`, `effect`, `outcome` or
+   `change`. The core refuses it unless the tool is a T0 tool it knows. Its `ts` is when the core took it; say when
+   it ran in `reason`. Its subject is derived from `tool` and `args_sha256` (a tool-call digest) and, like the rest,
+   is claimed: it is never a decision.
+
+### A person's run
+
+A `session.open` evaluation with `"properties": {"run": true, "via": "<delegate>"}` is a person opening a session
+to run a task agent (Autopilot's `Gateway.run_agent`: Tower's Run, or the person's own token). It asks for no limits
+and is not triggered; `via` is optional and needs `run`. The decision record is the Python gateway's: `args_sha256`
+of `{"via": <delegate or null>}` and result `opened to run[ via <delegate>]`.
+
+### Publishing pinned definitions
+
+A provider that loads agent definitions pinned on the cluster (Autopilot's Agent XR loader, `agent_xrs.py`) hands
+its whole set to the core after every poll that changed it, so the core's provenance and the read API see the same
+definitions the provider enforces:
+
+```json
+PUT /v1/definitions
+{"provider": "autopilot-gateway",
+ "pins": [{"source": {"repo": "jfillman/gate-api", "path": "agents/gate-triage.yaml", "commit": "1a2b3c4...",
+                      "namespace": "app-gate-api-cicd", "xr": "gate-triage", "loaded_at": "2026-11-03T10:00:00Z"},
+           "owner": "group:default/team-gate",
+           "doc": {"name": "gate-triage", "owner": "group:default/team-gate", "...": "..."}}],
+ "rejected": [{"name": "half-pin", "source": {"repo": "", "path": "", "commit": "", "xr": "half-pin"},
+               "reason": "the XR has no complete spec.source (repo, path, commit)"}]}
+```
+
+- `pins` is every pin the provider fetched: the file's document, its source, and the Agent XR's `spec.owner`. A
+  pin's source names its repository (`owner/name`), path, commit (hex), namespace and XR. An empty list unpins
+  everything.
+- `rejected` is the pins it could not load itself (an incomplete `spec.source`, a file the broker refused), each
+  with its reason.
+- The core decides every pin again with its own schema and rules (the agent-definition schema; the name is the
+  XR's; the owner is the XR's; a workload identity is `autopilot-runs/<name>`; not a bundled name). A pin it refuses
+  is a rejection with the core's reason, whatever the provider decided.
+- The set replaces the stored one in one transaction, and each change is one record, sealed by the core with
+  `caller`: `definition.load` (`loaded <pin>`, `re-pinned <pin>`), `definition.unload` (`pin removed <pin>`),
+  `definition.reject` (deny, `DF-PIN`, the reason). The pin's own fields are claimed: the core did not fetch the
+  file. The same set again records nothing.
+- The answer is what changed: `{"added", "changed", "removed", "rejected", "cleared", "cluster"}`.
+- At most 256 pins and 256 rejections, 4 MiB.
 
 ## The deployment role
 

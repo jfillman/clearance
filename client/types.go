@@ -29,8 +29,13 @@ const (
 )
 
 // RecordKinds are the kinds POST /v1/records takes (server.RecordKinds).
-var RecordKinds = []string{"session.open", "run.launch", "run.delete", "human.answer", "session.freeze",
-	"trigger.hold", "deploy.outcome", "deploy.exception"}
+var RecordKinds = []string{"session.open", "run.launch", "run.delete", "run.finish", "human.answer",
+	"session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome",
+	"deploy.exception"}
+
+// CoverageUnavailable is a tool.call record's coverage: a T0 read the provider allowed while the core was
+// unreachable (the outage policy), posted once it answers.
+const CoverageUnavailable = "coverage-unavailable"
 
 // -- POST /access/v1/evaluation ------------------------------------------------------------------------------------
 
@@ -70,6 +75,10 @@ type ActionProperties struct {
 	Limits    json.RawMessage `json:"limits,omitempty"`
 	TaskID    string          `json:"task_id,omitempty"`
 	Trigger   string          `json:"trigger,omitempty"`
+	// Run marks a session.open for a person's run (no limits, no trigger); Via names the delegate they acted
+	// through, recorded as "opened to run via <delegate>".
+	Run bool   `json:"run,omitempty"`
+	Via string `json:"via,omitempty"`
 }
 
 // Resource is what the action is on.
@@ -238,6 +247,14 @@ type OutcomeRequest struct {
 	Result  string         `json:"result"`
 	Effect  *Effect        `json:"effect,omitempty"`
 	Receipt map[string]any `json:"receipt,omitempty"`
+	// Refusal is a refusal the caller's handler made after the core allowed the call.
+	Refusal *Refusal `json:"refusal,omitempty"`
+}
+
+// Refusal is a handler's refusal: its rule id and message.
+type Refusal struct {
+	Rule    string `json:"rule"`
+	Message string `json:"message"`
 }
 
 // Effect is a write's receipt (a pull request's repo, pr, commit, branch and paths).
@@ -265,6 +282,7 @@ type ProviderEvent struct {
 	Parent      *string        `json:"parent,omitempty"`
 	Principal   *string        `json:"principal,omitempty"`
 	Agent       *string        `json:"agent,omitempty"`
+	Tool        *string        `json:"tool,omitempty"` // tool.call records only: the tool that was called
 	Target      *string        `json:"target,omitempty"`
 	App         *string        `json:"app,omitempty"`
 	Decision    *string        `json:"decision,omitempty"`
@@ -286,6 +304,69 @@ type ProviderEvent struct {
 
 // String is a pointer to s, for ProviderEvent's optional fields.
 func String(s string) *string { return &s }
+
+// -- PUT /v1/definitions -------------------------------------------------------------------------------------------
+
+// DefinitionsRequest is the provider's whole set of cluster-pinned agent definitions. Provider empty is
+// Options.Provider. Pins nil is sent as [] (unpin everything).
+type DefinitionsRequest struct {
+	Provider string             `json:"provider"`
+	Pins     []PinnedDefinition `json:"pins"`
+	Rejected []RejectedPin      `json:"rejected,omitempty"`
+}
+
+// PinnedDefinition is one fetched pin: its source, its Agent XR's spec.owner and the file's document.
+type PinnedDefinition struct {
+	Source PinSource      `json:"source"`
+	Owner  string         `json:"owner"`
+	Doc    map[string]any `json:"doc"`
+}
+
+// PinSource is where a pin came from.
+type PinSource struct {
+	Repo      *string `json:"repo,omitempty"`
+	Path      *string `json:"path,omitempty"`
+	Commit    *string `json:"commit,omitempty"`
+	Namespace *string `json:"namespace,omitempty"`
+	XR        *string `json:"xr,omitempty"`
+	LoadedAt  *string `json:"loaded_at,omitempty"`
+}
+
+// RejectedPin is a pin the provider could not load, and why.
+type RejectedPin struct {
+	Name   string    `json:"name"`
+	Source PinSource `json:"source"`
+	Reason string    `json:"reason"`
+}
+
+// DefinitionsResult is what a publish changed.
+type DefinitionsResult struct {
+	Added    []string       `json:"added"`
+	Changed  []string       `json:"changed"`
+	Removed  []string       `json:"removed"`
+	Rejected []RejectedView `json:"rejected"`
+	Cleared  []RejectedView `json:"cleared"`
+	Cluster  int            `json:"cluster"`
+}
+
+// RejectedView is a rejection as the core keeps it.
+type RejectedView struct {
+	Name   string     `json:"name"`
+	Source SourceView `json:"source"`
+	Reason string     `json:"reason"`
+}
+
+// SourceView is a pin's source as the core keeps it, with its one-line pin.
+type SourceView struct {
+	Kind      string  `json:"kind"`
+	Repo      *string `json:"repo,omitempty"`
+	Path      *string `json:"path,omitempty"`
+	Commit    *string `json:"commit,omitempty"`
+	Namespace *string `json:"namespace,omitempty"`
+	XR        *string `json:"xr,omitempty"`
+	LoadedAt  *string `json:"loaded_at,omitempty"`
+	Pin       string  `json:"pin"`
+}
 
 // -- the deployment gate -------------------------------------------------------------------------------------------
 

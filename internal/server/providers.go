@@ -24,13 +24,16 @@ import (
 // name is the record's provider.name (the schema's pattern; never "clearance", the core's own); version is
 // provider.version. principals are fnmatch globs on the authenticated principal id; a caller is the first provider
 // whose globs match it. kinds narrows which POST /v1/records kinds the provider may write (default: all of
-// RecordKinds). intent_capture is "redacted" (default) or "full" for its records' intent text.
+// RecordKinds). intent_capture is "redacted" (default) or "full" for its records' intent text. definitions lets the
+// provider publish its cluster-pinned agent definitions (PUT /v1/definitions; default false). At most one provider
+// has it: a publish replaces the whole pinned set, so two publishers would undo each other.
 type Provider struct {
 	Name          string   `json:"name"`
 	Version       string   `json:"version"`
 	Principals    []string `json:"principals"`
 	Kinds         []string `json:"kinds,omitempty"`
 	IntentCapture string   `json:"intent_capture,omitempty"`
+	Definitions   bool     `json:"definitions,omitempty"`
 }
 
 var providerName = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,62}$`)
@@ -52,6 +55,7 @@ func ParseProviders(v string) ([]Provider, error) {
 		return nil, fmt.Errorf("CLEARANCE_PROVIDERS: %w", err)
 	}
 	seen := map[string]bool{}
+	publisher := ""
 	for i := range ps {
 		p := &ps[i]
 		switch {
@@ -77,6 +81,13 @@ func ParseProviders(v string) ([]Provider, error) {
 			if _, ok := recordKinds[k]; !ok {
 				return nil, fmt.Errorf("CLEARANCE_PROVIDERS[%d]: kind %q is not one of %v", i, k, RecordKinds)
 			}
+		}
+		if p.Definitions {
+			if publisher != "" {
+				return nil, fmt.Errorf("CLEARANCE_PROVIDERS: %q and %q both have definitions: at most one provider "+
+					"publishes the pinned definitions", publisher, p.Name)
+			}
+			publisher = p.Name
 		}
 		seen[p.Name] = true
 	}

@@ -35,6 +35,17 @@ type OutcomeRequest struct {
 	Effect *Effect `json:"effect,omitempty"`
 	// Receipt is the provider's own reference for the call (a backend's id, a URL): flat, scalar values only.
 	Receipt map[string]any `json:"receipt,omitempty"`
+	// Refusal is a refusal the provider's handler made after the core allowed the call (a rule the core cannot see:
+	// the gateway's launch R004/R001, the inbox's HR-*, artifacts' ART-*), with its rule and message, as the Python
+	// gateway's deny record carried them. The record keeps the decision's own decision and rule (verified) and adds
+	// refusal (claimed).
+	Refusal *Refusal `json:"refusal,omitempty"`
+}
+
+// Refusal is a handler's refusal: its rule id and message.
+type Refusal struct {
+	Rule    string `json:"rule" contract:"required"`
+	Message string `json:"message" contract:"required"`
 }
 
 // Effect is a write's receipt; provenance reads it (store.Reader.Receipts on effect.repo and effect.pr).
@@ -49,6 +60,7 @@ type Effect struct {
 var (
 	repoRx   = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z`)
 	commitRx = regexp.MustCompile(`^[0-9a-f]{7,64}\z`)
+	ruleRx   = regexp.MustCompile(`^[A-Z][A-Z0-9]*(-[A-Z0-9]+)*\z`)
 	seqRx    = regexp.MustCompile(`^(0|[1-9][0-9]{0,17})\z`)
 )
 
@@ -137,6 +149,9 @@ func (s *Server) outcome(w http.ResponseWriter, r *http.Request) {
 		if len(body.Receipt) > 0 {
 			ev["receipt"] = body.Receipt
 		}
+		if body.Refusal != nil {
+			ev["refusal"] = map[string]any{"rule": body.Refusal.Rule, "message": body.Refusal.Message}
+		}
 		ev["outcome_of"] = map[string]any{"seq": json.Number(id), "hash": d["hash"]}
 		ev["caller"] = callerField(prov, p)
 		wr := prov.Writer()
@@ -172,6 +187,18 @@ var errRefused = errors.New("refused")
 func (b *OutcomeRequest) validate() (map[string]any, error) {
 	if b.Result == "" || len(b.Result) > MaxResultBytes || !utf8.ValidString(b.Result) || strings.ContainsRune(b.Result, 0) {
 		return nil, fmt.Errorf("result is a non-empty string of at most %d bytes", MaxResultBytes)
+	}
+	if f := b.Refusal; f != nil {
+		if len(f.Rule) > 64 || !ruleRx.MatchString(f.Rule) {
+			return nil, errors.New("refusal.rule is a rule id (R004, HR-003, ART-002)")
+		}
+		if f.Message == "" || len(f.Message) > MaxResultBytes || !utf8.ValidString(f.Message) ||
+			strings.ContainsRune(f.Message, 0) {
+			return nil, fmt.Errorf("refusal.message is a non-empty string of at most %d bytes", MaxResultBytes)
+		}
+		if b.Effect != nil {
+			return nil, errors.New("a refused call made no write: refusal and effect do not go together")
+		}
 	}
 	if len(b.Receipt) > MaxReceiptKeys {
 		return nil, fmt.Errorf("receipt has at most %d keys", MaxReceiptKeys)

@@ -15,7 +15,7 @@ session. It is one Go module, `github.com/jfillman/clearance`, built as one stat
 
 | Subcommand | What it does | Status |
 |---|---|---|
-| `clearance core` | Serves the core over HTTP (the API below) from the environment. `--memory` runs it on an in-memory store (tests and local runs; nothing is kept). `--insecure-dev-auth`, with `--memory` only, accepts `Bearer <principal>` as that principal. `--listen` overrides `CLEARANCE_LISTEN`. SIGTERM shuts it down gracefully (20 s for requests in flight). | Built |
+| `clearance core` | Serves the core over HTTP (the API below) from the environment. `--memory` runs it on an in-memory store (tests and local runs; nothing is kept). `--insecure-dev-auth`, with `--memory` only, accepts `Bearer <principal>` as that principal and serves the chain at `GET /v1/dev/records` (below). `--listen` overrides `CLEARANCE_LISTEN`. `--max-clock-skew` overrides `CLEARANCE_MAX_CLOCK_SKEW`; `0` (off) is accepted only with `--memory`. SIGTERM shuts it down gracefully (20 s for requests in flight). | Built |
 | `clearance chain verify` | Verifies an evidence chain from genesis, from a JSONL dump (`--file`, `-` for stdin) or a read-only Postgres connection (`--dsn`, default `$CLEARANCE_DSN`). `--anchor <count>:<head>` checks that a checkpoint taken elsewhere is still held, which catches truncation. | Built |
 | `clearance register` | The Go port of `register.py`: a customer's CI registers what it deploys with the deployment gate (the diff of two rendered manifest directories), authenticated by the workflow's GitHub Actions OIDC token or `--token-file`. Same flags as the Python command, except that `--paths-from-git` with a base is refused, because the binary does not shell out. Without it, the paths are the files that differ between `--before` and `--after`. | Built |
 | `clearance conformance` | `--provider <url> --role runtime\|deployment`: starts an in-memory core and a fake target, drives the provider through a fake call or a fake change, and proves hold, clear, release and an outcome whose digest matches the cleared subject, one PASS or FAIL line per rule ([provider-protocol.md](provider-protocol.md)). | Built (R-1f) |
@@ -31,7 +31,8 @@ The contract is [`contract/clearance-core.json`](https://github.com/jfillman/cle
 |---|---|---|
 | `POST /access/v1/evaluation` | a registered provider | Decide one AuthZEN 1.0 access evaluation (`tool.call`, `session.spawn`, `session.open`, `model.call`) and record the decision, sealed by the core. |
 | `POST /v1/decisions/{id}/outcome` | the provider that asked for the decision | The call's result, effect (a pull request's receipt) and receipt, once per allowed decision. |
-| `POST /v1/records` | a registered provider | One of the provider's own records: `session.open`, `run.launch`, `run.delete`, `human.answer`, `session.freeze`, `trigger.hold`, `deploy.outcome`, `deploy.exception`. |
+| `POST /v1/records` | a registered provider | One of the provider's own records: `session.open`, `run.launch`, `run.delete`, `run.finish`, `human.answer`, `session.freeze`, `session.end`, `trigger.hold`, `trigger.release`, `tool.call` (an outage read, `coverage-unavailable`), `deploy.outcome`, `deploy.exception`. |
+| `PUT /v1/definitions` | the provider registered with `definitions: true` | The provider's whole set of cluster-pinned agent definitions replaces the core's. The core decides each pin and records each change once (`definition.load`, `definition.unload`, `definition.reject`). |
 | `POST /v1/clearances`, `/v1/clearances/{change_id}/clear`, `/v1/clearances/{change_id}/deny` | a verifier; a person or a delegate | The deployment gate ([gate.md](gate.md)), at the Python core's paths. |
 | `POST /v1/definitions/review` | a verifier, a person, or a delegate naming one | Would Clearance load this agent definition, and how much more may its agent do (the definition-change tier). Stateless, unrecorded. |
 | `POST /v1/provenance` | a verifier | The agent-identity and agent-scope verdicts for a pull request, recorded as `provenance.verify`. |
@@ -48,7 +49,8 @@ bare 500. The server sets read-header, read, write and idle timeouts, and each h
 A JSON array (at most 64 KiB), strictly decoded. Without it no caller may evaluate or record.
 
 ```json
-[{"name": "autopilot-gateway", "version": "0.3.27", "principals": ["autopilot-system/clearance"]},
+[{"name": "autopilot-gateway", "version": "0.3.27", "principals": ["autopilot-system/clearance"],
+  "definitions": true},
  {"name": "argo-gate", "version": "0.1.0", "principals": ["hangar-prod/argocd/clearance-sync"],
   "kinds": ["deploy.outcome", "deploy.exception"]}]
 ```
@@ -59,6 +61,8 @@ A JSON array (at most 64 KiB), strictly decoded. Without it no caller may evalua
 - `principals` are fnmatch globs on the authenticated principal. A caller is the first provider whose globs match.
 - `kinds` narrows which `POST /v1/records` kinds the provider may write (default: all of them).
 - `intent_capture` is `redacted` (the default) or `full`, for its records' intent text.
+- `definitions: true` lets the provider publish its cluster-pinned agent definitions (`PUT /v1/definitions`). At
+  most one provider has it, because a publish replaces the whole set: two publishers would undo each other.
 
 ### Decisions, outcomes and records
 
@@ -68,13 +72,39 @@ A JSON array (at most 64 KiB), strictly decoded. Without it no caller may evalua
   outcome.
 - **The decision record** names its `caller` (`{provider, principal}`), and that field is verified because the
   core authenticated it. Its `ts` is the evaluation's `context.now`, which must be within 5 minutes of the core's
-  clock (`server.Options.MaxClockSkew`). A caller cannot move it.
+  clock (`CLEARANCE_MAX_CLOCK_SKEW`, `--max-clock-skew`). A caller cannot move it.
+- **A person's run.** A `session.open` with `run: true` is Gateway.run_agent: a person (Tower's Run, or their own
+  token) opens a session to launch a task agent. It asks for no limits and is not triggered. `via` names the
+  delegate the person acted through. The record is the Python gateway's: `args_sha256` of `{"via": <delegate or
+  null>}` and result `opened to run`, or `opened to run via <delegate>`. The delegate is the provider's word: the
+  core verifies the provider, not the delegate.
 - **Outcome.** Only the provider that asked for the decision may report its outcome, once, and only for an allowed
   decision. It is recorded as the decision's tool and linked by `outcome_of`. The identity fields are copied from the
   decision record (verified); what the provider reports is claimed. A second outcome is refused without a chain scan:
-  the server indexes `outcome_of` at start and keeps the index while it is the one writer.
+  the server indexes `outcome_of` at start and keeps the index while it is the one writer. A handler that refused
+  the call after the core allowed it (the gateway's launch R004 and R001, the inbox's HR-*, artifacts' ART-*) sends
+  `refusal: {rule, message}`. The record keeps the decision's `decision` and `rule` (verified) and adds `refusal`
+  (claimed), so the handler's rule is in the chain as the Python deny record had it. A refusal carries no effect.
 - **Provider records.** Sealed with the provider's name and version. Only `provider` and `ts` are verified;
-  everything else is claimed. Each kind has its required fields and its boundary (`internal/server/records.go`).
+  everything else is claimed. Each kind has its required fields and its boundary (`internal/server/records.go`;
+  [provider-protocol.md](provider-protocol.md#record-kinds) lists them). A `tool.call` record is the outage
+  policy's replay of a T0 read the provider ran while the core was unreachable: its `tool` is the tool called (a T0
+  tool the core knows), its coverage is `coverage-unavailable`, and it carries no rule, effect or outcome. Its
+  subject is the tool-call digest, claimed. It is never a decision.
+- **Published definitions.** `PUT /v1/definitions` takes the provider's Agent XR loader's pins (each with its
+  document, source and XR owner) and rejections. The core decides every pin itself with its own schema
+  (`definitions.FromPin`, `internal/profile`): the agent-definition schema, the name is the XR's, the owner is the
+  XR's, a workload identity is `autopilot-runs/<name>`, the name is not a bundled one. A pin it refuses becomes a
+  rejection with the core's reason. The set then replaces the stored one (`definitions.Service.Apply`, one
+  transaction), and each change is one record: `definition.load` (new or re-pinned), `definition.unload`,
+  `definition.reject`, sealed by the core with `caller`. The pin's own fields (principal `pin:<ns>/<xr>`, agent,
+  target, args_sha256) are claimed, because the core did not fetch the file. Publishing the same set records
+  nothing. Provenance (AS002 to AS004) reads the published set at once, and a restarted core reads it back from
+  `clearance_definitions`. The core is the only writer of `definition.*` records; `POST /v1/records` refuses them.
+- **The dev chain read.** `clearance core --memory --insecure-dev-auth` also serves `GET /v1/dev/records?from=<seq>&limit=<n>`
+  (at most 10,000, a bearer token required): the in-memory chain, so another package's tests (autopilot's) read what
+  the core recorded from the unmodified binary. It is not in the contract, and `core.Build` refuses it on a kept
+  store; clearance-api is the reader of a kept chain.
 
 ### Clients
 
@@ -100,6 +130,7 @@ All configuration comes from the environment. An empty variable counts as unset.
 | `CLEARANCE_DELEGATES` | Principal globs that may act for a person they name (`X-Hangar-On-Behalf-Of`). |
 | `CLEARANCE_ADMINS` | Principal globs (`user:<login>`) that may deny any held change. |
 | `CLEARANCE_EXPIRE_SECONDS` | How often holding changes past their TTL are expired (default 60, at most 86400). |
+| `CLEARANCE_MAX_CLOCK_SKEW` | How far an evaluation's `context.now` may be from the core's clock, a Go duration (default `5m`, at most `24h`). `0` turns the check off, and `clearance core` refuses that without `--memory`: a decision record's `ts` is the evaluation's `now` and is verified, so a kept chain never takes an unbounded one. A test core on a fixed clock runs `clearance core --memory --insecure-dev-auth --max-clock-skew 0`. |
 | `CLEARANCE_AGENTS_DIR` | Bundled agent definitions (`*.yaml`). Default none. |
 | `AGENT_LOGINS` | GitHub logins agents open PRs as (default `hangar-autopilot-agents[bot]`). |
 | `MODEL_ROUTES` | `alias=upstream,...`: the model aliases a definition release may name. When unset they are not checked. |

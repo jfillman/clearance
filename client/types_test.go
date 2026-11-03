@@ -26,6 +26,8 @@ func TestWireTypesMirrorTheCore(t *testing.T) {
 		{client.EvaluationResult{}, server.EvaluationResult{}},
 		{client.OutcomeRequest{}, server.OutcomeRequest{}},
 		{client.RecordRequest{}, server.RecordRequest{}},
+		{client.DefinitionsRequest{}, server.DefinitionsRequest{}},
+		{client.DefinitionsResult{}, server.DefinitionsResult{}},
 		{client.RecordRef{}, server.RecordRef{}},
 		{client.Change{}, gate.Change{}},
 		{client.Decided{}, gate.Decided{}},

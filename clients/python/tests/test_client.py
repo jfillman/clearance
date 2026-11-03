@@ -105,6 +105,38 @@ def test_outcome_and_record(core):
     assert isinstance(v, cc.ProvenanceVerdict) and v.agent_pr and v.record is not None
 
 
+def test_the_gateways_held_kinds_a_refusal_and_published_definitions(core):
+    c = cc.CoreClient(core.url, token=GW, provider="autopilot-gateway")
+    for kind in ("run.finish", "session.end", "trigger.release", "tool.call"):
+        assert kind in cc.RECORD_KINDS
+    assert not any(k.startswith("definition.") for k in cc.RECORD_KINDS)
+    digest = "b" * 64
+    c.record("run.finish", cc.ProviderEvent(session="s-1", task_id="t-1", principal="autopilot-runs/x", agent="x",
+                                            decision="allow", args_sha256=digest, result="succeeded"))
+    c.record("tool.call", {"session": "s-1", "task_id": "t-1", "principal": "user:alice", "agent": "coding-agent",
+                           "tool": "catalog.read", "tier": 0, "decision": "allow", "args_sha256": digest,
+                           "result": "ok", "coverage": "coverage-unavailable"})
+    with pytest.raises(cc.CoreRequestError) as e:
+        c.record("tool.call", {"session": "s-1", "task_id": "t-1", "principal": "user:alice", "agent": "a",
+                               "tool": "repo.pr.open", "tier": 1, "args_sha256": digest, "result": "ok",
+                               "coverage": "coverage-unavailable"})
+    assert e.value.status == 400 and "T0" in e.value.message
+
+    allow = c.evaluate(corpus_request(PR_OPEN_ALLOWED))
+    ref = c.outcome(allow.decision_id, cc.OutcomeRequest(result="refused HR-003: not yours",
+                                                         refusal=cc.Refusal(rule="HR-003", message="not yours")))
+    assert ref.seq == 3
+
+    pin = {"source": {"repo": "jfillman/gate-api", "path": "agents/x.yaml", "commit": "1a2b3c4", "namespace": "n",
+                      "xr": "x"}, "owner": "group:default/t", "doc": {"name": "x"}}
+    res = c.publish_definitions([pin], [{"name": "y", "source": {"xr": "y"}, "reason": "no spec.source"}])
+    assert isinstance(res, cc.DefinitionsResult) and res.cluster == 0
+    assert sorted(r.name for r in res.rejected) == ["x", "y"]
+    assert res.rejected[0].reason.startswith("schema: ")
+    again = c.publish_definitions([pin], [{"name": "y", "source": {"xr": "y"}, "reason": "no spec.source"}])
+    assert again.rejected == [] and again.added == []
+
+
 def test_the_gate(core):
     change = {"app": "gate-api", "env": "prod", "cluster": "hangar-prod", "repo": "jfillman/gitops-gate-api",
               "pr": 7, "head": HEAD, "base": "b" * 40, "proposer": "user:dana", "proposerKind": "person",

@@ -26,6 +26,13 @@ type Service struct {
 // and replaces the stored rows, all in one transaction. Nothing is recorded when the poll found the same set.
 // The in-memory set is swapped only once the transaction commits.
 func (s *Service) Apply(ctx context.Context, loaded []Loaded, rejected []Rejected) (Changes, error) {
+	return s.ApplyWith(ctx, loaded, rejected, s.Writer.OrCore(), nil)
+}
+
+// ApplyWith is Apply with each record sealed by w and carrying extra's fields as well (a published set's caller:
+// PUT /v1/definitions). extra may not name a field Event sets.
+func (s *Service) ApplyWith(ctx context.Context, loaded []Loaded, rejected []Rejected, w evidence.Writer,
+	extra map[string]any) (Changes, error) {
 	if s.Registry == nil {
 		return Changes{}, ErrNotRegistry
 	}
@@ -41,7 +48,14 @@ func (s *Service) Apply(ctx context.Context, loaded []Loaded, rejected []Rejecte
 	now := s.Clock()
 	err := s.Store.Atomic(ctx, func(tx store.Tx) error {
 		rec := func(tool, name string, src Source, decision string, rule any, result string) error {
-			_, err := tx.Append(ctx, Event(now, tool, name, src, decision, rule, result), s.Writer.OrCore())
+			ev := Event(now, tool, name, src, decision, rule, result)
+			for k, v := range extra {
+				if _, set := ev[k]; set {
+					return fmt.Errorf("definitions: extra field %q is the record's own", k)
+				}
+				ev[k] = v
+			}
+			_, err := tx.Append(ctx, ev, w)
 			return err
 		}
 		for _, n := range ch.Added {

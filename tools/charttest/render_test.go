@@ -267,7 +267,7 @@ func TestFullCoversEveryCoreVariable(t *testing.T) {
 	if e["CLEARANCE_DSN"] != "secret:t-clearance-pg-app/uri" {
 		t.Errorf("with cnpg the core's DSN is %q", e["CLEARANCE_DSN"])
 	}
-	if !strings.HasPrefix(e["CLEARANCE_PROVIDERS"], `[{"name":"autopilot-gateway"`) {
+	if !strings.HasPrefix(e["CLEARANCE_PROVIDERS"], `[{"definitions":true,"name":"autopilot-gateway"`) {
 		t.Errorf("CLEARANCE_PROVIDERS %q", e["CLEARANCE_PROVIDERS"])
 	}
 	c := container(t, core)

@@ -68,6 +68,10 @@ spec:
             {{- end }}
             - name: CLEARANCE_EXPIRE_SECONDS
               value: {{ .Values.gate.expireSeconds | quote }}
+            {{- with .Values.core.maxClockSkew }}
+            - name: CLEARANCE_MAX_CLOCK_SKEW
+              value: {{ . | quote }}
+            {{- end }}
             {{- with .Values.gate.agentLogins }}
             - name: AGENT_LOGINS
               value: {{ include "clearance.csv" . | quote }}

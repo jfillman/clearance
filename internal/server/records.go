@@ -15,10 +15,24 @@ import (
 )
 
 // RecordKinds are the records a registered provider writes itself (POST /v1/records): the runtime's session and
-// run lifecycle and people's answers and controls (the Autopilot gateway), and the deployment boundary's outcome
-// and exceptions (a deployment-gate provider such as the Argo sync).
-var RecordKinds = []string{"session.open", "run.launch", "run.delete", "human.answer", "session.freeze",
-	"trigger.hold", "deploy.outcome", "deploy.exception"}
+// run lifecycle and people's answers and controls (the Autopilot gateway), a T0 read the gateway allowed while the
+// core was unreachable (tool.call, coverage-unavailable: the outage policy's outbox replay), and the deployment
+// boundary's outcome and exceptions (a deployment-gate provider such as the Argo sync).
+//
+// definition.load, definition.unload and definition.reject are not among them: the core writes those itself when a
+// provider publishes its pinned definitions (PUT /v1/definitions, definitions.Service.Apply), so there is one
+// writer of each.
+var RecordKinds = []string{"session.open", "run.launch", "run.delete", "run.finish", "human.answer",
+	"session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome",
+	"deploy.exception"}
+
+// OutageKind is the record of a T0 read the provider allowed while the core was unreachable. Its tool is the tool
+// that was called (record.tool), its coverage is CoverageUnavailable, and everything in it is claimed: the core
+// decided nothing.
+const (
+	OutageKind          = "tool.call"
+	CoverageUnavailable = "coverage-unavailable"
+)
 
 // kindSpec is what each kind must carry, and its boundary.
 type kindSpec struct {
@@ -27,12 +41,17 @@ type kindSpec struct {
 }
 
 var recordKinds = map[string]kindSpec{
-	"session.open":     {[]string{"session", "task_id", "principal", "agent", "result"}, "runtime"},
-	"run.launch":       {[]string{"session", "principal", "agent", "result"}, "runtime"},
-	"run.delete":       {[]string{"session", "principal", "agent", "result"}, "runtime"},
-	"human.answer":     {[]string{"principal", "target", "result"}, "runtime"},
-	"session.freeze":   {[]string{"session", "principal", "agent", "result"}, "runtime"},
-	"trigger.hold":     {[]string{"principal", "agent", "target", "result"}, "runtime"},
+	"session.open":    {[]string{"session", "task_id", "principal", "agent", "result"}, "runtime"},
+	"run.launch":      {[]string{"session", "principal", "agent", "result"}, "runtime"},
+	"run.delete":      {[]string{"session", "principal", "agent", "result"}, "runtime"},
+	"run.finish":      {[]string{"session", "task_id", "principal", "agent", "args_sha256", "result"}, "runtime"},
+	"human.answer":    {[]string{"principal", "target", "result"}, "runtime"},
+	"session.freeze":  {[]string{"session", "principal", "agent", "result"}, "runtime"},
+	"session.end":     {[]string{"session", "principal", "agent", "target", "result"}, "runtime"},
+	"trigger.hold":    {[]string{"principal", "agent", "target", "result"}, "runtime"},
+	"trigger.release": {[]string{"principal", "agent", "target", "result"}, "runtime"},
+	OutageKind: {[]string{"session", "task_id", "principal", "agent", "tool", "tier", "args_sha256", "result",
+		"coverage"}, "runtime"},
 	"deploy.outcome":   {[]string{"app", "target", "outcome"}, "deployment"},
 	"deploy.exception": {[]string{"principal", "target", "result"}, "deployment"},
 }
@@ -49,11 +68,14 @@ type RecordRequest struct {
 // verifies only who sent it (provider) and when it arrived (ts). The envelope (seq, schema, boundary, verified,
 // claimed, prev_hash, hash, provider) is the core's.
 type ProviderEvent struct {
-	TaskID     *string `json:"task_id,omitempty"`
-	Session    *string `json:"session,omitempty"`
-	Parent     *string `json:"parent,omitempty"`
-	Principal  *string `json:"principal,omitempty"`
-	Agent      *string `json:"agent,omitempty"`
+	TaskID    *string `json:"task_id,omitempty"`
+	Session   *string `json:"session,omitempty"`
+	Parent    *string `json:"parent,omitempty"`
+	Principal *string `json:"principal,omitempty"`
+	Agent     *string `json:"agent,omitempty"`
+	// Tool is the tool that was called: kind tool.call only (a T0 tool the core knows); every other kind's tool is
+	// the kind.
+	Tool       *string `json:"tool,omitempty"`
 	Target     *string `json:"target,omitempty"`
 	App        *string `json:"app,omitempty"`
 	Decision   *string `json:"decision,omitempty"`
@@ -122,6 +144,17 @@ func (e *ProviderEvent) event(kind string, spec kindSpec, ts string) (store.Even
 			ev[f.k] = *f.v
 		}
 	}
+	if e.Tool != nil {
+		if kind != OutageKind {
+			return nil, fmt.Errorf("tool is set on a %s record only (a %s record's tool is its kind)", OutageKind, kind)
+		}
+		if err := text("tool", *e.Tool); err != nil {
+			return nil, err
+		}
+		ev["tool"] = *e.Tool
+	} else if kind == OutageKind {
+		ev["tool"] = nil
+	}
 	if e.Intent != nil {
 		ev["intent"] = *e.Intent // evidence.Seal caps and redacts it
 	}
@@ -145,6 +178,34 @@ func (e *ProviderEvent) event(kind string, spec kindSpec, ts string) (store.Even
 		}
 	}
 	return ev, nil
+}
+
+// checkOutageRead holds a tool.call record to what the outage policy allows a provider to run without the core: a
+// T0 tool the core knows, allowed, coverage-unavailable, and nothing that would read as the core's decision (a
+// rule) or as a write (an effect, an outcome, a change). The record's subject is derived from tool and args_sha256
+// (a tool-call digest) and is claimed, like every field but provider and ts.
+func (s *Server) checkOutageRead(e *ProviderEvent) error {
+	if *e.Coverage != CoverageUnavailable {
+		return fmt.Errorf("a %s record is an outage read: coverage is %s", OutageKind, CoverageUnavailable)
+	}
+	spec := s.opt.Engine.Tool(*e.Tool)
+	switch {
+	case spec == nil:
+		return fmt.Errorf("%s is not a tool the core knows", *e.Tool)
+	case spec.Tier != 0:
+		return fmt.Errorf("%s is a T%d tool: only a T0 read may run without the core's decision", *e.Tool, spec.Tier)
+	case *e.Tier != 0:
+		return fmt.Errorf("a %s record's tier is 0 (an outage read is a T0 read)", OutageKind)
+	case e.Decision != nil && *e.Decision != "allow":
+		return fmt.Errorf("a %s record is a read that ran: decision is allow", OutageKind)
+	case e.Rule != nil:
+		return fmt.Errorf("a %s record carries no rule: the core decided nothing", OutageKind)
+	case e.Subject != nil:
+		return fmt.Errorf("a %s record's subject is the core's to derive (tool and args_sha256)", OutageKind)
+	case e.Effect != nil || e.Outcome != nil || e.Change != nil:
+		return fmt.Errorf("a %s record is a read: no effect, outcome or change", OutageKind)
+	}
+	return nil
 }
 
 func text(k, v string) error {
@@ -184,6 +245,9 @@ func (s *Server) records(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ev, err := body.Record.event(body.Kind, spec, evidence.ISO(s.opt.Clock()))
+	if err == nil && body.Kind == OutageKind {
+		err = s.checkOutageRead(&body.Record)
+	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

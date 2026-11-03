@@ -17,14 +17,18 @@ func init() {
 	cli.Register(cli.Command{Name: "core", Summary: "serve the Clearance core (decisions, records, the gate) over HTTP", Run: coreCmd})
 }
 
-// coreCmd is `clearance core [--memory] [--listen addr] [--insecure-dev-auth]`: internal/core.Run on the
-// environment (internal/core's package doc lists it). main's signal context makes SIGTERM a graceful shutdown.
+// coreCmd is `clearance core [--memory] [--listen addr] [--insecure-dev-auth] [--max-clock-skew d]`:
+// internal/core.Run on the environment (internal/core's package doc lists it). main's signal context makes SIGTERM
+// a graceful shutdown.
 func coreCmd(ctx context.Context, args []string, _, stderr io.Writer) int {
 	fs := flag.NewFlagSet("core", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	mem := fs.Bool("memory", false, "run on an in-memory store (tests and local runs; nothing is kept)")
 	listen := fs.String("listen", "", "listen address (default $CLEARANCE_LISTEN or :8080)")
-	dev := fs.Bool("insecure-dev-auth", false, "with --memory only: accept `Bearer <principal>` as that principal")
+	dev := fs.Bool("insecure-dev-auth", false, "with --memory only: accept `Bearer <principal>` as that principal, "+
+		"and serve the chain at GET /v1/dev/records")
+	skew := fs.String("max-clock-skew", "", "how far an evaluation's context.now may be from the core's clock "+
+		"(default $CLEARANCE_MAX_CLOCK_SKEW or 5m); 0 is off, with --memory only")
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
 		return 2
 	}
@@ -54,9 +58,20 @@ func coreCmd(ctx context.Context, args []string, _, stderr io.Writer) int {
 	if *listen != "" {
 		cfg.Listen = *listen
 	}
+	if *skew != "" {
+		if cfg.MaxClockSkew, err = core.ParseMaxClockSkew(*skew); err != nil {
+			fmt.Fprintln(stderr, "core: --max-clock-skew:", err)
+			return 2
+		}
+	}
+	if err := cfg.CheckMaxClockSkew(); err != nil {
+		fmt.Fprintln(stderr, "core:", err)
+		return 2
+	}
 	if *dev {
 		log.Warn("INSECURE: --insecure-dev-auth: every bearer token is accepted as the principal it names")
 		cfg.Auth = core.DevAuthenticator()
+		cfg.DevRecords = true // GET /v1/dev/records: other packages' tests read what the core recorded
 	}
 	cfg.Version = buildVersion()
 	if err := core.Run(ctx, cfg, log, nil); err != nil {

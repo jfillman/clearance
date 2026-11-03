@@ -40,7 +40,8 @@ const (
 	headSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 )
 
-var providersJSON = `[{"name": "autopilot-gateway", "version": "0.3.27", "principals": ["autopilot-system/clearance"]},
+var providersJSON = `[{"name": "autopilot-gateway", "version": "0.3.27", "principals": ["autopilot-system/clearance"],
+  "definitions": true},
  {"name": "argo-gate", "version": "0.1.0", "principals": ["hangar-prod/argocd/*"],
   "kinds": ["deploy.outcome", "deploy.exception"]}]`
 

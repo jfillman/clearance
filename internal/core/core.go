@@ -12,6 +12,9 @@
 //	CLEARANCE_DELEGATES           principal globs that may act for a person they name (X-Hangar-On-Behalf-Of)
 //	CLEARANCE_ADMINS              principal globs (user:<login>) that may deny any held change
 //	CLEARANCE_EXPIRE_SECONDS      how often holding changes past their TTL are expired (default 60)
+//	CLEARANCE_MAX_CLOCK_SKEW      how far an evaluation's context.now may be from the core's clock, a Go duration
+//	                              (default 5m, at most 24h); 0 turns the check off, which `clearance core` allows
+//	                              only with --memory (ParseMaxClockSkew)
 //	CLEARANCE_AGENTS_DIR          bundled agent definitions (*.yaml, profile.LoadDir); default none
 //	AGENT_LOGINS                  GitHub logins agents open PRs as (default hangar-autopilot-agents[bot])
 //	MODEL_ROUTES                  alias=upstream,...: the model aliases a definition release may name (unset: not checked)
@@ -85,8 +88,11 @@ type Config struct {
 	ExpireEvery time.Duration
 	GitHubApp   *githubapp.Config // nil: no App
 	Auth        authn.Authenticator
-	// MaxClockSkew is server.Options.MaxClockSkew.
+	// MaxClockSkew is server.Options.MaxClockSkew: 0 the default, negative off (CheckMaxClockSkew: --memory only).
 	MaxClockSkew time.Duration
+	// DevRecords is server.Options.DevRecords (GET /v1/dev/records): `clearance core --memory --insecure-dev-auth`.
+	// Build refuses it without Memory.
+	DevRecords bool
 	// BackstageURL is Tower's Backstage, the gate's Directory and Owners ("": neither).
 	BackstageURL string
 	// BackstageTokenFile is read on every Backstage call (default backstage.DefaultTokenFile).
@@ -141,6 +147,9 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		return cfg, errors.New("CLEARANCE_EXPIRE_SECONDS must be a positive number of seconds (at most 86400)")
 	}
 	cfg.ExpireEvery = time.Duration(secs * float64(time.Second))
+	if cfg.MaxClockSkew, err = ParseMaxClockSkew(get("CLEARANCE_MAX_CLOCK_SKEW", "")); err != nil {
+		return cfg, fmt.Errorf("CLEARANCE_MAX_CLOCK_SKEW: %w", err)
+	}
 	parts := []string{get("CLEARANCE_GITHUB_APP_ID", ""), get("CLEARANCE_GITHUB_APP_KEY_FILE", ""),
 		get("CLEARANCE_GITHUB_APP_WEBHOOK_SECRET_FILE", "")}
 	set := 0
@@ -175,6 +184,41 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		return cfg, err
 	}
 	return cfg, nil
+}
+
+// MaxClockSkewLimit is the largest clock-skew bound a deployment may set.
+const MaxClockSkewLimit = 24 * time.Hour
+
+// ErrSkewOffNeedsMemory refuses a core with the clock-skew check off on a durable store.
+var ErrSkewOffNeedsMemory = errors.New("the clock-skew check may be off (0) only with --memory: a decision " +
+	"record's ts is the evaluation's context.now, and it is verified")
+
+// ParseMaxClockSkew reads CLEARANCE_MAX_CLOCK_SKEW or --max-clock-skew into Config.MaxClockSkew's terms: "" is the
+// default (0, server.DefaultMaxClockSkew), "0" is off (-1), else a positive Go duration of at most
+// MaxClockSkewLimit.
+func ParseMaxClockSkew(v string) (time.Duration, error) {
+	if v == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(v)
+	switch {
+	case err != nil:
+		return 0, fmt.Errorf("%q is not a Go duration (5m, 30s; 0 is off)", v)
+	case d == 0:
+		return -1, nil
+	case d < 0 || d > MaxClockSkewLimit:
+		return 0, fmt.Errorf("%q is not between 0 and %s", v, MaxClockSkewLimit)
+	}
+	return d, nil
+}
+
+// CheckMaxClockSkew is the deployment rule for the clock-skew check: off only on an in-memory store. A test core
+// on a fixed clock turns it off; a core whose records are kept may only widen or narrow it.
+func (c Config) CheckMaxClockSkew() error {
+	if c.MaxClockSkew < 0 && !c.Memory {
+		return ErrSkewOffNeedsMemory
+	}
+	return nil
 }
 
 func list(v string) []string {
@@ -212,6 +256,9 @@ func Build(ctx context.Context, cfg Config, clock func() time.Time, log *slog.Lo
 	}
 	if cfg.Auth == nil {
 		return nil, errors.New("core: no authenticator")
+	}
+	if cfg.DevRecords && !cfg.Memory {
+		return nil, errors.New("core: the dev records read is for an in-memory core only")
 	}
 	var packs []decide.Pack
 	for _, name := range cfg.Packs {
@@ -319,7 +366,9 @@ func (c *Core) wire(ctx context.Context) error {
 	}
 	srv, err := server.New(ctx, server.Options{Store: c.Store, Engine: c.Engine, Auth: cfg.Auth,
 		Providers: cfg.Providers, Version: cfg.Version, Clock: c.clock, Log: c.log, MaxClockSkew: cfg.MaxClockSkew,
-		Gate: g, Review: rev, Provenance: prov, App: c.App})
+		DevRecords:      cfg.DevRecords,
+		Definitions:     &definitions.Service{Registry: reg, Store: c.Store, Clock: c.clock, Writer: writer},
+		ParseDefinition: parse, Gate: g, Review: rev, Provenance: prov, App: c.App})
 	if err != nil {
 		return err
 	}

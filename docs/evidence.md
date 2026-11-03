@@ -51,7 +51,7 @@ schema are allowed and are claimed unless the writer verified them.
 | Target | `boundary`, `target`, `app`, `destination` | `boundary` is `runtime` or `deployment`; `destination` {cluster, environment, application} optional |
 | Provenance | `provenance` | optional {level, signals[{name, tag}]} |
 | Decision | `decision`, `tier`, `rule`, `rules`, `reason`, `policy`, `approvals`, `token`, `preflight` | verdict, tier, rule fired; `policy` {ref, engine, version} (R-5 fills it); `approvals` [{sub, iss, via, at}]; `token` ref; `preflight` reserved for AP-C1 |
-| Outcome | `result`, `effect`, `outcome` | `result` keeps its v0 meaning (the result line, or a deny's reason); `effect` is the receipt of a write the writer made; `outcome` {applied, observed_revision, digests, health, rollback} optional |
+| Outcome | `result`, `effect`, `refusal`, `outcome` | `result` keeps its v0 meaning (the result line, or a deny's reason); `effect` is the receipt of a write the writer made; `refusal` {rule, message} optional (revision 2): a handler's refusal on an outcome, after the core allowed; `outcome` {applied, observed_revision, digests, health, rollback} optional |
 | Coverage state | `coverage` | `authorized-and-verified` (default), `observed-not-attributed`, `out-of-band-detected`, `coverage-unavailable` |
 | Assurance state | `assurance` | beside the record, never hashed: `checkpointed`, `recorded-not-checkpointed`, `not-recorded`; a reader adds it |
 | Intent | `intent` | {capture: redacted\|full, sha256[, text]}; only when the event has an intent |
@@ -97,9 +97,18 @@ func Stored(r map[string]any) map[string]any
 
 - The core's own decision records (POST /access/v1/evaluation, the gate routes): the core's provider and
   `GatewayVerified` (the v0 verified set plus `provider`).
-- A registered provider's own records (POST /v1/records: session.open, run.launch, deploy.outcome, ...): that
-  provider's name and version, and `evidence.ProviderVerified` (only `provider` is verified; everything the
-  provider says is claimed). Pass the provider's `subject` in the event.
+- A registered provider's own records (POST /v1/records: session.open, run.launch, run.finish, deploy.outcome,
+  ...): that provider's name and version, and `evidence.ProviderVerified` (only `provider` is verified; everything
+  the provider says is claimed). Pass the provider's `subject` in the event. A `tool.call` record from a provider is
+  an outage read (`coverage: coverage-unavailable`): a T0 read the provider ran while the core was unreachable,
+  posted on recovery. Its `tool` is the tool called and its subject the derived tool-call digest, both claimed. It
+  is not a decision, and it carries no `rule`, `effect` or `outcome`.
+- Definitions a provider publishes (PUT /v1/definitions): `definition.load`, `definition.unload` and
+  `definition.reject`, sealed by the core with `caller`. Verified: `provider`, `ts`, `caller`, `tool`, `decision`,
+  `rule` (and the null session fields). Claimed: the pin's `principal` (`pin:<ns>/<xr>`), `agent`, `target`,
+  `args_sha256`, `result` and so the subject, because the core decided the pin but did not fetch the file. The
+  Python gateway's loader, which fetched it, wrote the same fields verified; the Go core's are tagged for what it
+  knows.
 - Errors: `ErrEnvelopeField` (an event set a reserved field), `ErrInvalid` (a value outside the schema),
   `ErrNotStorable` (a value Postgres jsonb would change).
 

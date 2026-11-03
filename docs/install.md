@@ -86,13 +86,14 @@ unset, so the core's default applies. Lists are joined with commas.
 
 | Value | Variable | Meaning |
 |---|---|---|
-| `providers` | `CLEARANCE_PROVIDERS` | The registered providers, `{name, version, principals, kinds?, intent_capture?}` ([core.md](core.md#registered-providers-clearance_providers)). Without one nobody may evaluate or record. |
+| `providers` | `CLEARANCE_PROVIDERS` | The registered providers, `{name, version, principals, kinds?, intent_capture?, definitions?}` ([core.md](core.md#registered-providers-clearance_providers)). Without one nobody may evaluate or record. `definitions: true` (one provider at most) may publish its cluster-pinned agent definitions. |
 | `verifiers` | `CLEARANCE_VERIFIERS` | Principal globs that may register changes and ask for provenance. |
 | `delegates` | `CLEARANCE_DELEGATES` | Principal globs that may act for a person they name. |
 | `admins` | `CLEARANCE_ADMINS` | `user:<login>` globs that may deny any held change. |
 | `packs` | `CLEARANCE_PACKS` | Policy packs (`hangar`). Default: the core rules only. |
 | `audience` | `CLEARANCE_AUDIENCE` | Callers' token audience (default `clearance`). |
 | `gate.expireSeconds` | `CLEARANCE_EXPIRE_SECONDS` | How often expired changes are swept (60). |
+| `core.maxClockSkew` | `CLEARANCE_MAX_CLOCK_SKEW` | How far an evaluation's `context.now` may be from the core's clock, a Go duration (empty: `5m`; at most `24h`). The core refuses `0` (off) here: off is for `clearance core --memory` test cores. |
 | `gate.agentLogins` | `AGENT_LOGINS` | GitHub logins agents open PRs as. |
 | `gate.modelRoutes` | `MODEL_ROUTES` | `alias=upstream` pairs a definition release may name. |
 | `gate.runtimeImagesExtra` | `RUNTIME_IMAGES_EXTRA` | Globs a definition's `runtime.image` may match. |

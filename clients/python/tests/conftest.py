@@ -19,7 +19,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[3]
 GW = "autopilot-system/clearance"
 CI = "app-gate-api-cicd/pipeline-runner"
-PROVIDERS = [{"name": "autopilot-gateway", "version": "0.3.27", "principals": [GW]}]
+PROVIDERS = [{"name": "autopilot-gateway", "version": "0.3.27", "principals": [GW], "definitions": True}]
 
 
 @pytest.fixture(scope="session")
