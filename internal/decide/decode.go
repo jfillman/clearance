@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/jfillman/clearance/internal/pycompat"
 )
@@ -13,6 +16,9 @@ import (
 // MaxRequestBytes caps an evaluation request. The largest legitimate one is an airframe.validate call (20
 // documents of 256 KiB) or an over-size artifact.put the policy must see to deny (R019 is over 1 MiB).
 const MaxRequestBytes = 8 << 20
+
+// MaxVia caps session.open's via (a delegate's principal id).
+const MaxVia = 256
 
 // ErrTooLarge is returned for a request over MaxRequestBytes.
 var ErrTooLarge = errors.New("decide: evaluation request is too large")
@@ -145,6 +151,20 @@ func (r *EvaluationRequest) validate() error {
 	if a := r.Context.Agent; a != nil {
 		if err := a.Limits.validate(); err != nil {
 			return fmt.Errorf("decide: agent: %w", err)
+		}
+	}
+	if p := r.Action.Properties; p.Run || p.Via != "" {
+		switch {
+		case r.Action.Name != ActionSessionOpen:
+			return errors.New("decide: run and via are session.open properties")
+		case !p.Run:
+			return errors.New("decide: via names the delegate of a person's run: it needs run")
+		case p.Trigger != "":
+			return errors.New("decide: a person's run (run) is not a triggered open")
+		case len(p.Limits) > 0 && string(p.Limits) != "null":
+			return errors.New("decide: a person's run (run) asks for no limits: it runs within the definition's")
+		case len(p.Via) > MaxVia || !utf8.ValidString(p.Via) || strings.ContainsFunc(p.Via, unicode.IsControl):
+			return fmt.Errorf("decide: via is a principal id of at most %d bytes", MaxVia)
 		}
 	}
 	if r.Action.Name == ActionSessionSpawn && r.Context.Session != nil && r.Context.NewSessionID == "" {

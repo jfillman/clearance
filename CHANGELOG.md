@@ -9,6 +9,37 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-11-03
+
+What the Autopilot gateway needs of the core before the hangar-dev cutover (R-3e).
+
+### Added
+- `POST /v1/records` takes the kinds the gateway held in its outbox: `run.finish`, `session.end`, `trigger.release`,
+  and `tool.call` with `coverage: coverage-unavailable`, the outage policy's replay of a T0 read the gateway ran
+  while the core was unreachable (`tool` names a T0 tool the core knows; no rule, subject, effect or outcome; all
+  claimed). Required fields are what the Python gateway recorded for each at v0.26.1
+  ([docs/provider-protocol.md](docs/provider-protocol.md#record-kinds)).
+- `PUT /v1/definitions` (operation `publishDefinitions`): the provider registered with `"definitions": true` in
+  `CLEARANCE_PROVIDERS` (at most one) publishes its cluster-pinned agent definitions, its Agent XR loader's pins and
+  rejections. The core decides each pin again with its own schema (`definitions.FromPin`, `internal/profile`),
+  replaces the stored set and records each change once through `definitions.Service.Apply` (`definition.load`,
+  `definition.unload`, `definition.reject`, sealed by the core with `caller`; the pin's fields claimed). Provenance
+  reads the published set at once and a restarted core reads it back. Go client `PublishDefinitions`, Python client
+  `publish_definitions`.
+- A person's run on `session.open`: `action.properties.run` and `via` (the delegate). The record is Gateway.run_agent's
+  at v0.26.1: `args_sha256({"via": ...})` and `opened to run[ via <delegate>]`.
+- An outcome may carry `refusal: {rule, message}`, a handler's refusal after the core allowed the call, recorded as
+  `refusal` (claimed) beside the decision's own `decision` and `rule`. Evidence schema `x-clearance-revision` 2.
+- `CLEARANCE_MAX_CLOCK_SKEW` (a Go duration, default `5m`, at most `24h`; chart value `core.maxClockSkew`) and
+  `clearance core --max-clock-skew`. `0` turns the check off and is accepted only with `--memory`.
+- `clearance core --memory --insecure-dev-auth` serves the in-memory chain at `GET /v1/dev/records` (dev only, not
+  in the contract), so autopilot's tests run against the unmodified binary instead of a `go build -overlay` test
+  core.
+
+### Changed
+- `definition.load`, `definition.unload` and `definition.reject` are the core's records only: `POST /v1/records`
+  refuses them (it never accepted them).
+
 ## [0.27.1] - 2026-11-03
 
 ### Added
@@ -278,7 +309,8 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   scope, narrow-only limits, CEL policy, sessions, the hash-chained audit log and the gateway; the Hangar pack's
   `glidepath.*` and `airframe.*` tools over glidepath-api and a GET-only Kubernetes adapter.
 
-[Unreleased]: https://github.com/jfillman/clearance/compare/v0.27.1...HEAD
+[Unreleased]: https://github.com/jfillman/clearance/compare/v0.28.0...HEAD
+[0.28.0]: https://github.com/jfillman/clearance/compare/v0.27.1...v0.28.0
 [0.27.1]: https://github.com/jfillman/clearance/compare/v0.27.0...v0.27.1
 [0.27.0]: https://github.com/jfillman/clearance/compare/v0.26.1...v0.27.0
 [0.26.1]: https://github.com/jfillman/clearance/compare/v0.26.0...v0.26.1

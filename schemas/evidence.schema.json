@@ -3,7 +3,7 @@
   "$id": "https://clearance.hangarplatform.dev/schemas/evidence/v1.json",
   "title": "clearance.evidence/v1",
   "description": "One Clearance evidence record (docs/evidence.md). Flat: every field is a top-level key, grouped by x-clearance-group into Identities, Source, Target, Provenance, Decision, Outcome, Coverage, Assurance, Intent and Integrity, and tagged verified or claimed by the record's own lists. Fields not listed here are allowed and are claimed unless the writer verified them. The chain rule is the same for every version.",
-  "x-clearance-revision": 1,
+  "x-clearance-revision": 2,
   "x-clearance-groups": [
     "identities",
     "source",
@@ -450,6 +450,23 @@
       "type": "object",
       "x-clearance-group": "outcome",
       "description": "The receipt of a write the writer made itself (repo, pr)."
+    },
+    "refusal": {
+      "type": "object",
+      "required": [
+        "rule",
+        "message"
+      ],
+      "properties": {
+        "rule": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "x-clearance-group": "outcome",
+      "description": "Optional (revision 2): on an outcome, a refusal the provider's handler made after the core allowed the call (a rule the core cannot see), with its rule id and message. Claimed; the record's decision and rule stay the decision's."
     },
     "outcome": {
       "type": "object",

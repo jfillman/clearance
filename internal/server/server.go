@@ -33,6 +33,7 @@ import (
 
 	"github.com/jfillman/clearance/internal/authn"
 	"github.com/jfillman/clearance/internal/decide"
+	"github.com/jfillman/clearance/internal/definitions"
 	"github.com/jfillman/clearance/internal/gate"
 	"github.com/jfillman/clearance/internal/githubapp"
 	"github.com/jfillman/clearance/internal/httpjson"
@@ -68,6 +69,15 @@ type Options struct {
 	Log     *slog.Logger
 	// MaxClockSkew bounds |context.now - Clock()| on an evaluation; 0 is DefaultMaxClockSkew, negative is off.
 	MaxClockSkew time.Duration
+	// DevRecords serves GET /v1/dev/records (DevRecordsPath): the chain, for another package's tests to read what
+	// the core recorded. `clearance core --memory --insecure-dev-auth` only; not in the contract (clearance-api is
+	// the reader of a kept chain).
+	DevRecords bool
+
+	// Definitions keeps the cluster-pinned definitions a provider publishes (PUT /v1/definitions), parsed with
+	// ParseDefinition; nil answers the route 404.
+	Definitions     *definitions.Service
+	ParseDefinition definitions.Parser
 
 	Gate       *gate.Service
 	Review     *review.Handler
@@ -113,6 +123,9 @@ func New(ctx context.Context, opt Options) (*Server, error) {
 		}
 	}
 	s.mountServices()
+	if opt.DevRecords {
+		s.mux.HandleFunc("GET "+DevRecordsPath, s.devRecords)
+	}
 	s.handler = s.recoverer(s.accessLog(s.bodyCap(authn.Middleware(opt.Auth, unauthenticated)(notePrincipal(s.mux)))))
 	return s, nil
 }
@@ -286,6 +299,40 @@ func capFor(r *http.Request) (int64, bool) {
 }
 
 // -- the operational routes ---------------------------------------------------------------------------------------
+
+// DevRecordsPath is the dev-only chain read (Options.DevRecords): ?from=<seq>&limit=<n, at most 10000>, the
+// records in seq order as stored.
+const DevRecordsPath = "/v1/dev/records"
+
+func (s *Server) devRecords(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	from, limit := int64(0), int64(1000)
+	if v := q.Get("from"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < 0 {
+			writeError(w, http.StatusBadRequest, "from is a seq")
+			return
+		}
+		from = n
+	}
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < 1 || n > 10000 {
+			writeError(w, http.StatusBadRequest, "limit is 1 to 10000")
+			return
+		}
+		limit = n
+	}
+	recs, err := s.opt.Store.Records(r.Context(), from, int(limit))
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "the store could not be read")
+		return
+	}
+	if recs == nil {
+		recs = []store.Record{}
+	}
+	writeJSON(w, http.StatusOK, recs)
+}
 
 func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, Health{OK: true})

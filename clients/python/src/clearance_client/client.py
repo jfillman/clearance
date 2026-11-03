@@ -206,6 +206,21 @@ class CoreClient:
         body = {"provider": prov, "kind": kind, "record": _as_dict(record)}
         return self._call("appendRecord", body, retry=_RETRY_UNSENT)
 
+    def publish_definitions(
+        self, pins: list[m.PinnedDefinition | Mapping[str, Any]],
+        rejected: list[m.RejectedPin | Mapping[str, Any]] | None = None, *, provider: str | None = None
+    ) -> m.DefinitionsResult:
+        """Replace the core's cluster-pinned agent definitions with this provider's whole set (PUT /v1/definitions;
+        the provider is registered with definitions: true). The core decides each pin itself and records what
+        changed; publishing the same set again records nothing, so it is retried like an evaluation."""
+        prov = provider or self.provider
+        if not prov:
+            raise ValueError("no provider: pass provider= or set it on the client")
+        body: dict[str, Any] = {"provider": prov, "pins": [_as_dict(p) for p in pins]}
+        if rejected:
+            body["rejected"] = [_as_dict(r) for r in rejected]
+        return self._call("publishDefinitions", body, retry=_RETRY_ANY)
+
     def register_change(self, change: Mapping[str, Any]) -> m.GateChange:
         """Register (or re-evaluate) a change to a protected environment; the caller is a verifier."""
         return self._call("registerChange", change, retry=_RETRY_ANY)

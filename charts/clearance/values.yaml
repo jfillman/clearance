@@ -18,11 +18,13 @@ commonLabels: {}
 # -- Who may call the core ----------------------------------------------------------------------------------------
 
 # CLEARANCE_PROVIDERS: the registered providers. Without one, nobody may evaluate or record. Each entry is
-# {name, version, principals: [<namespace>/<serviceaccount> globs], kinds?: [...], intent_capture?: redacted|full}.
+# {name, version, principals: [<namespace>/<serviceaccount> globs], kinds?: [...], intent_capture?: redacted|full,
+# definitions?: true (at most one provider: it publishes its cluster-pinned agent definitions, PUT /v1/definitions)}.
 providers: []
 #  - name: autopilot-gateway
 #    version: "0.3.27"
 #    principals: ["autopilot-system/autopilot-gateway"]
+#    definitions: true
 # CLEARANCE_VERIFIERS: principal globs that may register changes and ask for provenance (gate providers, CI).
 verifiers: []
 # CLEARANCE_DELEGATES: principal globs that may act for a person they name (X-Hangar-On-Behalf-Of), e.g. a portal.
@@ -159,6 +161,9 @@ externalSecrets:
 # The core: always one replica, Recreate. Two cores would fork the evidence chain; the second fails to take the
 # writer lock and does not start.
 core:
+  # CLEARANCE_MAX_CLOCK_SKEW: how far an evaluation's context.now may be from the core's clock, a Go duration ("": the
+  # core's default, 5m; at most 24h). The core refuses 0 (off) here: off is for `clearance core --memory` test cores.
+  maxClockSkew: ""
   resources:
     requests: {cpu: 50m, memory: 64Mi}
     limits: {memory: 256Mi}

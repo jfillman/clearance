@@ -56,6 +56,11 @@ func TestProvidersConfig(t *testing.T) {
 	if err != nil || len(ps) != 1 || !ps[0].matches("autopilot-system/clearance") || ps[0].matches("autopilot-system/other") {
 		t.Fatal(ps, err)
 	}
+	two := `[{"name":"x","version":"1","principals":["a/b"],"definitions":true,"kinds":["tool.call","run.finish"]},` +
+		`{"name":"y","version":"1","principals":["c/d"]}]`
+	if ps, err := ParseProviders(two); err != nil || !ps[0].Definitions || ps[1].Definitions || !ps[0].mayWrite("tool.call") {
+		t.Fatal(ps, err)
+	}
 	if ps, err := ParseProviders(""); err != nil || ps != nil {
 		t.Fatal(ps, err)
 	}
@@ -66,7 +71,11 @@ func TestProvidersConfig(t *testing.T) {
 		`[{"name":"x","version":"","principals":["a/b"]}]`,
 		`[{"name":"x","version":"1","principals":[]}]`,
 		`[{"name":"x","version":"1","principals":[""]}]`,
-		`[{"name":"x","version":"1","principals":["a/b"],"kinds":["tool.call"]}]`,
+		`[{"name":"x","version":"1","principals":["a/b"],"kinds":["model.call"]}]`,
+		`[{"name":"x","version":"1","principals":["a/b"],"kinds":["definition.load"]}]`,
+		`[{"name":"x","version":"1","principals":["a/b"],"definitions":"yes"}]`,
+		`[{"name":"x","version":"1","principals":["a/b"],"definitions":true},` +
+			`{"name":"y","version":"1","principals":["c/d"],"definitions":true}]`,
 		`[{"name":"x","version":"1","principals":["a/b"],"intent_capture":"some"}]`,
 		`[{"name":"x","version":"1","principals":["a/b"]},{"name":"x","version":"2","principals":["c/d"]}]`,
 		good + ` []`,

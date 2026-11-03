@@ -17,7 +17,8 @@
 //	               "properties": {"args": {...},            // tool.call, session.spawn
 //	                              "est_tokens": 1000,       // model.call
 //	                              "limits": {...},          // session.open: requested limits as sent
-//	                              "task_id": "t-..", "trigger": "cron"}},   // session.open
+//	                              "task_id": "t-..", "trigger": "cron",      // session.open
+//	                              "run": true, "via": "tower/backstage"}},   // session.open: a person's run
 //	  "resource": {"type": "tool" | "model" | "agent", "id": "repo.pr.open"},
 //	  "context":  {"now": "2026-09-26T12:00:00Z",
 //	               "session_id": "s-..",                     // the session the caller named
@@ -57,7 +58,8 @@
 //	               requested limits, R016 parent expired/tripped, depth over 3, children budget, no time left;
 //	               R007 a widening. The child is cut from what the parent has left after this call's charge.
 //	session.open   Gateway.open_session (R003, R001, R008, R007) and open_triggered (R003, R001, R024 hold,
-//	               dedupe onto a live session).
+//	               dedupe onto a live session). With run (Gateway.run_agent: a person's run, no limits, no
+//	               trigger) the record is "opened to run[ via <delegate>]" over args {"via": ...}.
 //	model.call     ModelProxy._decide: M001-M007; M006 with no record when the deployment has no model routes.
 //
 // # Rules

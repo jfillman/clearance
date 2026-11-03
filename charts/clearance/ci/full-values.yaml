@@ -2,7 +2,7 @@
 image:
   digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
 providers:
-  - {name: autopilot-gateway, version: "0.3.27", principals: ["autopilot-system/autopilot-gateway"]}
+  - {name: autopilot-gateway, version: "0.3.27", principals: ["autopilot-system/autopilot-gateway"], definitions: true}
   - {name: argo-gate, version: "0.1.0", principals: ["hangar-prod/argocd/clearance-sync"], kinds: [deploy.outcome, deploy.exception]}
 verifiers: ["platform-system/clearance-gate", "github:repo:jfillman/*"]
 delegates: ["tower/backstage"]
@@ -74,3 +74,5 @@ httpRoutes:
     enabled: true
     parentRefs: [{name: traefik-gateway, namespace: traefik}]
     hostnames: [clearance-api.example.test]
+core:
+  maxClockSkew: 2m

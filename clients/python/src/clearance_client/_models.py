@@ -16,9 +16,9 @@ from ._codec import Field, Model, Operation
 
 CONTRACT_VERSION = "1.0.0"
 
-RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "human.answer", "session.freeze", "trigger.hold", "deploy.outcome", "deploy.exception")
+RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "run.finish", "human.answer", "session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome", "deploy.exception")
 
-__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Budgets", "Context", "DecisionContext", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateApproval", "GateChange", "GateChangeWithAuditSeq", "GateDeployment", "GateErrorBody", "GateObjectChange", "GateReason", "GateRequirement", "Grant", "Health", "Hold", "Limits", "Models", "OutcomeRequest", "PolicyRef", "Problem", "ProvenanceCheck", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "Spend", "Subject", "SubjectProperties", "WebhookAnswer"]
+__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Budgets", "Context", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateApproval", "GateChange", "GateChangeWithAuditSeq", "GateDeployment", "GateErrorBody", "GateObjectChange", "GateReason", "GateRequirement", "Grant", "Health", "Hold", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Problem", "ProvenanceCheck", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "Spend", "Subject", "SubjectProperties", "WebhookAnswer"]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -44,15 +44,19 @@ class ActionProperties(Model):
         Field("args", "args", ("any",), False),
         Field("est_tokens", "est_tokens", ("nullable", ("int",)), False),
         Field("limits", "limits", ("any",), False),
+        Field("run", "run", ("bool",), False),
         Field("task_id", "task_id", ("str",), False),
         Field("trigger", "trigger", ("str",), False),
+        Field("via", "via", ("str",), False),
     )
 
     args: Any | None = None
     est_tokens: int | None = None
     limits: Any | None = None
+    run: bool | None = None
     task_id: str | None = None
     trigger: str | None = None
+    via: str | None = None
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -149,6 +153,86 @@ class DecisionContext(Model):
     rule: str | None = None
     spend: Spend
     tier: int | None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class DefinitionsRejectedView(Model):
+    """Contract schema DefinitionsRejectedView."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("name", "name", ("str",), True),
+        Field("reason", "reason", ("str",), True),
+        Field("source", "source", ("ref", "DefinitionsSourceView"), True),
+    )
+
+    name: str
+    reason: str
+    source: DefinitionsSourceView
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class DefinitionsRequest(Model):
+    """Contract schema DefinitionsRequest (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("pins", "pins", ("list", ("ref", "PinnedDefinition")), True),
+        Field("provider", "provider", ("str",), True),
+        Field("rejected", "rejected", ("list", ("ref", "RejectedPin")), False),
+    )
+
+    pins: list[PinnedDefinition]
+    provider: str
+    rejected: list[RejectedPin] | None = None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class DefinitionsResult(Model):
+    """Contract schema DefinitionsResult."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("added", "added", ("list", ("str",)), True),
+        Field("changed", "changed", ("list", ("str",)), True),
+        Field("cleared", "cleared", ("list", ("ref", "DefinitionsRejectedView")), True),
+        Field("cluster", "cluster", ("int",), True),
+        Field("rejected", "rejected", ("list", ("ref", "DefinitionsRejectedView")), True),
+        Field("removed", "removed", ("list", ("str",)), True),
+    )
+
+    added: list[str]
+    changed: list[str]
+    cleared: list[DefinitionsRejectedView]
+    cluster: int
+    rejected: list[DefinitionsRejectedView]
+    removed: list[str]
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class DefinitionsSourceView(Model):
+    """Contract schema DefinitionsSourceView."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("commit", "commit", ("nullable", ("str",)), False),
+        Field("kind", "kind", ("str",), True),
+        Field("loaded_at", "loaded_at", ("nullable", ("str",)), False),
+        Field("namespace", "namespace", ("nullable", ("str",)), False),
+        Field("path", "path", ("nullable", ("str",)), False),
+        Field("pin", "pin", ("str",), True),
+        Field("repo", "repo", ("nullable", ("str",)), False),
+        Field("xr", "xr", ("nullable", ("str",)), False),
+    )
+
+    commit: str | None = None
+    kind: str
+    loaded_at: str | None = None
+    namespace: str | None = None
+    path: str | None = None
+    pin: str
+    repo: str | None = None
+    xr: str | None = None
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -623,12 +707,52 @@ class OutcomeRequest(Model):
     _FIELDS: ClassVar[tuple[Field, ...]] = (
         Field("effect", "effect", ("nullable", ("ref", "Effect")), False),
         Field("receipt", "receipt", ("map", ("any",)), False),
+        Field("refusal", "refusal", ("nullable", ("ref", "Refusal")), False),
         Field("result", "result", ("str",), True),
     )
 
     effect: Effect | None = None
     receipt: dict[str, Any] | None = None
+    refusal: Refusal | None = None
     result: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class PinSource(Model):
+    """Contract schema PinSource (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("commit", "commit", ("nullable", ("str",)), False),
+        Field("loaded_at", "loaded_at", ("nullable", ("str",)), False),
+        Field("namespace", "namespace", ("nullable", ("str",)), False),
+        Field("path", "path", ("nullable", ("str",)), False),
+        Field("repo", "repo", ("nullable", ("str",)), False),
+        Field("xr", "xr", ("nullable", ("str",)), False),
+    )
+
+    commit: str | None = None
+    loaded_at: str | None = None
+    namespace: str | None = None
+    path: str | None = None
+    repo: str | None = None
+    xr: str | None = None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class PinnedDefinition(Model):
+    """Contract schema PinnedDefinition (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("doc", "doc", ("map", ("any",)), True),
+        Field("owner", "owner", ("str",), True),
+        Field("source", "source", ("ref", "PinSource"), True),
+    )
+
+    doc: dict[str, Any]
+    owner: str
+    source: PinSource
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -775,6 +899,7 @@ class ProviderEvent(Model):
         Field("target", "target", ("nullable", ("str",)), False),
         Field("task_id", "task_id", ("nullable", ("str",)), False),
         Field("tier", "tier", ("nullable", ("int",)), False),
+        Field("tool", "tool", ("nullable", ("str",)), False),
     )
 
     agent: str | None = None
@@ -799,6 +924,7 @@ class ProviderEvent(Model):
     target: str | None = None
     task_id: str | None = None
     tier: int | None = None
+    tool: str | None = None
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -847,6 +973,36 @@ class RecordRequest(Model):
     kind: str
     provider: str
     record: ProviderEvent
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class Refusal(Model):
+    """Contract schema Refusal (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("message", "message", ("str",), True),
+        Field("rule", "rule", ("str",), True),
+    )
+
+    message: str
+    rule: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class RejectedPin(Model):
+    """Contract schema RejectedPin (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("name", "name", ("str",), True),
+        Field("reason", "reason", ("str",), True),
+        Field("source", "source", ("ref", "PinSource"), True),
+    )
+
+    name: str
+    reason: str
+    source: PinSource
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -1052,6 +1208,10 @@ MODELS: dict[str, type[Model]] = {
     "Budgets": Budgets,
     "Context": Context,
     "DecisionContext": DecisionContext,
+    "DefinitionsRejectedView": DefinitionsRejectedView,
+    "DefinitionsRequest": DefinitionsRequest,
+    "DefinitionsResult": DefinitionsResult,
+    "DefinitionsSourceView": DefinitionsSourceView,
     "Effect": Effect,
     "ErrorResponse": ErrorResponse,
     "EvaluationRequest": EvaluationRequest,
@@ -1070,6 +1230,8 @@ MODELS: dict[str, type[Model]] = {
     "Limits": Limits,
     "Models": Models,
     "OutcomeRequest": OutcomeRequest,
+    "PinSource": PinSource,
+    "PinnedDefinition": PinnedDefinition,
     "PolicyRef": PolicyRef,
     "Problem": Problem,
     "ProvenanceCheck": ProvenanceCheck,
@@ -1080,6 +1242,8 @@ MODELS: dict[str, type[Model]] = {
     "Ready": Ready,
     "RecordRef": RecordRef,
     "RecordRequest": RecordRequest,
+    "Refusal": Refusal,
+    "RejectedPin": RejectedPin,
     "Resource": Resource,
     "ReviewChange": ReviewChange,
     "ReviewProblem": ReviewProblem,
@@ -1100,6 +1264,7 @@ OPERATIONS: dict[str, Operation] = {
     "clearChange": Operation("POST", "/v1/clearances/{change_id}/clear", "bearer", 65536, None, GateChangeWithAuditSeq),
     "denyChange": Operation("POST", "/v1/clearances/{change_id}/deny", "bearer", 65536, None, GateChangeWithAuditSeq),
     "recordOutcome": Operation("POST", "/v1/decisions/{id}/outcome", "provider", 65536, OutcomeRequest, RecordRef),
+    "publishDefinitions": Operation("PUT", "/v1/definitions", "provider", 4194304, DefinitionsRequest, DefinitionsResult),
     "reviewDefinition": Operation("POST", "/v1/definitions/review", "bearer", 65536, None, ReviewResult),
     "githubWebhook": Operation("POST", "/v1/github/webhook", "github-signature", 26214400, None, WebhookAnswer),
     "verifyProvenance": Operation("POST", "/v1/provenance", "bearer", 4194304, None, ProvenanceVerdict),

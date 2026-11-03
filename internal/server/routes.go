@@ -139,6 +139,18 @@ var routeTable = []Route{
 		serve:     func(s *Server) http.HandlerFunc { return s.records },
 	},
 	{
+		Method: "PUT", Path: "/v1/definitions", OperationID: "publishDefinitions", Auth: AuthProvider,
+		MaxBody: MaxDefinitionsBody,
+		Summary: "The provider's whole set of cluster-pinned agent definitions (its Agent XR loader's pins and " +
+			"rejections) replaces the set the core holds. The core decides each pin itself (schema, name, owner, " +
+			"workload identity, not a bundled name) and records each change once as definition.load, " +
+			"definition.unload or definition.reject; provenance then reads the pinned definitions. Only the provider " +
+			"registered with definitions: true.",
+		Request:   DefinitionsRequest{},
+		Responses: append([]Response{{200, "what changed", DefinitionsResult{}}}, errs(400, 401, 403, 404, 413, 503)...),
+		serve:     func(s *Server) http.HandlerFunc { return s.definitions },
+	},
+	{
 		Method: "POST", Path: "/v1/clearances", OperationID: "registerChange", Auth: AuthBearer,
 		MaxBody: gate.MaxRegisterBody,
 		Summary: "The clearance-gate check registers (or re-evaluates) a change to a protected environment; the caller " +

@@ -61,7 +61,16 @@ func (e *Engine) RecordFields(req *EvaluationRequest, resp *EvaluationResponse) 
 		g := dc.Grant
 		args := pycompat.NewMap(2)
 		result := "opened"
-		if p.Trigger != "" {
+		if p.Run {
+			// Gateway.run_agent: args {"via": <delegate or None>}, "opened to run[ via <delegate>]".
+			if p.Via != "" {
+				args.Set("via", p.Via)
+				result = "opened to run via " + p.Via
+			} else {
+				args.Set("via", nil)
+				result = "opened to run"
+			}
+		} else if p.Trigger != "" {
 			args.Set("trigger", p.Trigger)
 			if g.Deduped {
 				args.Set("deduped", true)

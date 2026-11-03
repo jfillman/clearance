@@ -44,6 +44,36 @@ func TestConfigFromEnv(t *testing.T) {
 	}
 }
 
+func TestTheClockSkewSetting(t *testing.T) {
+	for v, want := range map[string]time.Duration{"": 0, "0": -1, "0s": -1, "30s": 30 * time.Second, "10m": 10 * time.Minute,
+		"24h": 24 * time.Hour} {
+		got, err := ParseMaxClockSkew(v)
+		if err != nil || got != want {
+			t.Errorf("%q: %v %v, want %v", v, got, err, want)
+		}
+	}
+	for _, bad := range []string{"5", "-1m", "25h", "soon"} {
+		if _, err := ParseMaxClockSkew(bad); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+	cfg, err := FromEnv(env(map[string]string{"CLEARANCE_MAX_CLOCK_SKEW": "90s"}))
+	if err != nil || cfg.MaxClockSkew != 90*time.Second || cfg.CheckMaxClockSkew() != nil {
+		t.Fatal(cfg.MaxClockSkew, err)
+	}
+	if _, err := FromEnv(env(map[string]string{"CLEARANCE_MAX_CLOCK_SKEW": "-5m"})); err == nil {
+		t.Fatal("a negative skew")
+	}
+	cfg, _ = FromEnv(env(map[string]string{"CLEARANCE_MAX_CLOCK_SKEW": "0"}))
+	if cfg.MaxClockSkew >= 0 || cfg.CheckMaxClockSkew() != ErrSkewOffNeedsMemory {
+		t.Fatal("off on a durable store")
+	}
+	cfg.Memory = true
+	if cfg.CheckMaxClockSkew() != nil {
+		t.Fatal("off is allowed with --memory")
+	}
+}
+
 func TestBuildNeedsAStoreAndAnAuthenticator(t *testing.T) {
 	if _, err := Build(context.Background(), Config{Memory: true}, nil, nil); err == nil {
 		t.Fatal("built without an authenticator")

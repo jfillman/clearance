@@ -67,6 +67,12 @@ type ActionProperties struct {
 	TaskID string `json:"task_id,omitempty"`
 	// session.open: set when a trigger (schedule, event) opens the session; the subject is then "trigger:<name>".
 	Trigger string `json:"trigger,omitempty"`
+	// session.open: a person's run (Gateway.run_agent: Tower's Run, or the person's own token), opened as the
+	// subject to launch the agent. Recorded as "opened to run". No limits and no trigger.
+	Run bool `json:"run,omitempty"`
+	// session.open with run: the delegate the person acted through (X-Hangar-On-Behalf-Of), recorded as
+	// "opened to run via <delegate>". The provider's claim: the core verifies the provider, not the delegate.
+	Via string `json:"via,omitempty"`
 }
 
 // Resource is what the action is on: a tool (tool.call, session.spawn: run.spawn), a model alias, or an agent
