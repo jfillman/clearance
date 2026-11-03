@@ -131,3 +131,14 @@ def test_http_routes(g):
         assert r.status_code == 409 and r.json()["rule"] == "HR-ANSWERED"
         assert c.post("/v1/human/requests/h-000000000000/answer", headers={"Authorization": "Bearer alice"},
                       content="{}").status_code == 404
+
+
+def test_a_human_backend_and_an_inbox_are_not_both_registered(defs, clock):
+    """human.request had two handlers when a HumanBackend and an inbox were both given; the inbox's silently won."""
+    from clearance.backends import FakeHuman, core_handlers
+    with pytest.raises(ValueError, match="human.request"):
+        Gateway(defs, SessionStore(), AuditLog(), Auth(), clock, packs=(HANGAR,),
+                handlers=core_handlers(human=FakeHuman()), inbox=hr.MemoryInbox())
+    # chat.* from a HumanBackend beside the inbox is fine: only the tools the inbox serves collide.
+    h = {k: v for k, v in core_handlers(human=FakeHuman()).items() if not k.startswith("human.request")}
+    Gateway(defs, SessionStore(), AuditLog(), Auth(), clock, packs=(HANGAR,), handlers=h, inbox=hr.MemoryInbox())

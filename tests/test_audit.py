@@ -83,3 +83,15 @@ def test_persists_and_reloads_and_refuses_a_tampered_file(tmp_path):
     p.write_text("\n".join(lines) + "\n")
     with pytest.raises(ValueError):
         AuditLog(p)
+
+
+def test_verify_stream_matches_verify():
+    from clearance.audit import GENESIS, AuditLog, verify, verify_stream
+    log = AuditLog()
+    for i in range(3):
+        log.append({"tool": "t", "n": i})
+    assert verify_stream(iter(log.records)) == (True, None, 3, log.head)
+    assert verify_stream(iter([])) == (True, None, 0, GENESIS)
+    bad = [dict(r) for r in log.records]
+    bad[1]["n"] = 99
+    assert verify_stream(iter(bad))[:2] == verify(bad) == (False, 1)

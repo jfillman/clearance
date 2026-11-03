@@ -87,6 +87,30 @@ def test_an_edited_row_stops_clearance_from_starting(db, defs, gw_parts, clock):
         PgAuditLog(PgState(db))
 
 
+def test_the_chain_is_verified_in_batches_from_a_server_side_cursor(db, defs, gw_parts, clock, monkeypatch):
+    """Start-up verifies the whole chain without loading it: a named (server-side) cursor, VERIFY_BATCH rows at a
+    time, and the count and head come out of the same pass."""
+    state, g = gateway(db, defs, gw_parts, clock)
+    for _ in range(5):
+        g.open_session("alice", "coding-agent")
+    count, head = len(g.audit.records), g.audit.head
+    state.close()
+    monkeypatch.setattr(PgAuditLog, "VERIFY_BATCH", 2)
+    monkeypatch.setattr(PgAuditLog, "records", property(lambda self: pytest.fail("start-up loaded the whole chain")))
+    st = PgState(db)
+    names = []
+    real = st.conn.cursor
+
+    def cursor(*a, **k):
+        names.append(k.get("name"))
+        return real(*a, **k)
+    monkeypatch.setattr(st.conn, "cursor", cursor)
+    log = PgAuditLog(st)
+    assert names == ["clearance_verify_chain"]
+    assert log.checkpoint().count == count and log.head == head
+    st.close()
+
+
 def test_a_failed_commit_rolls_back_the_operations_evidence(db, defs, gw_parts, clock, monkeypatch):
     state, g = gateway(db, defs, gw_parts, clock)
     g.open_session("alice", "coding-agent")

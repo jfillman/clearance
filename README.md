@@ -65,6 +65,14 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[test]'
 No cluster is needed. `tests/test_pg.py` needs a scratch Postgres in `CLEARANCE_TEST_DSN` (CI runs one) and skips without it. The Glidepath contract drift test reads a glidepath checkout under `HANGAR_TECH` and skips
 without one (CI clones it).
 
+## Releases
+
+A `vX.Y.Z` tag on `main`, cut after the version-bump PR merges and CI is green, runs `.github/workflows/release.yaml`:
+it checks that the tag, `pyproject.toml` and `CHANGELOG.md` agree, builds the wheel, and publishes a GitHub Release
+whose notes are the version's section of [CHANGELOG.md](CHANGELOG.md) (`tools/release_notes.py`; no section, no
+release). The version-bump PR adds that section; `tests/test_release.py` fails without it. `clearance.__version__` is
+the installed package's version.
+
 ## History
 
 This code was the `clearance` package inside https://github.com/jfillman/autopilot until 2026-10-29 (Hangar decision

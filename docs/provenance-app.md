@@ -1,5 +1,8 @@
 # The Clearance provenance App: design pass, 2026-11-01
 
+Status (v0.26.1): **built**, phases 1 (v0.21.0), 2a (v0.22.0) and 2b (v0.23.0), and live on Hangar as `Hangar
+Clearance` (app 5561694) beside `agent-gates-`. The design below is as reviewed; the Built sections say what exists.
+
 Clearance decides whether a pull request is the one its agent opened and whether it stays inside that agent's scope
 (`provenance.py`). Today those verdicts reach GitHub through a CI check someone else runs: on Hangar, Glidepath's
 `agent-gates-` Pipelines-as-Code check reads the PR with Glidepath's GitHub App and asks `POST /v1/provenance`. That is

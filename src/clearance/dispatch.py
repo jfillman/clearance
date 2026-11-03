@@ -155,6 +155,12 @@ class Gateway:
         # the principals (globs) that may answer for a person they name, e.g. Tower's backend.
         self.inbox, self.directory, self.delegates = inbox, directory, tuple(delegates)
         if inbox is not None:
+            # One handler per tool: a HumanBackend's human.request (backends.core_handlers(human=...)) beside the inbox
+            # would be silently replaced, so the deployment says which it means.
+            twice = sorted({"human.request", "human.request.get"} & set(handlers))
+            if twice:
+                raise ValueError(f"handlers for tools the inbox serves: {twice} (pass an inbox or a HumanBackend's "
+                                 "human.request, not both)")
             self._handlers.update({"human.request": self._human_request, "human.request.get": self._human_get})
 
     # -- sessions --------------------------------------------------------
