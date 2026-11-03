@@ -9,6 +9,8 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-11-03
+
 ### Added
 - `CHANGELOG.md` (this file) and a release workflow: a `v*` tag on `main` builds the wheel and publishes a GitHub
   Release with this file's section for the version as its notes, and fails when the section is missing.
@@ -27,6 +29,8 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   runtime's reads move to the gateway (R-3). Counts exclude the core's outcome records by default (`outcomes`).
   `contract/clearance-api.json` is now generated from the Go handlers, and `tools/gen_api_contract.py` is gone
   ([docs/clearance-api.md](docs/clearance-api.md)).
+- `CLEARANCE_FLIGHT_REGISTRIES` (chart value `gate.flightRegistries`): the image prefixes a tier-1 image bump may come
+  from; unset, the default, is any registry. Hangar sets `ghcr.io/riley-roooo/` from the R-4 cutover.
 - `tools/release_notes.py`: print one version's section (the workflow's notes; exits 1 when there is none).
 - The Go core (R-1): one `clearance` binary (`core [--memory]`, `chain verify`, `register`, `conformance`, `version`); the
   decision engine on cel-go with a golden corpus replayed from the Python engine; the Postgres store extending the
@@ -266,7 +270,8 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   scope, narrow-only limits, CEL policy, sessions, the hash-chained audit log and the gateway; the Hangar pack's
   `glidepath.*` and `airframe.*` tools over glidepath-api and a GET-only Kubernetes adapter.
 
-[Unreleased]: https://github.com/jfillman/clearance/compare/v0.26.1...HEAD
+[Unreleased]: https://github.com/jfillman/clearance/compare/v0.27.0...HEAD
+[0.27.0]: https://github.com/jfillman/clearance/compare/v0.26.1...v0.27.0
 [0.26.1]: https://github.com/jfillman/clearance/compare/v0.26.0...v0.26.1
 [0.26.0]: https://github.com/jfillman/clearance/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/jfillman/clearance/compare/v0.24.2...v0.25.0
