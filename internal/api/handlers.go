@@ -323,6 +323,15 @@ func (s *Server) countClearances(w http.ResponseWriter, r *http.Request, v *View
 		return
 	}
 	f := ChangeFilter{App: strings.ToLower(q["app"]), Env: q["env"], State: q["state"], Since: q["since"]}
+	// The same checks listClearances makes: a state or since that can match nothing is a 400, not empty counts.
+	if f.State != "" && !in(ChangeStates, f.State) {
+		writeError(w, 400, "state is one of "+strings.Join(ChangeStates, ", "))
+		return
+	}
+	if f.Since != "" && !isoTime.MatchString(f.Since) {
+		writeError(w, 400, "since is an ISO time")
+		return
+	}
 	items, err := s.opt.Store.ChangeCounts(r.Context(), f, v, by)
 	if err != nil {
 		s.readFailed(w, r, err)
