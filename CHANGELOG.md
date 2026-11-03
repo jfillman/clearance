@@ -9,6 +9,12 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Added
+- Chart values `core.hostAliases` and `api.hostAliases` (a portal hostname with no DNS, as Hangar's lab reaches Tower).
+
+### Fixed
+- `GET /v1/clearances/counts` refuses an unknown `state` or a non-ISO `since` with 400, as `GET /v1/clearances` does (#45).
+
 ## [0.27.0] - 2026-11-03
 
 ### Added
