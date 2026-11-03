@@ -95,6 +95,13 @@ type ProviderEvent struct {
 	Change      map[string]any `json:"change,omitempty"`
 	Effect      map[string]any `json:"effect,omitempty"`
 	Outcome     map[string]any `json:"outcome,omitempty"`
+	// ModelVersion is the pinned model version the run runs on (AP-C1): the definition's model through the
+	// provider's route. A run's records only (RunRecordKinds).
+	ModelVersion *string `json:"model_version,omitempty"`
+	// Preflight is the Preflight result of the run's definition (AP-C1). A run's records only.
+	Preflight *Preflight `json:"preflight,omitempty"`
+	// Cost is the run's usage summary when it ends (AP-C2). run.finish only.
+	Cost *Cost `json:"cost,omitempty"`
 }
 
 var hexDigest = regexp.MustCompile(`^[0-9a-f]{64}\z`)
@@ -166,6 +173,9 @@ func (e *ProviderEvent) event(kind string, spec kindSpec, ts string) (store.Even
 		if f.v != nil {
 			ev[f.k] = f.v
 		}
+	}
+	if err := e.recorderFields(kind, ev); err != nil {
+		return nil, err
 	}
 	for _, k := range spec.required {
 		switch v := ev[k].(type) {

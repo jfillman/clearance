@@ -46,7 +46,7 @@ the inbox, trigger history, results), so the Go API serves only Clearance's own 
 | listEvidence | `GET /v1/evidence` | **ported**; adds `outcomes` (below) |
 | getEvidence | `GET /v1/evidence/{seq}` | **ported** |
 | verifyEvidence | `GET /v1/evidence/verify` | **ported** (auditors) |
-| countEvidence | `GET /v1/evidence/counts` | **ported**; takes every list filter, adds `outcomes` |
+| countEvidence | `GET /v1/evidence/counts` | **ported**; takes every list filter, adds `outcomes`; `by=cost` (A-4, below) |
 | getPolicy | `GET /v1/policy` | **ported** |
 | explainPolicy | `GET /v1/policy/explain` | **ported** (`decide.(*Engine).Trace`) |
 | listReceipts | `GET /v1/receipts` | **ported** |
@@ -72,6 +72,26 @@ Nothing was dropped. Of the Backstage plugins' reads (backstage `plugins/clearan
 `/v1/agents`, `/v1/agents/{name}`, `/v1/sessions`, `/v1/sessions/{id}`, `/v1/sessions/{id}/result`, `/v1/events`,
 `/v1/human/requests` and `/v1/runtimes` move to the gateway's read API with R-3. The Clearance backend's proxy forwards
 only the operations in its vendored contract, so its copy is refreshed with R-3/R-4.
+
+### Cost counts (`by=cost`)
+
+Built (A-4, AP-C2). `GET /v1/evidence/counts?by=cost[&per=task|session|agent|principal]` with any of the list's
+filters (`task`, `session`, `agent`, `tool`, `principal`, `decision`, `rule`, `app`, `since`, `until`), scoped like
+every read. It sums the `model.call` outcome records that carry `usage` and the `run.finish` records that carry
+`cost` ([evidence.md](evidence.md#the-flight-recorder-fields-revision-3-ap-c1-ap-c2)); `outcomes` does not apply and
+is refused, and `per` is refused with any other `by`. The answer is the counts shape plus `per` and the summed
+`cost`; each item's `count` is its model calls and its `cost` is:
+
+```json
+{"by": "cost", "per": "task", "total": 4,
+ "cost": {"charged_tokens": 215, "input_tokens": 170, "output_tokens": 35, "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 100, "model_calls": 4, "runs": 2, "wall_seconds": 90},
+ "items": [{"key": "t-0", "count": 3, "cost": {"charged_tokens": 175, "...": "..."}}, "..."]}
+```
+
+`charged_tokens` is what the Autopilot gateway's model proxy charged the sessions' `model_tokens` budgets, so a
+task's sum is what its run tree spent of its budget. Items are ordered by `charged_tokens`, largest first, at most
+500. `tool=model.call` leaves the runs out; `per=session&task=<id>` is one task tree's runs.
 
 ### Differences from api.py on the ported routes
 
@@ -187,7 +207,7 @@ All list endpoints are cursor-paginated (`limit`, max 200; `after`), newest firs
 | `GET /v1/evidence` | records filtered by `task`, `session`, `agent`, `tool`, `principal`, `decision`, `rule`, `app`, `since`, `until`; cursor is `seq` |
 | `GET /v1/evidence/{seq}` | one record, with its hash and assurance state; every served record is in the clearance.evidence/v1 shape, a v0-draft row with the `provider` and `subject` the api derived named in `projected` ([evidence.md](evidence.md)) |
 | `GET /v1/evidence/verify` | the chain checked from genesis (or `from`/`to`): `ok`, `count`, `head`, first bad `seq` |
-| `GET /v1/evidence/counts` | records you may see counted by `by` (rule, tool, agent, app, decision), same filters as the list: the 7-day hits on the Policy page |
+| `GET /v1/evidence/counts` | records you may see counted by `by` (rule, tool, agent, app, decision), same filters as the list: the 7-day hits on the Policy page. `by=cost` sums what runs cost instead, `per` task tree (default), session, agent or principal ([cost counts](#cost-counts-bycost)) |
 | `GET /v1/policy` | the policy in force: deny rules in evaluation order (id, name, CEL, message, hint, and the bundle it came from as `pack`), the tool registry with tiers, `core` plus the loaded bundles as `packs` |
 | `GET /v1/policy/explain` | "would this be allowed?": `agent`, `tool`, `args` (JSON); the real policy on a fresh session of that definition, the decision and every rule's verdict in order (the path). Records nothing, spends nothing |
 | `GET /v1/receipts` | PR receipts (`repo`, `pr`): what Clearance's agents opened, the commit, the paths |

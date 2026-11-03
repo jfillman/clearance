@@ -18,7 +18,7 @@ CONTRACT_VERSION = "1.0.0"
 
 RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "run.finish", "human.answer", "session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome", "deploy.exception")
 
-__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Budgets", "BundleRef", "Context", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateApproval", "GateChange", "GateChangeWithAuditSeq", "GateDeployment", "GateErrorBody", "GateObjectChange", "GateReason", "GateRequirement", "Grant", "Health", "Hold", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Problem", "ProvenanceCheck", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "WebhookAnswer"]
+__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateApproval", "GateChange", "GateChangeWithAuditSeq", "GateDeployment", "GateErrorBody", "GateObjectChange", "GateReason", "GateRequirement", "Grant", "Health", "Hold", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProvenanceCheck", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "Usage", "WebhookAnswer"]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -147,6 +147,34 @@ class Context(Model):
     scope: Scope | None = None
     session: SessionState | None = None
     session_id: str | None = None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class Cost(Model):
+    """Contract schema Cost (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("cache_creation_input_tokens", "cache_creation_input_tokens", ("int",), False),
+        Field("cache_read_input_tokens", "cache_read_input_tokens", ("int",), False),
+        Field("charged_tokens", "charged_tokens", ("nullable", ("int",)), True),
+        Field("compute", "compute", ("str",), False),
+        Field("input_tokens", "input_tokens", ("int",), False),
+        Field("model_calls", "model_calls", ("int",), False),
+        Field("output_tokens", "output_tokens", ("int",), False),
+        Field("tool_calls", "tool_calls", ("int",), False),
+        Field("wall_seconds", "wall_seconds", ("int",), False),
+    )
+
+    cache_creation_input_tokens: int | None = None
+    cache_read_input_tokens: int | None = None
+    charged_tokens: int | None
+    compute: str | None = None
+    input_tokens: int | None = None
+    model_calls: int | None = None
+    output_tokens: int | None = None
+    tool_calls: int | None = None
+    wall_seconds: int | None = None
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -728,15 +756,19 @@ class OutcomeRequest(Model):
     _STRICT: ClassVar[bool] = True
     _FIELDS: ClassVar[tuple[Field, ...]] = (
         Field("effect", "effect", ("nullable", ("ref", "Effect")), False),
+        Field("model_version", "model_version", ("nullable", ("str",)), False),
         Field("receipt", "receipt", ("map", ("any",)), False),
         Field("refusal", "refusal", ("nullable", ("ref", "Refusal")), False),
         Field("result", "result", ("str",), True),
+        Field("usage", "usage", ("nullable", ("ref", "Usage")), False),
     )
 
     effect: Effect | None = None
+    model_version: str | None = None
     receipt: dict[str, Any] | None = None
     refusal: Refusal | None = None
     result: str
+    usage: Usage | None = None
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -791,6 +823,22 @@ class PolicyRef(Model):
     bundle: str
     bundles: list[BundleRef] | None = None
     version: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class Preflight(Model):
+    """Contract schema Preflight (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("cases", "cases", ("nullable", ("int",)), False),
+        Field("definition", "definition", ("str",), False),
+        Field("result", "result", ("str",), True),
+    )
+
+    cases: int | None = None
+    definition: str | None = None
+    result: str
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -905,14 +953,17 @@ class ProviderEvent(Model):
         Field("app", "app", ("nullable", ("str",)), False),
         Field("args_sha256", "args_sha256", ("nullable", ("str",)), False),
         Field("change", "change", ("map", ("any",)), False),
+        Field("cost", "cost", ("nullable", ("ref", "Cost")), False),
         Field("coverage", "coverage", ("nullable", ("str",)), False),
         Field("decision", "decision", ("nullable", ("str",)), False),
         Field("destination", "destination", ("map", ("any",)), False),
         Field("effect", "effect", ("map", ("any",)), False),
         Field("initiator", "initiator", ("map", ("any",)), False),
         Field("intent", "intent", ("nullable", ("str",)), False),
+        Field("model_version", "model_version", ("nullable", ("str",)), False),
         Field("outcome", "outcome", ("map", ("any",)), False),
         Field("parent", "parent", ("nullable", ("str",)), False),
+        Field("preflight", "preflight", ("nullable", ("ref", "Preflight")), False),
         Field("principal", "principal", ("nullable", ("str",)), False),
         Field("reason", "reason", ("nullable", ("str",)), False),
         Field("result", "result", ("nullable", ("str",)), False),
@@ -930,14 +981,17 @@ class ProviderEvent(Model):
     app: str | None = None
     args_sha256: str | None = None
     change: dict[str, Any] | None = None
+    cost: Cost | None = None
     coverage: str | None = None
     decision: str | None = None
     destination: dict[str, Any] | None = None
     effect: dict[str, Any] | None = None
     initiator: dict[str, Any] | None = None
     intent: str | None = None
+    model_version: str | None = None
     outcome: dict[str, Any] | None = None
     parent: str | None = None
+    preflight: Preflight | None = None
     principal: str | None = None
     reason: str | None = None
     result: str | None = None
@@ -1246,6 +1300,26 @@ class SubjectProperties(Model):
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
+class Usage(Model):
+    """Contract schema Usage (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("cache_creation_input_tokens", "cache_creation_input_tokens", ("int",), False),
+        Field("cache_read_input_tokens", "cache_read_input_tokens", ("int",), False),
+        Field("charged_tokens", "charged_tokens", ("nullable", ("int",)), True),
+        Field("input_tokens", "input_tokens", ("int",), False),
+        Field("output_tokens", "output_tokens", ("int",), False),
+    )
+
+    cache_creation_input_tokens: int | None = None
+    cache_read_input_tokens: int | None = None
+    charged_tokens: int | None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
 class WebhookAnswer(Model):
     """Contract schema WebhookAnswer."""
 
@@ -1264,6 +1338,7 @@ MODELS: dict[str, type[Model]] = {
     "Budgets": Budgets,
     "BundleRef": BundleRef,
     "Context": Context,
+    "Cost": Cost,
     "DecisionContext": DecisionContext,
     "DefinitionsRejectedView": DefinitionsRejectedView,
     "DefinitionsRequest": DefinitionsRequest,
@@ -1290,6 +1365,7 @@ MODELS: dict[str, type[Model]] = {
     "PinSource": PinSource,
     "PinnedDefinition": PinnedDefinition,
     "PolicyRef": PolicyRef,
+    "Preflight": Preflight,
     "Problem": Problem,
     "ProvenanceCheck": ProvenanceCheck,
     "ProvenanceRecordSummary": ProvenanceRecordSummary,
@@ -1312,6 +1388,7 @@ MODELS: dict[str, type[Model]] = {
     "Spend": Spend,
     "Subject": Subject,
     "SubjectProperties": SubjectProperties,
+    "Usage": Usage,
     "WebhookAnswer": WebhookAnswer,
 }
 

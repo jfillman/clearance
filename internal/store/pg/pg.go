@@ -34,7 +34,8 @@ import (
 )
 
 // Schema is pg.py's SCHEMA for the core's tables, verbatim: CREATE ... IF NOT EXISTS only, so migrate never
-// alters or drops what the Python core created.
+// alters or drops what the Python core created. Since then: clearance_evidence_cost (A-4), the records clearance-api's
+// counts by=cost sums (model-call outcomes with usage, run.finish with cost).
 const Schema = `
 CREATE TABLE IF NOT EXISTS clearance_evidence (
   seq        bigint PRIMARY KEY,
@@ -47,6 +48,8 @@ CREATE TABLE IF NOT EXISTS clearance_evidence (
 );
 CREATE INDEX IF NOT EXISTS clearance_evidence_receipt ON clearance_evidence
   ((record->'effect'->>'repo'), (record->'effect'->>'pr')) WHERE record ? 'effect';
+CREATE INDEX IF NOT EXISTS clearance_evidence_cost ON clearance_evidence (seq)
+  WHERE record ? 'usage' OR record ? 'cost';
 CREATE TABLE IF NOT EXISTS clearance_changes (
   id         text        PRIMARY KEY,
   app        text        NOT NULL,

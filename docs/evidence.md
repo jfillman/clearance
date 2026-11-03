@@ -46,12 +46,12 @@ schema are allowed and are claimed unless the writer verified them.
 
 | Group | Fields | Notes |
 | --- | --- | --- |
-| Identities | `provider`, `principal`, `agent`, `session`, `parent`, `task_id`, `initiator`, `model_version` | `provider` {name, version[, conformance]} is required; `initiator` {sub, iss} optional; `model_version` reserved for AP-C1 |
+| Identities | `provider`, `principal`, `agent`, `session`, `parent`, `task_id`, `initiator`, `model_version` | `provider` {name, version[, conformance]} is required; `initiator` {sub, iss} optional; `model_version` optional (revision 3, AP-C1): a run's pinned model version on its records, the answering model on a `model.call` outcome |
 | Source | `subject`, `tool`, `args_sha256`, `change`, `source` | `subject` required (null when there is none); `tool` is the operation or event type; arguments are never stored, only their digest |
 | Target | `boundary`, `target`, `app`, `destination` | `boundary` is `runtime` or `deployment`; `destination` {cluster, environment, application} optional |
 | Provenance | `provenance` | optional {level, signals[{name, tag}]} |
-| Decision | `decision`, `tier`, `rule`, `rules`, `reason`, `policy`, `approvals`, `token`, `preflight` | verdict, tier, rule fired; `policy` {ref, engine, version} (R-5 fills it); `approvals` [{sub, iss, via, at}]; `token` ref; `preflight` reserved for AP-C1 |
-| Outcome | `result`, `effect`, `refusal`, `outcome` | `result` keeps its v0 meaning (the result line, or a deny's reason); `effect` is the receipt of a write the writer made; `refusal` {rule, message} optional (revision 2): a handler's refusal on an outcome, after the core allowed; `outcome` {applied, observed_revision, digests, health, rollback} optional |
+| Decision | `decision`, `tier`, `rule`, `rules`, `reason`, `policy`, `approvals`, `token`, `preflight` | verdict, tier, rule fired; `policy` {ref, engine, version} (R-5 fills it); `approvals` [{sub, iss, via, at}]; `token` ref; `preflight` {result: pass\|fail\|not-run, definition, cases} optional (revision 3, AP-C1): the Preflight result of a run's definition |
+| Outcome | `result`, `effect`, `refusal`, `outcome` | `result` keeps its v0 meaning (the result line, or a deny's reason); `effect` is the receipt of a write the writer made; `refusal` {rule, message} optional (revision 2): a handler's refusal on an outcome, after the core allowed; `outcome` {applied, observed_revision, digests, health, rollback} optional; `usage` (revision 3, AP-C2) on a `model.call` outcome: {input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, charged_tokens}; `cost` (revision 3) on `run.finish`: the run's own summary |
 | Coverage state | `coverage` | `authorized-and-verified` (default), `observed-not-attributed`, `out-of-band-detected`, `coverage-unavailable` |
 | Assurance state | `assurance` | beside the record, never hashed: `checkpointed`, `recorded-not-checkpointed`, `not-recorded`; a reader adds it |
 | Intent | `intent` | {capture: redacted\|full, sha256[, text]}; only when the event has an intent |
@@ -115,6 +115,29 @@ func Stored(r map[string]any) map[string]any
 The Python equivalents are `audit.Writer`, `audit.Provider`, `audit.seal`, `audit.derive_subject`,
 `audit.project` and `audit.stored`; the gateway's writer is `audit.gateway_writer()`
 (`autopilot-gateway` at the package version).
+
+## The flight recorder fields (revision 3: AP-C1, AP-C2)
+
+Built (A-4). What a run ran on, how its definition scored, and what it cost, in the chain itself. Every one is
+claimed: the core sees neither the model provider's answer nor the run's clock, only the provider that reported them
+(`internal/server/cost.go`).
+
+| Field | On | Set by the Autopilot gateway from |
+| --- | --- | --- |
+| `model_version` | `session.open`, `run.launch`, `run.finish`, `run.delete` (provider records) | the run's pinned model: its definition's first model through the deployment's model route (`MODEL_ROUTES` alias to upstream model) |
+| `model_version` | a `model.call` outcome | the model that answered, as the provider named it in its answer (`model` in the Messages API response), else the route's upstream model |
+| `preflight` | a run's records, as `model_version` | the definition's Preflight result: `pass` or `fail` once A-6 scores definitions, `not-run` until then, with `definition` (its name) and `cases` |
+| `usage` | a `model.call` outcome | the provider's usage block (input, output, cache write, cache read tokens, every one present, 0 when absent) and `charged_tokens`, what the model proxy charged the session's `model_tokens` budget for them: `ceil(input + output + 1.25 * cache_creation + 0.1 * cache_read)` (Autopilot `modelproxy.USAGE_WEIGHTS`) |
+| `cost` | `run.finish` | the session's usage summed over its calls, `model_calls`, `tool_calls`, `wall_seconds` (open to finish) and `compute` (the definition's compute class) |
+
+The core refuses `usage` and `model_version` on the outcome of anything but a model call, `model_version` and
+`preflight` on a record that is not a run's, `cost` on anything but `run.finish`, a negative or non-integer count,
+and any count over 2^40.
+
+`GET /v1/evidence/counts?by=cost` (clearance-api) sums these per task tree (`per=task`, the default), run
+(`per=session`), agent or principal: tokens from the `model.call` outcomes' `usage` only, runs and wall seconds from
+the `run.finish` records' `cost`, so a run is never counted twice. A partial index on the records that carry either
+field (`clearance_evidence_cost`) keeps it off a chain scan.
 
 ## Versioning rule
 

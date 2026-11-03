@@ -19,7 +19,13 @@ var (
 	ChangeCountBy = []string{"state", "tier", "app", "env", "cleared_by"}
 	ChangeStates  = []string{"holding", "cleared", "denied", "expired", "superseded"}
 	outcomeModes  = []string{OutcomesInclude, OutcomesExclude, OutcomesOnly}
+	// CostPer are what counts by=cost groups by; costField the record field of each.
+	CostPer   = []string{"task", "session", "agent", "principal"}
+	costField = map[string]string{"task": "task_id", "session": "session", "agent": "agent", "principal": "principal"}
 )
+
+// ByCost is the counts' `by` that sums cost instead of counting records.
+const ByCost = "cost"
 
 // isoTime is the shape of a time Python's datetime.fromisoformat reads (with Z for +00:00): a date, optionally a
 // time to the microsecond, optionally an offset.
@@ -169,8 +175,16 @@ func (s *Server) countEvidence(w http.ResponseWriter, r *http.Request, v *Viewer
 	if by == "" {
 		by = "rule"
 	}
+	if by == ByCost {
+		s.countCost(w, r, v, q)
+		return
+	}
 	if !in(CountBy, by) {
-		writeError(w, 400, "by is one of "+strings.Join(CountBy, ", "))
+		writeError(w, 400, "by is one of "+strings.Join(CountBy, ", ")+", "+ByCost)
+		return
+	}
+	if q["per"] != "" {
+		writeError(w, 400, "per is for by=cost")
 		return
 	}
 	f, aerr := evidenceFilter(q, OutcomesExclude)
@@ -184,6 +198,41 @@ func (s *Server) countEvidence(w http.ResponseWriter, r *http.Request, v *Viewer
 		return
 	}
 	writeJSON(w, 200, Counts{By: by, Items: items, Total: total(items), Outcomes: f.Outcomes})
+}
+
+// countCost is counts by=cost (AP-C2): the cost of the records the viewer may see, per task, session, agent or
+// principal. The records summed are fixed (model.call outcomes with usage, run.finish with cost), so outcomes is
+// refused rather than ignored.
+func (s *Server) countCost(w http.ResponseWriter, r *http.Request, v *Viewer, q map[string]string) {
+	per := q["per"]
+	if per == "" {
+		per = "task"
+	}
+	if !in(CostPer, per) {
+		writeError(w, 400, "per is one of "+strings.Join(CostPer, ", "))
+		return
+	}
+	if q["outcomes"] != "" {
+		writeError(w, 400, "by=cost sums the model-call outcomes and run.finish records: outcomes does not apply")
+		return
+	}
+	f, aerr := evidenceFilter(q, OutcomesInclude)
+	if aerr != nil {
+		aerr.write(w)
+		return
+	}
+	items, err := s.opt.Store.Costs(r.Context(), f, v, per)
+	if err != nil {
+		s.readFailed(w, r, err)
+		return
+	}
+	sum := &CostSum{}
+	for _, it := range items {
+		if it.Cost != nil {
+			sum.add(it.Cost)
+		}
+	}
+	writeJSON(w, 200, Counts{By: ByCost, Per: per, Items: items, Total: total(items), Cost: sum})
 }
 
 // byPR is api.py receipts_or_verdicts: repo (owner/name, lower-cased) is required, pr is a number when given.

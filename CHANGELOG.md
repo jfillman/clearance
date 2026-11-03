@@ -9,6 +9,21 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Added
+- Flight recorder fields and cost accounting (A-4: AP-C1, AP-C2); evidence schema revision 3, additive. A model
+  call's outcome (`POST /v1/decisions/{id}/outcome`) takes `model_version` (the model that answered) and `usage`
+  (`input_tokens`, `output_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`, `charged_tokens`: what
+  the gateway's model proxy charged the session), refused on any other tool's outcome. A run's provider records
+  (`session.open`, `run.launch`, `run.finish`, `run.delete`) take `model_version` and `preflight` {result
+  pass|fail|not-run, definition, cases}, and `run.finish` takes `cost` (the run's summary: tokens, model and tool
+  calls, wall seconds, compute class). All claimed. The Go client and the Python client (`clearance-core-client`)
+  carry the new fields (`Usage`, `Preflight`, `Cost`).
+- clearance-api `GET /v1/evidence/counts?by=cost&per=task|session|agent|principal`: the model-call outcomes'
+  usage and the run.finish records' runs and wall seconds summed per task tree, run, agent or principal, with the
+  list's filters and scoping; each item carries `cost`, the answer `per` and the summed `cost`.
+- Postgres: the partial index `clearance_evidence_cost` on the records that carry `usage` or `cost` (created by the
+  core's migration, `CREATE INDEX IF NOT EXISTS`).
+
 ## [0.30.0] - 2026-11-03
 
 R-3: the Python package is gone. Breaking for anyone who installs `clearance` from this repository with pip (or
