@@ -14,8 +14,9 @@
 //
 // Every object is canonicalised (JSON with sorted keys, server-populated fields dropped), hashed, and stamped with
 // clearance.hangar.io/rendered and clearance.hangar.io/grant; the tree root is the sha256 of the sorted
-// "<apiVersion>/<kind>/<namespace>/<name> <hash>" lines. A ConfigMap clearance-cmp-diag carries what the plugin
+// "<apiVersion>/<kind>/<namespace>/<name> <hash>" lines. A ConfigMap carries what the plugin
 // saw, so the spike can read it back from the cluster.
+// The diag ConfigMap is named clearance-cmp-diag-<application>.
 package main
 
 import (
@@ -193,7 +194,7 @@ func run(out io.Writer) error {
 	diagJSON, _ := json.Marshal(diag)
 	objs = append(objs, map[string]any{
 		"apiVersion": "v1", "kind": "ConfigMap",
-		"metadata": map[string]any{"name": "clearance-cmp-diag"},
+		"metadata": map[string]any{"name": "clearance-cmp-diag-" + envOr("ARGOCD_APP_NAME", "spike")},
 		"data":     map[string]any{"diag.json": string(diagJSON)},
 	})
 	for _, o := range objs {
