@@ -24,4 +24,6 @@ jobs:
       # Fuzz the parsers (section 12): one target per invocation, as go test -fuzz requires.
       - run: go test -run '^$' -fuzz '^FuzzCanonical$' -fuzztime 30s ./internal/canon
       - run: go test -run '^$' -fuzz '^FuzzVerifyLine$' -fuzztime 30s ./internal/evidence
+      - run: go test -run '^$' -fuzz '^FuzzParseJWT$' -fuzztime 30s ./internal/authn
+      - run: go test -run '^$' -fuzz '^FuzzParse$' -fuzztime 30s ./internal/profile
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...

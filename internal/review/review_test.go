@@ -84,7 +84,7 @@ func list(xs ...string) []any {
 var reg = deftest.Tools()
 
 func validate(doc any, o review.Options) []string {
-	return rules(review.Validate(doc, reg, deftest.Parse, o))
+	return rules(review.Validate(doc, reg, parseDef, o))
 }
 
 func TestAGoodDefinitionHasNoProblems(t *testing.T) {
@@ -212,7 +212,7 @@ func TestClassifyTiersAChangeByWhatTheAgentMayDoAfterIt(t *testing.T) {
 }
 
 func TestTheReviewRoute(t *testing.T) {
-	h := &review.Handler{Registry: reg, Parse: deftest.Parse, Config: review.Config{
+	h := &review.Handler{Registry: reg, Parse: parseDef, Config: review.Config{
 		Verifiers: []string{"app-*-cicd/pipeline-runner"}, Delegates: []string{"hangar-prod/app-backstage-prod/backstage"},
 		ImageAllow: []string{"ghcr.io/jfillman/autopilot-agent-runtime@*"}}}
 	mux := http.NewServeMux()
