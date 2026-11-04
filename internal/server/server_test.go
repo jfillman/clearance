@@ -44,7 +44,7 @@ const (
 var providersJSON = `[{"name": "autopilot-gateway", "version": "0.3.27", "principals": ["autopilot-system/clearance"],
   "definitions": true},
  {"name": "argo-gate", "version": "0.1.0", "principals": ["hangar-prod/argocd/*"],
-  "kinds": ["deploy.outcome", "deploy.exception"]}]`
+  "kinds": ["deploy.outcome", "deploy.exception", "deploy.degraded"]}]`
 
 var quiet = slog.New(slog.NewTextHandler(io.Discard, nil))
 
@@ -479,7 +479,15 @@ func TestEveryProviderRecordKind(t *testing.T) {
 			"destination": map[string]any{"cluster": "hangar-prod", "environment": "prod"}}, "deployment"},
 		{argo, "argo-gate", "deploy.exception", map[string]any{"principal": s("kubernetes-admin"),
 			"target": s("apps/v1/Deployment/app-gate-api-prod/gate-api"), "result": s("applied without a grant"),
-			"coverage": s("out-of-band-detected")}, "deployment"},
+			"coverage": s("out-of-band-detected"),
+			"exception": map[string]any{"kind": "out-of-band", "objects": []any{map[string]any{
+				"apiVersion": "apps/v1", "kind": "Deployment", "namespace": "app-gate-api-prod", "name": "gate-api"}}},
+			"destination": map[string]any{"cluster": "hangar-prod", "environment": "prod"}}, "deployment"},
+		{argo, "argo-gate", "deploy.degraded", map[string]any{"principal": s("hangar-prod/argocd/clearance-sync"),
+			"target": s("gate-api-prod"), "app": s("gate-api"), "result": s("synced on the outage policy"),
+			"decision": s("allow"), "tier": func() *int { t := 1; return &t }(), "coverage": s("coverage-unavailable"),
+			"outage":      map[string]any{"from": "2026-09-26T11:00:00Z", "to": "2026-09-26T11:30:00Z"},
+			"destination": map[string]any{"cluster": "hangar-prod", "environment": "prod"}}, "deployment"},
 	}
 	for _, c := range cases {
 		a := f.do("POST", "/v1/records", c.who, map[string]any{"provider": c.prov, "kind": c.kind, "record": c.rec}).

@@ -31,7 +31,7 @@ const (
 // RecordKinds are the kinds POST /v1/records takes (server.RecordKinds).
 var RecordKinds = []string{"session.open", "run.launch", "run.delete", "run.finish", "human.answer",
 	"session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome",
-	"deploy.exception"}
+	"deploy.exception", "deploy.degraded"}
 
 // CoverageUnavailable is a tool.call record's coverage: a T0 read the provider allowed while the core was
 // unreachable (the outage policy), posted once it answers.
@@ -327,6 +327,10 @@ type ProviderEvent struct {
 	Change      map[string]any `json:"change,omitempty"`
 	Effect      map[string]any `json:"effect,omitempty"`
 	Outcome     map[string]any `json:"outcome,omitempty"`
+	// Exception is a deploy.exception's {kind, objects, addresses, actor, expected, observed, state, detected_at,
+	// detail}; Outage a deploy.degraded's {from, to} (docs/gate.md).
+	Exception map[string]any `json:"exception,omitempty"`
+	Outage    map[string]any `json:"outage,omitempty"`
 }
 
 // String is a pointer to s, for ProviderEvent's optional fields.
@@ -475,6 +479,17 @@ type Change struct {
 	Target           string            `json:"target"`
 	ObjectsCount     int               `json:"objects_count"`
 	PathsCount       int               `json:"paths_count"`
+	// Outage is allow-and-record or hold: what a provider does with the change while the core is unreachable.
+	Outage string `json:"outage,omitempty"`
+	// Ended is the record that moved the change to degraded or exception.
+	Ended *Ended `json:"ended,omitempty"`
+}
+
+// Ended names the provider record that took a change out of the main path.
+type Ended struct {
+	Seq  int64  `json:"seq"`
+	Tool string `json:"tool"`
+	Kind string `json:"kind,omitempty"`
 }
 
 // Reason is one classification reason of a change.

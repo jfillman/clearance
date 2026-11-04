@@ -80,6 +80,14 @@ func (b *q) evidenceFilter(f EvidenceFilter) {
 	if f.Until != "" {
 		b.add("e.record->>'ts' < " + b.arg(f.Until))
 	}
+	if f.Exceptions {
+		// The exact predicate of the clearance_evidence_exceptions partial index (store/pg Schema).
+		b.add("(e.record->>'tool' IN ('deploy.exception', 'deploy.degraded', 'breakglass.open', 'breakglass.close') " +
+			"OR e.record->>'coverage' = 'coverage-unavailable')")
+	}
+	if f.Kind != "" {
+		b.add("e.record->'exception'->>'kind' = " + b.arg(f.Kind))
+	}
 	switch f.Outcomes {
 	case OutcomesExclude:
 		b.add("NOT (e.record ? 'outcome_of')")

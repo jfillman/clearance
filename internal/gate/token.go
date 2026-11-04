@@ -209,8 +209,10 @@ func (w *writer) issue(c *Change, nonce string) (string, error) {
 	return nonce, nil
 }
 
-// revoke revokes c's live token because head superseded it, recorded as deploy.revoke.
-func (w *writer) revoke(c *Change, head string) {
+// revoke revokes c's live token because it left cleared (why: "superseded by <head>", "exception: drift"),
+// recorded as deploy.revoke with extra beside the token's nonce. Only move calls it: a token is live only while
+// its change is cleared.
+func (w *writer) revoke(c *Change, why string, extra map[string]any) {
 	if w.err != nil {
 		return
 	}
@@ -230,8 +232,11 @@ func (w *writer) revoke(c *Change, head string) {
 	if w.err = w.tx.PutToken(w.ctx, tk); w.err != nil {
 		return
 	}
-	w.record("policy", nil, "deploy.revoke", c, "allow", nil, "token revoked: superseded by "+pycompat.Truncate(head, 7),
-		map[string]any{"by": head, "token": tk.Nonce}, map[string]any{"token": tk.Nonce})
+	args := map[string]any{"token": tk.Nonce}
+	for k, v := range extra {
+		args[k] = v
+	}
+	w.record("policy", nil, "deploy.revoke", c, "allow", nil, "token revoked: "+why, args, map[string]any{"token": tk.Nonce})
 }
 
 // clearedFields are what a deploy.clear (and a deploy.request or deploy.answer on a cleared change) records about
@@ -290,7 +295,7 @@ func (s *Service) refreshOne(tx store.Tx, w *writer, tk store.Token) (bool, erro
 	if err != nil {
 		return false, err
 	}
-	if c != nil && c.State == "cleared" {
+	if c != nil && c.State == StateCleared {
 		row, ok, err := s.Tokens.mint(w.ctx, c, tk.Nonce, w.now)
 		if err != nil {
 			return false, fmt.Errorf("gate: re-issuing the clearance token: %w", err)
@@ -378,7 +383,7 @@ func (s *Service) CheckNonce(ctx context.Context, c *token.Claims) error {
 	if err != nil {
 		return err
 	}
-	if ch == nil || ch.State != "cleared" {
+	if ch == nil || ch.State != StateCleared {
 		return fmt.Errorf("%w: the change is not cleared", token.ErrReplay)
 	}
 	return nil

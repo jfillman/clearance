@@ -1,6 +1,27 @@
 {
   "components": {
     "schemas": {
+      "BreakglassList": {
+        "properties": {
+          "items": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/GateBreakglass"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
       "DecideAction": {
         "additionalProperties": false,
         "properties": {
@@ -884,6 +905,140 @@
         ],
         "type": "object"
       },
+      "GateBreakglass": {
+        "properties": {
+          "app": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "close_seq": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "closed_at": {
+            "oneOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "closed_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cluster": {
+            "type": "string"
+          },
+          "env": {
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "iss": {
+            "type": "string"
+          },
+          "open_seq": {
+            "type": "integer"
+          },
+          "opened_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "person": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "reported": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "sub": {
+            "type": "string"
+          },
+          "ttl_seconds": {
+            "type": "integer"
+          },
+          "via": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "app",
+          "close_seq",
+          "closed_at",
+          "closed_by",
+          "cluster",
+          "env",
+          "expires_at",
+          "id",
+          "iss",
+          "open_seq",
+          "opened_at",
+          "person",
+          "reason",
+          "reported",
+          "state",
+          "sub",
+          "ttl_seconds",
+          "via"
+        ],
+        "type": "object"
+      },
+      "GateBreakglassRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "app": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cluster": {
+            "type": "string"
+          },
+          "env": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "ttl": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cluster",
+          "env",
+          "reason",
+          "ttl"
+        ],
+        "type": "object"
+      },
       "GateChange": {
         "properties": {
           "agent": {
@@ -952,6 +1107,16 @@
             },
             "type": "array"
           },
+          "ended": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateEnded"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "env": {
             "type": "string"
           },
@@ -976,6 +1141,9 @@
           },
           "objects_count": {
             "type": "integer"
+          },
+          "outage": {
+            "type": "string"
           },
           "owner": {
             "type": "string"
@@ -1230,6 +1398,24 @@
           "installation",
           "requested_at",
           "run_id"
+        ],
+        "type": "object"
+      },
+      "GateEnded": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "tool": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "tool"
         ],
         "type": "object"
       },
@@ -1644,6 +1830,10 @@
             "additionalProperties": {},
             "type": "object"
           },
+          "exception": {
+            "additionalProperties": {},
+            "type": "object"
+          },
           "initiator": {
             "additionalProperties": {},
             "type": "object"
@@ -1653,6 +1843,10 @@
               "string",
               "null"
             ]
+          },
+          "outage": {
+            "additionalProperties": {},
+            "type": "object"
           },
           "outcome": {
             "additionalProperties": {},
@@ -2149,6 +2343,249 @@
         "x-clearance-max-body": 65536
       }
     },
+    "/v1/breakglass": {
+      "get": {
+        "operationId": "listBreakglass",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BreakglassList"
+                }
+              }
+            },
+            "description": "the open windows"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is not valid (strict decoding, or a field the route refuses)"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no bearer token, or one the authenticator refused"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "a Clearance that keeps no changes"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the store could not record it: treat as unreachable (fail closed)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The break-glass windows open now (?cluster= narrows them), for a registered provider that honours break-glass and for admins.",
+        "x-clearance-auth": "bearer",
+        "x-clearance-max-body": 65536
+      },
+      "post": {
+        "operationId": "openBreakglass",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GateBreakglassRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateBreakglass"
+                }
+              }
+            },
+            "description": "the open window"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateErrorBody"
+                }
+              }
+            },
+            "description": "a malformed body, a TTL out of range, or an environment that is not protected"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no bearer token, or one the authenticator refused"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateErrorBody"
+                }
+              }
+            },
+            "description": "not an admin, or a delegate naming no admin"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateErrorBody"
+                }
+              }
+            },
+            "description": "a Clearance that keeps no changes (DG-OFF)"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateErrorBody"
+                }
+              }
+            },
+            "description": "a window is already open on that environment"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is over the route's cap"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "An admin (CLEARANCE_ADMINS), or a delegate naming one in the on-behalf-of header, opens a break-glass window on one protected environment: a reason, a TTL (a Go duration, at most CLEARANCE_BREAKGLASS_MAX_TTL, never over 4h) and the cluster and env. Recorded as breakglass.open and committed before the answer, so the record precedes every change it covers. It clears nothing; exceptions inside it carry its id. At the TTL the core reconciles it (breakglass.close).",
+        "x-clearance-auth": "bearer",
+        "x-clearance-max-body": 16384
+      }
+    },
+    "/v1/breakglass/{id}/close": {
+      "post": {
+        "operationId": "closeBreakglass",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateBreakglass"
+                }
+              }
+            },
+            "description": "the closed window"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no bearer token, or one the authenticator refused"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateErrorBody"
+                }
+              }
+            },
+            "description": "not an admin"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateErrorBody"
+                }
+              }
+            },
+            "description": "no such window"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateErrorBody"
+                }
+              }
+            },
+            "description": "the window is already closed"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "An admin closes a break-glass window early; it is reconciled at once (breakglass.close lists what the record store knows changed in the window).",
+        "x-clearance-auth": "bearer",
+        "x-clearance-max-body": 65536
+      }
+    },
     "/v1/clearances": {
       "post": {
         "operationId": "registerChange",
@@ -2156,7 +2593,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "description": "gate.ChangeRequest (docs/gate.md): app, env, cluster, repo, pr, head, base, proposer, proposerKind, owner, protected, treeDigest, paths, linesChanged, objects, checks, policy, agent, definition; unknown fields are refused",
+                "description": "gate.ChangeRequest (docs/gate.md): app, env, cluster, repo, pr, head, base, proposer, proposerKind, owner, protected, treeDigest, paths, linesChanged, objects, checks, policy, agent, definition; unknown fields are refused. protected: false is refused (DG-PROTECTED): Clearance decides protection from CLEARANCE_PROTECTED_ENVIRONMENTS, and clears a change elsewhere at tier 0 (unprotected)",
                 "type": "object"
               }
             }
@@ -3124,6 +3561,7 @@
     "trigger.release",
     "tool.call",
     "deploy.outcome",
-    "deploy.exception"
+    "deploy.exception",
+    "deploy.degraded"
   ]
 }

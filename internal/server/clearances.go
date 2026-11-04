@@ -72,3 +72,46 @@ func (s *Server) keys(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "max-age=300")
 	writeJSON(w, http.StatusOK, out)
 }
+
+// BreakglassList is GET /v1/breakglass's answer: the break-glass windows open now.
+type BreakglassList struct {
+	Items []*gate.Breakglass `json:"items"`
+}
+
+// listBreakglass is GET /v1/breakglass[?cluster=]: the windows open now, for a provider that honours break-glass
+// (the Argo agent's marker) and for admins. Nothing else may read it: a window names a person and their reason.
+func (s *Server) listBreakglass(w http.ResponseWriter, r *http.Request) {
+	g := s.opt.Gate
+	if g == nil {
+		writeError(w, http.StatusNotFound, "this core keeps no changes")
+		return
+	}
+	p, ok := authn.From(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "a bearer token is required")
+		return
+	}
+	if providerFor(s.opt.Providers, p.ID) == nil && !(p.IsPerson() && pycompat.MatchAny(p.ID, g.Config.Admins)) {
+		writeError(w, http.StatusForbidden, p.ID+" is neither a registered provider nor an admin")
+		return
+	}
+	q := r.URL.Query()
+	for k := range q {
+		if k != "cluster" {
+			writeError(w, http.StatusBadRequest, "unknown parameter "+k+" (cluster only)")
+			return
+		}
+	}
+	items, err := g.OpenBreakglassWindows(r.Context(), q.Get("cluster"))
+	var ge *gate.Error
+	switch {
+	case errors.As(err, &ge):
+		writeJSON(w, ge.Status, gate.ErrorBody{Error: ge.Message, Rule: ge.Rule, Hint: ge.Hint})
+		return
+	case err != nil:
+		s.log.ErrorContext(r.Context(), "break-glass read failed", "error", err.Error())
+		writeError(w, http.StatusServiceUnavailable, "the store could not be read")
+		return
+	}
+	writeJSON(w, http.StatusOK, BreakglassList{Items: items})
+}

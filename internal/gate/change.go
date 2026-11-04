@@ -99,6 +99,19 @@ type Change struct {
 	Target           string            `json:"target"`
 	ObjectsCount     int               `json:"objects_count"`
 	PathsCount       int               `json:"paths_count"`
+	// Outage is what a provider does with this change while the core is unreachable: allow-and-record or hold
+	// (its tier under its effective policy's outage block). Absent on changes registered before C-6.
+	Outage string `json:"outage,omitempty"`
+	// Ended is the record that moved the change to degraded or exception (C-6): its seq, its tool and, for an
+	// exception, its kind.
+	Ended *Ended `json:"ended,omitempty"`
+}
+
+// Ended names the provider record that took a change out of the main path.
+type Ended struct {
+	Seq  int64  `json:"seq"`
+	Tool string `json:"tool"`
+	Kind string `json:"kind,omitempty"`
 }
 
 // TargetOf is "repo#pr@short" (or "repo@short" for a pushed commit).
@@ -160,7 +173,8 @@ func Open(req ChangeRequest, cl Classification, now time.Time, registeredBy stri
 		LinesChanged: req.LinesChanged, Objects: append([]ObjectChange(nil), req.Objects...), Checks: copyChecks(req.Checks),
 		PolicyVersion: cl.Policy.Version, RepoPolicyDigest: cl.Policy.RepoPolicyDigest, Tier: cl.Tier, Reasons: reasons,
 		Requirement: cl.Requirement, State: "holding", CreatedAt: PyTime{now}, UpdatedAt: PyTime{now},
-		ExpiresAt: PyTime{now.AddDate(0, 0, cl.Policy.TTLDays)}, RegisteredBy: registeredBy}
+		ExpiresAt: PyTime{now.AddDate(0, 0, cl.Policy.TTLDays)}, RegisteredBy: registeredBy,
+		Outage: cl.Policy.OutageFor(cl.Tier)}
 	return c.View()
 }
 
@@ -185,9 +199,9 @@ func FromRecord(raw []byte) (*Change, error) {
 // rejected once it can never be, nothing while it holds.
 func DeploymentAnswer(state string) *string {
 	switch state {
-	case "cleared":
+	case StateCleared:
 		return strp("approved")
-	case "holding":
+	case StateHolding:
 		return nil
 	}
 	return strp("rejected")
@@ -226,7 +240,7 @@ func CheckReason(reason any) (string, error) {
 
 // RoleFor is gate.role_for: which requirement a person satisfies, owner first, else outside.
 func RoleFor(person string, groups map[string]bool, c *Change) (string, error) {
-	if c.State != "holding" {
+	if c.State != StateHolding {
 		return "", gerr("DG-STATE", "this change is "+c.State, "", 409)
 	}
 	if person == c.Proposer {

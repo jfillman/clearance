@@ -195,7 +195,8 @@ func TestMinimal(t *testing.T) {
 		t.Errorf("core: CLEARANCE_DSN %q", e["CLEARANCE_DSN"])
 	}
 	for _, unset := range []string{"CLEARANCE_PROVIDERS", "CLEARANCE_OIDC_ISSUER", "CLEARANCE_GITHUB_APP_ID",
-		"BACKSTAGE_URL", "CLEARANCE_TRUSTED_REGISTRIES", "CLEARANCE_BUNDLES", "CLEARANCE_BUNDLE_SOURCES"} {
+		"BACKSTAGE_URL", "CLEARANCE_TRUSTED_REGISTRIES", "CLEARANCE_BUNDLES", "CLEARANCE_BUNDLE_SOURCES",
+		"CLEARANCE_PROTECTED_ENVIRONMENTS", "CLEARANCE_BREAKGLASS_MAX_TTL"} {
 		if _, ok := e[unset]; ok {
 			t.Errorf("core: %s is set by default", unset)
 		}
@@ -263,6 +264,9 @@ func TestFullCoversEveryCoreVariable(t *testing.T) {
 		if _, ok := e[n]; !ok {
 			t.Errorf("CLEARANCE core variable %s has no chart value (not set by ci/full-values.yaml)", n)
 		}
+	}
+	if e["CLEARANCE_PROTECTED_ENVIRONMENTS"] != "hangar-prod/*" || e["CLEARANCE_BREAKGLASS_MAX_TTL"] != "2h" {
+		t.Errorf("protected environments %q break-glass max TTL %q", e["CLEARANCE_PROTECTED_ENVIRONMENTS"], e["CLEARANCE_BREAKGLASS_MAX_TTL"])
 	}
 	if e["CLEARANCE_TRUSTED_REGISTRIES"] != "ghcr.io/riley-roooo/" || e["CLEARANCE_BUNDLES"] != "/etc/clearance/bundles/hangar/bundle.json" {
 		t.Errorf("trusted registries %q bundles %q", e["CLEARANCE_TRUSTED_REGISTRIES"], e["CLEARANCE_BUNDLES"])
@@ -399,6 +403,7 @@ func TestRefused(t *testing.T) {
 		"app without id":                   {[]string{"--set", "database.existingSecret=x", "--set", "githubApp.enabled=true", "--set", "githubApp.existingSecret=s"}, "githubApp.appId is required"},
 		"bad comments":                     {[]string{"--set", "database.existingSecret=x", "--set", "githubApp.comments=all"}, "githubApp.comments is off or agent-failures"},
 		"flight registry slash":            {[]string{"--set", "database.existingSecret=x", "--set", "gate.trustedRegistries[0]=ghcr.io/x"}, `must end in "/"`},
+		"protected env shape":              {[]string{"--set", "database.existingSecret=x", "--set", "gate.protectedEnvironments[0]=prod"}, `is not <cluster>/<env>`},
 		"bad digest":                       {[]string{"--set", "database.existingSecret=x", "--set", "image.digest=latest"}, "image.digest is sha256"},
 		"route without parent":             {[]string{"--set", "database.existingSecret=x", "--set", "httpRoutes.core.enabled=true"}, "parentRefs is required"},
 		"eso without store":                {[]string{"--set", "database.existingSecret=x", "--set", "externalSecrets.enabled=true"}, "secretStoreRef.name is required"},

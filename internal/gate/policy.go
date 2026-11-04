@@ -46,7 +46,7 @@ var (
 
 // States, proposer kinds and object ops.
 var (
-	States        = []string{"holding", "cleared", "denied", "expired", "superseded"}
+	States        = []string{StateHolding, StateCleared, StateDenied, StateExpired, StateSuperseded, StateDegraded, StateException}
 	ProposerKinds = []string{"person", "agent", "unknown"}
 	ops           = []string{"added", "changed", "removed"}
 	metadataOnly  = []string{"/metadata/labels", "/metadata/annotations"}
@@ -94,6 +94,9 @@ type Policy struct {
 	Approvers         map[int]Approvers
 	RepoPolicyDigest  *string // set by Tightened: the clearance.yaml that shaped this policy
 	Tier2Paths        []string
+	// Outage is what a provider does with each tier while the core is unreachable (OutageFor; "" is the baseline,
+	// DefaultOutage).
+	Outage [4]string
 }
 
 // DefaultPolicy is GatePolicy(): the baseline of 2026-10-31.
@@ -117,6 +120,7 @@ func DefaultPolicy() Policy {
 		OutsideGroups:   append([]string{}, vocab.Get().OutsideGroups...),
 		TTLDays:         DefaultTTLDays,
 		Approvers:       map[int]Approvers{2: {1, 0}, 3: {1, 1}},
+		Outage:          DefaultOutage,
 	}
 }
 
@@ -130,6 +134,8 @@ type PolicyView struct {
 	TTLDays           int                  `json:"ttlDays"`
 	Approvers         map[string]Approvers `json:"approvers"`
 	RepoPolicy        *string              `json:"repoPolicy"`
+	// Outage is the outage policy by tier: allow-and-record or hold (C-6).
+	Outage map[string]string `json:"outage"`
 }
 
 // PolicyTiers is the view's tier table: "3" then "0", as gate.py writes it.
@@ -162,6 +168,7 @@ func (p Policy) View() PolicyView {
 		Version: p.Version, Tiers: tiers,
 		TrustedRegistries: nonNil(p.TrustedRegistries), MaxLinesTier1: p.MaxLinesTier1,
 		OutsideGroups: nonNil(p.OutsideGroups), TTLDays: p.TTLDays, Approvers: appr, RepoPolicy: p.RepoPolicyDigest,
+		Outage: p.OutageView(),
 	}
 }
 
@@ -173,8 +180,8 @@ func nonNil(s []string) []string {
 }
 
 // Tightened applies a repo's clearance.yaml. Allowed: tiers.3.{kinds,paths,fields} (add), tiers.2.{kinds,paths}
-// (add), approvers.{2,3}.{owner,outside} (raise), ttlDays (shorten). Anything that loosens, or an unknown key, is
-// refused (DG-POLICY).
+// (add), approvers.{2,3}.{owner,outside} (raise), ttlDays (shorten), outage.{0..3} (allow-and-record to hold).
+// Anything that loosens, or an unknown key, is refused (DG-POLICY).
 func (p Policy) Tightened(repoPolicy any) (Policy, error) {
 	if repoPolicy == nil {
 		return p, nil
@@ -192,14 +199,14 @@ func (p Policy) Tightened(repoPolicy any) (Policy, error) {
 	digest := hex.EncodeToString(sum[:])
 	var unknown []string
 	for k := range rp {
-		if k != "tiers" && k != "approvers" && k != "ttlDays" {
+		if k != "tiers" && k != "approvers" && k != "ttlDays" && k != "outage" {
 			unknown = append(unknown, k)
 		}
 	}
 	if len(unknown) > 0 {
 		sort.Strings(unknown)
 		return p, gerr("DG-POLICY", fmt.Sprintf("clearance.yaml: unknown key %s", pycompat.Repr(unknown[0])),
-			"Allowed: tiers.{2,3}.{kinds,paths,fields}, approvers.{2,3}.{owner,outside}, ttlDays.", 400)
+			"Allowed: tiers.{2,3}.{kinds,paths,fields}, approvers.{2,3}.{owner,outside}, ttlDays, outage.{0,1,2,3}.", 400)
 	}
 	t3k := map[string]bool{}
 	for k := range p.Tier3Kinds {
@@ -308,7 +315,16 @@ func (p Policy) Tightened(repoPolicy any) (Policy, error) {
 		}
 		ttl = n
 	}
+	outage := p.Outage
+	if v, present := rp["outage"]; present {
+		o, err := p.tightenOutage(v)
+		if err != nil {
+			return p, err
+		}
+		outage = o
+	}
 	out := p
+	out.Outage = outage
 	out.Tier3Kinds, out.Tier3Fields, out.Tier3Paths = t3k, t3f, t3p
 	out.TTLDays, out.Approvers, out.RepoPolicyDigest, out.Tier2Paths = int(ttl), appr, &digest, t2p
 	return out, nil

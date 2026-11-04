@@ -89,7 +89,7 @@ unset, so the core's default applies. Lists are joined with commas.
 | `providers` | `CLEARANCE_PROVIDERS` | The registered providers, `{name, version, principals, kinds?, intent_capture?, definitions?, conformance?}` ([core.md](core.md#registered-providers-clearance_providers)). Without one nobody may evaluate or record. `definitions: true` (one provider at most) may publish its cluster-pinned agent definitions. |
 | `verifiers` | `CLEARANCE_VERIFIERS` | Principal globs that may register changes and ask for provenance. |
 | `delegates` | `CLEARANCE_DELEGATES` | Principal globs that may act for a person they name. |
-| `admins` | `CLEARANCE_ADMINS` | `user:<login>` globs that may deny any held change. |
+| `admins` | `CLEARANCE_ADMINS` | `user:<login>` globs that may deny any held change and break glass (`POST /v1/breakglass`). |
 | `policy.bundles` | `CLEARANCE_BUNDLES` | Policy bundles, each `{name, configMap, key}` (key default `bundle.json`): a ConfigMap you manage, mounted for the core and the api at `/etc/clearance/bundles/<name>/` ([core.md](core.md#policy-bundles)). Default: the core rules only. |
 | `policy.sources` | `CLEARANCE_BUNDLE_SOURCES` | Where each bundle source is read at start, by name: `{url, sendToken?, tokenAudience?, tokenExpirationSeconds?}` (with `sendToken` the pod sends a projected service-account token, of `tokenAudience` or else the API server's default audience, mounted at `/var/run/clearance/sources/<name>`), or `{configMap, key?}` (a file). |
 | `policy.sourceWait` | `CLEARANCE_BUNDLE_SOURCE_WAIT` | How long the start retries a source that does not answer before going on with its bundle degraded (default `10s`; [core.md](core.md#policy-bundles)). |
@@ -102,6 +102,8 @@ unset, so the core's default applies. Lists are joined with commas.
 | `gate.agentLogins` | `AGENT_LOGINS` | GitHub logins agents open PRs as (default none). |
 | `gate.modelRoutes` | `MODEL_ROUTES` | `alias=upstream` pairs a definition release may name. |
 | `gate.runtimeImagesExtra` | `RUNTIME_IMAGES_EXTRA` | Globs a definition's `runtime.image` may match. |
+| `gate.protectedEnvironments` | `CLEARANCE_PROTECTED_ENVIRONMENTS` | `<cluster glob>/<env glob>` entries the gate protects. **Empty: every environment is protected** (fail closed); a change anywhere else is cleared at tier 0 (`unprotected`) and recorded ([gate.md](gate.md#protected-environments)). |
+| `gate.breakglassMaxTTL` | `CLEARANCE_BREAKGLASS_MAX_TTL` | The longest break-glass window (empty: `4h`, the ceiling; at least `1m`). |
 | `gate.trustedRegistries` | `CLEARANCE_TRUSTED_REGISTRIES` | Image prefixes, each ending in `/`, a tier-1 image bump may come from; others are tier 2. Empty: any registry (the product default; Hangar sets its own in Apron). |
 | `agents.configMap` | `CLEARANCE_AGENTS_DIR` | A ConfigMap of bundled agent definitions, mounted at `/etc/clearance/agents`. |
 

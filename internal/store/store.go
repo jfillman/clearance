@@ -72,6 +72,14 @@ type SigningKey struct {
 	RetiredAt *time.Time
 }
 
+// Breakglass is one row of clearance_breakglass (C-6): a break-glass window an admin opened. Record is the gate's
+// view of it (gate.Breakglass) as jsonb; the other fields are its indexed columns. State is open or closed.
+type Breakglass struct {
+	ID, Cluster, Env, State string
+	ExpiresAt               time.Time
+	Record                  json.RawMessage
+}
+
 // Store is a writable core store.
 type Store interface {
 	Reader
@@ -93,6 +101,8 @@ type Tx interface {
 	PutToken(ctx context.Context, t Token) error
 	// UseSigningKey records k as the key in use (inserted, or un-retired) and retires every other key at now.
 	UseSigningKey(ctx context.Context, k SigningKey, now time.Time) error
+	// PutBreakglass writes a break-glass window (an upsert by id).
+	PutBreakglass(ctx context.Context, b Breakglass) error
 }
 
 // Reader is what both a Tx and the store outside a transaction can read.
@@ -120,4 +130,8 @@ type Reader interface {
 	TokensDue(ctx context.Context, due time.Time, keyID string, limit int) ([]Token, error)
 	// SigningKeys are the keys in use or retired after since, newest first.
 	SigningKeys(ctx context.Context, since time.Time) ([]SigningKey, error)
+	// Breakglass is one break-glass window (ErrNotFound when there is none).
+	Breakglass(ctx context.Context, id string) (Breakglass, error)
+	// BreakglassOpen are the windows still open (not yet reconciled), soonest expiry first.
+	BreakglassOpen(ctx context.Context) ([]Breakglass, error)
 }
