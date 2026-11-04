@@ -42,6 +42,19 @@ deployment that sets no signing key, except that records and views carry the new
 - `provider.conformance`: a `CLEARANCE_PROVIDERS` entry's `conformance` (`clearance-conformance/v1@<date>`) is stamped
   on every record that provider writes.
 - Go client `Clearance`, `Keys`; Python client `get_clearance`, `keys` (models regenerated).
+- C-8: every deployment decision records its policy. Each `deploy.*` record carries a `policy` group:
+  `ref` (`clearance.yaml@<commit>`, `clearance.yaml@sha256:<digest>` or `baseline`), `version` (the gate baseline
+  plus the `clearance.yaml` digest), and the offline admission result the verifier sent: `engine`
+  (`kyverno/<version>`, or `none`), `verdict` (`pass`, `warn`, `fail`, `skipped`, `error`, or `not-evaluated`) and
+  `bundle` (the rule set, `<repo>//<path>@<commit>`). `POST /v1/clearances` takes `policyCommit` and
+  `admission {engine, verdict, bundle, deny, warn}` (`checks.admission` must agree with the verdict); the change
+  keeps `policy_ref` and `admission` (optional in the contract: older rows have neither). The verdict is recorded,
+  not enforced. The evidence schema's `policy` gains `verdict` and `bundle` (docs/gate.md "The policy in the record").
+- The clearance token's `policy` claim is the record's policy group (C-8): `{ref, version, engine, verdict, bundle}`,
+  so the token attests what its `deploy.clear` record says. It replaces C-1's `{ref, repo_policy_digest, engine:
+  "clearance-gate", engine_version, verdict: "clear" | "hold"}`: the gate's decision stays in `clearance.cleared_by`
+  and `tier`, and the `clearance.yaml` digest is in `version`. Not yet released, so no token in the field carries
+  the old shape.
 
 ### Added (G-TF-1)
 - G-TF-1, the terraform-plan subject: `POST /v1/clearances` takes `subject: {kind: terraform-plan, planDigest,

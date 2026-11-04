@@ -118,6 +118,9 @@ Evidence records, in the existing chain, `boundary: deployment`:
 | `deploy.expire` | the TTL passes | — |
 | `deploy.exception` | admission or the controller sees a change no grant covers | object, who applied it (the admission request's user) |
 
+Every `deploy.*` record also carries a `policy` group naming the policy that decided and the policy engine's
+verdict (C-8, "The policy in the record" below).
+
 Apps' owners see their apps' records (the existing `app` scoping); the C1 queue is for everyone who may clear
 something; auditors see all. The run that drafted the change links by `task_id` through the PR receipt.
 
@@ -318,6 +321,62 @@ nobody is in either while Backstage is down. Differences from the Python transpo
 (was 30 s; the Go gate asks inside its lock and the operation's transaction), redirects are not followed (the token
 stays with the configured URL), the answer is capped at 1 MiB (was 16 MiB), a malformed answer is no groups where
 Python raised, and each cache holds at most 4096 entries.
+
+## The policy in the record (C-8, Built; live check pending)
+
+Two policies stand behind a deployment decision: Clearance's own tier policy (the baseline, tightened by the repo's
+`clearance.yaml`), which the core applies, and the target cluster's admission policies, which the verifier evaluates
+offline over the rendered tree before it registers the change. Every `deploy.*` record about a change
+(`deploy.request`, `deploy.clear`, `deploy.deny`, `deploy.expire`, a GitHub deployment's `deploy.request`) carries a
+`policy` group, in the evidence schema's Decision group, that names both:
+
+```json
+"policy": {
+  "ref": "clearance.yaml@9f2c...e1",
+  "version": "baseline-2026-10-31+sha256:3905e609...e3e5",
+  "engine": "kyverno/1.19.0",
+  "verdict": "pass",
+  "bundle": "https://github.com/jfillman/gitops-hangar-dev.git//30-policy@4b1d...07"
+}
+```
+
+| Field | What it is | Where it comes from |
+| --- | --- | --- |
+| `ref` | `clearance.yaml@<commit>`: the commit that last changed the repo's `clearance.yaml` at the change's head. `clearance.yaml@sha256:<digest>` when the verifier sent the file without its commit; `baseline` when the repo has none | the request's `policyCommit` (else the digest of `policy`) |
+| `version` | the gate baseline's version, plus `+sha256:<digest>` of the `clearance.yaml` that tightened it. With the core's baseline this reproduces the tier decision | the core |
+| `engine` | the admission engine and its version, `kyverno/1.19.0`; `none` when no admission result was sent | the request's `admission.engine` |
+| `verdict` | `pass`, `warn` (Audit/Warn findings only, or a rule offline evaluation could not decide), `fail` (a Deny/Enforce policy fails: the cluster would refuse the sync), `skipped` (no admission policy to evaluate), `error` (the evaluation could not run); `not-evaluated` when none was sent | the request's `admission.verdict` |
+| `bundle` | the admission rule set it ran: `<repo>//<path>@<commit>`. With the rendered tree (`subject`) and `engine`, it reproduces the admission verdict | the request's `admission.bundle` |
+
+A decision with no change on record (a GitHub deployment of an unregistered commit, `DG-UNREGISTERED`) records
+`{ref: baseline, version: <baseline>, engine: none, verdict: not-evaluated}`. The group is **claimed**: the verifier
+reports the commit and the verdict; the core fills `version` from what it applied. The runtime boundary's records keep
+their own `policy` group (`clearance-core+<bundle>@<version>`, the bundle digest, `engine: cel-go`), unchanged. The clearance token signed on `deploy.clear` carries the same group as its `policy` claim, field for field ([core.md](core.md) "The clearance token"): the token attests what the record says.
+
+**The request.** `POST /v1/clearances` takes two optional fields beside `policy` (all strictly decoded, unknown keys
+refused):
+
+- `policyCommit`: the 40-hex commit that last changed `clearance.yaml` at the head. Refused without `policy`.
+- `admission`: `{engine, verdict, bundle, deny, warn}`; `engine` is `<name>/<version>` (lowercase name), `verdict` one
+  of the five above, `bundle` at most 512 printable characters, `deny` and `warn` the blocking and warning finding
+  counts. It is a check result: `checks.admission` becomes its verdict, and a request whose `checks.admission` says
+  something else is refused (400).
+
+The change keeps `policy_ref` and `admission` (clearance-api serves them on `GET /v1/clearances/{id}`; a change
+registered before this release has neither, and its records name `clearance.yaml@sha256:<digest>` or `baseline`). A
+re-registration of a holding change takes the new admission result, so the `deploy.clear` that follows records the
+verdict it cleared on.
+
+**Recorded, not enforced.** The tier rules do not read the verdict: on Hangar the `policy-validation-` check is the
+required gate for an admission failure, and phase 2's grant-match admission is the hard one. Making a tier-1 clear by
+policy wait for `admission` in (`pass`, `warn`, `skipped`) is a one-line change to the checks a tier-1 change needs,
+left for the owner to decide (it would turn every verifier that sends no admission result into tier 2).
+
+**Who sends it.** Glidepath's `clearance-gate-` task evaluates each protected environment's rendered head with the
+Kyverno CLI against the target cluster's policy bundle, exactly as the `policy-validation-` gate does (glidepath
+`docs/admin/policy-validation.md`; the two tasks share the evaluation), and sends `admission` and `policyCommit`.
+Argo CD's config management plugin (G-ARGO) sends the same `admission` object from its own offline evaluation of the
+tree it rendered; `clearance register` sends none today (`not-evaluated`).
 
 ## The manifest-tree digest (Built)
 

@@ -216,6 +216,89 @@
         }
       ]
     },
+    "taskId": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+          "description": "The run tree's task id, kept as task_id."
+        }
+      ]
+    },
+    "policyCommit": {
+      "description": "The 40-hex commit that last changed clearance.yaml at head (C-8); needs policy.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "const": ""
+        },
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      ]
+    },
+    "admission": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "engine",
+            "verdict"
+          ],
+          "description": "The offline admission result (C-8); checks.admission, when sent, must be its verdict.",
+          "properties": {
+            "engine": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,31}/v?[0-9][0-9A-Za-z.+-]{0,63}$"
+            },
+            "verdict": {
+              "enum": [
+                "pass",
+                "warn",
+                "fail",
+                "skipped",
+                "error"
+              ]
+            },
+            "bundle": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "const": ""
+                },
+                {
+                  "type": "string",
+                  "pattern": "^[!-~]+$",
+                  "maxLength": 512
+                }
+              ]
+            },
+            "deny": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1048576
+            },
+            "warn": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1048576
+            }
+          }
+        }
+      ]
+    },
     "definition": {
       "oneOf": [
         {

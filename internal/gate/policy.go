@@ -209,13 +209,10 @@ func (p Policy) Tightened(repoPolicy any) (Policy, error) {
 	if !ok {
 		return p, gerr("DG-POLICY", "clearance.yaml is a mapping", "", 400)
 	}
-	// json.dumps(repo_policy, sort_keys=True, default=str): ASCII escapes, default separators.
-	raw, err := pycompat.Dumps(rp, pycompat.Options{ASCII: true, Spaced: true})
+	digest, err := repoPolicyDigest(rp)
 	if err != nil {
 		return p, gerr("DG-POLICY", "clearance.yaml is a mapping", "", 400)
 	}
-	sum := sha256.Sum256(raw)
-	digest := hex.EncodeToString(sum[:])
 	var unknown []string
 	for k := range rp {
 		if k != "tiers" && k != "approvers" && k != "ttlDays" && k != "workspaces" {
@@ -415,6 +412,17 @@ func (p Policy) tightenWorkspaces(v any) (Policy, error) {
 		}
 	}
 	return out, nil
+}
+
+// repoPolicyDigest is the sha256 of a clearance.yaml as gate.py hashed it: json.dumps(repo_policy, sort_keys=True,
+// default=str), ASCII escapes, default separators.
+func repoPolicyDigest(rp map[string]any) (string, error) {
+	raw, err := pycompat.Dumps(rp, pycompat.Options{ASCII: true, Spaced: true})
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func sortedKeys(m map[string]any) []string {

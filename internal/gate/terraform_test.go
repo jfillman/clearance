@@ -323,6 +323,9 @@ func TestARegisteredPlanIsRecordedWithItsSubject(t *testing.T) {
 			d["planJson"] != planJSON || d["variableSet"] != varSet || d["gitCommit"] != head {
 			t.Fatalf("%s: subject %v", rec["tool"], rec["subject"])
 		}
+		if pg, _ := rec["policy"].(map[string]any); pg["ref"] != "baseline" || pg["version"] != "baseline-2026-10-31" || pg["verdict"] != "not-evaluated" {
+			t.Fatalf("%s: policy group %v", rec["tool"], rec["policy"])
+		}
 		if !inList(rec["claimed"], "subject") {
 			t.Fatalf("the subject is the verifier's claim: %v", rec["claimed"])
 		}
@@ -431,9 +434,14 @@ func TestTheChangeRequestSchemaMatchesTheParser(t *testing.T) {
 		"plan, a placeholder":          tfChange(func() map[string]any { s := plan(nil); s["planDigest"] = strings.Repeat("a", 64); return s }(), nil),
 		"plan, bad action":             tfChange(plan(nil, res("aws_vpc.lab", "aws_vpc", []string{"move"})), nil),
 		"plan, unknown field":          tfChange(func() map[string]any { s := plan(nil); s["raw"] = "x"; return s }(), nil),
-		"plan, null resources":         tfChange(func() map[string]any { s := plan(nil); s["resources"] = nil; return s }(), nil),
-		"plan, objects":                tfChange(ok, map[string]any{"objects": replicas}),
-		"plan, a value in fields":      tfChange(plan(nil, res("aws_vpc.lab", "aws_vpc", update, "tags=x")), nil),
+		"manifest with C-1 and C-8 fields": change(map[string]any{"taskId": "task-1", "policy": map[string]any{"ttlDays": 1}, "policyCommit": head,
+			"admission": map[string]any{"engine": "kyverno/1.19.0", "verdict": "pass", "bundle": "r//p@x", "deny": 0, "warn": 1}}),
+		"manifest, bad admission":          change(map[string]any{"admission": map[string]any{"engine": "Kyverno", "verdict": "pass"}}),
+		"manifest, bad taskId":             change(map[string]any{"taskId": "a b"}),
+		"plan with a taskId and admission": tfChange(plan(nil), map[string]any{"taskId": "t", "admission": map[string]any{"engine": "kyverno/1.19.0", "verdict": "skipped"}}),
+		"plan, null resources":             tfChange(func() map[string]any { s := plan(nil); s["resources"] = nil; return s }(), nil),
+		"plan, objects":                    tfChange(ok, map[string]any{"objects": replicas}),
+		"plan, a value in fields":          tfChange(plan(nil, res("aws_vpc.lab", "aws_vpc", update, "tags=x")), nil),
 	}
 	accepted := 0
 	for name, body := range bodies {
@@ -446,8 +454,8 @@ func TestTheChangeRequestSchemaMatchesTheParser(t *testing.T) {
 			accepted++
 		}
 	}
-	if accepted != 6 {
-		t.Errorf("%d of %d bodies accepted, want 6 (the comparison would be vacuous)", accepted, len(bodies))
+	if accepted != 8 {
+		t.Errorf("%d of %d bodies accepted, want 8 (the comparison would be vacuous)", accepted, len(bodies))
 	}
 }
 
@@ -456,6 +464,9 @@ func TestAPlanTokenIsATerraformPlanSubject(t *testing.T) {
 	f := newGate(t)
 	c := f.register(t, "ci", tfChange(plan(nil, res("aws_vpc.lab", "aws_vpc", update, "/tags/Owner")), nil))
 	cl := (&gate.Tokens{}).Claims(c, "n", T0, T0.Add(time.Minute))
+	if cl.Policy != c.PolicyClaim() || cl.Policy.Version == "" {
+		t.Fatalf("policy claim %+v", cl.Policy)
+	}
 	if cl.Subjects.Kind != gate.KindTerraformPlan || cl.Subjects.PlanDigest != planDigest || cl.Subjects.TreeRoot != "" {
 		t.Fatalf("%+v", cl.Subjects)
 	}

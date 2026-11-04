@@ -222,7 +222,7 @@ Both carry the same claims. A verifier may check either one and gets the same an
 | `objects` | each object the change touches: `{apiVersion, kind, namespace, name, rendered, changed, op}`; `rendered` is its rendered hash as the verifier reported it |
 | `target` | `{cluster, env, app}` |
 | `tier` | 0 to 3 |
-| `policy` | `{ref, repo_policy_digest, engine: "clearance-gate", engine_version, verdict: "clear" \| "hold"}`: the baseline's version, the repo's `clearance.yaml` digest, and the engine's verdict (`hold` when people cleared it) |
+| `policy` | `{ref, version, engine, verdict, bundle}`: the deploy.* record's `policy` group, field for field, so the token attests what the record says ([gate.md](gate.md) "The policy in the record"). `ref` is the tier policy (`clearance.yaml@<commit>`, `clearance.yaml@sha256:<digest>` or `baseline`); `version` the gate baseline plus the `clearance.yaml` digest; `engine`, `verdict` and `bundle` the offline admission result the verifier sent (`kyverno/<version>`, `pass` \| `warn` \| `fail` \| `skipped` \| `error`, and the rule set `<repo>//<path>@<commit>`), or `none` and `not-evaluated` (no `bundle`). The gate's own decision is `clearance.cleared_by` and `tier` |
 | `provenance` | `{level, check, proposer, proposer_kind, agent, task_id}`: `level` is the evidence schema's (`confirmed-agent` for an agent PR the agent gates confirmed, `probable-agent` for another agent PR, `confirmed-human` for a person's PR the gates found no agent in, else `unknown`); `task_id` is the run's, when the registration names it (`taskId`) |
 | `approvals` | each person: `{sub, iss, person, via, role, at}` (below); empty when policy cleared it |
 
@@ -245,7 +245,9 @@ A decoded payload (a tier-2 change one person cleared through Tower):
                "changed": true, "op": "changed"}],
   "target": {"cluster": "hangar-prod", "env": "prod", "app": "gate-api"},
   "tier": 2,
-  "policy": {"ref": "baseline-2026-10-31", "engine": "clearance-gate", "engine_version": "0.31.0", "verdict": "hold"},
+  "policy": {"ref": "clearance.yaml@9f2c00000000000000000000000000000000e1e1", "version": "baseline-2026-10-31+sha256:3905e6096876f604915034458c354e7c01ca4266dde97b4fcd23efdfe3eee3e5",
+             "engine": "kyverno/1.19.0", "verdict": "pass",
+             "bundle": "https://github.com/jfillman/gitops-hangar-prod.git//30-policy@4b1d00000000000000000000000000000000a7a7"},
   "provenance": {"level": "confirmed-human", "check": "not-agent", "proposer": "user:dana", "proposer_kind": "person"},
   "approvals": [{"sub": "user:erin", "iss": "delegate:hangar-prod/app-backstage-prod/backstage", "person": "user:erin",
                  "via": "hangar-prod/app-backstage-prod/backstage", "role": "owner", "at": "2026-11-03T12:00:00Z"}]

@@ -165,7 +165,7 @@ func (w *writer) record(principal string, via *string, tool string, c *Change, d
 		"ts": pycompat.ISO(w.now), "task_id": strOrNil(c.TaskID), "session": nil, "parent": nil, "principal": principal,
 		"agent": strOrNil(c.Agent), "tool": tool, "tier": nil, "decision": decision, "rule": strOrNil(rule),
 		"target": c.TargetOf(), "args_sha256": pycompat.ArgsDigest(args), "result": result, "app": c.App,
-		"boundary": "deployment", "change": c.Summary(), "subject": c.recordSubject(),
+		"boundary": "deployment", "change": c.Summary(), "subject": c.recordSubject(), "policy": c.PolicyGroup(),
 	}
 	for _, x := range extra {
 		for k, v := range x {
@@ -322,6 +322,8 @@ func (s *Service) Register(ctx context.Context, p authn.Principal, body any) (*C
 			ch = existing
 			ch.Checks, ch.Tier, ch.Reasons, ch.UpdatedAt = copyChecks(req.Checks), c.Tier, append([]Reason(nil), c.Reasons...), now
 			ch.Requirement = c.Requirement
+			ch.Admission = copyAdmission(req.Admission)
+			ch.PolicyRef, ch.PolicyVersion, ch.RepoPolicyDigest = policyRefOf(req), c.Policy.Version, c.Policy.RepoPolicyDigest
 		}
 		switch c.Decision {
 		case "deny":

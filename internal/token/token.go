@@ -129,14 +129,18 @@ type Target struct {
 	App     string `json:"app"`
 }
 
-// Policy is the policy the gate decided with and its verdict.
+// Policy is the policy the change was decided under: the same group as the deploy.* record's `policy` (C-8;
+// clearance docs/gate.md "The policy in the record"), so the token attests what the record says. Ref is the tier
+// policy (clearance.yaml@<commit>, clearance.yaml@sha256:<digest> or baseline); Version the gate baseline plus the
+// clearance.yaml digest; Engine, Verdict and Bundle the offline admission result the verifier sent (kyverno/<version>,
+// pass | warn | fail | skipped | error, and the rule set <repo>//<path>@<commit>), or "none" and "not-evaluated". The
+// gate's own decision is Clearance.ClearedBy and Tier, not a policy verdict.
 type Policy struct {
-	Ref              string `json:"ref"`
-	RepoPolicyDigest string `json:"repo_policy_digest,omitempty"`
-	Engine           string `json:"engine"`
-	EngineVersion    string `json:"engine_version"`
-	// Verdict is the engine's: "clear" (by policy) or "hold" (for people, then met).
+	Ref     string `json:"ref"`
+	Version string `json:"version"`
+	Engine  string `json:"engine"`
 	Verdict string `json:"verdict"`
+	Bundle  string `json:"bundle,omitempty"`
 }
 
 // Provenance is who proposed the change and how sure Clearance is of it.
