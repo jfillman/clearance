@@ -129,14 +129,18 @@ type Target struct {
 	App     string `json:"app"`
 }
 
-// Policy is the policy the gate decided with and its verdict.
+// Policy is the policy the change was decided under: the same group as the deploy.* record's `policy` (C-8;
+// clearance docs/gate.md "The policy in the record"), so the token attests what the record says. Ref is the tier
+// policy (clearance.yaml@<commit>, clearance.yaml@sha256:<digest> or baseline); Version the gate baseline plus the
+// clearance.yaml digest; Engine, Verdict and Bundle the offline admission result the verifier sent (kyverno/<version>,
+// pass | warn | fail | skipped | error, and the rule set <repo>//<path>@<commit>), or "none" and "not-evaluated". The
+// gate's own decision is Clearance.ClearedBy and Tier, not a policy verdict.
 type Policy struct {
-	Ref              string `json:"ref"`
-	RepoPolicyDigest string `json:"repo_policy_digest,omitempty"`
-	Engine           string `json:"engine"`
-	EngineVersion    string `json:"engine_version"`
-	// Verdict is the engine's: "clear" (by policy) or "hold" (for people, then met).
+	Ref     string `json:"ref"`
+	Version string `json:"version"`
+	Engine  string `json:"engine"`
 	Verdict string `json:"verdict"`
+	Bundle  string `json:"bundle,omitempty"`
 }
 
 // Provenance is who proposed the change and how sure Clearance is of it.
@@ -426,7 +430,10 @@ func (c *Claims) Covers(apiVersion, kind, namespace, name, rendered string) erro
 
 // ParseEnvelope decodes a DSSE envelope strictly: size-capped, unknown fields refused, the clearance payloadType,
 // one to MaxSignatures signatures.
-func ParseEnvelope(raw []byte) (*Envelope, error) {
+func ParseEnvelope(raw []byte) (*Envelope, error) { return parseEnvelope(raw, PayloadType) }
+
+// parseEnvelope is ParseEnvelope for one payloadType (a token's, or a grant feed's).
+func parseEnvelope(raw []byte, payloadType string) (*Envelope, error) {
 	if len(raw) > MaxEnvelopeBytes {
 		return nil, fmt.Errorf("%w: over %d bytes", ErrMalformed, MaxEnvelopeBytes)
 	}
@@ -434,7 +441,7 @@ func ParseEnvelope(raw []byte) (*Envelope, error) {
 	if err := strictJSON(raw, &env); err != nil {
 		return nil, fmt.Errorf("%w: envelope: %v", ErrMalformed, err)
 	}
-	if env.PayloadType != PayloadType {
+	if env.PayloadType != payloadType {
 		return nil, fmt.Errorf("%w: payloadType is %q", ErrMalformed, env.PayloadType)
 	}
 	if len(env.Signatures) == 0 || len(env.Signatures) > MaxSignatures {

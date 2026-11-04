@@ -74,6 +74,9 @@ func (b *q) evidenceFilter(f EvidenceFilter) {
 		{"tool", f.Tool}, {"principal", f.Principal}, {"decision", f.Decision}, {"rule", f.Rule}, {"app", f.App}} {
 		b.eq("e.record->>'"+c.field+"'", c.v)
 	}
+	if f.Installation != "" {
+		b.add("e.record->>'principal' = " + b.arg(InstallationPrincipal(f.Installation)))
+	}
 	if f.Since != "" {
 		b.add("e.record->>'ts' >= " + b.arg(f.Since))
 	}
@@ -236,8 +239,9 @@ func likeEscape(s string) string {
 	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
 }
 
-func (s *PG) ByPR(ctx context.Context, tools []string, repo, pr string, v *Viewer) ([]Record, error) {
+func (s *PG) ByPR(ctx context.Context, tools []string, f PRFilter, v *Viewer) ([]Record, error) {
 	b := &q{}
+	repo, pr := f.Repo, f.PR
 	b.add("e.record->>'tool' = ANY(" + b.arg(tools) + ")")
 	match := "(e.record->'effect'->>'repo' = " + b.arg(repo)
 	if pr != "" {
@@ -246,6 +250,18 @@ func (s *PG) ByPR(ctx context.Context, tools []string, repo, pr string, v *Viewe
 		match += ") OR e.record->>'target' LIKE " + b.arg(likeEscape(repo)+"#%")
 	}
 	b.add("(" + match + ")")
+	if f.Installation != "" {
+		inst := b.arg(InstallationPrincipal(f.Installation))
+		if f.ByInstaller {
+			b.add("e.record->>'principal' = " + inst)
+		} else {
+			// A receipt's pull request is its effect's repo#pr, or its target. clearance_evidence_app serves the
+			// lookup (the installation's records by principal).
+			b.add("EXISTS (SELECT 1 FROM clearance_evidence i WHERE i.record->>'principal' = " + inst +
+				" AND i.record->>'principal' LIKE 'app:%' AND i.record->>'tool' = 'provenance.verify' AND i.record->>'target' = " +
+				"COALESCE((e.record->'effect'->>'repo') || '#' || (e.record->'effect'->>'pr'), e.record->>'target'))")
+		}
+	}
 	with := b.evidenceScope(v)
 	return s.records(ctx, with+"SELECT e.record::text, e.assurance FROM clearance_evidence e WHERE "+b.sql()+
 		" ORDER BY e.seq DESC LIMIT "+b.arg(MaxLimit), b.args)
@@ -397,6 +413,147 @@ func (s *PG) SigningKeys(ctx context.Context, since time.Time) ([]store.SigningK
 func (s *PG) Ping(ctx context.Context) error {
 	_, _, err := s.R.Head(ctx)
 	return err
+}
+
+func (s *PG) Head(ctx context.Context) (int64, error) {
+	seq, _, err := s.R.Head(ctx)
+	return seq, err
+}
+
+func (s *PG) EvidenceAfter(ctx context.Context, f EvidenceFilter, v *Viewer, after int64, limit int) ([]Record, error) {
+	b := &q{}
+	with := b.evidenceScope(v)
+	b.evidenceFilter(f)
+	b.add("e.seq > " + b.arg(after))
+	return s.records(ctx, with+"SELECT e.record::text, e.assurance FROM clearance_evidence e WHERE "+b.sql()+
+		" ORDER BY e.seq LIMIT "+b.arg(limit), b.args)
+}
+
+// DeploysAfter reads the primary key's range above after; the change by its primary key.
+func (s *PG) DeploysAfter(ctx context.Context, after int64, limit int) ([]DeployEvent, error) {
+	rows, done, err := s.R.Query(ctx, "SELECT e.seq, e.record->>'tool', COALESCE(e.record->>'ts', ''), "+
+		"(e.record->'change')::text, c.record::text FROM clearance_evidence e "+
+		"LEFT JOIN clearance_changes c ON c.id = e.record->'change'->>'id' "+
+		"WHERE e.seq > $1 AND e.record->>'tool' LIKE 'deploy.%' AND jsonb_typeof(e.record->'change') = 'object' "+
+		"ORDER BY e.seq LIMIT $2", after, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	defer rows.Close()
+	out := []DeployEvent{}
+	for rows.Next() {
+		var d DeployEvent
+		var summary string
+		var change *string
+		if err := rows.Scan(&d.Seq, &d.Tool, &d.TS, &summary, &change); err != nil {
+			return nil, fmt.Errorf("pg: %w", err)
+		}
+		d.Summary = json.RawMessage(summary)
+		if change != nil {
+			d.Change = json.RawMessage(*change)
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+func (s *PG) Feed(ctx context.Context, cluster string) (*store.Feed, error) {
+	f, err := s.R.Feed(ctx, cluster)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &f, nil
+}
+
+// Installations reads clearance_evidence_app (the App installations' records, by principal and seq).
+func (s *PG) Installations(ctx context.Context) ([]Installation, error) {
+	const app = "e.record->>'principal' LIKE 'app:%'"
+	byID := map[string]*Installation{}
+	var order []string
+	rows, done, err := s.R.Query(ctx, "SELECT p, tool, n, first, last, first_ts, last_ts FROM (SELECT "+
+		"e.record->>'principal' AS p, COALESCE(e.record->>'tool', '') AS tool, count(*) AS n, min(e.seq) AS first, "+
+		"max(e.seq) AS last, COALESCE(min(e.record->>'ts'), '') AS first_ts, COALESCE(max(e.record->>'ts'), '') AS last_ts "+
+		"FROM clearance_evidence e WHERE "+app+" GROUP BY 1, 2) g "+`ORDER BY p COLLATE "C", tool COLLATE "C"`)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var p, tool, firstTS, lastTS string
+		var n, first, last int64
+		if err := rows.Scan(&p, &tool, &n, &first, &last, &firstTS, &lastTS); err != nil {
+			rows.Close()
+			done()
+			return nil, fmt.Errorf("pg: %w", err)
+		}
+		in := byID[p]
+		if in == nil {
+			if len(order) >= MaxLimit {
+				continue
+			}
+			in = newInstallation(p)
+			byID[p] = in
+			order = append(order, p)
+		}
+		in.add(tool, n, first, last, firstTS, lastTS)
+	}
+	rows.Close()
+	done()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows, done, err = s.R.Query(ctx, "SELECT DISTINCT ON (e.record->>'principal') e.record->>'principal', "+
+		"e.record->>'target', COALESCE(e.record->>'result', '') FROM clearance_evidence e WHERE "+app+
+		" AND e.record->>'tool' = 'app.installation' ORDER BY e.record->>'principal', e.seq DESC")
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var p, result string
+		var account *string
+		if err := rows.Scan(&p, &account, &result); err != nil {
+			rows.Close()
+			done()
+			return nil, fmt.Errorf("pg: %w", err)
+		}
+		if in := byID[p]; in != nil {
+			in.last(account, result)
+		}
+	}
+	rows.Close()
+	done()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows, done, err = s.R.Query(ctx, "SELECT p, repo FROM (SELECT DISTINCT e.record->>'principal' AS p, "+
+		"split_part(e.record->>'target', '#', 1) AS repo FROM clearance_evidence e WHERE "+app+
+		" AND e.record->>'tool' = 'provenance.verify' AND e.record->>'target' LIKE '%#%') r "+
+		`ORDER BY p COLLATE "C", repo COLLATE "C"`)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	defer rows.Close()
+	for rows.Next() {
+		var p, repo string
+		if err := rows.Scan(&p, &repo); err != nil {
+			return nil, fmt.Errorf("pg: %w", err)
+		}
+		if in := byID[p]; in != nil && len(in.Repos) < MaxLimit {
+			in.Repos = append(in.Repos, repo)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]Installation, 0, len(order))
+	for _, p := range order {
+		out = append(out, *byID[p])
+	}
+	return out, nil
 }
 
 func in(list []string, s string) bool {

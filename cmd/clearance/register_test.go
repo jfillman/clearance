@@ -263,3 +263,39 @@ func TestTheActionsTokenIsFetchedForTheAudience(t *testing.T) {
 		t.Fatal(tok, got, err)
 	}
 }
+
+// The body binds the change to the rendered tree: treeDigest is the manifest-tree digest of --after (docs/gate.md,
+// The manifest-tree digest), not a placeholder; an --after with no manifests is refused before anything is sent.
+func TestTheTreeDigestIsTheManifestTreeOfAfter(t *testing.T) {
+	tmp := t.TempDir()
+	var s sent
+	runRegister(t, argsFor(t, tmp), envFor(t, tmp, nil), capture(&s, 200, map[string]any{"state": "cleared"}), fetchFor)
+	after, err := render.LoadDir(filepath.Join(tmp, "a"))
+	if err != nil || len(after) != 1 {
+		t.Fatal(after, err)
+	}
+	if got := s.body["treeDigest"]; got != render.TreeDigest(after) || got == strings.Repeat("0", 64) {
+		t.Fatalf("treeDigest %v, want %s", got, render.TreeDigest(after))
+	}
+	empty := filepath.Join(tmp, "empty")
+	if err := os.MkdirAll(empty, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--app", "web", "--env", "prod", "--cluster", "hangar-dev", "--after", empty}
+	code, _, errOut := runRegister(t, args, envFor(t, tmp, nil), func(context.Context, string, string, []byte) (int, map[string]any, error) {
+		t.Fatal("sent a change with no tree")
+		return 0, nil, nil
+	}, fetchFor)
+	if code != exitUsage || !strings.Contains(errOut, "holds no manifests") {
+		t.Fatal(code, errOut)
+	}
+	file := filepath.Join(tmp, "a", "web.yaml") // a file, not a directory: once read as an empty tree
+	args = []string{"--app", "web", "--env", "prod", "--cluster", "hangar-dev", "--after", file}
+	code, _, errOut = runRegister(t, args, envFor(t, tmp, nil), func(context.Context, string, string, []byte) (int, map[string]any, error) {
+		t.Fatal("sent a change with no tree")
+		return 0, nil, nil
+	}, fetchFor)
+	if code != exitUsage || !strings.Contains(errOut, "not a directory") {
+		t.Fatal(code, errOut)
+	}
+}

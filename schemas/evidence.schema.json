@@ -383,10 +383,16 @@
         },
         "version": {
           "type": "string"
+        },
+        "verdict": {
+          "type": "string"
+        },
+        "bundle": {
+          "type": "string"
         }
       },
       "x-clearance-group": "decision",
-      "description": "Optional: the policy bundle ref and version and the engine that evaluated it (R-5 fills it)."
+      "description": "Optional: the policy that decided. A runtime decision (R-5): ref names the core and each policy bundle with its version, version is their digest, engine is cel-go. A deployment decision (C-8): ref is clearance.yaml@<commit> (or clearance.yaml@sha256:<digest>, or baseline), version the gate baseline plus the clearance.yaml digest, engine the admission engine and version the verifier ran offline (kyverno/1.19.0, or none), verdict its result (pass, warn, fail, skipped, error, or not-evaluated) and bundle the admission rule set it ran (<repo>//<path>@<commit>)."
     },
     "approvals": {
       "type": "array",

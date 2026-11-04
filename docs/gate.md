@@ -4,7 +4,9 @@ Status (v0.26.1): **phase 1a built** (the gate's core, v0.19.0), fed by Glidepat
 (advisory on Hangar) and `clearance register` (v0.23.0), and answered to GitHub Actions deployments by the App's
 protection rule (v0.22.0; [provenance-app.md](provenance-app.md)). **Not built**: phase 2 admission (the pulled grant
 and the Kyverno policy), `deploy.exception` and outcome records. The design below is as reviewed; the Built sections
-at the end say what exists.
+at the end say what exists. G-TF-1 adds a second subject beside the manifest tree, a saved Terraform plan, with its
+own tier table ([The terraform-plan subject](#the-terraform-plan-subject-g-tf-1)), and defines the digest a manifest
+change binds to ([The manifest-tree digest](#the-manifest-tree-digest-built)).
 
 Clearance has two boundaries. The **runtime boundary** is built: every tool call an agent makes goes through the
 gateway, is decided by policy and recorded as evidence. The **deployment boundary** is this document: may a change
@@ -115,6 +117,9 @@ Evidence records, in the existing chain, `boundary: deployment`:
 | `deploy.deny` | a person denies, or the classifier denies (unknown agent) | reason, rule |
 | `deploy.expire` | the TTL passes | — |
 | `deploy.exception` | admission or the controller sees a change no grant covers | object, who applied it (the admission request's user) |
+
+Every `deploy.*` record also carries a `policy` group naming the policy that decided and the policy engine's
+verdict (C-8, "The policy in the record" below).
 
 Apps' owners see their apps' records (the existing `app` scoping); the C1 queue is for everyone who may clear
 something; auditors see all. The run that drafted the change links by `task_id` through the PR receipt.
@@ -278,14 +283,75 @@ format, the claims, the key and the replay rules. In short:
 - A new head on the same pull request revokes the older head's token (`deploy.revoke`); a token whose nonce is not
   the clearance's live one is a replay.
 - The grant feed is clearance-api's `GET /v1/clearances?cluster=<c>&state=cleared`: the cluster's cleared changes
-  whose token is live, each with it. The grant-sync agent (G-ARGO-3) reads it as a feed reader
-  (`CLEARANCE_API_FEED_READERS`), verifies each token against `GET /v1/keys`, and writes the ClearanceGrants.
+  whose token is live, each with it. Since C-10 the grant-sync agent (G-ARGO-3) reads the **signed** feed instead,
+  `GET /v1/grant-feeds/{cluster}` ([below](#the-signed-grant-feed-c-10-built)), as a feed reader
+  (`CLEARANCE_API_FEED_READERS`), verifies it whole and each token against `GET /v1/keys`, and writes the
+  ClearanceGrants.
 - `registerChange` takes an optional `taskId` (the run that proposed the change), kept on the change as `task_id`,
   carried in the token and on every `deploy.*` record's `task_id`.
 
 Not yet: admission on the grant (G-ARGO-2), the CMP that registers the whole rendered tree with unchanged objects
 marked (G-ARGO-4; today `objects` lists the objects the change touches, each `changed: true`), the PreSync wait
 (G-ARGO-5), and the Terraform plan subject (G-TF-1, which adds `subjects.plan_digest`).
+
+## The signed grant feed (C-10, Built)
+
+What the grant-sync agent (G-ARGO-3) reads, every 30 s, from clearance-api as a feed reader:
+`GET /v1/grant-feeds/{cluster}`. The C-1 list (`GET /v1/clearances?cluster=<c>&state=cleared`) stays, but it is a
+page of tokens, each good on its own: a reader cannot tell it the whole set from a page someone trimmed, nor today's
+from last hour's replayed. A grant-sync that removes grants for what is missing needs both, so the core signs the
+set.
+
+**The document** (`internal/token/feed.go`, `token.Feed`): a DSSE envelope, payloadType
+`application/vnd.clearance.grant-feed.v1+json`, signed with the token key (the same Signer, keyid and `GET /v1/keys`),
+over
+
+```json
+{"_type": "clearance.grant-feed/v1", "iss": "clearance", "cluster": "hangar-prod",
+ "seq": 41, "iat": 1762200000, "exp": 1762200300, "records_seq": 1093,
+ "entries": [{"change_id": "ch-...", "nonce": "...", "exp": 1762200800, "payload_sha256": "<hex>"}]}
+```
+
+- `seq`: the cluster's feed number, one more than the feed it replaces, never reused.
+- `iat`, `exp`: NumericDate; `exp` is `iat` + 5 minutes (`gate.FeedTTL`; a feed may claim at most 15).
+- `records_seq`: the evidence chain's last seq when it was signed; every `deploy.*` record at or below it is reflected.
+- `entries`: every token live on the cluster at `iat`, by `change_id` ascending (at most 2000). `payload_sha256` is the
+  SHA-256 of that token's DSSE payload (the claims bytes as signed), so it names one issuance: a refreshed or altered
+  token does not match.
+
+**When the core signs it.** In the same transaction as any write to one of the cluster's tokens (a clear issues one,
+a refresh re-issues, a new head or the horizon revokes), so the stored feed always matches the stored tokens; and
+at least every 2 minutes otherwise (`gate.FeedResign`, the core's own minute ticker, whatever
+`CLEARANCE_EXPIRE_SECONDS` is), so a feed past its `exp` means the core, or the path to it, is down. A cluster gets
+its first feed with its first token, and an empty feed (no entries) once its last token is revoked: that is how its
+grants get removed. A cluster with more than 2000 live tokens is not re-signed (its feed goes stale and grant-sync
+stops: fail closed), and the core logs it every minute. The row (`clearance_feeds`, one per cluster) keeps the
+envelope and the tokens it lists side by side; clearance-api serves it as it is and holds no key.
+
+**What grant-sync does with it** (in this order; any failure means: change nothing, keep the grants it has, and
+let them expire on their own `exp`):
+
+1. Keys: `GET /v1/keys` (cache it up to its `max-age`; refetch on an unknown keyid).
+2. `token.VerifyFeed(feed, keys, {Issuer, Cluster: <its own>, MinSeq: <the highest seq it accepted>})`: the
+   signature, strict decoding, the issuer, this cluster (`ErrFeedCluster`), `seq` not below the last accepted
+   (`ErrFeedReplay`; the same seq is the same feed read again), and fresh (`exp`, with 30 s leeway).
+3. `feed.Match(tokens)`: the tokens beside it are exactly the entries, each the issuance named
+   (`ErrFeedIncomplete` otherwise).
+4. Each token: `token.Verify` with `Expect{Cluster}` (signature, expiry, binding). No nonce check is needed: the
+   feed is the revocation list.
+5. Then create or update a ClearanceGrant per entry, delete the grants no entry names, and remember `seq`.
+
+A reader that persists its `MinSeq` survives restarts; one that does not accepts any fresh feed after a restart,
+which is still bounded by `exp`. A restored or rebuilt core database starts `seq` again at 1: grant-sync then refuses
+every feed until an operator resets its remembered seq (by design: a rolled-back database is exactly a replay).
+
+**Faster than 30 s.** `GET /v1/stream` gives a feed reader the clearance events of its clusters as they are
+recorded; it is a cue to re-read the feed, never a substitute for it.
+
+**For the gate providers that wait** (the Terraform run task, G-TF-2; the PreSync hook, G-ARGO-5): the core's
+`GET /v1/clearances/{change_id}/wait?state=&timeout=` ([core.md](core.md#the-api)) holds the call until the change
+leaves the state the caller knows, or up to 60 s, and answers the state and the token. It is the same for every
+subject kind.
 
 ## The Go core (R-1c, Built, deployed on hangar-dev 2026-11-03)
 
@@ -316,3 +382,203 @@ nobody is in either while Backstage is down. Differences from the Python transpo
 (was 30 s; the Go gate asks inside its lock and the operation's transaction), redirects are not followed (the token
 stays with the configured URL), the answer is capped at 1 MiB (was 16 MiB), a malformed answer is no groups where
 Python raised, and each cache holds at most 4096 entries.
+
+## The policy in the record (C-8, Built; live check pending)
+
+Two policies stand behind a deployment decision: Clearance's own tier policy (the baseline, tightened by the repo's
+`clearance.yaml`), which the core applies, and the target cluster's admission policies, which the verifier evaluates
+offline over the rendered tree before it registers the change. Every `deploy.*` record about a change
+(`deploy.request`, `deploy.clear`, `deploy.deny`, `deploy.expire`, a GitHub deployment's `deploy.request`) carries a
+`policy` group, in the evidence schema's Decision group, that names both:
+
+```json
+"policy": {
+  "ref": "clearance.yaml@9f2c...e1",
+  "version": "baseline-2026-10-31+sha256:3905e609...e3e5",
+  "engine": "kyverno/1.19.0",
+  "verdict": "pass",
+  "bundle": "https://github.com/jfillman/gitops-hangar-dev.git//30-policy@4b1d...07"
+}
+```
+
+| Field | What it is | Where it comes from |
+| --- | --- | --- |
+| `ref` | `clearance.yaml@<commit>`: the commit that last changed the repo's `clearance.yaml` at the change's head. `clearance.yaml@sha256:<digest>` when the verifier sent the file without its commit; `baseline` when the repo has none | the request's `policyCommit` (else the digest of `policy`) |
+| `version` | the gate baseline's version, plus `+sha256:<digest>` of the `clearance.yaml` that tightened it. With the core's baseline this reproduces the tier decision | the core |
+| `engine` | the admission engine and its version, `kyverno/1.19.0`; `none` when no admission result was sent | the request's `admission.engine` |
+| `verdict` | `pass`, `warn` (Audit/Warn findings only, or a rule offline evaluation could not decide), `fail` (a Deny/Enforce policy fails: the cluster would refuse the sync), `skipped` (no admission policy to evaluate), `error` (the evaluation could not run); `not-evaluated` when none was sent | the request's `admission.verdict` |
+| `bundle` | the admission rule set it ran: `<repo>//<path>@<commit>`. With the rendered tree (`subject`) and `engine`, it reproduces the admission verdict | the request's `admission.bundle` |
+
+A decision with no change on record (a GitHub deployment of an unregistered commit, `DG-UNREGISTERED`) records
+`{ref: baseline, version: <baseline>, engine: none, verdict: not-evaluated}`. The group is **claimed**: the verifier
+reports the commit and the verdict; the core fills `version` from what it applied. The runtime boundary's records keep
+their own `policy` group (`clearance-core+<bundle>@<version>`, the bundle digest, `engine: cel-go`), unchanged. The clearance token signed on `deploy.clear` carries the same group as its `policy` claim, field for field ([core.md](core.md) "The clearance token"): the token attests what the record says.
+
+**The request.** `POST /v1/clearances` takes two optional fields beside `policy` (all strictly decoded, unknown keys
+refused):
+
+- `policyCommit`: the 40-hex commit that last changed `clearance.yaml` at the head. Refused without `policy`.
+- `admission`: `{engine, verdict, bundle, deny, warn}`; `engine` is `<name>/<version>` (lowercase name), `verdict` one
+  of the five above, `bundle` at most 512 printable characters, `deny` and `warn` the blocking and warning finding
+  counts. It is a check result: `checks.admission` becomes its verdict, and a request whose `checks.admission` says
+  something else is refused (400).
+
+The change keeps `policy_ref` and `admission` (clearance-api serves them on `GET /v1/clearances/{id}`; a change
+registered before this release has neither, and its records name `clearance.yaml@sha256:<digest>` or `baseline`). A
+re-registration of a holding change takes the new admission result, so the `deploy.clear` that follows records the
+verdict it cleared on.
+
+**Recorded, not enforced.** The tier rules do not read the verdict: on Hangar the `policy-validation-` check is the
+required gate for an admission failure, and phase 2's grant-match admission is the hard one. Making a tier-1 clear by
+policy wait for `admission` in (`pass`, `warn`, `skipped`) is a one-line change to the checks a tier-1 change needs,
+left for the owner to decide (it would turn every verifier that sends no admission result into tier 2).
+
+**Who sends it.** Glidepath's `clearance-gate-` task evaluates each protected environment's rendered head with the
+Kyverno CLI against the target cluster's policy bundle, exactly as the `policy-validation-` gate does (glidepath
+`docs/admin/policy-validation.md`; the two tasks share the evaluation), and sends `admission` and `policyCommit`.
+Argo CD's config management plugin (G-ARGO) sends the same `admission` object from its own offline evaluation of the
+tree it rendered; `clearance register` sends none today (`not-evaluated`).
+
+## The manifest-tree digest (Built)
+
+A change binds to what will be applied through one digest, the **manifest-tree digest** of the rendered "after"
+tree. `clearance register` computes it from `--after`, Glidepath's `clearance-gate-` check computes the same value
+for the same render (it always has), and the Argo CD plugin (G-ARGO) is to stamp the same value; the core keeps it as
+the change's `tree_digest` and `subject.digests.sha256`, and the provider protocol's outcome compares against it.
+
+1. **Objects.** Every document in the directory's `*.yaml`, `*.yml` and `*.json` files (recursively, in path order)
+   that has `apiVersion`, `kind` and `metadata.name`; a `*List`'s `items` count one by one. YAML is read as PyYAML's
+   SafeLoader reads it (YAML 1.1 scalars; `internal/gate/render`). An object's identity is
+   `(apiVersion, kind, metadata.namespace or "", metadata.name)`; a later document with the same identity replaces an
+   earlier one.
+2. **Object hash.** The lowercase hex sha256 of the object's canonical JSON: keys sorted by code point, separators
+   `,` and `:` (no spaces), every character outside space to `~` escaped as `\uXXXX` (Python's
+   `json.dumps(obj, sort_keys=True, separators=(",", ":"))`). This is also each object's `digest` in `objects`.
+3. **Lines.** One per object: `apiVersion/kind/namespace/name:` followed by the object hash (an empty namespace
+   leaves `//`, as in `rbac.authorization.k8s.io/v1/ClusterRole//shop-reader:2f89...`).
+4. **Root.** The lines sorted byte-wise, joined with `\n` (no trailing newline), and the lowercase hex sha256 of
+   that. It is sent as 64 hex digits (a `sha256:` prefix is accepted and dropped).
+
+`internal/gate/render/testdata/parity` pins the definition: its three objects' hashes and the root
+`27cbba8e2f2c...1238` were computed with Glidepath's own Python over the same file, and
+`TestTreeDigestIsGlidepaths` holds the Go to them. Before G-TF-1, `clearance register` hashed the canonical
+documents themselves (sha256 over each object's canonical JSON and a newline, in identity order), so its digest for a
+render differed from Glidepath's; a change registered by a v0.30.0 or earlier `clearance register` keeps the digest it
+was registered with.
+
+**Placeholders.** A `treeDigest` of 64 copies of one hex digit, or sha256 of nothing (the tree of an empty render),
+is a placeholder: it binds the change to no tree, only to its commit. (hangar-dev's records 402 to 405, on
+2026-11-01, carry an all-zero tree; they were a hand-made registration by `app-gate-api-cicd/pipeline-runner`, not
+`clearance register`, whose registrations there, 468 to 474 and 641, carry a real tree.) What the core does with one
+is `CLEARANCE_GATE_UNBOUND_TREE` (chart `gate.unboundTree`):
+
+- `flag`, the default for this release, for backward compatibility: the change is registered and tiered as before,
+  with one more reason, `{"the tree", "tree:unbound", 0}`, `subject.flags: ["unbound-tree"]` and no
+  `subject.digests.sha256`; its records' subject carries `gitCommit` only.
+- `refuse`: `DG-UNBOUND` (400), nothing recorded. The plan is to make this the default one release later, once every
+  registrar sends a real tree.
+
+`clearance register` itself refuses an `--after` that holds no manifests (exit 2) rather than send the empty tree.
+
+## The terraform-plan subject (G-TF-1)
+
+Status: **Built** in the core (classification, the request and the record); **not built**: anything that produces a
+plan subject. The plan parser and CI step that post it (G-TF-2), the hold between plan and apply, and detection of
+applies that went around the gate come next; nothing in Glidepath or the lab's `jfillman/hangar-infra` posts one yet.
+
+A change's **subject** is what it binds to. Beside the Kubernetes object diff (kind `manifest-tree`, described by
+`treeDigest` and `objects`) and an agent definition's release (kind `definition`), a change can now be a saved
+Terraform plan. The verifier sends it as the request's `subject` (`schemas/change-request.schema.json`, the whole
+request's schema; `POST /v1/clearances` from a verifier, `CLEARANCE_VERIFIERS`, or from a GitHub Actions workflow's
+OIDC token, which registers for its own repository only, `DG-REPO`):
+
+```json
+"subject": {
+  "kind": "terraform-plan",
+  "planDigest": "<sha256 of the saved plan file, terraform plan -out>",
+  "planJsonDigest": "<sha256 of the redacted plan JSON, terraform show -json with sensitive values replaced>",
+  "workspace": {"backend": "s3", "key": "network/lab/terraform.tfstate", "name": "default"},
+  "versions": {"terraform": "1.9.8", "providers": {"registry.terraform.io/hashicorp/aws": "5.70.0"}},
+  "summary": {"create": 0, "update": 1, "replace": 0, "destroy": 1, "destroyedAddresses": ["aws_instance.bastion"]},
+  "targeted": false,
+  "variableSetDigest": "<sha256 of the variable set>",
+  "resources": [
+    {"address": "aws_vpc.lab", "type": "aws_vpc", "actions": ["update"], "fields": ["/tags/Owner"]},
+    {"address": "aws_instance.bastion", "type": "aws_instance", "actions": ["delete"]}
+  ]
+}
+```
+
+- `resources` is one entry per `resource_changes[]` of the plan JSON: the address, the type (the address must name
+  it), Terraform's action list (`no-op`, `create`, `read`, `update`, `delete`, `delete`+`create`,
+  `create`+`delete`), the JSON pointers of the attributes an update changes, and Terraform's `action_reason`
+  (`actionReason`; `replace_by_request` is a `-replace`). The card's shape names only the summary; the resources were
+  added because the tier table needs each resource's type and attributes, and the classifier names their addresses.
+- `summary` must be exactly what `resources` says (the counts, and `destroyedAddresses` = the addresses with
+  `["delete"]`), or the request is refused; a verifier cannot show a destroy in one and hide it from the other.
+- `targeted` says the plan was made with `-target`.
+- With a plan subject, `cluster` and `treeDigest` may be omitted (a `treeDigest` that is not the plan's digest is
+  refused), `objects` must be empty and `definition` absent. The change's `tree_digest` is `planDigest`, so the
+  provider protocol's outcome check reads the same field for both kinds.
+- Every digest is sha256 (bare hex or `sha256:`); a placeholder plan, plan-JSON or variable-set digest is refused
+  `DG-UNBOUND`. **Secret variable values are never sent or stored:** the record carries the redacted plan JSON's
+  digest and the variable set's hash; `fields` are attribute names, never values.
+
+**The Terraform baseline** (`GatePolicy`: `TFTier3Types`, `TFTagFields`), the maximum over the plan's resource
+changes (no-op and read entries are skipped) and its paths (the path rules apply: a `clearance.yaml` in the infra
+repo is tier 3):
+
+| Rule | Tier | Reason (subject, rule) |
+|---|---|---|
+| destroy (`["delete"]`) in a protected workspace | 3 | the address, `tf:destroy` |
+| replace (`delete`+`create`, either order) in a protected workspace | 3 | the address, `tf:replace` |
+| any change to an IAM, security-group, network-ACL, KMS or database type, a tag included | 3 | the address, `tf-type:iam` / `security-group` / `network-acl` / `kms` / `database` |
+| an update whose every changed attribute is under `/tags`, `/tags_all`, `/labels` or `/description` | 1 | the address, `tf:tag-only` |
+| everything else (create, other updates, destroy or replace in an unprotected workspace, an update naming no attributes) | 2 | the address, `tf:create` / `tf:update` / `tf:destroy` / `tf:replace` |
+| a plan that changes nothing | 1 | `the plan`, `tf:no-change` |
+| `-target` (`targeted`) or a `-replace` (`actionReason: replace_by_request`): one tier up, at least 2, at most 3 | +1, floor 2 | `the plan`, `tf:targeted`; the address, `tf:replace-requested` |
+
+Then, as for manifests: an unknown proposer is denied (`DG-PROVENANCE`); a tier-1 plan clears by policy only with
+`ci: pass` and `provenance` confirmed or not-agent (there is no `render` check for a plan), else it is tier 2
+(`checks:...`); tier 2 holds for one owner, tier 3 for one owner and one outside person. Tier 3 is never cleared by
+policy, so **a destroy in a protected workspace never clears by policy**. The decision's `result` names the
+workspace and what set the tier: `tier 3: holding for 1 from group:... and 1 from outside (...) (s3:network/lab/
+terraform.tfstate#default, protected; set by aws_instance.bastion)`.
+
+The type globs (fnmatch on the resource type), by category: **iam** `aws_iam_*`, `aws_ssoadmin_*`,
+`aws_organizations_policy*`, `aws_lambda_permission`, the S3, SQS, SNS, ECR and Secrets Manager resource policies,
+`google_*_iam_*`, `google_service_account*`, `google_organization_policy`, `azurerm_role_assignment`,
+`azurerm_role_definition`, `azurerm_user_assigned_identity`, `azuread_*`, `kubernetes_*role*`,
+`kubernetes_service_account*`; **security-group** `aws_security_group`, `aws_security_group_rule`,
+`aws_default_security_group`, `aws_vpc_security_group_*`, `google_compute_firewall*`,
+`azurerm_network_security_group`, `azurerm_network_security_rule`; **network-acl** `aws_network_acl`,
+`aws_network_acl_*`, `aws_default_network_acl`; **kms** `aws_kms_*`, `google_kms_*`, `azurerm_key_vault*`;
+**database** `aws_db_*`, `aws_rds_*`, `aws_dynamodb_*`, `aws_docdb_*`, `aws_neptune_*`, `aws_redshift_*`,
+`aws_elasticache_*`, `aws_memorydb_*`, `aws_dax_*`, `aws_keyspaces_*`, `aws_timestreamwrite_*`, `google_sql_*`,
+`google_spanner_*`, `google_bigtable_*`, `google_firestore_*`, `google_alloydb_*`, `azurerm_*sql*`,
+`azurerm_cosmosdb_*`, `azurerm_redis_*`. `GET /v1/clearance-policy` serves them under `terraform`.
+
+**Protected workspaces.** A workspace is protected when the request says `protected` (the default, as for an
+environment) or the repo's `clearance.yaml` names it. `clearance.yaml` gains a `workspaces:` block, tighten-only
+like the gitops tiers:
+
+```yaml
+workspaces:
+  protected: ["network/*", "prod"]        # globs on the state key or the workspace name: protect more, never fewer
+  tiers:
+    "3": {types: ["aws_route53_*"]}       # more tier-3 types (reason tf-type:clearance.yaml)
+    "2": {types: ["aws_vpc"]}             # types whose tag-only update is still tier 2 (tf-type:tier2)
+```
+
+Anything else in the block (an `unprotected` list, `tiers` 0 or 1, a key other than `types`, a value that is not a
+list of strings) is `DG-POLICY`, and, as for the gitops block, the change is denied by policy rather than the file
+ignored. Approvers and the TTL are the file's top-level `approvers` and `ttlDays`, shared by both kinds.
+
+**The record.** The change on record (`GET /v1/clearances`, `/v1/clearances/{id}`) carries `subject`: the request's
+plan subject plus `digests` (`sha256` = the plan, `planJson`, `variableSet`, `gitCommit` = the head). Each
+`deploy.*` record's subject is `{kind: terraform-plan, name: app/env, digests}` (claimed: the verifier described the
+plan). A manifest change's subject is `{kind: manifest-tree, digests: {sha256, gitCommit}}`, a definition release's
+`{kind: definition, name: <agent>, digests}`; a change stored before G-TF-1 reads back as `manifest-tree` from its
+`tree_digest`. clearance-api returns the stored change as it is, so the list shows `subject.kind` for every change
+registered from this release on (and for older ones once they are written again). A cleared plan's clearance token
+(C-1) has `subjects.kind: terraform-plan` and binds the plan's digest as `subjects.plan_digest` (no `tree_root`).

@@ -34,9 +34,9 @@ import (
 )
 
 // Schema is pg.py's SCHEMA for the core's tables, verbatim, plus the Go core's own (clearance_tokens and
-// clearance_signing_keys, C-1; clearance_evidence_cost, A-4: the records clearance-api's counts by=cost sums,
-// model-call outcomes with usage and run.finish with cost): CREATE ... IF NOT EXISTS only, so migrate never alters or
-// drops what is there.
+// clearance_signing_keys, C-1; clearance_feeds and the App installations' index, C-10; clearance_evidence_cost, A-4:
+// the records clearance-api's counts by=cost sums, model-call outcomes with usage and run.finish with cost):
+// CREATE ... IF NOT EXISTS only, so migrate never alters or drops what is there.
 const Schema = `
 CREATE TABLE IF NOT EXISTS clearance_evidence (
   seq        bigint PRIMARY KEY,
@@ -92,6 +92,17 @@ CREATE TABLE IF NOT EXISTS clearance_signing_keys (
   created_at timestamptz NOT NULL,
   retired_at timestamptz
 );
+CREATE TABLE IF NOT EXISTS clearance_feeds (
+  cluster    text        PRIMARY KEY,
+  seq        bigint      NOT NULL,
+  key_id     text        NOT NULL,
+  issued_at  timestamptz NOT NULL,
+  expires_at timestamptz NOT NULL,
+  envelope   jsonb       NOT NULL,
+  tokens     jsonb       NOT NULL
+);
+CREATE INDEX IF NOT EXISTS clearance_evidence_app ON clearance_evidence ((record->>'principal'), seq)
+  WHERE record->>'principal' LIKE 'app:%';
 `
 
 // Options tune a store; the zero value is the defaults.
@@ -532,6 +543,24 @@ func (t *tx) PutToken(ctx context.Context, tk store.Token) error {
 	return nil
 }
 
+func (t *tx) PutFeed(ctx context.Context, f store.Feed) error {
+	if err := t.lock(); err != nil {
+		return err
+	}
+	defer t.mu.Unlock()
+	ctx, cancel := deadline(ctx, t.s.opt)
+	defer cancel()
+	_, err := t.tx.Exec(ctx, "INSERT INTO clearance_feeds (cluster, seq, key_id, issued_at, expires_at, envelope, tokens) "+
+		"VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (cluster) DO UPDATE SET seq = EXCLUDED.seq, "+
+		"key_id = EXCLUDED.key_id, issued_at = EXCLUDED.issued_at, expires_at = EXCLUDED.expires_at, "+
+		"envelope = EXCLUDED.envelope, tokens = EXCLUDED.tokens",
+		f.Cluster, f.Seq, f.KeyID, f.IssuedAt, f.ExpiresAt, string(f.Envelope), string(f.Tokens))
+	if err != nil {
+		return fmt.Errorf("pg: put feed: %w", err)
+	}
+	return nil
+}
+
 func (t *tx) UseSigningKey(ctx context.Context, k store.SigningKey, now time.Time) error {
 	if err := t.lock(); err != nil {
 		return err
@@ -745,6 +774,117 @@ func (t *tx) SigningKeys(ctx context.Context, since time.Time) ([]store.SigningK
 	}
 	defer done()
 	return signingKeys(ctx, q, t.s.opt, since)
+}
+
+func (r *Reader) LiveTokens(ctx context.Context, cluster string, now time.Time, limit int) ([]store.Token, error) {
+	return liveTokens(ctx, r.pool, r.opt, cluster, now, limit)
+}
+
+func (r *Reader) Feed(ctx context.Context, cluster string) (store.Feed, error) {
+	return feedOne(ctx, r.pool, r.opt, cluster)
+}
+
+func (r *Reader) FeedClusters(ctx context.Context) ([]string, error) {
+	return feedClusters(ctx, r.pool, r.opt)
+}
+
+func (t *tx) LiveTokens(ctx context.Context, cluster string, now time.Time, limit int) ([]store.Token, error) {
+	q, done, err := t.q()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	return liveTokens(ctx, q, t.s.opt, cluster, now, limit)
+}
+
+func (t *tx) Feed(ctx context.Context, cluster string) (store.Feed, error) {
+	q, done, err := t.q()
+	if err != nil {
+		return store.Feed{}, err
+	}
+	defer done()
+	return feedOne(ctx, q, t.s.opt, cluster)
+}
+
+func (t *tx) FeedClusters(ctx context.Context) ([]string, error) {
+	q, done, err := t.q()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	return feedClusters(ctx, q, t.s.opt)
+}
+
+// liveTokens reads clearance_tokens_feed (cluster, expires_at) WHERE revoked_at IS NULL.
+func liveTokens(ctx context.Context, q querier, opt Options, cluster string, now time.Time, limit int) ([]store.Token, error) {
+	if limit <= 0 {
+		limit = MaxRecords
+	}
+	ctx, cancel := deadline(ctx, opt)
+	defer cancel()
+	rows, err := q.Query(ctx, "SELECT "+TokenCols+" FROM clearance_tokens WHERE cluster = $1 AND revoked_at IS NULL "+
+		`AND expires_at > $2 ORDER BY change_id COLLATE "C" LIMIT $3`, cluster, now, limit)
+	if err != nil {
+		return nil, fmt.Errorf("pg: %w", err)
+	}
+	defer rows.Close()
+	out := []store.Token{}
+	for rows.Next() {
+		tk, err := ScanToken(rows)
+		if err != nil {
+			return nil, fmt.Errorf("pg: %w", err)
+		}
+		out = append(out, tk)
+	}
+	return out, rows.Err()
+}
+
+// FeedCols are clearance_feeds' columns in ScanFeed's order.
+const FeedCols = "cluster, seq, key_id, issued_at, expires_at, envelope::text, tokens::text"
+
+// ScanFeed scans one row of FeedCols.
+func ScanFeed(row pgx.Row) (store.Feed, error) {
+	var f store.Feed
+	var env, toks string
+	if err := row.Scan(&f.Cluster, &f.Seq, &f.KeyID, &f.IssuedAt, &f.ExpiresAt, &env, &toks); err != nil {
+		return f, err
+	}
+	f.Envelope, f.Tokens = []byte(env), []byte(toks)
+	f.IssuedAt, f.ExpiresAt = f.IssuedAt.UTC(), f.ExpiresAt.UTC()
+	return f, nil
+}
+
+func feedOne(ctx context.Context, q querier, opt Options, cluster string) (store.Feed, error) {
+	ctx, cancel := deadline(ctx, opt)
+	defer cancel()
+	f, err := ScanFeed(q.QueryRow(ctx, "SELECT "+FeedCols+" FROM clearance_feeds WHERE cluster = $1", cluster))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.Feed{}, store.ErrNotFound
+	}
+	if err != nil {
+		return store.Feed{}, fmt.Errorf("pg: %w", err)
+	}
+	return f, nil
+}
+
+func feedClusters(ctx context.Context, q querier, opt Options) ([]string, error) {
+	ctx, cancel := deadline(ctx, opt)
+	defer cancel()
+	rows, err := q.Query(ctx, "SELECT cluster FROM (SELECT cluster FROM clearance_tokens WHERE cluster <> '' UNION "+
+		`SELECT cluster FROM clearance_feeds) u ORDER BY cluster COLLATE "C"`)
+	if err != nil {
+		return nil, fmt.Errorf("pg: %w", err)
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var c string
+		if err := rows.Scan(&c); err != nil {
+			return nil, fmt.Errorf("pg: %w", err)
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }
 
 // TokenCols are clearance_tokens' columns in ScanToken's order.

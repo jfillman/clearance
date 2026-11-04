@@ -37,6 +37,7 @@ The contract is [`contract/clearance-core.json`](https://github.com/jfillman/cle
 | `PUT /v1/definitions` | the provider registered with `definitions: true` | The provider's whole set of cluster-pinned agent definitions replaces the core's. The core decides each pin and records each change once (`definition.load`, `definition.unload`, `definition.reject`). |
 | `POST /v1/clearances`, `/v1/clearances/{change_id}/clear`, `/v1/clearances/{change_id}/deny` | a verifier; a person or a delegate | The deployment gate ([gate.md](gate.md)), at the Python core's paths. |
 | `GET /v1/clearances/{change_id}` | a registered provider, or the verifier that registered the change | The change's state and its live [clearance token](#the-clearance-token) (`null` when it has none). A token with under half its life left is re-issued first. People read changes through clearance-api. |
+| `GET /v1/clearances/{change_id}/wait` | the same callers | Long-poll (C-10): the same answer plus `changed`, as soon as the change's state is not `state` (default: its state when the call arrived), or after `timeout` seconds (1 to 60, default 30) with `changed: false`. Subject-kind neutral: the Terraform run task (G-TF-2) and the PreSync hook (G-ARGO-5) wait on it. The gate is the one writer, so an in-process notifier wakes the call on the commit itself; nothing polls the database. At most 512 waits open at once (503 past it); this route alone gets a deadline past the server's write timeout. Go client `Wait`. |
 | `GET /v1/keys` | anyone (no token) | The token verification keys, a JWKS: the key in use and keys retired in the last 24 hours. |
 | `POST /v1/definitions/review` | a verifier, a person, or a delegate naming one | Would Clearance load this agent definition, and how much more may its agent do (the definition-change tier). Stateless, unrecorded. |
 | `POST /v1/provenance` | a verifier | The agent-identity and agent-scope verdicts for a pull request, recorded as `provenance.verify`. |
@@ -152,6 +153,7 @@ All configuration comes from the environment. An empty variable counts as unset.
 | `MODEL_ROUTES` | `alias=upstream,...`: the model aliases a definition release may name. When unset they are not checked. |
 | `RUNTIME_IMAGES_EXTRA` | Globs a definition's `runtime.image` may match. |
 | `CLEARANCE_TRUSTED_REGISTRIES` | Comma-separated image prefixes, each ending in `/`, that a tier-1 image bump may come from; an image bump from anywhere else is tier 2 (`image:not-trusted-registry`) and held for the owner group. Unset: any registry (the product default). Hangar sets `ghcr.io/riley-roooo/` (decided 2026-11-03, live from the R-4 cutover). |
+| `CLEARANCE_GATE_UNBOUND_TREE` | `flag` (default) or `refuse`. A manifest-tree registration whose `treeDigest` is a placeholder (64 copies of one hex digit, or sha256 of nothing) is registered and flagged (`tree:unbound`, `subject.flags: ["unbound-tree"]`, the record's subject carries the commit only), or refused `DG-UNBOUND` (400). Planned: `refuse` becomes the default one release after this flag ships ([gate.md](gate.md#the-manifest-tree-digest-built)). |
 | `CLEARANCE_SIGNING_KEY_FILE` | The [clearance token](#the-clearance-token) signing key: a PEM ECDSA P-256 private key (SEC 1 `EC PRIVATE KEY` or PKCS #8 `PRIVATE KEY`), read once at start. Unset: no tokens are issued, and the core logs a warning. |
 | `CLEARANCE_SIGNING_KMS` | A KMS key reference. Reserved: the KMS signer is not built, and the core refuses to start with it set. |
 | `CLEARANCE_TOKEN_TTL` | Each token's life, a Go duration (default `15m`; `1m` to `24h`, and at least four times `CLEARANCE_EXPIRE_SECONDS`, the refresh interval). |
@@ -225,7 +227,7 @@ Both carry the same claims. A verifier may check either one and gets the same an
 | `objects` | each object the change touches: `{apiVersion, kind, namespace, name, rendered, changed, op}`; `rendered` is its rendered hash as the verifier reported it |
 | `target` | `{cluster, env, app}` |
 | `tier` | 0 to 3 |
-| `policy` | `{ref, repo_policy_digest, engine: "clearance-gate", engine_version, verdict: "clear" \| "hold"}`: the baseline's version, the repo's `clearance.yaml` digest, and the engine's verdict (`hold` when people cleared it) |
+| `policy` | `{ref, version, engine, verdict, bundle}`: the deploy.* record's `policy` group, field for field, so the token attests what the record says ([gate.md](gate.md) "The policy in the record"). `ref` is the tier policy (`clearance.yaml@<commit>`, `clearance.yaml@sha256:<digest>` or `baseline`); `version` the gate baseline plus the `clearance.yaml` digest; `engine`, `verdict` and `bundle` the offline admission result the verifier sent (`kyverno/<version>`, `pass` \| `warn` \| `fail` \| `skipped` \| `error`, and the rule set `<repo>//<path>@<commit>`), or `none` and `not-evaluated` (no `bundle`). The gate's own decision is `clearance.cleared_by` and `tier` |
 | `provenance` | `{level, check, proposer, proposer_kind, agent, task_id}`: `level` is the evidence schema's (`confirmed-agent` for an agent PR the agent gates confirmed, `probable-agent` for another agent PR, `confirmed-human` for a person's PR the gates found no agent in, else `unknown`); `task_id` is the run's, when the registration names it (`taskId`) |
 | `approvals` | each person: `{sub, iss, person, via, role, at}` (below); empty when policy cleared it |
 
@@ -248,7 +250,9 @@ A decoded payload (a tier-2 change one person cleared through Tower):
                "changed": true, "op": "changed"}],
   "target": {"cluster": "hangar-prod", "env": "prod", "app": "gate-api"},
   "tier": 2,
-  "policy": {"ref": "baseline-2026-10-31", "engine": "clearance-gate", "engine_version": "0.31.0", "verdict": "hold"},
+  "policy": {"ref": "clearance.yaml@9f2c00000000000000000000000000000000e1e1", "version": "baseline-2026-10-31+sha256:3905e6096876f604915034458c354e7c01ca4266dde97b4fcd23efdfe3eee3e5",
+             "engine": "kyverno/1.19.0", "verdict": "pass",
+             "bundle": "https://github.com/jfillman/gitops-hangar-prod.git//30-policy@4b1d00000000000000000000000000000000a7a7"},
   "provenance": {"level": "confirmed-human", "check": "not-agent", "proposer": "user:dana", "proposer_kind": "person"},
   "approvals": [{"sub": "user:erin", "iss": "delegate:hangar-prod/app-backstage-prod/backstage", "person": "user:erin",
                  "via": "hangar-prod/app-backstage-prod/backstage", "role": "owner", "at": "2026-11-03T12:00:00Z"}]
@@ -288,6 +292,11 @@ deployment names who cleared it, or says `policy`.
 - **A new head invalidates it.** Registering a new head on the same pull request (for a pushed commit, `pr` 0: the
   same app, environment and cluster) revokes the older head's token, recorded as `deploy.revoke` (`token`: the
   nonce, result `token revoked: superseded by <head>`). The grant feed stops listing it at once.
+- **The signed grant feed** (C-10). In the same transaction as any write to a cluster's tokens, and at least every
+  2 minutes, the core signs that cluster's feed: a DSSE envelope over every token live there, with a per-cluster
+  `seq`, a 5-minute `exp` and each token's payload digest (`token.Feed`, `token.SignFeed`, `token.VerifyFeed`,
+  `Feed.Match`; [gate.md](gate.md#the-signed-grant-feed-c-10-built)). Stored in `clearance_feeds`, served by
+  clearance-api. `FuzzVerifyFeed` fuzzes its parser.
 - **Replay.** A token is acted on only while its nonce is the clearance's live one: the core's check
   (`gate.Service.CheckNonce`) refuses a token whose clearance has another nonce, a revoked one, or no longer
   cleared. A one-shot consumer (the PreSync hook) keeps `token.NonceCache`, which accepts a nonce once until its
@@ -449,7 +458,9 @@ vocabulary (`vocabulary.*`): see [install.md](install.md).
   tables of its own, created the same way on the next start: `clearance_tokens` (one row per cleared change: the
   cluster, nonce, key id, validity, revocation, the DSSE envelope and the JWT; indexed for the grant feed by
   `(cluster, expires_at)` and for the refresh by `expires_at`, both where not revoked) and `clearance_signing_keys`
-  (the public keys the core has signed with). The chart's reader role reads them through its default privileges. The gateway's
+  (the public keys the core has signed with). C-10 adds `clearance_feeds` (one row per cluster: the signed grant
+  feed and the tokens it lists) and the index `clearance_evidence_app` (`((record->>'principal'), seq)` where the
+  principal is `app:%`: the GitHub App installations' records, for clearance-api). The chart's reader role reads them through its default privileges. The gateway's
   tables (sessions, artifacts, inbox, events, holds, results) are not the core's and are left alone.
 - **One writer.** Opening a writable store takes the advisory lock the Python core takes (`LockKey`, pg.py's
   `"clr0"`) on a dedicated connection and holds it for the store's life. Every write runs on that connection, and a

@@ -47,6 +47,7 @@ func TestConfigFromEnv(t *testing.T) {
 		{"CLEARANCE_OIDC_ISSUER": "https://dex"},
 		{"CLEARANCE_TRUSTED_REGISTRIES": "ghcr.io/acme"},
 		{"CLEARANCE_TRUSTED_REGISTRIES": "ghcr.io/a b/"},
+		{"CLEARANCE_GATE_UNBOUND_TREE": "warn"},
 	} {
 		if _, err := FromEnv(env(bad)); err == nil {
 			t.Errorf("accepted %v", bad)
@@ -156,5 +157,15 @@ func TestTrustedRegistriesFromEnv(t *testing.T) {
 	cfg, err = FromEnv(env(map[string]string{"CLEARANCE_DSN": "postgres://x"}))
 	if err != nil || len(cfg.Gate.TrustedRegistries) != 0 {
 		t.Fatalf("default: %q %v", cfg.Gate.TrustedRegistries, err)
+	}
+}
+
+// A placeholder tree digest is flagged unless the deployment refuses it (flag is the default for one release; G-TF-1).
+func TestTheUnboundTreeSetting(t *testing.T) {
+	for v, want := range map[string]string{"": "flag", "flag": "flag", "refuse": "refuse"} {
+		cfg, err := FromEnv(env(map[string]string{"CLEARANCE_DSN": "postgres://x", "CLEARANCE_GATE_UNBOUND_TREE": v}))
+		if err != nil || cfg.Gate.UnboundTree != want {
+			t.Errorf("%q: %q %v", v, cfg.Gate.UnboundTree, err)
+		}
 	}
 }

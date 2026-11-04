@@ -77,6 +77,11 @@ func evidenceFilter(q map[string]string, outcomesDefault string) (EvidenceFilter
 	f := EvidenceFilter{Task: q["task"], Session: q["session"], Agent: q["agent"], Tool: q["tool"],
 		Principal: q["principal"], Decision: q["decision"], Rule: q["rule"], App: q["app"], Since: q["since"],
 		Until: q["until"], Outcomes: q["outcomes"]}
+	inst, aerr := installationOf(q)
+	if aerr != nil {
+		return f, aerr
+	}
+	f.Installation = inst
 	for k, v := range map[string]string{"since": f.Since, "until": f.Until} {
 		if v != "" && !isoTime.MatchString(v) {
 			return f, errorf(400, "%s is an ISO time", k)
@@ -253,7 +258,13 @@ func (s *Server) byPR(w http.ResponseWriter, r *http.Request, v *Viewer, tools [
 		writeError(w, 400, "pr is a number")
 		return
 	}
-	items, err := s.opt.Store.ByPR(r.Context(), tools, repo, pr, v)
+	inst, aerr := installationOf(q)
+	if aerr != nil {
+		aerr.write(w)
+		return
+	}
+	f := PRFilter{Repo: repo, PR: pr, Installation: inst, ByInstaller: len(tools) == 1 && tools[0] == "provenance.verify"}
+	items, err := s.opt.Store.ByPR(r.Context(), tools, f, v)
 	if err != nil {
 		s.readFailed(w, r, err)
 		return
@@ -497,11 +508,10 @@ func (s *Server) getClearancePolicy(w http.ResponseWriter, _ *http.Request, _ *V
 // -- the contract -------------------------------------------------------------------------------------------------
 
 func (s *Server) getContract(w http.ResponseWriter, _ *http.Request, _ *Viewer) {
-	doc, err := ContractDoc()
+	doc, err := ContractDoc(s.opt.GatewayURL, s.opt.CoreURL)
 	if err != nil {
 		writeError(w, 500, fmt.Sprint("contract: ", err))
 		return
 	}
-	doc.Gateway, doc.Core = s.opt.GatewayURL, s.opt.CoreURL
 	writeJSON(w, 200, doc)
 }

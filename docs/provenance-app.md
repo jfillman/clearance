@@ -110,8 +110,8 @@ behind a period where both report, so the verdicts can be compared.
 ## API
 
 No new public API for PRs: the App is driven by webhooks. Internally, `POST /v1/github/webhook` (signature-checked,
-no bearer token). clearance-api gains the installation as a filter on the existing evidence and receipts reads, and
-`GET /v1/github/installations` for an operator page.
+no bearer token). Built in C-10: clearance-api's `installation=<id>` filter on the evidence, counts, verdicts and
+receipts reads, and `GET /v1/github/installations` for an operator page ([clearance-api.md](clearance-api.md#the-gates-reads-c-10-built)).
 
 ## Phases
 
@@ -195,7 +195,8 @@ The customer's own CI registers what it is about to deploy, so the protection ru
   refuses a change for any other repository (`DG-REPO`, 403). A workflow cannot clear the way for another repo.
 - **The change**: `clearance register` (the Go binary's subcommand, `cmd/clearance/register.go`) diffs two
   directories of rendered manifests, `--before` and `--after`: each object added, removed or changed, a changed
-  object's differing leaves as JSON pointers, the images it runs, a digest; the tree digest of `--after`; the repo,
+  object's differing leaves as JSON pointers, the images it runs, a digest; the manifest-tree digest of `--after`
+  ([gate.md](gate.md#the-manifest-tree-digest-built); an `--after` with no manifests is a usage error); the repo,
   commit and PR (0 for a push) from the Actions environment and event. The gate's own validation runs before
   anything is sent; `--dry-run` prints the body.
 - **The exit code**: 0 cleared, 3 holding for people (the deploy job then waits on the protection rule), 1 denied or
