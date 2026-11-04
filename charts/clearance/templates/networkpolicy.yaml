@@ -81,6 +81,26 @@ spec:
     {{- end }}
 {{- end }}
 {{- end }}
+{{- if $np.kubeAPIServer.ciliumEntity }}
+---
+# Cilium: the API server is the kube-apiserver entity, which a NetworkPolicy ipBlock does not match
+# (networkPolicy.kubeAPIServer.ciliumEntity). The core and the api may reach it for TokenReview; nothing else here.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "clearance.fullname" . }}-kube-apiserver
+  labels:
+    {{- include "clearance.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "clearance.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+    matchExpressions:
+      - {key: app.kubernetes.io/component, operator: In, values: [core, api]}
+  egress:
+    - toEntities: [kube-apiserver]
+{{- end }}
 {{- if .Values.tests.chainVerify }}
 ---
 # The `helm test` pod: Postgres and DNS only.

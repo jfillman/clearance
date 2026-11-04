@@ -242,6 +242,17 @@ func TestTheGateThroughTheClient(t *testing.T) {
 	if err != nil || got.State != "cleared" || got.Token == nil || got.Token.JWT == "" {
 		t.Fatalf("%+v %v", got, err)
 	}
+	// The wait route: a state other than the one known answers at once; the same state waits out the timeout.
+	if w, err := verifier.Wait(ctx, ch.ID, "holding", 5*time.Second); err != nil || !w.Changed || w.State != "cleared" ||
+		w.Token == nil {
+		t.Fatalf("wait %+v %v", w, err)
+	}
+	if w, err := verifier.Wait(ctx, ch.ID, "", time.Second); err != nil || w.Changed || w.State != "cleared" {
+		t.Fatalf("wait timeout %+v %v", w, err)
+	}
+	if _, err := verifier.Wait(ctx, ch.ID, "", 2*time.Minute); err == nil {
+		t.Fatal("a wait past MaxWait was sent")
+	}
 	jwks, err := newClient(t, srv.URL, "").Keys(ctx)
 	if err != nil || len(jwks.Keys) != 1 {
 		t.Fatalf("%+v %v", jwks, err)

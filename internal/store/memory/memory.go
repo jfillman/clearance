@@ -34,6 +34,7 @@ type Store struct {
 	defs    []store.Definition
 	tokens  map[string]store.Token
 	keys    map[string]store.SigningKey
+	feeds   map[string]store.Feed
 	glass   map[string]store.Breakglass
 	closed  bool
 }
@@ -49,7 +50,7 @@ var ErrTxDone = errors.New("memory: transaction is finished")
 // New returns an empty store.
 func New() *Store {
 	return &Store{head: evidence.Start, changes: map[string]store.Change{}, tokens: map[string]store.Token{},
-		keys: map[string]store.SigningKey{}, glass: map[string]store.Breakglass{}}
+		keys: map[string]store.SigningKey{}, feeds: map[string]store.Feed{}, glass: map[string]store.Breakglass{}}
 }
 
 // Load returns a store holding an existing chain, verified from genesis like store/pg's Open.
@@ -91,7 +92,7 @@ func (s *Store) Atomic(ctx context.Context, fn func(tx store.Tx) error) (err err
 		return ErrClosed
 	}
 	t := &tx{s: s, head: head, changes: map[string]store.Change{}, tokens: map[string]store.Token{},
-		glass: map[string]store.Breakglass{}}
+		feeds: map[string]store.Feed{}, glass: map[string]store.Breakglass{}}
 	defer func() {
 		t.mu.Lock()
 		t.done = true
@@ -116,11 +117,14 @@ func (s *Store) Atomic(ctx context.Context, fn func(tx store.Tx) error) (err err
 	for id, tk := range t.tokens {
 		s.tokens[id] = tk
 	}
-	if t.keys != nil {
-		s.keys = t.keys
+	for c, f := range t.feeds {
+		s.feeds[c] = f
 	}
 	for id, b := range t.glass {
 		s.glass[id] = b
+	}
+	if t.keys != nil {
+		s.keys = t.keys
 	}
 	return nil
 }
@@ -135,6 +139,7 @@ type tx struct {
 	changes map[string]store.Change
 	defs    *[]store.Definition
 	tokens  map[string]store.Token
+	feeds   map[string]store.Feed
 	keys    map[string]store.SigningKey // nil: unchanged
 	glass   map[string]store.Breakglass
 }
@@ -265,6 +270,23 @@ func (t *tx) PutBreakglass(ctx context.Context, b store.Breakglass) error {
 	return nil
 }
 
+func (t *tx) PutFeed(ctx context.Context, f store.Feed) error {
+	if err := t.lock(); err != nil {
+		return err
+	}
+	defer t.mu.Unlock()
+	if f.Cluster == "" || !json.Valid(f.Envelope) || !json.Valid(f.Tokens) {
+		return errors.New("memory: a feed needs a cluster, a JSON envelope and JSON tokens")
+	}
+	t.feeds[f.Cluster] = cloneFeed(f)
+	return nil
+}
+
+func cloneFeed(f store.Feed) store.Feed {
+	f.Envelope, f.Tokens = bytes.Clone(f.Envelope), bytes.Clone(f.Tokens)
+	return f
+}
+
 func cloneToken(tk store.Token) store.Token {
 	tk.Envelope = bytes.Clone(tk.Envelope)
 	if tk.RevokedAt != nil {
@@ -293,6 +315,7 @@ type view struct {
 	defs    []store.Definition
 	tokens  map[string]store.Token
 	keys    map[string]store.SigningKey
+	feeds   map[string]store.Feed
 	glass   map[string]store.Breakglass
 }
 
@@ -310,8 +333,12 @@ func (s *Store) view() (view, error) {
 	for k, v := range s.glass {
 		glass[k] = v
 	}
+	feeds := make(map[string]store.Feed, len(s.feeds))
+	for k, v := range s.feeds {
+		feeds[k] = v
+	}
 	return view{head: s.head, records: s.records[:len(s.records):len(s.records)], changes: maps(s.changes), defs: s.defs,
-		tokens: tokens, keys: s.keys, glass: glass}, nil
+		tokens: tokens, keys: s.keys, feeds: feeds, glass: glass}, nil
 }
 
 func maps(m map[string]store.Change) map[string]store.Change {
@@ -342,11 +369,14 @@ func (t *tx) view() (view, error) {
 	for id, tk := range t.tokens {
 		v.tokens[id] = tk
 	}
-	if t.keys != nil {
-		v.keys = t.keys
+	for c, f := range t.feeds {
+		v.feeds[c] = f
 	}
 	for id, b := range t.glass {
 		v.glass[id] = b
+	}
+	if t.keys != nil {
+		v.keys = t.keys
 	}
 	return v, nil
 }
@@ -711,6 +741,95 @@ func (v view) signingKeys(since time.Time) []store.SigningKey {
 		}
 		return out[i].KeyID < out[j].KeyID
 	})
+	return out
+}
+
+func (s *Store) LiveTokens(ctx context.Context, cluster string, now time.Time, limit int) ([]store.Token, error) {
+	v, err := s.view()
+	if err != nil {
+		return nil, err
+	}
+	return v.liveTokens(cluster, now, limit), nil
+}
+
+func (t *tx) LiveTokens(ctx context.Context, cluster string, now time.Time, limit int) ([]store.Token, error) {
+	v, err := t.view()
+	if err != nil {
+		return nil, err
+	}
+	return v.liveTokens(cluster, now, limit), nil
+}
+
+func (v view) liveTokens(cluster string, now time.Time, limit int) []store.Token {
+	out := []store.Token{}
+	for _, tk := range v.tokens {
+		if tk.Cluster == cluster && tk.RevokedAt == nil && tk.ExpiresAt.After(now) {
+			out = append(out, cloneToken(tk))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ChangeID < out[j].ChangeID })
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
+func (s *Store) Feed(ctx context.Context, cluster string) (store.Feed, error) {
+	v, err := s.view()
+	if err != nil {
+		return store.Feed{}, err
+	}
+	return v.feed(cluster)
+}
+
+func (t *tx) Feed(ctx context.Context, cluster string) (store.Feed, error) {
+	v, err := t.view()
+	if err != nil {
+		return store.Feed{}, err
+	}
+	return v.feed(cluster)
+}
+
+func (v view) feed(cluster string) (store.Feed, error) {
+	f, ok := v.feeds[cluster]
+	if !ok {
+		return store.Feed{}, store.ErrNotFound
+	}
+	return cloneFeed(f), nil
+}
+
+func (s *Store) FeedClusters(ctx context.Context) ([]string, error) {
+	v, err := s.view()
+	if err != nil {
+		return nil, err
+	}
+	return v.feedClusters(), nil
+}
+
+func (t *tx) FeedClusters(ctx context.Context) ([]string, error) {
+	v, err := t.view()
+	if err != nil {
+		return nil, err
+	}
+	return v.feedClusters(), nil
+}
+
+func (v view) feedClusters() []string {
+	seen := map[string]bool{}
+	out := []string{}
+	add := func(c string) {
+		if c != "" && !seen[c] {
+			seen[c] = true
+			out = append(out, c)
+		}
+	}
+	for _, tk := range v.tokens {
+		add(tk.Cluster)
+	}
+	for c := range v.feeds {
+		add(c)
+	}
+	sort.Strings(out)
 	return out
 }
 

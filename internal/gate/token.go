@@ -198,6 +198,7 @@ func (w *writer) issue(c *Change, nonce string) (string, error) {
 		w.err = err
 		return "", err
 	}
+	w.touch(row.ChangeID, row.Cluster)
 	return nonce, nil
 }
 
@@ -228,6 +229,7 @@ func (w *writer) revoke(c *Change, why string, extra map[string]any) {
 	for k, v := range extra {
 		args[k] = v
 	}
+	w.touch(tk.ChangeID, tk.Cluster)
 	w.record("policy", nil, "deploy.revoke", c, "allow", nil, "token revoked: "+why, args, map[string]any{"token": tk.Nonce})
 }
 
@@ -283,6 +285,7 @@ func (s *Service) Refresh(ctx context.Context) (reissued, revoked int, err error
 
 // refreshOne re-issues tk (true) or revokes it (false).
 func (s *Service) refreshOne(tx store.Tx, w *writer, tk store.Token) (bool, error) {
+	w.touch(tk.ChangeID, tk.Cluster)
 	c, err := load(w.ctx, tx, tk.ChangeID)
 	if err != nil {
 		return false, err

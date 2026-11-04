@@ -17,7 +17,10 @@ type Route struct {
 	Summary                   string
 	Response                  any   // a value of the 200 answer's Go type, for the contract's schema
 	Errors                    []int // the other statuses it answers
-	serve                     func(*Server, http.ResponseWriter, *http.Request, *Viewer)
+	// Stream is a route that answers text/event-stream (Response is one event's data): no handler deadline, its own
+	// write deadlines, and a portal's buffered proxy does not forward it.
+	Stream bool
+	serve  func(*Server, http.ResponseWriter, *http.Request, *Viewer)
 }
 
 // Routes is the route table in contract order. The slice is shared: do not modify it.
@@ -84,9 +87,10 @@ type Ready struct {
 var routeTable = []Route{
 	{OperationID: "listEvidence", Method: "GET", Path: "/v1/evidence", Roles: PersonRoles,
 		Params: []string{"task", "session", "agent", "tool", "principal", "decision", "rule", "app", "since", "until",
-			"limit", "after", "outcomes"},
+			"limit", "after", "outcomes", "installation"},
 		Summary: "Evidence records you may see, newest first; the cursor is seq. outcomes=include (default), exclude " +
-			"or only: the outcome records the core writes beside each allowed decision (outcome_of)",
+			"or only: the outcome records the core writes beside each allowed decision (outcome_of). installation=<id> " +
+			"keeps one GitHub App installation's records (principal app:<id>)",
 		Response: EvidencePage{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).listEvidence},
 	{OperationID: "listExceptions", Method: "GET", Path: "/v1/exceptions", Roles: PersonRoles,
 		Params: []string{"tool", "kind", "app", "since", "until", "limit", "after"},
@@ -105,7 +109,7 @@ var routeTable = []Route{
 		Response: Verified{}, Errors: []int{401, 403, 503}, serve: (*Server).verifyEvidence},
 	{OperationID: "countEvidence", Method: "GET", Path: "/v1/evidence/counts", Roles: PersonRoles,
 		Params: []string{"by", "task", "session", "agent", "tool", "principal", "decision", "rule", "app", "since",
-			"until", "outcomes"},
+			"until", "outcomes", "installation"},
 		Summary: "Records you may see, counted by rule, tool, agent, app or decision (`by`), with the same filters as " +
 			"the list. outcomes=exclude (default) counts each decision once; include or only count the outcome records too",
 		Response: Counts{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).countEvidence},
@@ -119,12 +123,14 @@ var routeTable = []Route{
 			"fresh session: the decision and each rule's verdict in order. Records nothing",
 		Response: Explanation{}, Errors: []int{400, 401, 403, 404}, serve: (*Server).explainPolicy},
 	{OperationID: "listReceipts", Method: "GET", Path: "/v1/receipts", Roles: PersonRoles,
-		Params:   []string{"repo", "pr"},
-		Summary:  "PR receipts: what Clearance's agents opened on a repo (and PR), the commit, the paths",
+		Params: []string{"repo", "pr", "installation"},
+		Summary: "PR receipts: what Clearance's agents opened on a repo (and PR), the commit, the paths. " +
+			"installation=<id> keeps the receipts of pull requests that GitHub App installation checked",
 		Response: RecordList{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).listReceipts},
 	{OperationID: "listProvenance", Method: "GET", Path: "/v1/provenance", Roles: PersonRoles,
-		Params:   []string{"repo", "pr"},
-		Summary:  "The agent-gate verdicts recorded for a PR (provenance.verify)",
+		Params: []string{"repo", "pr", "installation"},
+		Summary: "The agent-gate verdicts recorded for a PR (provenance.verify). installation=<id> keeps the " +
+			"verdicts that GitHub App installation recorded",
 		Response: RecordList{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).listProvenance},
 	{OperationID: "listClearances", Method: "GET", Path: "/v1/clearances", Roles: FeedRoles,
 		Params: []string{"app", "env", "state", "repo", "pr", "tier", "since", "limit", "after", "cluster"},
@@ -158,6 +164,29 @@ var routeTable = []Route{
 		Summary: "The clearance token verification keys, a JWKS (EC P-256, ES256, kid = the RFC 7638 thumbprint): " +
 			"the key the core signs with and keys retired within the last 24 hours. Public",
 		Response: token.JWKS{}, Errors: []int{503}, serve: (*Server).getKeys},
+	{OperationID: "getGrantFeed", Method: "GET", Path: "/v1/grant-feeds/{cluster}", Roles: []string{RoleFeed, RoleAuditor},
+		Params: []string{},
+		Summary: "The cluster's signed grant feed: a DSSE envelope (application/vnd.clearance.grant-feed.v1+json, the " +
+			"token key) over every clearance token live on the cluster when the core signed it, with seq, iat, exp and " +
+			"each token's payload digest, and the tokens it lists beside it. The core re-signs it on every token write " +
+			"and at least every 2 minutes (exp 5 minutes): verify it whole before acting (docs/gate.md). A feed reader " +
+			"reads its own clusters'; auditors any",
+		Response: GrantFeed{}, Errors: []int{400, 401, 403, 404, 503}, serve: (*Server).getGrantFeed},
+	{OperationID: "listInstallations", Method: "GET", Path: "/v1/github/installations", Roles: PersonRoles,
+		Params: []string{},
+		Summary: "The Clearance GitHub App's installations as the records name them (app:<id>): the account and last " +
+			"action of the last app.installation record, the status it leaves, the records by tool, their seq and ts " +
+			"bounds, and the repositories its checks ran on",
+		Response: InstallationList{}, Errors: []int{401, 403, 503}, serve: (*Server).listInstallations},
+	{OperationID: "streamEvents", Method: "GET", Path: "/v1/stream", Roles: FeedRoles,
+		Params: []string{"types", "after"}, Stream: true,
+		Summary: "Server-sent events of new evidence records (event: record, the record as getEvidence serves it) and " +
+			"gate state changes (event: clearance: the deploy.* record's seq, tool and ts and the change summary it " +
+			"recorded), each with id: <seq>. Resume with Last-Event-ID (or after=<seq>); without either the stream " +
+			"starts at the head. types=records,clearances (default both). The same scoping as the reads: a person sees " +
+			"the records and changes they may read; a feed reader only clearance events of its clusters. A comment " +
+			"every 15 s keeps it open; the server ends it after 10 minutes (reconnect with Last-Event-ID)",
+		Response: StreamEvent{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).stream},
 	{OperationID: "getContract", Method: "GET", Path: "/v1/contract", Roles: []string{RoleAny}, Params: []string{},
 		Summary:  "This contract",
 		Response: map[string]any{}}, // served by getContract (New), which reads this table

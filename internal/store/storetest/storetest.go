@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -46,6 +47,7 @@ func Run(t *testing.T, open Opener) {
 		{"Definitions", testDefinitions},
 		{"Tokens", testTokens},
 		{"SigningKeys", testSigningKeys},
+		{"Feeds", testFeeds},
 		{"Breakglass", testBreakglass},
 		{"Concurrent", testConcurrent},
 		{"CancelledContext", testCancelled},
@@ -707,6 +709,60 @@ func testSigningKeys(t *testing.T, open Opener) {
 	use("k1", t0.Add(4*time.Hour)) // rolled back to the old key
 	if got := names(s.SigningKeys(bg, t0.Add(3*time.Hour))); got != "k2@4h0m0s k1@- " {
 		t.Fatalf("roll back: %q", got)
+	}
+}
+
+func testFeeds(t *testing.T, open Opener) {
+	s := open(t, nil)
+	t0 := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	tok := func(id, cluster string, exp time.Duration) store.Token {
+		return store.Token{ChangeID: id, Cluster: cluster, Nonce: "n-" + id, KeyID: "k1", IssuedAt: t0,
+			ExpiresAt: t0.Add(exp), Envelope: json.RawMessage(`{"payloadType":"x","payload":"e30=","signatures":[]}`),
+			JWT: "a.b.c"}
+	}
+	revoked := tok("t4", "prod-1", time.Hour)
+	at := t0
+	revoked.RevokedAt = &at
+	putToken(t, s, tok("t2", "prod-1", time.Hour), tok("t1", "prod-1", time.Hour), tok("t3", "prod-1", -time.Second),
+		revoked, tok("t5", "prod-2", time.Hour), tok("t6", "", time.Hour))
+	// Live: this cluster's, not revoked, not expired; by change id.
+	if got := tokenIDs(s.LiveTokens(bg, "prod-1", t0, 0)); got != "t1 t2 " {
+		t.Errorf("LiveTokens = %s", got)
+	}
+	if got := tokenIDs(s.LiveTokens(bg, "prod-1", t0, 1)); got != "t1 " {
+		t.Errorf("LiveTokens limit = %s", got)
+	}
+	if _, err := s.Feed(bg, "prod-1"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Feed before any: %v", err)
+	}
+	f := store.Feed{Cluster: "prod-3", Seq: 1, KeyID: "k1", IssuedAt: t0, ExpiresAt: t0.Add(5 * time.Minute),
+		Envelope: json.RawMessage(`{"payloadType":"f","payload":"e30=","signatures":[]}`), Tokens: json.RawMessage(`[]`)}
+	put := func(f store.Feed) {
+		t.Helper()
+		if err := s.Atomic(bg, func(tx store.Tx) error {
+			if err := tx.PutFeed(bg, f); err != nil {
+				return err
+			}
+			got, err := tx.Feed(bg, f.Cluster) // a transaction reads its own write
+			if err != nil || got.Seq != f.Seq {
+				t.Errorf("tx.Feed = %+v, %v", got, err)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put(f)
+	f.Seq, f.Tokens = 2, json.RawMessage(`[{"change_id":"t1"}]`)
+	put(f)
+	got, err := s.Feed(bg, "prod-3")
+	if err != nil || got.Seq != 2 || got.KeyID != "k1" || !got.ExpiresAt.Equal(t0.Add(5*time.Minute)) ||
+		!json.Valid(got.Envelope) || !strings.Contains(string(got.Tokens), "t1") {
+		t.Fatalf("Feed = %+v, %v", got, err)
+	}
+	cs, err := s.FeedClusters(bg)
+	if err != nil || strings.Join(cs, ",") != "prod-1,prod-2,prod-3" {
+		t.Fatalf("FeedClusters = %v, %v", cs, err)
 	}
 }
 

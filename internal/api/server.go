@@ -62,6 +62,8 @@ type Options struct {
 	GatewayURL, CoreURL string
 	Clock               func() time.Time
 	Log                 *slog.Logger
+	// StreamPoll is how often the stream hub reads the chain's head (0: StreamPoll).
+	StreamPoll time.Duration
 }
 
 // Server is the read API. Build it with New.
@@ -69,6 +71,7 @@ type Server struct {
 	opt     Options
 	log     *slog.Logger
 	handler http.Handler
+	hub     *hub
 }
 
 // New builds the server.
@@ -82,7 +85,7 @@ func New(opt Options) (*Server, error) {
 	if opt.Log == nil {
 		opt.Log = slog.Default()
 	}
-	s := &Server{opt: opt, log: opt.Log}
+	s := &Server{opt: opt, log: opt.Log, hub: newHub(opt.Store, opt.StreamPoll, opt.Log)}
 	mux := http.NewServeMux()
 	for _, rt := range Routes() {
 		if rt.serve == nil {
@@ -245,6 +248,9 @@ func pathMatches(pattern, path string) bool {
 	return true
 }
 
+// streamPath is the stream route's path (its handler deadline is the stream's own).
+const streamPath = "/v1/stream"
+
 // -- middleware ---------------------------------------------------------------------------------------------------
 
 func (s *Server) recoverer(next http.Handler) http.Handler {
@@ -276,6 +282,9 @@ func (w *statusWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
+// Unwrap lets http.ResponseController reach the connection (Flush, and a long poll's or a stream's deadlines).
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 func (w *statusWriter) Write(b []byte) (int, error) {
 	if w.status == 0 {
 		w.status = http.StatusOK
@@ -302,7 +311,11 @@ func (s *Server) accessLog(next http.Handler) http.Handler {
 		t0 := time.Now()
 		sw := &statusWriter{ResponseWriter: w}
 		box := &principalBox{}
-		ctx, cancel := context.WithTimeout(context.WithValue(r.Context(), boxKey{}, box), HandlerTimeout)
+		limit := HandlerTimeout
+		if r.URL.Path == streamPath {
+			limit = StreamMaxDuration + HandlerTimeout // the stream ends itself; each event has its own deadline
+		}
+		ctx, cancel := context.WithTimeout(context.WithValue(r.Context(), boxKey{}, box), limit)
 		defer cancel()
 		next.ServeHTTP(sw, r.WithContext(ctx))
 		if sw.status == 0 {

@@ -7,14 +7,19 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jfillman/clearance/internal/api"
+	"github.com/jfillman/clearance/internal/authn"
 	"github.com/jfillman/clearance/internal/core"
 	"github.com/jfillman/clearance/internal/evidence"
 	"github.com/jfillman/clearance/internal/server"
+	"github.com/jfillman/clearance/internal/store/pg"
 	"github.com/jfillman/clearance/internal/token"
 )
 
@@ -180,5 +185,170 @@ func TestAProvidersConformanceIsStampedOnItsRecords(t *testing.T) {
 	}
 	if ok, bad := evidence.Verify(recs); !ok {
 		t.Fatalf("the chain breaks at %d", bad)
+	}
+}
+
+// waitCall is GET .../wait from a goroutine: its status and body arrive on the channel.
+func (f *fixture) waitCall(path, who string) <-chan answer {
+	out := make(chan answer, 1)
+	go func() {
+		req, _ := http.NewRequest("GET", f.srv.URL+path, nil)
+		req.Header.Set("Authorization", "Bearer "+who)
+		resp, err := f.srv.Client().Do(req)
+		if err != nil {
+			out <- answer{status: -1}
+			return
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		a := answer{status: resp.StatusCode}
+		_ = json.Unmarshal(raw, &a.body)
+		out <- a
+	}()
+	return out
+}
+
+func TestTheWaitRouteAnswersOnTheWrite(t *testing.T) {
+	f, _ := tokenFixture(t)
+	pending := change("pending")
+	held := f.do("POST", "/v1/clearances", ci, pending).want(t, 200, "").body["id"].(string)
+	// A state other than the one given answers at once.
+	a := f.do("GET", "/v1/clearances/"+held+"/wait?state=cleared&timeout=5", argo, nil).want(t, 200, "")
+	if a.body["state"] != "holding" || a.body["changed"] != true {
+		t.Fatal(a.body)
+	}
+	// Nothing written: the timeout, changed false.
+	t0 := time.Now()
+	a = f.do("GET", "/v1/clearances/"+held+"/wait?timeout=1", argo, nil).want(t, 200, "")
+	if a.body["state"] != "holding" || a.body["changed"] != false || time.Since(t0) < time.Second {
+		t.Fatal(a.body, time.Since(t0))
+	}
+	// The check passes (the verifier re-registers the same head): the waiter wakes with the token, long before
+	// its timeout.
+	ch := f.waitCall("/v1/clearances/"+held+"/wait?state=holding&timeout=30", argo)
+	deadline := time.Now().Add(5 * time.Second)
+	for f.core.Gate.Waiting() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	t1 := time.Now()
+	f.do("POST", "/v1/clearances", ci, change("pass")).want(t, 200, "")
+	select {
+	case a = <-ch:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the waiter did not wake")
+	}
+	if a.status != 200 || a.body["state"] != "cleared" || a.body["changed"] != true || a.body["token"] == nil ||
+		time.Since(t1) > 5*time.Second {
+		t.Fatal(a.status, a.body)
+	}
+	if f.core.Gate.Waiting() != 0 {
+		t.Fatal("a watch leaked", f.core.Gate.Waiting())
+	}
+	// The same callers as getClearance; bad parameters are 400.
+	f.do("GET", "/v1/clearances/"+held+"/wait?timeout=1", "user:erin", nil).want(t, 403, "neither a registered provider")
+	f.do("GET", "/v1/clearances/ch-nope/wait?timeout=1", ci, nil).want(t, 404, "no such change")
+	for _, q := range []string{"timeout=0", "timeout=61", "timeout=x", "other=1", "timeout=1&timeout=2"} {
+		f.do("GET", "/v1/clearances/"+held+"/wait?"+q, argo, nil).want(t, 400, "")
+	}
+}
+
+func TestTheWaitRouteThroughTheRealServer(t *testing.T) {
+	// Through the core's own http.Server (HTTPServer, with every timeout set), not only the handler: the route's
+	// deadline changes (no read deadline, a write deadline past the wait) are accepted by the connection.
+	f, _ := tokenFixture(t)
+	held := f.do("POST", "/v1/clearances", ci, change("pending")).want(t, 200, "").body["id"].(string)
+	hs := f.core.Server.HTTPServer("127.0.0.1:0")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = hs.Serve(ln) }()
+	t.Cleanup(func() { _ = hs.Close() })
+	req, _ := http.NewRequest("GET", "http://"+ln.Addr().String()+"/v1/clearances/"+held+"/wait?timeout=2", nil)
+	req.Header.Set("Authorization", "Bearer "+argo)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var body map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+	if resp.StatusCode != 200 || body["changed"] != false {
+		t.Fatal(resp.StatusCode, body)
+	}
+}
+
+// The seam end to end, on one Postgres: the core signs the grant feed in the clearing transaction, clearance-api (a
+// read-only process with no key) serves it, and a reader verifies it with the keys clearance-api publishes.
+func TestTheCoreSignsTheGrantFeedAndClearanceAPIServesIt(t *testing.T) {
+	dsn := pgDSN(t)
+	cfg := config(t, dsn)
+	s := signer(t)
+	cfg.Signer, cfg.TokenIssuer, cfg.TokenTTL = s, "clearance", 15*time.Minute
+	f := newFixture(t, cfg)
+	id := f.do("POST", "/v1/clearances", ci, change("pass")).want(t, 200, "").body["id"].(string)
+
+	rd, err := pg.OpenReader(context.Background(), dsn, pg.Options{MaxConns: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(rd.Close)
+	auth := authn.AuthenticatorFunc(func(_ context.Context, tok string) (authn.Principal, error) {
+		return authn.Principal{ID: tok, Kind: authn.KindForeignWorkload}, nil
+	})
+	srv, err := api.New(api.Options{Store: &api.PG{R: rd}, Auth: auth, Log: quiet,
+		Access: &api.Access{FeedReaders: []api.FeedReader{{Principal: "hangar-prod/clearance-system/*", Cluster: "hangar-prod"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	get := func(path, who string) (int, []byte) {
+		req := httptest.NewRequest("GET", path, nil)
+		if who != "" {
+			req.Header.Set("Authorization", "Bearer "+who)
+		}
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		return rec.Code, rec.Body.Bytes()
+	}
+	code, rawKeys := get("/v1/keys", "")
+	ks, err := token.ParseJWKS(rawKeys)
+	if code != 200 || err != nil {
+		t.Fatal(code, err)
+	}
+	code, raw := get("/v1/grant-feeds/hangar-prod", "hangar-prod/clearance-system/grant-sync")
+	if code != 200 {
+		t.Fatalf("%d %s", code, raw)
+	}
+	var feed api.GrantFeed
+	if err := json.Unmarshal(raw, &feed); err != nil {
+		t.Fatal(err)
+	}
+	env, _ := json.Marshal(feed.Feed)
+	fd, err := token.VerifyFeed(env, ks, token.FeedOptions{Issuer: "clearance", Cluster: "hangar-prod"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]token.Envelope{}
+	for _, tk := range feed.Tokens {
+		byID[tk.ChangeID] = tk.DSSE
+		tokRaw, _ := json.Marshal(tk.DSSE)
+		if _, err := token.Verify(context.Background(), tokRaw, ks, token.Options{Issuer: "clearance",
+			Expect: token.Expect{Cluster: "hangar-prod"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := fd.Match(byID); err != nil || len(fd.Entries) != 1 || fd.Entries[0].ChangeID != id || fd.RecordsSeq < 0 {
+		t.Fatalf("%+v %v", fd, err)
+	}
+	// A new head revokes it: the next feed (a higher seq) is empty.
+	held := change("pending")
+	held["head"] = strings.Repeat("e", 40)
+	f.do("POST", "/v1/clearances", ci, held).want(t, 200, "")
+	_, raw = get("/v1/grant-feeds/hangar-prod", "hangar-prod/clearance-system/grant-sync")
+	_ = json.Unmarshal(raw, &feed)
+	env, _ = json.Marshal(feed.Feed)
+	if fd2, err := token.VerifyFeed(env, ks, token.FeedOptions{Issuer: "clearance", Cluster: "hangar-prod",
+		MinSeq: fd.Seq + 1}); err != nil || len(fd2.Entries) != 0 || len(feed.Tokens) != 0 {
+		t.Fatalf("%+v %v", fd2, err)
 	}
 }

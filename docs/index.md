@@ -34,7 +34,8 @@ Clearance is one Go module and one binary, `clearance` ([core.md](core.md)); han
 - **The GitHub App** (`internal/githubapp`, `internal/provenance`): check runs on PRs and the deployment protection rule.
 - **The read API** (`clearance api`, `internal/api`, `contract/clearance-api.json`): clearance-api, a separate
   read-only process: evidence, counts, PR receipts and verdicts, clearances, the policy and its explainer,
-  definitions ([clearance-api.md](clearance-api.md)). The runtime's reads (sessions, runs, agents, the inbox, trigger
+  definitions, and for the gates the signed grant feed, the record stream (SSE) and the GitHub App installations
+  ([clearance-api.md](clearance-api.md); an OpenAPI 3.1 contract). The runtime's reads (sessions, runs, agents, the inbox, trigger
   history, results) are the Autopilot gateway's own API.
 - **The clients**: `client` (Go) and `clients/python` (`clearance-core-client`, generated from the contract).
 

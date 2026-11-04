@@ -23,8 +23,10 @@ const (
 // EvidenceFilter is the evidence list's and counts' filters; "" is unset.
 type EvidenceFilter struct {
 	Task, Session, Agent, Tool, Principal, Decision, Rule, App string
-	Since, Until                                               string // compared with the record's ts as text, as api.py does
-	Outcomes                                                   string // OutcomesInclude (""), OutcomesExclude, OutcomesOnly
+	// Installation keeps the records of one GitHub App installation (principal app:<id>).
+	Installation string
+	Since, Until string // compared with the record's ts as text, as api.py does
+	Outcomes     string // OutcomesInclude (""), OutcomesExclude, OutcomesOnly
 	// Exceptions keeps only the records the packet's exceptions section lists (GET /v1/exceptions): the tools of
 	// ExceptionTools, and any record whose coverage is coverage-unavailable. Kind narrows a deploy.exception to
 	// its exception.kind.
@@ -67,8 +69,10 @@ type Store interface {
 	// largest first, at most MaxLimit groups.
 	Counts(ctx context.Context, f EvidenceFilter, v *Viewer, by string) ([]Count, error)
 	// ByPR is the records of one of tools that the viewer may see, whose effect names repo (and pr when not "") or
-	// whose target is repo#pr (repo#anything without pr), newest first, at most MaxLimit.
-	ByPR(ctx context.Context, tools []string, repo, pr string, v *Viewer) ([]Record, error)
+	// whose target is repo#pr (repo#anything without pr), newest first, at most MaxLimit. f.Installation, when set,
+	// keeps the records of that App installation (Verdicts: recorded by app:<id>) or (receipts) the records on a
+	// pull request that installation checked (a provenance.verify by app:<id> targets it).
+	ByPR(ctx context.Context, tools []string, f PRFilter, v *Viewer) ([]Record, error)
 	// Verify checks the whole chain from genesis.
 	Verify(ctx context.Context) (Verified, error)
 	// Changes is up to limit of the gate's changes the viewer may see, by updated_at newest first, below after.
@@ -85,4 +89,58 @@ type Store interface {
 	SigningKeys(ctx context.Context, since time.Time) ([]store.SigningKey, error)
 	// Ping answers when the database does.
 	Ping(ctx context.Context) error
+
+	// Head is the chain's last seq (-1 when empty): the stream's high-water mark.
+	Head(ctx context.Context) (int64, error)
+	// EvidenceAfter is up to limit records the viewer may see matching f, with seq above after, oldest first.
+	EvidenceAfter(ctx context.Context, f EvidenceFilter, v *Viewer, after int64, limit int) ([]Record, error)
+	// DeploysAfter is up to limit of the gate's deploy.* records with seq above after, oldest first, each with the
+	// change it names as stored now (unscoped: the caller checks visibility).
+	DeploysAfter(ctx context.Context, after int64, limit int) ([]DeployEvent, error)
+	// Feed is the cluster's signed grant feed (nil when the core has signed none).
+	Feed(ctx context.Context, cluster string) (*store.Feed, error)
+	// Installations are the GitHub App installations the records name (principal app:<id>), at most MaxLimit.
+	Installations(ctx context.Context) ([]Installation, error)
+}
+
+// PRFilter is the receipts' and verdicts' filters.
+type PRFilter struct {
+	Repo, PR     string
+	Installation string
+	// ByInstaller: Installation keeps the records the installation wrote (verdicts), not the records on the pull
+	// requests it checked (receipts).
+	ByInstaller bool
+}
+
+// DeployEvent is one deploy.* record as the stream sends it: its seq, tool and ts, the change summary it recorded
+// (the change's state at that record), and the change as stored now (nil when the row is gone).
+type DeployEvent struct {
+	Seq     int64
+	Tool    string
+	TS      string
+	Summary json.RawMessage
+	Change  json.RawMessage
+}
+
+// Installation is one GitHub App installation as the records show it (GET /v1/github/installations).
+type Installation struct {
+	// ID is the installation id; the records name it as Principal, app:<id>.
+	ID        string `json:"id"`
+	Principal string `json:"principal"`
+	// Account is the GitHub account (organization or user) of its last app.installation record; null when the
+	// chain has none (the App was installed before Clearance recorded installations).
+	Account *string `json:"account"`
+	// Action is that record's action (created, deleted, suspend, unsuspend, new_permissions_accepted, added,
+	// removed), and Status what it leaves: active, suspended or removed.
+	Action *string `json:"action"`
+	Status string  `json:"status"`
+	// FirstSeq/LastSeq and FirstTS/LastTS bound the installation's records; Records counts them by tool
+	// (provenance.verify, deploy.request, app.installation, ...).
+	FirstSeq int64            `json:"first_seq"`
+	LastSeq  int64            `json:"last_seq"`
+	FirstTS  string           `json:"first_ts"`
+	LastTS   string           `json:"last_ts"`
+	Records  map[string]int64 `json:"records"`
+	// Repos are the repositories its checks ran on (provenance.verify targets), by name, at most MaxLimit.
+	Repos []string `json:"repos"`
 }

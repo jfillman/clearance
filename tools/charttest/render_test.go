@@ -291,6 +291,13 @@ func TestFullCoversEveryCoreVariable(t *testing.T) {
 	if !sawBundle || !sawSourceToken {
 		t.Errorf("volumes: bundle %v, source token (API server audience) %v", sawBundle, sawSourceToken)
 	}
+	cnp := find(objs, "CiliumNetworkPolicy", "t-clearance-kube-apiserver")
+	if cnp == nil || fmt.Sprint(get(cnp, "spec", "egress")) != "[map[toEntities:[kube-apiserver]]]" ||
+		fmt.Sprint(get(cnp, "spec", "endpointSelector", "matchExpressions")) !=
+			"[map[key:app.kubernetes.io/component operator:In values:[core api]]]" ||
+		get(cnp, "spec", "endpointSelector", "matchLabels", "app.kubernetes.io/instance") != "t" {
+		t.Errorf("ciliumEntity: %v", cnp)
+	}
 	np := find(objs, "NetworkPolicy", "t-clearance-core")
 	if eg := fmt.Sprint(get(np, "spec", "egress")); !strings.Contains(eg, "glidepath-api") {
 		t.Errorf("core NetworkPolicy has no egress to the bundle source: %s", eg)
