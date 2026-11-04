@@ -9,6 +9,13 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.31.1] - 2026-11-03
+
+### Fixed
+- A terraform-plan change to an environment the deployment does not protect (cleared at tier 0 by
+  `CLEARANCE_PROTECTED_ENVIRONMENTS`) held the gitops 7 days, so its token could be re-issued for a week; it now keeps
+  the plan's 24 hours on that path too (`unprotected()` applies the plan TTL; PR Lens on #60, fixed in #62).
+
 ## [0.31.0] - 2026-11-03
 
 C-1: the clearance token. Additive on the wire, with one exception for strict clients: a change's view gains
@@ -214,8 +221,7 @@ view `outage`, `ProviderEvent` `exception` and `outage`; take this release's cli
 ### Changed (G-TF-2)
 - A terraform-plan change holds **24 hours** (`DefaultPlanTTLDays = 1`), not the gitops 7 days, then expires with
   `deploy.expire` ("not cleared within 24 hours"); a `clearance.yaml` `ttlDays` still only shortens it. Gitops
-  changes keep 7 days. This holds on every path: a plan to an environment the deployment does not protect, cleared
-  at tier 0, keeps the 24 hours too, so its token's horizon is a day, not a week.
+  changes keep 7 days.
 - A terraform-plan change's id is derived from (repo, workspace backend, key and name, plan digest) instead of
   (repo, pr, head): registering the same plan again returns the same change, and two workspaces planned at one
   commit are two changes (they shared an id before). (G-TF-1 is unreleased, so no stored plan change carries the old id.) A
@@ -619,7 +625,8 @@ What the Autopilot gateway needs of the core before the hangar-dev cutover (R-3e
   scope, narrow-only limits, CEL policy, sessions, the hash-chained audit log and the gateway; the Hangar pack's
   `glidepath.*` and `airframe.*` tools over glidepath-api and a GET-only Kubernetes adapter.
 
-[Unreleased]: https://github.com/jfillman/clearance/compare/v0.31.0...HEAD
+[Unreleased]: https://github.com/jfillman/clearance/compare/v0.31.1...HEAD
+[0.31.1]: https://github.com/jfillman/clearance/compare/v0.31.0...v0.31.1
 [0.31.0]: https://github.com/jfillman/clearance/compare/v0.30.0...v0.31.0
 [0.30.0]: https://github.com/jfillman/clearance/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/jfillman/clearance/compare/v0.28.0...v0.29.0
