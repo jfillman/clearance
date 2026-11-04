@@ -25,8 +25,6 @@ type Tokens struct {
 	Signer token.Signer
 	Issuer string
 	TTL    time.Duration
-	// EngineVersion is the core's version, named in the claims' policy.engine_version.
-	EngineVersion string
 }
 
 // Defaults for Tokens.
@@ -123,21 +121,15 @@ func (t *Tokens) Claims(c *Change, nonce string, now, exp time.Time) token.Claim
 	for _, a := range c.Approvals {
 		approvals = append(approvals, a.claim())
 	}
-	clearedBy, verdict := "policy", "clear"
+	clearedBy := "policy"
 	if c.ClearedBy != nil && *c.ClearedBy != "" {
 		clearedBy = *c.ClearedBy
-	}
-	if clearedBy != "policy" {
-		verdict = "hold"
 	}
 	decided := ""
 	if c.DecidedAt != nil {
 		decided = pycompat.Isoformat(c.DecidedAt.Time)
 	}
-	pol := token.Policy{Ref: c.PolicyVersion, Engine: "clearance-gate", EngineVersion: t.EngineVersion, Verdict: verdict}
-	if c.RepoPolicyDigest != nil {
-		pol.RepoPolicyDigest = *c.RepoPolicyDigest
-	}
+	pol := c.PolicyClaim() // the deploy.* record's policy group, so the token attests what the record says
 	prov := token.Provenance{Level: ProvenanceLevel(c), Check: c.Checks["provenance"], Proposer: c.Proposer,
 		ProposerKind: c.ProposerKind}
 	if c.Agent != nil {
@@ -146,12 +138,18 @@ func (t *Tokens) Claims(c *Change, nonce string, now, exp time.Time) token.Claim
 	if c.TaskID != nil {
 		prov.TaskID = *c.TaskID
 	}
+	// The token binds what the change binds: a saved plan by its digest (kind terraform-plan, plan_digest), else
+	// the tree root (manifest-tree; a definition release binds to its tree digest the same way).
+	subj := token.Subjects{Kind: KindManifestTree, Repo: c.Repo, PR: c.PR, Commit: c.Head, Base: c.Base,
+		TreeRoot: c.TreeDigest, Images: images}
+	if c.Subject != nil && c.Subject.Kind == KindTerraformPlan {
+		subj.Kind, subj.TreeRoot, subj.PlanDigest = KindTerraformPlan, "", c.Subject.PlanDigest
+	}
 	return token.Claims{
 		Type: token.Type, Issuer: t.issuer(), Subject: c.ID, IssuedAt: now.Unix(), Expires: exp.Unix(), Nonce: nonce,
 		Clearance: token.Clearance{ID: c.ID, ClearedBy: clearedBy, DecidedAt: decided},
-		Subjects: token.Subjects{Kind: "manifest-tree", Repo: c.Repo, PR: c.PR, Commit: c.Head, Base: c.Base,
-			TreeRoot: c.TreeDigest, Images: images},
-		Objects: objects, Target: token.Target{Cluster: c.Cluster, Env: c.Env, App: c.App}, Tier: c.Tier,
+		Subjects:  subj,
+		Objects:   objects, Target: token.Target{Cluster: c.Cluster, Env: c.Env, App: c.App}, Tier: c.Tier,
 		Policy: pol, Provenance: prov, Approvals: approvals,
 	}
 }
@@ -206,6 +204,7 @@ func (w *writer) issue(c *Change, nonce string) (string, error) {
 		w.err = err
 		return "", err
 	}
+	w.touch(row.ChangeID, row.Cluster)
 	return nonce, nil
 }
 
@@ -230,6 +229,7 @@ func (w *writer) revoke(c *Change, head string) {
 	if w.err = w.tx.PutToken(w.ctx, tk); w.err != nil {
 		return
 	}
+	w.touch(tk.ChangeID, tk.Cluster)
 	w.record("policy", nil, "deploy.revoke", c, "allow", nil, "token revoked: superseded by "+pycompat.Truncate(head, 7),
 		map[string]any{"by": head, "token": tk.Nonce}, map[string]any{"token": tk.Nonce})
 }
@@ -286,6 +286,7 @@ func (s *Service) Refresh(ctx context.Context) (reissued, revoked int, err error
 
 // refreshOne re-issues tk (true) or revokes it (false).
 func (s *Service) refreshOne(tx store.Tx, w *writer, tk store.Token) (bool, error) {
+	w.touch(tk.ChangeID, tk.Cluster)
 	c, err := load(w.ctx, tx, tk.ChangeID)
 	if err != nil {
 		return false, err

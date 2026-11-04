@@ -289,8 +289,7 @@ func Objects(before, after Set) ([]Object, error) {
 		if hasNew {
 			images = Images(nw)
 		}
-		sum := sha256.Sum256([]byte(canonical(doc.Value)))
-		out = append(out, Object{key[0], key[1], key[2], key[3], op, fields, images, hex.EncodeToString(sum[:])})
+		out = append(out, Object{key[0], key[1], key[2], key[3], op, fields, images, ObjectDigest(doc)})
 	}
 	if len(out) > MaxObjects {
 		return nil, &TooMany{len(out)}
@@ -298,14 +297,25 @@ func Objects(before, after Set) ([]Object, error) {
 	return out, nil
 }
 
-// TreeDigest is register.tree_digest: sha256 over each object's canonical JSON and a newline, in key order.
+// ObjectDigest is one rendered object's hash: the lowercase hex sha256 of its canonical JSON (canonical: keys
+// sorted, separators "," and ":", every character outside space..~ escaped as \uXXXX). It is Objects' digest.
+func ObjectDigest(d Doc) string {
+	sum := sha256.Sum256([]byte(canonical(d.Value)))
+	return hex.EncodeToString(sum[:])
+}
+
+// TreeDigest is the manifest-tree digest of a rendered directory (docs/gate.md, "The manifest-tree digest"): one
+// line per object, "apiVersion/kind/namespace/name:" and its ObjectDigest (namespace empty when the object has
+// none), the lines sorted byte-wise and joined with "\n" (no trailing newline), and the lowercase hex sha256 of that.
+// It is what Glidepath's clearance-gate check computes for the same render, and what the Argo CD plugin stamps.
 func TreeDigest(after Set) string {
-	h := sha256.New()
-	for _, k := range sortedKeys(after) {
-		h.Write([]byte(canonical(after[k].Value)))
-		h.Write([]byte("\n"))
+	lines := make([]string, 0, len(after))
+	for k, d := range after {
+		lines = append(lines, strings.Join(k[:], "/")+":"+ObjectDigest(d))
 	}
-	return hex.EncodeToString(h.Sum(nil))
+	sort.Strings(lines)
+	sum := sha256.Sum256([]byte(strings.Join(lines, "\n")))
+	return hex.EncodeToString(sum[:])
 }
 
 // ChangedFiles is register.changed_files: the files that differ between the two directories, by relative path.

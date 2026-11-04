@@ -223,6 +223,9 @@ func (w *statusWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
+// Unwrap lets http.ResponseController reach the connection (Flush, and a long poll's or a stream's deadlines).
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 func (w *statusWriter) Write(b []byte) (int, error) {
 	if w.status == 0 {
 		w.status = http.StatusOK
@@ -244,7 +247,7 @@ func (s *Server) accessLog(next http.Handler) http.Handler {
 		t0 := time.Now()
 		sw := &statusWriter{ResponseWriter: w}
 		box := &principalBox{}
-		ctx, cancel := context.WithTimeout(context.WithValue(r.Context(), boxKey{}, box), HandlerTimeout)
+		ctx, cancel := context.WithTimeout(context.WithValue(r.Context(), boxKey{}, box), handlerTimeout(r))
 		defer cancel()
 		next.ServeHTTP(sw, r.WithContext(ctx))
 		if sw.status == 0 {
@@ -255,6 +258,16 @@ func (s *Server) accessLog(next http.Handler) http.Handler {
 			slog.Int64("bytes", sw.bytes), slog.Int64("ms", time.Since(t0).Milliseconds()),
 			slog.String("principal", box.id))
 	})
+}
+
+// handlerTimeout is HandlerTimeout, or MaxWait past it for a long-poll route.
+func handlerTimeout(r *http.Request) time.Duration {
+	for _, rt := range Routes() {
+		if rt.LongPoll && rt.Method == r.Method && rt.matches(r.URL.Path) {
+			return MaxWait + HandlerTimeout
+		}
+	}
+	return HandlerTimeout
 }
 
 // notePrincipal records the authenticated principal (inside the auth middleware) for the access log (outside it).

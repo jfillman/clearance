@@ -57,8 +57,9 @@ type Deployment struct {
 	DeliveredAt  *string `json:"delivered_at"`
 }
 
-// Change is the change on record (gate.Change). Its JSON is Change.view(): the dataclass fields in order, then
-// target, objects_count and paths_count; it is the row's jsonb record.
+// Change is the change on record (gate.Change). Its JSON is Change.view(): the dataclass fields in order (subject,
+// what the change binds to, after tree_digest), then target, objects_count and paths_count; it is the row's jsonb
+// record. A change stored before subjects were (v0.30.0 and earlier) is read with a manifest-tree subject.
 type Change struct {
 	ID               string            `json:"id"`
 	App              string            `json:"app"`
@@ -75,12 +76,15 @@ type Change struct {
 	Owner            string            `json:"owner"`
 	Protected        bool              `json:"protected"`
 	TreeDigest       string            `json:"tree_digest"`
+	Subject          *Subject          `json:"subject"`
 	Paths            []string          `json:"paths"`
 	LinesChanged     int64             `json:"lines_changed"`
 	Objects          []ObjectChange    `json:"objects"`
 	Checks           map[string]string `json:"checks"`
 	PolicyVersion    string            `json:"policy_version"`
 	RepoPolicyDigest *string           `json:"repo_policy_digest"`
+	PolicyRef        string            `json:"policy_ref,omitempty"`
+	Admission        *Admission        `json:"admission,omitempty"`
 	Tier             int               `json:"tier"`
 	Reasons          []Reason          `json:"reasons"`
 	Requirement      *Requirement      `json:"requirement"`
@@ -112,6 +116,9 @@ func (c *Change) TargetOf() string {
 // View fills the derived fields (target, objects_count, paths_count) and empty lists; it returns c for chaining.
 func (c *Change) View() *Change {
 	c.Target, c.ObjectsCount, c.PathsCount = c.TargetOf(), len(c.Objects), len(c.Paths)
+	if c.Subject == nil {
+		c.Subject = c.legacySubject()
+	}
 	if c.Paths == nil {
 		c.Paths = []string{}
 	}
@@ -156,12 +163,21 @@ func Open(req ChangeRequest, cl Classification, now time.Time, registeredBy stri
 	reasons := append([]Reason(nil), cl.Reasons...)
 	c := &Change{ID: req.ID(), App: req.App, Env: req.Env, Cluster: req.Cluster, Repo: req.Repo, PR: req.PR,
 		Head: req.Head, Base: req.Base, Proposer: req.Proposer, ProposerKind: req.ProposerKind, Agent: req.Agent, TaskID: req.TaskID,
-		Owner: req.Owner, Protected: req.Protected, TreeDigest: req.TreeDigest, Paths: append([]string(nil), req.Paths...),
+		Owner: req.Owner, Protected: req.Protected, TreeDigest: req.TreeDigest, Subject: subjectFor(req), Paths: append([]string(nil), req.Paths...),
 		LinesChanged: req.LinesChanged, Objects: append([]ObjectChange(nil), req.Objects...), Checks: copyChecks(req.Checks),
-		PolicyVersion: cl.Policy.Version, RepoPolicyDigest: cl.Policy.RepoPolicyDigest, Tier: cl.Tier, Reasons: reasons,
+		PolicyVersion: cl.Policy.Version, RepoPolicyDigest: cl.Policy.RepoPolicyDigest, PolicyRef: policyRefOf(req),
+		Admission: copyAdmission(req.Admission), Tier: cl.Tier, Reasons: reasons,
 		Requirement: cl.Requirement, State: "holding", CreatedAt: PyTime{now}, UpdatedAt: PyTime{now},
 		ExpiresAt: PyTime{now.AddDate(0, 0, cl.Policy.TTLDays)}, RegisteredBy: registeredBy}
 	return c.View()
+}
+
+func copyAdmission(a *Admission) *Admission {
+	if a == nil {
+		return nil
+	}
+	out := *a
+	return &out
 }
 
 func copyChecks(m map[string]string) map[string]string {

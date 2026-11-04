@@ -1,383 +1,653 @@
 {
-  "api": "clearance-api",
-  "version": "v1",
-  "notes": "GET only. clearance-api reads what the Clearance core committed. Writes go to the core (POST /v1/clearances/{id}/clear and /deny, /v1/provenance, /v1/records); the runtime's reads and writes (sessions, tasks, agents and their holds, the human inbox, events, results, runtimes) are the AI gateway's.",
-  "operations": [
-    {
-      "operationId": "listEvidence",
-      "method": "GET",
-      "path": "/v1/evidence",
-      "roles": [
-        "person",
-        "delegate",
-        "auditor"
-      ],
-      "params": [
-        "task",
-        "session",
-        "agent",
-        "tool",
-        "principal",
-        "decision",
-        "rule",
-        "app",
-        "since",
-        "until",
-        "limit",
-        "after",
-        "outcomes"
-      ],
-      "summary": "Evidence records you may see, newest first; the cursor is seq. outcomes=include (default), exclude or only: the outcome records the core writes beside each allowed decision (outcome_of)"
-    },
-    {
-      "operationId": "getEvidence",
-      "method": "GET",
-      "path": "/v1/evidence/{seq}",
-      "roles": [
-        "person",
-        "delegate",
-        "auditor"
-      ],
-      "params": [],
-      "summary": "One evidence record with its hash"
-    },
-    {
-      "operationId": "verifyEvidence",
-      "method": "GET",
-      "path": "/v1/evidence/verify",
-      "roles": [
-        "auditor"
-      ],
-      "params": [],
-      "summary": "The whole chain checked from genesis: ok, count, head, the first bad seq"
-    },
-    {
-      "operationId": "countEvidence",
-      "method": "GET",
-      "path": "/v1/evidence/counts",
-      "roles": [
-        "person",
-        "delegate",
-        "auditor"
-      ],
-      "params": [
-        "by",
-        "task",
-        "session",
-        "agent",
-        "tool",
-        "principal",
-        "decision",
-        "rule",
-        "app",
-        "since",
-        "until",
-        "outcomes"
-      ],
-      "summary": "Records you may see, counted by rule, tool, agent, app or decision (`by`), with the same filters as the list. outcomes=exclude (default) counts each decision once; include or only count the outcome records too"
-    },
-    {
-      "operationId": "getPolicy",
-      "method": "GET",
-      "path": "/v1/policy",
-      "roles": [
-        "person",
-        "delegate",
-        "auditor"
-      ],
-      "params": [],
-      "summary": "The policy in force: the deny rules in evaluation order (id, name, CEL expression, message, hint, bundle, `pack`), the tool registry with tiers, \"core\" and the loaded bundles (`packs`)"
-    },
-    {
-      "operationId": "explainPolicy",
-      "method": "GET",
-      "path": "/v1/policy/explain",
-      "roles": [
-        "person",
-        "delegate",
-        "auditor"
-      ],
-      "params": [
-        "agent",
-        "tool",
-        "args"
-      ],
-      "summary": "Would this be allowed? A dry run of the real policy for an agent, a tool and its args (JSON) on a fresh session: the decision and each rule's verdict in order. Records nothing"
-    },
-    {
-      "operationId": "listReceipts",
-      "method": "GET",
-      "path": "/v1/receipts",
-      "roles": [
-        "person",
-        "delegate",
-        "auditor"
-      ],
-      "params": [
-        "repo",
-        "pr"
-      ],
-      "summary": "PR receipts: what Clearance's agents opened on a repo (and PR), the commit, the paths"
-    },
-    {
-      "operationId": "listProvenance",
-      "method": "GET",
-      "path": "/v1/provenance",
-      "roles": [
-        "person",
-        "delegate",
-        "auditor"
-      ],
-      "params": [
-        "repo",
-        "pr"
-      ],
-      "summary": "The agent-gate verdicts recorded for a PR (provenance.verify)"
-    },
-    {
-      "operationId": "listClearances",
-      "method": "GET",
-      "path": "/v1/clearances",
-      "roles": [
-        "person",
-        "delegate",
-        "auditor",
-        "feed"
-      ],
-      "params": [
-        "app",
-        "env",
-        "state",
-        "repo",
-        "pr",
-        "tier",
-        "since",
-        "limit",
-        "after",
-        "cluster"
-      ],
-      "summary": "The deployment gate's changes, newest first: tier and why, state (holding, cleared, denied, expired, superseded), the requirement and the approvals so far, what the grant binds to. A person sees their apps' changes and the ones their groups may clear; the cursor is updated_at. cluster=<c>&state=cleared is the grant feed: the cluster's cleared changes whose clearance token is live, each with its token; a feed reader (CLEARANCE_API_FEED_READERS) may read only that, for its own clusters"
-    },
-    {
-      "operationId": "countClearances",
-      "method": "GET",
-      "path": "/v1/clearances/counts",
-      "roles": [
-        "person",
-        "delegate",
-        "auditor"
-      ],
-      "params": [
-        "app",
-        "env",
-        "state",
-        "since",
-        "by"
-      ],
-      "summary": "Changes counted by state, tier, app, env or cleared_by (the C1 stats: holding, cleared by policy and by people, denied)"
-    },
-    {
-      "operationId": "getClearance",
-      "method": "GET",
-      "path": "/v1/clearances/{id}",
-      "roles": [
-        "person",
-        "delegate",
-        "auditor",
-        "feed"
-      ],
-      "params": [],
-      "summary": "One change: the objects and paths it touches, every reason for its tier, the requirement, the approvals, the checks as last reported, and its live clearance token (null when it has none)"
-    },
-    {
-      "operationId": "getClearancePolicy",
-      "method": "GET",
-      "path": "/v1/clearance-policy",
-      "roles": [
-        "person",
-        "delegate",
-        "auditor"
-      ],
-      "params": [],
-      "summary": "The deployment gate's baseline policy: the tier table, the people each tier needs, the outside groups, the TTL. A repo's clearance.yaml can only tighten it"
-    },
-    {
-      "operationId": "listDefinitions",
-      "method": "GET",
-      "path": "/v1/definitions",
-      "roles": [
-        "person",
-        "delegate",
-        "auditor"
-      ],
-      "params": [
-        "full"
-      ],
-      "summary": "The agent definitions Clearance decides with: the bundled set and the cluster pins the core stored, each with its source; rejected pins with the reason. full=1 (auditors) adds instructions"
-    },
-    {
-      "operationId": "getKeys",
-      "method": "GET",
-      "path": "/v1/keys",
-      "roles": [
-        "any"
-      ],
-      "params": [],
-      "summary": "The clearance token verification keys, a JWKS (EC P-256, ES256, kid = the RFC 7638 thumbprint): the key the core signs with and keys retired within the last 24 hours. Public"
-    },
-    {
-      "operationId": "getContract",
-      "method": "GET",
-      "path": "/v1/contract",
-      "roles": [
-        "any"
-      ],
-      "params": [],
-      "summary": "This contract"
-    }
-  ],
-  "responses": {
-    "countClearances": {
-      "200": {
-        "$ref": "#/schemas/Counts"
+  "components": {
+    "schemas": {
+      "ClearanceView": {
+        "properties": {
+          "admission": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateAdmission"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "agent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "app": {
+            "type": "string"
+          },
+          "approvals": {
+            "items": {
+              "$ref": "#/components/schemas/GateApproval"
+            },
+            "type": "array"
+          },
+          "base": {
+            "type": "string"
+          },
+          "checks": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "cleared_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cluster": {
+            "type": "string"
+          },
+          "created_at": {
+            "description": "Python datetime.isoformat() of an aware time",
+            "type": "string"
+          },
+          "decided_at": {
+            "oneOf": [
+              {
+                "description": "Python datetime.isoformat() of an aware time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "denied_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deny_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deployments": {
+            "items": {
+              "$ref": "#/components/schemas/GateDeployment"
+            },
+            "type": "array"
+          },
+          "env": {
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "Python datetime.isoformat() of an aware time",
+            "type": "string"
+          },
+          "head": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "lines_changed": {
+            "type": "integer"
+          },
+          "objects": {
+            "items": {
+              "$ref": "#/components/schemas/GateObjectChange"
+            },
+            "type": "array"
+          },
+          "objects_count": {
+            "type": "integer"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "paths_count": {
+            "type": "integer"
+          },
+          "policy_ref": {
+            "type": "string"
+          },
+          "policy_version": {
+            "type": "string"
+          },
+          "pr": {
+            "type": "integer"
+          },
+          "proposer": {
+            "type": "string"
+          },
+          "proposer_kind": {
+            "type": "string"
+          },
+          "protected": {
+            "type": "boolean"
+          },
+          "reasons": {
+            "items": {
+              "$ref": "#/components/schemas/GateReason"
+            },
+            "type": "array"
+          },
+          "registered_by": {
+            "type": "string"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "repo_policy_digest": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requirement": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateRequirement"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "subject": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateSubject"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "superseded_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tier": {
+            "type": "integer"
+          },
+          "token": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateTokenView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tree_digest": {
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "Python datetime.isoformat() of an aware time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent",
+          "app",
+          "approvals",
+          "base",
+          "checks",
+          "cleared_by",
+          "cluster",
+          "created_at",
+          "decided_at",
+          "denied_by",
+          "deny_reason",
+          "deployments",
+          "env",
+          "expires_at",
+          "head",
+          "id",
+          "lines_changed",
+          "objects",
+          "objects_count",
+          "owner",
+          "paths",
+          "paths_count",
+          "policy_version",
+          "pr",
+          "proposer",
+          "proposer_kind",
+          "protected",
+          "reasons",
+          "registered_by",
+          "repo",
+          "repo_policy_digest",
+          "requirement",
+          "state",
+          "subject",
+          "superseded_by",
+          "target",
+          "task_id",
+          "tier",
+          "token",
+          "tree_digest",
+          "updated_at"
+        ],
+        "type": "object"
       },
-      "400": {
-        "$ref": "#/schemas/ErrorBody"
+      "Count": {
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "count",
+          "key"
+        ],
+        "type": "object"
       },
-      "401": {
-        "$ref": "#/schemas/ErrorBody"
+      "Counts": {
+        "properties": {
+          "by": {
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Count"
+            },
+            "type": "array"
+          },
+          "outcomes": {
+            "type": "string"
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "by",
+          "items",
+          "total"
+        ],
+        "type": "object"
       },
-      "403": {
-        "$ref": "#/schemas/ErrorBody"
+      "DecideProblem": {
+        "properties": {
+          "hint": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "pointer": {
+            "type": "string"
+          },
+          "rule": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "hint",
+          "message",
+          "pointer",
+          "rule"
+        ],
+        "type": "object"
       },
-      "503": {
-        "$ref": "#/schemas/ErrorBody"
-      }
-    },
-    "countEvidence": {
-      "200": {
-        "$ref": "#/schemas/Counts"
+      "DecideRuleVerdict": {
+        "properties": {
+          "error": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "matched": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "order": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "error",
+          "id",
+          "matched",
+          "name",
+          "order"
+        ],
+        "type": "object"
       },
-      "400": {
-        "$ref": "#/schemas/ErrorBody"
+      "DefinitionIdentity": {
+        "properties": {
+          "serviceAccount": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "serviceAccount",
+          "type"
+        ],
+        "type": "object"
       },
-      "401": {
-        "$ref": "#/schemas/ErrorBody"
+      "DefinitionLimits": {
+        "properties": {
+          "children": {
+            "type": "integer"
+          },
+          "github_calls": {
+            "type": "integer"
+          },
+          "model_tokens": {
+            "type": "integer"
+          },
+          "open_prs": {
+            "type": "integer"
+          },
+          "tool_calls": {
+            "type": "integer"
+          },
+          "ttl_minutes": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "children",
+          "github_calls",
+          "model_tokens",
+          "open_prs",
+          "tool_calls",
+          "ttl_minutes"
+        ],
+        "type": "object"
       },
-      "403": {
-        "$ref": "#/schemas/ErrorBody"
-      },
-      "503": {
-        "$ref": "#/schemas/ErrorBody"
-      }
-    },
-    "explainPolicy": {
-      "200": {
-        "$ref": "#/schemas/Explanation"
-      },
-      "400": {
-        "$ref": "#/schemas/ErrorBody"
-      },
-      "401": {
-        "$ref": "#/schemas/ErrorBody"
-      },
-      "403": {
-        "$ref": "#/schemas/ErrorBody"
-      },
-      "404": {
-        "$ref": "#/schemas/ErrorBody"
-      }
-    },
-    "getClearance": {
-      "200": {
-        "$ref": "#/schemas/ClearanceView"
-      },
-      "401": {
-        "$ref": "#/schemas/ErrorBody"
-      },
-      "403": {
-        "$ref": "#/schemas/ErrorBody"
-      },
-      "404": {
-        "$ref": "#/schemas/ErrorBody"
-      },
-      "503": {
-        "$ref": "#/schemas/ErrorBody"
-      }
-    },
-    "getClearancePolicy": {
-      "200": {
-        "$ref": "#/schemas/GatePolicyView"
-      },
-      "401": {
-        "$ref": "#/schemas/ErrorBody"
-      },
-      "403": {
-        "$ref": "#/schemas/ErrorBody"
-      },
-      "404": {
-        "$ref": "#/schemas/ErrorBody"
-      }
-    },
-    "getContract": {
-      "200": {
-        "$ref": "#/schemas/EvidenceRecord"
-      }
-    },
-    "getEvidence": {
-      "200": {
-        "$ref": "#/schemas/EvidenceRecord"
-      },
-      "400": {
-        "$ref": "#/schemas/ErrorBody"
-      },
-      "401": {
-        "$ref": "#/schemas/ErrorBody"
-      },
-      "403": {
-        "$ref": "#/schemas/ErrorBody"
-      },
-      "404": {
-        "$ref": "#/schemas/ErrorBody"
-      },
-      "503": {
-        "$ref": "#/schemas/ErrorBody"
-      }
-    },
-    "getKeys": {
-      "200": {
-        "$ref": "#/schemas/TokenJWKS"
-      },
-      "503": {
-        "$ref": "#/schemas/ErrorBody"
-      }
-    },
-    "getPolicy": {
-      "200": {
-        "$ref": "#/schemas/PolicyDoc"
-      },
-      "401": {
-        "$ref": "#/schemas/ErrorBody"
-      },
-      "403": {
-        "$ref": "#/schemas/ErrorBody"
-      },
-      "404": {
-        "$ref": "#/schemas/ErrorBody"
-      }
-    },
-    "listClearances": {
-      "200": {
+      "DefinitionList": {
         "properties": {
           "items": {
             "items": {
-              "$ref": "#/schemas/ListedChange"
+              "$ref": "#/components/schemas/DefinitionView"
+            },
+            "type": "array"
+          },
+          "rejected": {
+            "items": {
+              "$ref": "#/components/schemas/DefinitionsRejectedView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items",
+          "rejected"
+        ],
+        "type": "object"
+      },
+      "DefinitionRepos": {
+        "properties": {
+          "allow": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "allow"
+        ],
+        "type": "object"
+      },
+      "DefinitionRuntime": {
+        "properties": {
+          "framework": {
+            "type": "string"
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sandbox": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "framework",
+          "image",
+          "sandbox"
+        ],
+        "type": "object"
+      },
+      "DefinitionView": {
+        "properties": {
+          "compute": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "identity": {
+            "$ref": "#/components/schemas/DefinitionIdentity"
+          },
+          "instructions": {},
+          "kind": {
+            "type": "string"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/DefinitionLimits"
+          },
+          "models": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "network": {
+            "type": "string"
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repos": {
+            "$ref": "#/components/schemas/DefinitionRepos"
+          },
+          "runsIn": {
+            "type": "string"
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/DefinitionRuntime"
+          },
+          "scopes": {
+            "$ref": "#/components/schemas/EvidenceRecord"
+          },
+          "source": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DefinitionsSourceView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tierCeiling": {
+            "type": "string"
+          },
+          "tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "triggers": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceRecord"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "compute",
+          "description",
+          "identity",
+          "kind",
+          "limits",
+          "models",
+          "name",
+          "network",
+          "owner",
+          "repos",
+          "runsIn",
+          "runtime",
+          "scopes",
+          "source",
+          "tierCeiling",
+          "tools",
+          "triggers"
+        ],
+        "type": "object"
+      },
+      "DefinitionsRejectedView": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/DefinitionsSourceView"
+          }
+        },
+        "required": [
+          "name",
+          "reason",
+          "source"
+        ],
+        "type": "object"
+      },
+      "DefinitionsSourceView": {
+        "properties": {
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": "string"
+          },
+          "loaded_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "namespace": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pin": {
+            "type": "string"
+          },
+          "repo": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "xr": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "pin"
+        ],
+        "type": "object"
+      },
+      "ErrorBody": {
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "EvidencePage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceRecord"
             },
             "type": "array"
           },
           "next": {
             "type": [
-              "string",
+              "integer",
               "null"
             ]
           }
@@ -388,1619 +658,2968 @@
         ],
         "type": "object"
       },
-      "400": {
-        "$ref": "#/schemas/ErrorBody"
+      "EvidenceRecord": {
+        "additionalProperties": {},
+        "description": "A stored evidence record (schemas/evidence.schema.json, clearance.evidence/v1 or a v0-draft row projected into it) with assurance beside it and projected naming the fields the api added (docs/evidence.md)",
+        "required": [
+          "seq",
+          "ts",
+          "tool",
+          "hash",
+          "prev_hash",
+          "schema",
+          "provider",
+          "subject",
+          "assurance",
+          "projected"
+        ],
+        "type": "object"
       },
-      "401": {
-        "$ref": "#/schemas/ErrorBody"
+      "ExplainDecision": {
+        "properties": {
+          "allow": {
+            "type": "boolean"
+          },
+          "hint": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "problems": {
+            "items": {
+              "$ref": "#/components/schemas/DecideProblem"
+            },
+            "type": "array"
+          },
+          "rule": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tier": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "allow",
+          "hint",
+          "message",
+          "name",
+          "rule",
+          "tier"
+        ],
+        "type": "object"
       },
-      "403": {
-        "$ref": "#/schemas/ErrorBody"
+      "Explanation": {
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "all_rules": {
+            "items": {
+              "$ref": "#/components/schemas/DecideRuleVerdict"
+            },
+            "type": "array"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/ExplainDecision"
+          },
+          "dry_run": {
+            "type": "boolean"
+          },
+          "known_tool": {
+            "type": "boolean"
+          },
+          "path": {
+            "items": {
+              "$ref": "#/components/schemas/DecideRuleVerdict"
+            },
+            "type": "array"
+          },
+          "tool": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent",
+          "all_rules",
+          "decision",
+          "dry_run",
+          "known_tool",
+          "path",
+          "tool"
+        ],
+        "type": "object"
       },
-      "503": {
-        "$ref": "#/schemas/ErrorBody"
+      "GateAdmission": {
+        "properties": {
+          "bundle": {
+            "type": "string"
+          },
+          "deny": {
+            "type": "integer"
+          },
+          "engine": {
+            "type": "string"
+          },
+          "verdict": {
+            "type": "string"
+          },
+          "warn": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "deny",
+          "engine",
+          "verdict",
+          "warn"
+        ],
+        "type": "object"
+      },
+      "GateApproval": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "iss": {
+            "type": "string"
+          },
+          "person": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "sub": {
+            "type": "string"
+          },
+          "via": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "at",
+          "person",
+          "role",
+          "via"
+        ],
+        "type": "object"
+      },
+      "GateApprovers": {
+        "properties": {
+          "outside": {
+            "type": "integer"
+          },
+          "owner": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "outside",
+          "owner"
+        ],
+        "type": "object"
+      },
+      "GateDeployment": {
+        "properties": {
+          "answer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "answered_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "callback_url": {
+            "type": "string"
+          },
+          "delivered": {
+            "type": "boolean"
+          },
+          "delivered_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "environment": {
+            "type": "string"
+          },
+          "installation": {
+            "type": "string"
+          },
+          "requested_at": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "answer",
+          "answered_at",
+          "callback_url",
+          "delivered",
+          "delivered_at",
+          "environment",
+          "installation",
+          "requested_at",
+          "run_id"
+        ],
+        "type": "object"
+      },
+      "GateFeedToken": {
+        "properties": {
+          "change_id": {
+            "type": "string"
+          },
+          "dsse": {
+            "$ref": "#/components/schemas/TokenEnvelope"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "issued_at": {
+            "type": "string"
+          },
+          "jwt": {
+            "type": "string"
+          },
+          "key_id": {
+            "type": "string"
+          },
+          "nonce": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "change_id",
+          "dsse",
+          "expires_at",
+          "issued_at",
+          "jwt",
+          "key_id",
+          "nonce"
+        ],
+        "type": "object"
+      },
+      "GateObjectChange": {
+        "properties": {
+          "apiVersion": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "images": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "op": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "digest",
+          "fields",
+          "images",
+          "kind",
+          "name",
+          "namespace",
+          "op"
+        ],
+        "type": "object"
+      },
+      "GatePlanSummary": {
+        "properties": {
+          "create": {
+            "type": "integer"
+          },
+          "destroy": {
+            "type": "integer"
+          },
+          "destroyedAddresses": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "replace": {
+            "type": "integer"
+          },
+          "update": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "create",
+          "destroy",
+          "replace",
+          "update"
+        ],
+        "type": "object"
+      },
+      "GatePolicyTerraform": {
+        "properties": {
+          "protectedWorkspaces": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "tagOnlyFields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "tier2Types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "tier3Types": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "protectedWorkspaces",
+          "tagOnlyFields",
+          "tier2Types",
+          "tier3Types"
+        ],
+        "type": "object"
+      },
+      "GatePolicyTiers": {
+        "properties": {
+          "0": {
+            "properties": {
+              "paths": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "paths"
+            ],
+            "type": "object"
+          },
+          "3": {
+            "properties": {
+              "fields": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "kinds": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "paths": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "fields",
+              "kinds",
+              "paths"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "0",
+          "3"
+        ],
+        "type": "object"
+      },
+      "GatePolicyView": {
+        "properties": {
+          "approvers": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/GateApprovers"
+            },
+            "type": "object"
+          },
+          "maxLinesTier1": {
+            "type": "integer"
+          },
+          "outsideGroups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "repoPolicy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "terraform": {
+            "$ref": "#/components/schemas/GatePolicyTerraform"
+          },
+          "tiers": {
+            "$ref": "#/components/schemas/GatePolicyTiers"
+          },
+          "trustedRegistries": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "ttlDays": {
+            "type": "integer"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "approvers",
+          "maxLinesTier1",
+          "outsideGroups",
+          "repoPolicy",
+          "terraform",
+          "tiers",
+          "trustedRegistries",
+          "ttlDays",
+          "version"
+        ],
+        "type": "object"
+      },
+      "GateReason": {
+        "properties": {
+          "rule": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "tier": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rule",
+          "subject",
+          "tier"
+        ],
+        "type": "object"
+      },
+      "GateRequirement": {
+        "properties": {
+          "outside": {
+            "type": "integer"
+          },
+          "outsideGroups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "owner": {
+            "type": "integer"
+          },
+          "ownerGroup": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "outside",
+          "outsideGroups",
+          "owner",
+          "ownerGroup"
+        ],
+        "type": "object"
+      },
+      "GateResource": {
+        "properties": {
+          "actionReason": {
+            "type": "string"
+          },
+          "actions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "address": {
+            "type": "string"
+          },
+          "fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "actions",
+          "address",
+          "type"
+        ],
+        "type": "object"
+      },
+      "GateSubject": {
+        "properties": {
+          "digests": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "flags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "planDigest": {
+            "type": "string"
+          },
+          "planJsonDigest": {
+            "type": "string"
+          },
+          "resources": {
+            "items": {
+              "$ref": "#/components/schemas/GateResource"
+            },
+            "type": "array"
+          },
+          "summary": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GatePlanSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "targeted": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "variableSetDigest": {
+            "type": "string"
+          },
+          "versions": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateVersions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "workspace": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateWorkspace"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "digests",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "GateTokenView": {
+        "properties": {
+          "dsse": {
+            "$ref": "#/components/schemas/TokenEnvelope"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "issued_at": {
+            "type": "string"
+          },
+          "jwt": {
+            "type": "string"
+          },
+          "key_id": {
+            "type": "string"
+          },
+          "nonce": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "dsse",
+          "expires_at",
+          "issued_at",
+          "jwt",
+          "key_id",
+          "nonce"
+        ],
+        "type": "object"
+      },
+      "GateVersions": {
+        "properties": {
+          "providers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "terraform": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "providers",
+          "terraform"
+        ],
+        "type": "object"
+      },
+      "GateWorkspace": {
+        "properties": {
+          "backend": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "backend",
+          "key",
+          "name"
+        ],
+        "type": "object"
+      },
+      "GrantFeed": {
+        "properties": {
+          "cluster": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "feed": {
+            "$ref": "#/components/schemas/TokenEnvelope"
+          },
+          "issued_at": {
+            "type": "string"
+          },
+          "key_id": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "tokens": {
+            "items": {
+              "$ref": "#/components/schemas/GateFeedToken"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "cluster",
+          "expires_at",
+          "feed",
+          "issued_at",
+          "key_id",
+          "seq",
+          "tokens"
+        ],
+        "type": "object"
+      },
+      "Installation": {
+        "properties": {
+          "account": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "action": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "first_seq": {
+            "type": "integer"
+          },
+          "first_ts": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "last_seq": {
+            "type": "integer"
+          },
+          "last_ts": {
+            "type": "string"
+          },
+          "principal": {
+            "type": "string"
+          },
+          "records": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object"
+          },
+          "repos": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "account",
+          "action",
+          "first_seq",
+          "first_ts",
+          "id",
+          "last_seq",
+          "last_ts",
+          "principal",
+          "records",
+          "repos",
+          "status"
+        ],
+        "type": "object"
+      },
+      "InstallationList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Installation"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "ListedChange": {
+        "properties": {
+          "admission": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateAdmission"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "agent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "app": {
+            "type": "string"
+          },
+          "approvals": {
+            "items": {
+              "$ref": "#/components/schemas/GateApproval"
+            },
+            "type": "array"
+          },
+          "base": {
+            "type": "string"
+          },
+          "checks": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "cleared_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cluster": {
+            "type": "string"
+          },
+          "created_at": {
+            "description": "Python datetime.isoformat() of an aware time",
+            "type": "string"
+          },
+          "decided_at": {
+            "oneOf": [
+              {
+                "description": "Python datetime.isoformat() of an aware time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "denied_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deny_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deployments": {
+            "items": {
+              "$ref": "#/components/schemas/GateDeployment"
+            },
+            "type": "array"
+          },
+          "env": {
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "Python datetime.isoformat() of an aware time",
+            "type": "string"
+          },
+          "head": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "lines_changed": {
+            "type": "integer"
+          },
+          "objects": {
+            "items": {
+              "$ref": "#/components/schemas/GateObjectChange"
+            },
+            "type": "array"
+          },
+          "objects_count": {
+            "type": "integer"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "paths_count": {
+            "type": "integer"
+          },
+          "policy_ref": {
+            "type": "string"
+          },
+          "policy_version": {
+            "type": "string"
+          },
+          "pr": {
+            "type": "integer"
+          },
+          "proposer": {
+            "type": "string"
+          },
+          "proposer_kind": {
+            "type": "string"
+          },
+          "protected": {
+            "type": "boolean"
+          },
+          "reasons": {
+            "items": {
+              "$ref": "#/components/schemas/GateReason"
+            },
+            "type": "array"
+          },
+          "registered_by": {
+            "type": "string"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "repo_policy_digest": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requirement": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateRequirement"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "subject": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateSubject"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "superseded_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tier": {
+            "type": "integer"
+          },
+          "token": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateTokenView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tree_digest": {
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "Python datetime.isoformat() of an aware time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent",
+          "app",
+          "approvals",
+          "base",
+          "checks",
+          "cleared_by",
+          "cluster",
+          "created_at",
+          "decided_at",
+          "denied_by",
+          "deny_reason",
+          "deployments",
+          "env",
+          "expires_at",
+          "head",
+          "id",
+          "lines_changed",
+          "objects",
+          "objects_count",
+          "owner",
+          "paths",
+          "paths_count",
+          "policy_version",
+          "pr",
+          "proposer",
+          "proposer_kind",
+          "protected",
+          "reasons",
+          "registered_by",
+          "repo",
+          "repo_policy_digest",
+          "requirement",
+          "state",
+          "subject",
+          "superseded_by",
+          "target",
+          "task_id",
+          "tier",
+          "tree_digest",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "PolicyDoc": {
+        "properties": {
+          "packs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/PolicyRule"
+            },
+            "type": "array"
+          },
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/PolicyTool"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "packs",
+          "rules",
+          "tools"
+        ],
+        "type": "object"
+      },
+      "PolicyRule": {
+        "properties": {
+          "expression": {
+            "type": "string"
+          },
+          "hint": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "order": {
+            "type": "integer"
+          },
+          "pack": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "expression",
+          "hint",
+          "id",
+          "message",
+          "name",
+          "order",
+          "pack"
+        ],
+        "type": "object"
+      },
+      "PolicyTool": {
+        "properties": {
+          "github_cost": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "propose_only": {
+            "type": "boolean"
+          },
+          "required_args": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "tier": {
+            "type": "string"
+          },
+          "writes_files": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "github_cost",
+          "name",
+          "propose_only",
+          "required_args",
+          "summary",
+          "target",
+          "tier",
+          "writes_files"
+        ],
+        "type": "object"
+      },
+      "RecordList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceRecord"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "StreamEvent": {
+        "properties": {
+          "change": {
+            "$ref": "#/components/schemas/EvidenceRecord"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "ts": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "change",
+          "seq",
+          "tool",
+          "ts"
+        ],
+        "type": "object"
+      },
+      "TokenEnvelope": {
+        "properties": {
+          "payload": {
+            "type": "string"
+          },
+          "payloadType": {
+            "type": "string"
+          },
+          "signatures": {
+            "items": {
+              "$ref": "#/components/schemas/TokenSignature"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "payload",
+          "payloadType",
+          "signatures"
+        ],
+        "type": "object"
+      },
+      "TokenJWK": {
+        "properties": {
+          "alg": {
+            "type": "string"
+          },
+          "crv": {
+            "type": "string"
+          },
+          "kid": {
+            "type": "string"
+          },
+          "kty": {
+            "type": "string"
+          },
+          "use": {
+            "type": "string"
+          },
+          "x": {
+            "type": "string"
+          },
+          "y": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "alg",
+          "crv",
+          "kid",
+          "kty",
+          "use",
+          "x",
+          "y"
+        ],
+        "type": "object"
+      },
+      "TokenJWKS": {
+        "properties": {
+          "keys": {
+            "items": {
+              "$ref": "#/components/schemas/TokenJWK"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "keys"
+        ],
+        "type": "object"
+      },
+      "TokenSignature": {
+        "properties": {
+          "keyid": {
+            "type": "string"
+          },
+          "sig": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "keyid",
+          "sig"
+        ],
+        "type": "object"
+      },
+      "Verified": {
+        "properties": {
+          "bad_seq": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "count": {
+            "type": "integer"
+          },
+          "head": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "bad_seq",
+          "count",
+          "head",
+          "ok"
+        ],
+        "type": "object"
       }
     },
-    "listDefinitions": {
-      "200": {
-        "$ref": "#/schemas/DefinitionList"
-      },
-      "400": {
-        "$ref": "#/schemas/ErrorBody"
-      },
-      "401": {
-        "$ref": "#/schemas/ErrorBody"
-      },
-      "403": {
-        "$ref": "#/schemas/ErrorBody"
-      }
-    },
-    "listEvidence": {
-      "200": {
-        "$ref": "#/schemas/EvidencePage"
-      },
-      "400": {
-        "$ref": "#/schemas/ErrorBody"
-      },
-      "401": {
-        "$ref": "#/schemas/ErrorBody"
-      },
-      "403": {
-        "$ref": "#/schemas/ErrorBody"
-      },
-      "503": {
-        "$ref": "#/schemas/ErrorBody"
-      }
-    },
-    "listProvenance": {
-      "200": {
-        "$ref": "#/schemas/RecordList"
-      },
-      "400": {
-        "$ref": "#/schemas/ErrorBody"
-      },
-      "401": {
-        "$ref": "#/schemas/ErrorBody"
-      },
-      "403": {
-        "$ref": "#/schemas/ErrorBody"
-      },
-      "503": {
-        "$ref": "#/schemas/ErrorBody"
-      }
-    },
-    "listReceipts": {
-      "200": {
-        "$ref": "#/schemas/RecordList"
-      },
-      "400": {
-        "$ref": "#/schemas/ErrorBody"
-      },
-      "401": {
-        "$ref": "#/schemas/ErrorBody"
-      },
-      "403": {
-        "$ref": "#/schemas/ErrorBody"
-      },
-      "503": {
-        "$ref": "#/schemas/ErrorBody"
-      }
-    },
-    "verifyEvidence": {
-      "200": {
-        "$ref": "#/schemas/Verified"
-      },
-      "401": {
-        "$ref": "#/schemas/ErrorBody"
-      },
-      "403": {
-        "$ref": "#/schemas/ErrorBody"
-      },
-      "503": {
-        "$ref": "#/schemas/ErrorBody"
+    "securitySchemes": {
+      "bearer": {
+        "scheme": "bearer",
+        "type": "http"
       }
     }
   },
-  "schemas": {
-    "ClearanceView": {
-      "properties": {
-        "agent": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "app": {
-          "type": "string"
-        },
-        "approvals": {
-          "items": {
-            "$ref": "#/schemas/GateApproval"
+  "info": {
+    "description": "GET only. clearance-api reads what the Clearance core committed. Writes go to the core (POST /v1/clearances/{id}/clear and /deny, /v1/provenance, /v1/records); the runtime's reads and writes (sessions, tasks, agents and their holds, the human inbox, events, results, runtimes) are the AI gateway's. Generated by tools/contract -api from the route table and the Go types (internal/api); do not edit.",
+    "title": "clearance-api",
+    "version": "1.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/clearance-policy": {
+      "get": {
+        "operationId": "getClearancePolicy",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatePolicyView"
+                }
+              }
+            },
+            "description": "OK"
           },
-          "type": "array"
-        },
-        "base": {
-          "type": "string"
-        },
-        "checks": {
-          "additionalProperties": {
-            "type": "string"
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
           },
-          "type": "object"
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          }
         },
-        "cleared_by": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "cluster": {
-          "type": "string"
-        },
-        "created_at": {
-          "description": "Python datetime.isoformat() of an aware time",
-          "type": "string"
-        },
-        "decided_at": {
-          "oneOf": [
-            {
-              "description": "Python datetime.isoformat() of an aware time",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The deployment gate's baseline policy: the tier table, the people each tier needs, the outside groups, the TTL. A repo's clearance.yaml can only tighten it",
+        "x-clearance-roles": [
+          "person",
+          "delegate",
+          "auditor"
+        ]
+      }
+    },
+    "/v1/clearances": {
+      "get": {
+        "operationId": "listClearances",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "app",
+            "required": false,
+            "schema": {
               "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "denied_by": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "deny_reason": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "deployments": {
-          "items": {
-            "$ref": "#/schemas/GateDeployment"
-          },
-          "type": "array"
-        },
-        "env": {
-          "type": "string"
-        },
-        "expires_at": {
-          "description": "Python datetime.isoformat() of an aware time",
-          "type": "string"
-        },
-        "head": {
-          "type": "string"
-        },
-        "id": {
-          "type": "string"
-        },
-        "lines_changed": {
-          "type": "integer"
-        },
-        "objects": {
-          "items": {
-            "$ref": "#/schemas/GateObjectChange"
-          },
-          "type": "array"
-        },
-        "objects_count": {
-          "type": "integer"
-        },
-        "owner": {
-          "type": "string"
-        },
-        "paths": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "paths_count": {
-          "type": "integer"
-        },
-        "policy_version": {
-          "type": "string"
-        },
-        "pr": {
-          "type": "integer"
-        },
-        "proposer": {
-          "type": "string"
-        },
-        "proposer_kind": {
-          "type": "string"
-        },
-        "protected": {
-          "type": "boolean"
-        },
-        "reasons": {
-          "items": {
-            "$ref": "#/schemas/GateReason"
-          },
-          "type": "array"
-        },
-        "registered_by": {
-          "type": "string"
-        },
-        "repo": {
-          "type": "string"
-        },
-        "repo_policy_digest": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "requirement": {
-          "oneOf": [
-            {
-              "$ref": "#/schemas/GateRequirement"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "state": {
-          "type": "string"
-        },
-        "superseded_by": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "target": {
-          "type": "string"
-        },
-        "task_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "tier": {
-          "type": "integer"
-        },
-        "token": {
-          "oneOf": [
-            {
-              "$ref": "#/schemas/GateTokenView"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "tree_digest": {
-          "type": "string"
-        },
-        "updated_at": {
-          "description": "Python datetime.isoformat() of an aware time",
-          "type": "string"
-        }
-      },
-      "required": [
-        "agent",
-        "app",
-        "approvals",
-        "base",
-        "checks",
-        "cleared_by",
-        "cluster",
-        "created_at",
-        "decided_at",
-        "denied_by",
-        "deny_reason",
-        "deployments",
-        "env",
-        "expires_at",
-        "head",
-        "id",
-        "lines_changed",
-        "objects",
-        "objects_count",
-        "owner",
-        "paths",
-        "paths_count",
-        "policy_version",
-        "pr",
-        "proposer",
-        "proposer_kind",
-        "protected",
-        "reasons",
-        "registered_by",
-        "repo",
-        "repo_policy_digest",
-        "requirement",
-        "state",
-        "superseded_by",
-        "target",
-        "task_id",
-        "tier",
-        "token",
-        "tree_digest",
-        "updated_at"
-      ],
-      "type": "object"
-    },
-    "Count": {
-      "properties": {
-        "count": {
-          "type": "integer"
-        },
-        "key": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "count",
-        "key"
-      ],
-      "type": "object"
-    },
-    "Counts": {
-      "properties": {
-        "by": {
-          "type": "string"
-        },
-        "items": {
-          "items": {
-            "$ref": "#/schemas/Count"
-          },
-          "type": "array"
-        },
-        "outcomes": {
-          "type": "string"
-        },
-        "total": {
-          "type": "integer"
-        }
-      },
-      "required": [
-        "by",
-        "items",
-        "total"
-      ],
-      "type": "object"
-    },
-    "DecideProblem": {
-      "properties": {
-        "hint": {
-          "type": "string"
-        },
-        "message": {
-          "type": "string"
-        },
-        "pointer": {
-          "type": "string"
-        },
-        "rule": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "hint",
-        "message",
-        "pointer",
-        "rule"
-      ],
-      "type": "object"
-    },
-    "DecideRuleVerdict": {
-      "properties": {
-        "error": {
-          "type": "boolean"
-        },
-        "id": {
-          "type": "string"
-        },
-        "matched": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "name": {
-          "type": "string"
-        },
-        "order": {
-          "type": "integer"
-        }
-      },
-      "required": [
-        "error",
-        "id",
-        "matched",
-        "name",
-        "order"
-      ],
-      "type": "object"
-    },
-    "DefinitionIdentity": {
-      "properties": {
-        "serviceAccount": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "type": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "serviceAccount",
-        "type"
-      ],
-      "type": "object"
-    },
-    "DefinitionLimits": {
-      "properties": {
-        "children": {
-          "type": "integer"
-        },
-        "github_calls": {
-          "type": "integer"
-        },
-        "model_tokens": {
-          "type": "integer"
-        },
-        "open_prs": {
-          "type": "integer"
-        },
-        "tool_calls": {
-          "type": "integer"
-        },
-        "ttl_minutes": {
-          "type": "integer"
-        }
-      },
-      "required": [
-        "children",
-        "github_calls",
-        "model_tokens",
-        "open_prs",
-        "tool_calls",
-        "ttl_minutes"
-      ],
-      "type": "object"
-    },
-    "DefinitionList": {
-      "properties": {
-        "items": {
-          "items": {
-            "$ref": "#/schemas/DefinitionView"
-          },
-          "type": "array"
-        },
-        "rejected": {
-          "items": {
-            "$ref": "#/schemas/DefinitionsRejectedView"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "items",
-        "rejected"
-      ],
-      "type": "object"
-    },
-    "DefinitionRepos": {
-      "properties": {
-        "allow": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "allow"
-      ],
-      "type": "object"
-    },
-    "DefinitionRuntime": {
-      "properties": {
-        "framework": {
-          "type": "string"
-        },
-        "image": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "sandbox": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "framework",
-        "image",
-        "sandbox"
-      ],
-      "type": "object"
-    },
-    "DefinitionView": {
-      "properties": {
-        "compute": {
-          "type": "string"
-        },
-        "description": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "identity": {
-          "$ref": "#/schemas/DefinitionIdentity"
-        },
-        "instructions": {},
-        "kind": {
-          "type": "string"
-        },
-        "limits": {
-          "$ref": "#/schemas/DefinitionLimits"
-        },
-        "models": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "name": {
-          "type": "string"
-        },
-        "network": {
-          "type": "string"
-        },
-        "owner": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "repos": {
-          "$ref": "#/schemas/DefinitionRepos"
-        },
-        "runsIn": {
-          "type": "string"
-        },
-        "runtime": {
-          "$ref": "#/schemas/DefinitionRuntime"
-        },
-        "scopes": {
-          "$ref": "#/schemas/EvidenceRecord"
-        },
-        "source": {
-          "oneOf": [
-            {
-              "$ref": "#/schemas/DefinitionsSourceView"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "tierCeiling": {
-          "type": "string"
-        },
-        "tools": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "triggers": {
-          "items": {
-            "$ref": "#/schemas/EvidenceRecord"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "compute",
-        "description",
-        "identity",
-        "kind",
-        "limits",
-        "models",
-        "name",
-        "network",
-        "owner",
-        "repos",
-        "runsIn",
-        "runtime",
-        "scopes",
-        "source",
-        "tierCeiling",
-        "tools",
-        "triggers"
-      ],
-      "type": "object"
-    },
-    "DefinitionsRejectedView": {
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "reason": {
-          "type": "string"
-        },
-        "source": {
-          "$ref": "#/schemas/DefinitionsSourceView"
-        }
-      },
-      "required": [
-        "name",
-        "reason",
-        "source"
-      ],
-      "type": "object"
-    },
-    "DefinitionsSourceView": {
-      "properties": {
-        "commit": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "kind": {
-          "type": "string"
-        },
-        "loaded_at": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "namespace": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "path": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "pin": {
-          "type": "string"
-        },
-        "repo": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "xr": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "kind",
-        "pin"
-      ],
-      "type": "object"
-    },
-    "ErrorBody": {
-      "properties": {
-        "error": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "error"
-      ],
-      "type": "object"
-    },
-    "EvidencePage": {
-      "properties": {
-        "items": {
-          "items": {
-            "$ref": "#/schemas/EvidenceRecord"
-          },
-          "type": "array"
-        },
-        "next": {
-          "type": [
-            "integer",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "items",
-        "next"
-      ],
-      "type": "object"
-    },
-    "EvidenceRecord": {
-      "additionalProperties": {},
-      "description": "A stored evidence record (schemas/evidence.schema.json, clearance.evidence/v1 or a v0-draft row projected into it) with assurance beside it and projected naming the fields the api added (docs/evidence.md)",
-      "required": [
-        "seq",
-        "ts",
-        "tool",
-        "hash",
-        "prev_hash",
-        "schema",
-        "provider",
-        "subject",
-        "assurance",
-        "projected"
-      ],
-      "type": "object"
-    },
-    "ExplainDecision": {
-      "properties": {
-        "allow": {
-          "type": "boolean"
-        },
-        "hint": {
-          "type": "string"
-        },
-        "message": {
-          "type": "string"
-        },
-        "name": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "problems": {
-          "items": {
-            "$ref": "#/schemas/DecideProblem"
-          },
-          "type": "array"
-        },
-        "rule": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "tier": {
-          "type": [
-            "integer",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "allow",
-        "hint",
-        "message",
-        "name",
-        "rule",
-        "tier"
-      ],
-      "type": "object"
-    },
-    "Explanation": {
-      "properties": {
-        "agent": {
-          "type": "string"
-        },
-        "all_rules": {
-          "items": {
-            "$ref": "#/schemas/DecideRuleVerdict"
-          },
-          "type": "array"
-        },
-        "decision": {
-          "$ref": "#/schemas/ExplainDecision"
-        },
-        "dry_run": {
-          "type": "boolean"
-        },
-        "known_tool": {
-          "type": "boolean"
-        },
-        "path": {
-          "items": {
-            "$ref": "#/schemas/DecideRuleVerdict"
-          },
-          "type": "array"
-        },
-        "tool": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "agent",
-        "all_rules",
-        "decision",
-        "dry_run",
-        "known_tool",
-        "path",
-        "tool"
-      ],
-      "type": "object"
-    },
-    "GateApproval": {
-      "properties": {
-        "at": {
-          "type": "string"
-        },
-        "iss": {
-          "type": "string"
-        },
-        "person": {
-          "type": "string"
-        },
-        "role": {
-          "type": "string"
-        },
-        "sub": {
-          "type": "string"
-        },
-        "via": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "at",
-        "person",
-        "role",
-        "via"
-      ],
-      "type": "object"
-    },
-    "GateApprovers": {
-      "properties": {
-        "outside": {
-          "type": "integer"
-        },
-        "owner": {
-          "type": "integer"
-        }
-      },
-      "required": [
-        "outside",
-        "owner"
-      ],
-      "type": "object"
-    },
-    "GateDeployment": {
-      "properties": {
-        "answer": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "answered_at": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "callback_url": {
-          "type": "string"
-        },
-        "delivered": {
-          "type": "boolean"
-        },
-        "delivered_at": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "environment": {
-          "type": "string"
-        },
-        "installation": {
-          "type": "string"
-        },
-        "requested_at": {
-          "type": "string"
-        },
-        "run_id": {
-          "type": "integer"
-        }
-      },
-      "required": [
-        "answer",
-        "answered_at",
-        "callback_url",
-        "delivered",
-        "delivered_at",
-        "environment",
-        "installation",
-        "requested_at",
-        "run_id"
-      ],
-      "type": "object"
-    },
-    "GateObjectChange": {
-      "properties": {
-        "apiVersion": {
-          "type": "string"
-        },
-        "digest": {
-          "type": "string"
-        },
-        "fields": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "images": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "kind": {
-          "type": "string"
-        },
-        "name": {
-          "type": "string"
-        },
-        "namespace": {
-          "type": "string"
-        },
-        "op": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "apiVersion",
-        "digest",
-        "fields",
-        "images",
-        "kind",
-        "name",
-        "namespace",
-        "op"
-      ],
-      "type": "object"
-    },
-    "GatePolicyTiers": {
-      "properties": {
-        "0": {
-          "properties": {
-            "paths": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
             }
           },
-          "required": [
-            "paths"
-          ],
-          "type": "object"
-        },
-        "3": {
-          "properties": {
-            "fields": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "kinds": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "paths": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            }
-          },
-          "required": [
-            "fields",
-            "kinds",
-            "paths"
-          ],
-          "type": "object"
-        }
-      },
-      "required": [
-        "0",
-        "3"
-      ],
-      "type": "object"
-    },
-    "GatePolicyView": {
-      "properties": {
-        "approvers": {
-          "additionalProperties": {
-            "$ref": "#/schemas/GateApprovers"
-          },
-          "type": "object"
-        },
-        "maxLinesTier1": {
-          "type": "integer"
-        },
-        "outsideGroups": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "repoPolicy": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "tiers": {
-          "$ref": "#/schemas/GatePolicyTiers"
-        },
-        "trustedRegistries": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "ttlDays": {
-          "type": "integer"
-        },
-        "version": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "approvers",
-        "maxLinesTier1",
-        "outsideGroups",
-        "repoPolicy",
-        "tiers",
-        "trustedRegistries",
-        "ttlDays",
-        "version"
-      ],
-      "type": "object"
-    },
-    "GateReason": {
-      "properties": {
-        "rule": {
-          "type": "string"
-        },
-        "subject": {
-          "type": "string"
-        },
-        "tier": {
-          "type": "integer"
-        }
-      },
-      "required": [
-        "rule",
-        "subject",
-        "tier"
-      ],
-      "type": "object"
-    },
-    "GateRequirement": {
-      "properties": {
-        "outside": {
-          "type": "integer"
-        },
-        "outsideGroups": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "owner": {
-          "type": "integer"
-        },
-        "ownerGroup": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "outside",
-        "outsideGroups",
-        "owner",
-        "ownerGroup"
-      ],
-      "type": "object"
-    },
-    "GateTokenView": {
-      "properties": {
-        "dsse": {
-          "$ref": "#/schemas/TokenEnvelope"
-        },
-        "expires_at": {
-          "type": "string"
-        },
-        "issued_at": {
-          "type": "string"
-        },
-        "jwt": {
-          "type": "string"
-        },
-        "key_id": {
-          "type": "string"
-        },
-        "nonce": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "dsse",
-        "expires_at",
-        "issued_at",
-        "jwt",
-        "key_id",
-        "nonce"
-      ],
-      "type": "object"
-    },
-    "ListedChange": {
-      "properties": {
-        "agent": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "app": {
-          "type": "string"
-        },
-        "approvals": {
-          "items": {
-            "$ref": "#/schemas/GateApproval"
-          },
-          "type": "array"
-        },
-        "base": {
-          "type": "string"
-        },
-        "checks": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "type": "object"
-        },
-        "cleared_by": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "cluster": {
-          "type": "string"
-        },
-        "created_at": {
-          "description": "Python datetime.isoformat() of an aware time",
-          "type": "string"
-        },
-        "decided_at": {
-          "oneOf": [
-            {
-              "description": "Python datetime.isoformat() of an aware time",
+          {
+            "in": "query",
+            "name": "env",
+            "required": false,
+            "schema": {
               "type": "string"
-            },
-            {
-              "type": "null"
             }
-          ]
-        },
-        "denied_by": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "deny_reason": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "deployments": {
-          "items": {
-            "$ref": "#/schemas/GateDeployment"
           },
-          "type": "array"
-        },
-        "env": {
-          "type": "string"
-        },
-        "expires_at": {
-          "description": "Python datetime.isoformat() of an aware time",
-          "type": "string"
-        },
-        "head": {
-          "type": "string"
-        },
-        "id": {
-          "type": "string"
-        },
-        "lines_changed": {
-          "type": "integer"
-        },
-        "objects": {
-          "items": {
-            "$ref": "#/schemas/GateObjectChange"
-          },
-          "type": "array"
-        },
-        "objects_count": {
-          "type": "integer"
-        },
-        "owner": {
-          "type": "string"
-        },
-        "paths": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "paths_count": {
-          "type": "integer"
-        },
-        "policy_version": {
-          "type": "string"
-        },
-        "pr": {
-          "type": "integer"
-        },
-        "proposer": {
-          "type": "string"
-        },
-        "proposer_kind": {
-          "type": "string"
-        },
-        "protected": {
-          "type": "boolean"
-        },
-        "reasons": {
-          "items": {
-            "$ref": "#/schemas/GateReason"
-          },
-          "type": "array"
-        },
-        "registered_by": {
-          "type": "string"
-        },
-        "repo": {
-          "type": "string"
-        },
-        "repo_policy_digest": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "requirement": {
-          "oneOf": [
-            {
-              "$ref": "#/schemas/GateRequirement"
-            },
-            {
-              "type": "null"
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
-          ]
-        },
-        "state": {
-          "type": "string"
-        },
-        "superseded_by": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "target": {
-          "type": "string"
-        },
-        "task_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "tier": {
-          "type": "integer"
-        },
-        "token": {
-          "oneOf": [
-            {
-              "$ref": "#/schemas/GateTokenView"
-            },
-            {
-              "type": "null"
+          },
+          {
+            "in": "query",
+            "name": "repo",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
-          ]
-        },
-        "tree_digest": {
-          "type": "string"
-        },
-        "updated_at": {
-          "description": "Python datetime.isoformat() of an aware time",
-          "type": "string"
-        }
-      },
-      "required": [
-        "agent",
-        "app",
-        "approvals",
-        "base",
-        "checks",
-        "cleared_by",
-        "cluster",
-        "created_at",
-        "decided_at",
-        "denied_by",
-        "deny_reason",
-        "deployments",
-        "env",
-        "expires_at",
-        "head",
-        "id",
-        "lines_changed",
-        "objects",
-        "objects_count",
-        "owner",
-        "paths",
-        "paths_count",
-        "policy_version",
-        "pr",
-        "proposer",
-        "proposer_kind",
-        "protected",
-        "reasons",
-        "registered_by",
-        "repo",
-        "repo_policy_digest",
-        "requirement",
-        "state",
-        "superseded_by",
-        "target",
-        "task_id",
-        "tier",
-        "tree_digest",
-        "updated_at"
-      ],
-      "type": "object"
-    },
-    "PolicyDoc": {
-      "properties": {
-        "packs": {
-          "items": {
-            "type": "string"
           },
-          "type": "array"
-        },
-        "rules": {
-          "items": {
-            "$ref": "#/schemas/PolicyRule"
+          {
+            "in": "query",
+            "name": "pr",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           },
-          "type": "array"
-        },
-        "tools": {
-          "items": {
-            "$ref": "#/schemas/PolicyTool"
+          {
+            "in": "query",
+            "name": "tier",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           },
-          "type": "array"
-        }
-      },
-      "required": [
-        "packs",
-        "rules",
-        "tools"
-      ],
-      "type": "object"
-    },
-    "PolicyRule": {
-      "properties": {
-        "expression": {
-          "type": "string"
-        },
-        "hint": {
-          "type": "string"
-        },
-        "id": {
-          "type": "string"
-        },
-        "message": {
-          "type": "string"
-        },
-        "name": {
-          "type": "string"
-        },
-        "order": {
-          "type": "integer"
-        },
-        "pack": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "expression",
-        "hint",
-        "id",
-        "message",
-        "name",
-        "order",
-        "pack"
-      ],
-      "type": "object"
-    },
-    "PolicyTool": {
-      "properties": {
-        "github_cost": {
-          "type": "integer"
-        },
-        "name": {
-          "type": "string"
-        },
-        "propose_only": {
-          "type": "boolean"
-        },
-        "required_args": {
-          "items": {
-            "type": "string"
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           },
-          "type": "array"
-        },
-        "summary": {
-          "type": "string"
-        },
-        "target": {
-          "type": "string"
-        },
-        "tier": {
-          "type": "string"
-        },
-        "writes_files": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "github_cost",
-        "name",
-        "propose_only",
-        "required_args",
-        "summary",
-        "target",
-        "tier",
-        "writes_files"
-      ],
-      "type": "object"
-    },
-    "RecordList": {
-      "properties": {
-        "items": {
-          "items": {
-            "$ref": "#/schemas/EvidenceRecord"
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           },
-          "type": "array"
-        }
-      },
-      "required": [
-        "items"
-      ],
-      "type": "object"
-    },
-    "TokenEnvelope": {
-      "properties": {
-        "payload": {
-          "type": "string"
-        },
-        "payloadType": {
-          "type": "string"
-        },
-        "signatures": {
-          "items": {
-            "$ref": "#/schemas/TokenSignature"
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           },
-          "type": "array"
-        }
-      },
-      "required": [
-        "payload",
-        "payloadType",
-        "signatures"
-      ],
-      "type": "object"
-    },
-    "TokenJWK": {
-      "properties": {
-        "alg": {
-          "type": "string"
-        },
-        "crv": {
-          "type": "string"
-        },
-        "kid": {
-          "type": "string"
-        },
-        "kty": {
-          "type": "string"
-        },
-        "use": {
-          "type": "string"
-        },
-        "x": {
-          "type": "string"
-        },
-        "y": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "alg",
-        "crv",
-        "kid",
-        "kty",
-        "use",
-        "x",
-        "y"
-      ],
-      "type": "object"
-    },
-    "TokenJWKS": {
-      "properties": {
-        "keys": {
-          "items": {
-            "$ref": "#/schemas/TokenJWK"
+          {
+            "in": "query",
+            "name": "cluster",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "items": {
+                      "items": {
+                        "$ref": "#/components/schemas/ListedChange"
+                      },
+                      "type": "array"
+                    },
+                    "next": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "next"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
           },
-          "type": "array"
-        }
-      },
-      "required": [
-        "keys"
-      ],
-      "type": "object"
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The deployment gate's changes, newest first: tier and why, state (holding, cleared, denied, expired, superseded), the requirement and the approvals so far, what the grant binds to. A person sees their apps' changes and the ones their groups may clear; the cursor is updated_at. cluster=<c>&state=cleared is the grant feed: the cluster's cleared changes whose clearance token is live, each with its token; a feed reader (CLEARANCE_API_FEED_READERS) may read only that, for its own clusters",
+        "x-clearance-roles": [
+          "person",
+          "delegate",
+          "auditor",
+          "feed"
+        ]
+      }
     },
-    "TokenSignature": {
-      "properties": {
-        "keyid": {
-          "type": "string"
+    "/v1/clearances/counts": {
+      "get": {
+        "operationId": "countClearances",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "app",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "env",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "by",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Counts"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
         },
-        "sig": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "keyid",
-        "sig"
-      ],
-      "type": "object"
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Changes counted by state, tier, app, env or cleared_by (the C1 stats: holding, cleared by policy and by people, denied)",
+        "x-clearance-roles": [
+          "person",
+          "delegate",
+          "auditor"
+        ]
+      }
     },
-    "Verified": {
-      "properties": {
-        "bad_seq": {
-          "type": [
-            "integer",
-            "null"
-          ]
+    "/v1/clearances/{id}": {
+      "get": {
+        "operationId": "getClearance",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClearanceView"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
         },
-        "count": {
-          "type": "integer"
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "One change: the objects and paths it touches, every reason for its tier, the requirement, the approvals, the checks as last reported, and its live clearance token (null when it has none)",
+        "x-clearance-roles": [
+          "person",
+          "delegate",
+          "auditor",
+          "feed"
+        ]
+      }
+    },
+    "/v1/contract": {
+      "get": {
+        "operationId": "getContract",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceRecord"
+                }
+              }
+            },
+            "description": "OK"
+          }
         },
-        "head": {
-          "type": "string"
+        "security": [],
+        "summary": "This contract",
+        "x-clearance-roles": [
+          "any"
+        ]
+      }
+    },
+    "/v1/definitions": {
+      "get": {
+        "operationId": "listDefinitions",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "full",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DefinitionList"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          }
         },
-        "ok": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "bad_seq",
-        "count",
-        "head",
-        "ok"
-      ],
-      "type": "object"
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The agent definitions Clearance decides with: the bundled set and the cluster pins the core stored, each with its source; rejected pins with the reason. full=1 (auditors) adds instructions",
+        "x-clearance-roles": [
+          "person",
+          "delegate",
+          "auditor"
+        ]
+      }
+    },
+    "/v1/evidence": {
+      "get": {
+        "operationId": "listEvidence",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "task",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tool",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "principal",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "decision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "rule",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "app",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "outcomes",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "installation",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidencePage"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Evidence records you may see, newest first; the cursor is seq. outcomes=include (default), exclude or only: the outcome records the core writes beside each allowed decision (outcome_of). installation=<id> keeps one GitHub App installation's records (principal app:<id>)",
+        "x-clearance-roles": [
+          "person",
+          "delegate",
+          "auditor"
+        ]
+      }
+    },
+    "/v1/evidence/counts": {
+      "get": {
+        "operationId": "countEvidence",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "by",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "task",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tool",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "principal",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "decision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "rule",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "app",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "outcomes",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "installation",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Counts"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Records you may see, counted by rule, tool, agent, app or decision (`by`), with the same filters as the list. outcomes=exclude (default) counts each decision once; include or only count the outcome records too",
+        "x-clearance-roles": [
+          "person",
+          "delegate",
+          "auditor"
+        ]
+      }
+    },
+    "/v1/evidence/verify": {
+      "get": {
+        "operationId": "verifyEvidence",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Verified"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The whole chain checked from genesis: ok, count, head, the first bad seq",
+        "x-clearance-roles": [
+          "auditor"
+        ]
+      }
+    },
+    "/v1/evidence/{seq}": {
+      "get": {
+        "operationId": "getEvidence",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "seq",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceRecord"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "One evidence record with its hash",
+        "x-clearance-roles": [
+          "person",
+          "delegate",
+          "auditor"
+        ]
+      }
+    },
+    "/v1/github/installations": {
+      "get": {
+        "operationId": "listInstallations",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstallationList"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The Clearance GitHub App's installations as the records name them (app:<id>): the account and last action of the last app.installation record, the status it leaves, the records by tool, their seq and ts bounds, and the repositories its checks ran on",
+        "x-clearance-roles": [
+          "person",
+          "delegate",
+          "auditor"
+        ]
+      }
+    },
+    "/v1/grant-feeds/{cluster}": {
+      "get": {
+        "operationId": "getGrantFeed",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantFeed"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The cluster's signed grant feed: a DSSE envelope (application/vnd.clearance.grant-feed.v1+json, the token key) over every clearance token live on the cluster when the core signed it, with seq, iat, exp and each token's payload digest, and the tokens it lists beside it. The core re-signs it on every token write and at least every 2 minutes (exp 5 minutes): verify it whole before acting (docs/gate.md). A feed reader reads its own clusters'; auditors any",
+        "x-clearance-roles": [
+          "feed",
+          "auditor"
+        ]
+      }
+    },
+    "/v1/keys": {
+      "get": {
+        "operationId": "getKeys",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenJWKS"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [],
+        "summary": "The clearance token verification keys, a JWKS (EC P-256, ES256, kid = the RFC 7638 thumbprint): the key the core signs with and keys retired within the last 24 hours. Public",
+        "x-clearance-roles": [
+          "any"
+        ]
+      }
+    },
+    "/v1/policy": {
+      "get": {
+        "operationId": "getPolicy",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyDoc"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The policy in force: the deny rules in evaluation order (id, name, CEL expression, message, hint, bundle, `pack`), the tool registry with tiers, \"core\" and the loaded bundles (`packs`)",
+        "x-clearance-roles": [
+          "person",
+          "delegate",
+          "auditor"
+        ]
+      }
+    },
+    "/v1/policy/explain": {
+      "get": {
+        "operationId": "explainPolicy",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "agent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tool",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "args",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Explanation"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Would this be allowed? A dry run of the real policy for an agent, a tool and its args (JSON) on a fresh session: the decision and each rule's verdict in order. Records nothing",
+        "x-clearance-roles": [
+          "person",
+          "delegate",
+          "auditor"
+        ]
+      }
+    },
+    "/v1/provenance": {
+      "get": {
+        "operationId": "listProvenance",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "repo",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pr",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "installation",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordList"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The agent-gate verdicts recorded for a PR (provenance.verify). installation=<id> keeps the verdicts that GitHub App installation recorded",
+        "x-clearance-roles": [
+          "person",
+          "delegate",
+          "auditor"
+        ]
+      }
+    },
+    "/v1/receipts": {
+      "get": {
+        "operationId": "listReceipts",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "repo",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pr",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "installation",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordList"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "PR receipts: what Clearance's agents opened on a repo (and PR), the commit, the paths. installation=<id> keeps the receipts of pull requests that GitHub App installation checked",
+        "x-clearance-roles": [
+          "person",
+          "delegate",
+          "auditor"
+        ]
+      }
+    },
+    "/v1/stream": {
+      "get": {
+        "operationId": "streamEvents",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "types",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "the seq of the last event received",
+            "in": "header",
+            "name": "Last-Event-ID",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/StreamEvent"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Server-sent events of new evidence records (event: record, the record as getEvidence serves it) and gate state changes (event: clearance: the deploy.* record's seq, tool and ts and the change summary it recorded), each with id: <seq>. Resume with Last-Event-ID (or after=<seq>); without either the stream starts at the head. types=records,clearances (default both). The same scoping as the reads: a person sees the records and changes they may read; a feed reader only clearance events of its clusters. A comment every 15 s keeps it open; the server ends it after 10 minutes (reconnect with Last-Event-ID)",
+        "x-clearance-roles": [
+          "person",
+          "delegate",
+          "auditor",
+          "feed"
+        ],
+        "x-clearance-stream": true
+      }
     }
-  }
+  },
+  "x-clearance-api-version": "v1"
 }

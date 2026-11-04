@@ -51,8 +51,19 @@ func Contract() ([]byte, error) {
 					"schema": map[string]any{"type": "string"}})
 			}
 		}
+		for _, qp := range rt.Query {
+			typ := "string"
+			if qp.Integer {
+				typ = "integer"
+			}
+			params = append(params, map[string]any{"name": qp.Name, "in": "query", "required": false,
+				"description": qp.Description, "schema": map[string]any{"type": typ}})
+		}
 		if params != nil {
 			op["parameters"] = params
+		}
+		if rt.LongPoll {
+			op["x-clearance-long-poll"] = true
 		}
 		switch {
 		case rt.Request != nil:

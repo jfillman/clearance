@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 2 }
-      - run: ./render.sh prod HEAD~1 > /tmp/before && ./render.sh prod HEAD > /tmp/after   # your renderer
+      - run: mkdir -p /tmp/before /tmp/after && ./render.sh prod HEAD~1 > /tmp/before/all.yaml && ./render.sh prod HEAD > /tmp/after/all.yaml   # your renderer
       - uses: jfillman/clearance/register@v0.30.0
         with:
           url: https://clearance.example.com
@@ -46,3 +46,8 @@ puts it on `PATH` and runs `clearance register`. From v0.30.0 there is no Python
 Python package with pip. The inputs are unchanged. `args` passes further `clearance register` flags through; the Go
 binary refuses `--paths-from-git`, which only the Python command had (paths are the files that differ between
 `before` and `after`). Pin a tag: the binary is exactly that tag's code.
+
+**What the change binds to.** `treeDigest` is the manifest-tree digest of `after`
+([docs/gate.md](../docs/gate.md#the-manifest-tree-digest-built)), the same value Glidepath's `clearance-gate-` check
+computes for the same render. `before` and `after` are directories; an `after` that is not a directory, or holds no
+manifests, is a usage error (exit 2) rather than a change bound to an empty tree.

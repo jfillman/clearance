@@ -1,9 +1,12 @@
 package render
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -44,8 +47,17 @@ func TestLoadDirMatchesRegisterPy(t *testing.T) {
 			t.Errorf("%s images: %v, Python %v", id, got, g.Images[id])
 		}
 	}
-	if got := TreeDigest(set); got != g.Tree {
-		t.Errorf("tree %s, Python %s", got, g.Tree)
+	// The tree is the manifest-tree digest (not register.py's, which hashed the canonical documents themselves):
+	// recomputed here from Python's canonical forms, so the definition is checked independently of TreeDigest.
+	var lines []string
+	for _, k := range g.Keys {
+		sum := sha256.Sum256([]byte(g.Canonical[strings.Join(k, "|")]))
+		lines = append(lines, strings.Join(k, "/")+":"+hex.EncodeToString(sum[:]))
+	}
+	sort.Strings(lines)
+	want := sha256.Sum256([]byte(strings.Join(lines, "\n")))
+	if got := TreeDigest(set); got != hex.EncodeToString(want[:]) {
+		t.Errorf("tree %s, want %x", got, want)
 	}
 	objs, err := Objects(Set{}, set)
 	if err != nil {
@@ -53,6 +65,37 @@ func TestLoadDirMatchesRegisterPy(t *testing.T) {
 	}
 	if !reflect.DeepEqual(objs, g.Objects) {
 		t.Errorf("objects:\n go %+v\n py %+v", objs, g.Objects)
+	}
+}
+
+// TestTreeDigestIsGlidepaths: the manifest-tree digest of testdata/parity is the tree Glidepath's clearance-gate check
+// computes for the same render (its Python, run over app.yaml with PyYAML 6.0.3 on 2026-11-03:
+// sha256("\n".join(sorted(f"{apiVersion}/{kind}/{namespace}/{name}:{sha256(canonical json)}")))), so `clearance
+// register`, the Tekton check and the Argo CD plugin bind a change to the same digest.
+func TestTreeDigestIsGlidepaths(t *testing.T) {
+	set, err := LoadDir("testdata/parity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects := map[string]string{
+		"apps/v1/Deployment/app-shop-prod/shop":                 "6bf2a416cc8bf2abebca0dda6c0f4793e284dfc3b04964e4178b98c5e3916a7a",
+		"rbac.authorization.k8s.io/v1/ClusterRole//shop-reader": "2f8966b1556655c957622a418fd2aa4b1680078ed800bf2d4260f7ab67deab24",
+		"v1/Service/app-shop-prod/shop":                         "d677c244ccd9ce9bdeaa0f00ae94da8e3620bf88b64e6a249a36662fd29f01bb",
+	}
+	if len(set) != len(objects) {
+		t.Fatalf("%d objects, want %d", len(set), len(objects))
+	}
+	for k, d := range set {
+		if got, want := ObjectDigest(d), objects[strings.Join(k[:], "/")]; got != want {
+			t.Errorf("%v: %s, Glidepath %s", k, got, want)
+		}
+	}
+	if got := TreeDigest(set); got != "27cbba8e2f2c096b28ffba850f594304e273c79145fd8f8e7ed3ee1337ec1238" {
+		t.Errorf("tree %s", got)
+	}
+	// The order objects are read in does not matter; an empty render is sha256 of nothing.
+	if got := TreeDigest(Set{}); got != "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" {
+		t.Errorf("empty tree %s", got)
 	}
 }
 

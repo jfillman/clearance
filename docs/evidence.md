@@ -50,7 +50,7 @@ schema are allowed and are claimed unless the writer verified them.
 | Source | `subject`, `tool`, `args_sha256`, `change`, `source` | `subject` required (null when there is none); `tool` is the operation or event type; arguments are never stored, only their digest |
 | Target | `boundary`, `target`, `app`, `destination` | `boundary` is `runtime` or `deployment`; `destination` {cluster, environment, application} optional |
 | Provenance | `provenance` | optional {level, signals[{name, tag}]} |
-| Decision | `decision`, `tier`, `rule`, `rules`, `reason`, `policy`, `approvals`, `token`, `preflight` | verdict, tier, rule fired; `policy` {ref, engine, version} (R-5 fills it); `approvals` [{sub, iss, via, at}] (C-1: on `deploy.clear`, with `person` and `role`, and on the App's `deploy.request` and `deploy.answer` once cleared); `token` the clearance token's nonce (C-1: `deploy.clear`, `deploy.revoke`); `preflight` reserved for AP-C1 |
+| Decision | `decision`, `tier`, `rule`, `rules`, `reason`, `policy`, `approvals`, `token`, `preflight` | verdict, tier, rule fired; `policy` {ref, engine, version}, filled by R-5 for runtime decisions (engine `cel-go`) and by C-8 for deployment decisions (plus `verdict` and `bundle`: the offline admission engine's result and rule set; [gate.md](gate.md) "The policy in the record"); `approvals` [{sub, iss, via, at}] (C-1: on `deploy.clear`, with `person` and `role`, and on the App's `deploy.request` and `deploy.answer` once cleared); `token` the clearance token's nonce (C-1: `deploy.clear`, `deploy.revoke`); `preflight` reserved for AP-C1 |
 | Outcome | `result`, `effect`, `refusal`, `outcome` | `result` keeps its v0 meaning (the result line, or a deny's reason); `effect` is the receipt of a write the writer made; `refusal` {rule, message} optional (revision 2): a handler's refusal on an outcome, after the core allowed; `outcome` {applied, observed_revision, digests, health, rollback} optional |
 | Coverage state | `coverage` | `authorized-and-verified` (default), `observed-not-attributed`, `out-of-band-detected`, `coverage-unavailable` |
 | Assurance state | `assurance` | beside the record, never hashed: `checkpointed`, `recorded-not-checkpointed`, `not-recorded`; a reader adds it |
@@ -74,6 +74,12 @@ Go's `TestPythonV1Identical` must reproduce it byte for byte:
   `definition` (the digest of the pin); any other runtime record gives `tool-call` (name = tool, `sha256` =
   `args_sha256`); a deployment record with no tree has `null`. A derived subject is verified when the fields it came
   from are; an event's own subject is claimed unless the writer verifies `subject`.
+- Since G-TF-1 the deployment gate gives every `deploy.*` record its subject itself, from the change's `subject`
+  ([gate.md](gate.md#the-terraform-plan-subject-g-tf-1)): `manifest-tree` (name `app/env`, `sha256` = the
+  manifest-tree digest, `gitCommit`), `definition` for an agent definition's release (name = the agent), or
+  `terraform-plan` (name `app/env`; `sha256` = the saved plan, `planJson` = the redacted plan JSON, `variableSet` =
+  the variable-set hash, `gitCommit`). A placeholder tree is left out: the subject then carries `gitCommit` only. The
+  subject is claimed (the verifier described the change).
 - `verified` and `claimed` together name every field outside the chain's own (`seq`, `schema`, `boundary`,
   `coverage`, `verified`, `claimed`, `prev_hash`, `hash`).
 
@@ -177,7 +183,7 @@ The six questions against those records:
 
 | # | Question | v0-draft record today | v1 field that answers it | Who fills it |
 | --- | --- | --- | --- | --- |
-| 1 | What changed: rendered manifest digest, diff, repos and clusters touched | **Runtime: no.** A tool call has only `args_sha256` (seq 3, 139) and the PR it opened (139 `effect`); no manifest. **Deployment: partly.** 335/336 carry the tree digest and head in `change`, claimed; 402 to 405 have a zero tree, and 397 has no change at all | `subject` (manifest-tree: sha256 + gitCommit), `source`, `destination` | the deployment gate; `clearance register` must send a tree |
+| 1 | What changed: rendered manifest digest, diff, repos and clusters touched | **Runtime: no.** A tool call has only `args_sha256` (seq 3, 139) and the PR it opened (139 `effect`); no manifest. **Deployment: partly.** 335/336 carry the tree digest and head in `change`, claimed; 402 to 405 have a zero tree (a hand-made registration by a pipeline service account on 2026-11-01, not `clearance register`, whose own registrations, 468 to 474 and 641, carry a real tree; since G-TF-1 a placeholder tree is flagged `tree:unbound` or refused `DG-UNBOUND`), and 397 has no change at all | `subject` (manifest-tree: sha256 + gitCommit), `source`, `destination` | the deployment gate; `clearance register` must send a tree |
 | 2 | Who or what initiated it, with confidence | **Yes, strongest at runtime.** principal + agent + session + task_id are verified on every record (seq 0, 3, 16, 139); 141 adds a provenance level for the PR, as a result string | `principal`, `agent`, `task_id`, `initiator`, `provenance` {level, signals} | both; the gateway has the strongest signal |
 | 3 | Was it authorized before it went live: policy, tier, approver, approver is not author | **Partly.** decision, rule and tier are verified (seq 3: deny R006, tier 1); 336 says "cleared by policy" in `result`. No policy version, no approver identity (405's principal is `app:177375213`, the App, not a person) | `policy` {ref, engine, version}, `rules`, `reason`, `approvals` [{sub, iss}], `token` | both; the shared core |
 | 4 | Was it tested: CI run and results | **No.** Nothing in any record | a provider's claimed `outcome`/`source` from the PR and pipeline (CI attestation reference) | the deployment gate, from the PR and pipeline |

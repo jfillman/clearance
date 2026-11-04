@@ -103,6 +103,7 @@ unset, so the core's default applies. Lists are joined with commas.
 | `gate.modelRoutes` | `MODEL_ROUTES` | `alias=upstream` pairs a definition release may name. |
 | `gate.runtimeImagesExtra` | `RUNTIME_IMAGES_EXTRA` | Globs a definition's `runtime.image` may match. |
 | `gate.trustedRegistries` | `CLEARANCE_TRUSTED_REGISTRIES` | Image prefixes, each ending in `/`, a tier-1 image bump may come from; others are tier 2. Empty: any registry (the product default; Hangar sets its own in Apron). |
+| `gate.unboundTree` | `CLEARANCE_GATE_UNBOUND_TREE` | `flag` or `refuse`: a manifest-tree registration whose `treeDigest` is a placeholder (64 copies of one digit, or sha256 of nothing) is flagged `tree:unbound` and binds to its commit only, or refused `DG-UNBOUND`. Empty: `flag` (the default for one release, then `refuse` is planned; [gate.md](gate.md#the-manifest-tree-digest-built)). |
 | `agents.configMap` | `CLEARANCE_AGENTS_DIR` | A ConfigMap of bundled agent definitions, mounted at `/etc/clearance/agents`. |
 
 ### People and other identities
@@ -173,6 +174,7 @@ pack and definition variables above.
 | `networkPolicy.core.from`, `networkPolicy.api.from` | NetworkPolicyPeers allowed to call each on 8080: providers, verifiers, your Gateway's namespace (for the webhook), a portal. |
 | `networkPolicy.dns.{namespace,podSelector}` | `kube-system`, `k8s-app: kube-dns`. |
 | `networkPolicy.kubeAPIServer.{cidrs,ports}` | The API server for TokenReview. Default `0.0.0.0/0` on 443 and 6443: narrow it to `kubectl get endpoints kubernetes`. |
+| `networkPolicy.kubeAPIServer.ciliumEntity` | Default false. **On Cilium set it true**: an ipBlock never matches the API server there (it is the `kube-apiserver` entity unless the agent runs with `policy-cidr-match-mode: nodes`), so TokenReview times out and every caller answers 401. true also renders a `CiliumNetworkPolicy` (`<fullname>-kube-apiserver`, cilium.io/v2) letting the core and the api reach `toEntities: [kube-apiserver]`, nothing else. Leave it false on any other CNI (the CRD would not exist). |
 | `networkPolicy.postgres.{to,port}` | Your Postgres; the chart's CNPG instances are added automatically. With `cnpg.enabled`, a policy on the instances admits only the core, the api, the test pod, each other and the operator. |
 | `networkPolicy.extraEgress` | NetworkPolicyEgressRules: the OIDC JWKS, Backstage, the GitHub API. |
 

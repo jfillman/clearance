@@ -417,9 +417,89 @@ type ChangeRequest struct {
 	Objects      []ObjectChange    `json:"objects"`
 	Checks       map[string]string `json:"checks"`
 	Policy       map[string]any    `json:"policy,omitempty"`
+	PolicyCommit string            `json:"policyCommit,omitempty"`
+	Admission    *Admission        `json:"admission,omitempty"`
 	Agent        *string           `json:"agent,omitempty"`
 	TaskID       *string           `json:"taskId,omitempty"`
 	Definition   map[string]any    `json:"definition,omitempty"`
+	// Subject is a saved Terraform plan (G-TF-1); with it, Cluster and TreeDigest may be empty and Objects is an
+	// empty list (not nil: the core refuses "objects": null).
+	Subject *PlanSubject `json:"subject,omitempty"`
+}
+
+// PlanSubject is a terraform-plan change's subject as a verifier sends it (schemas/change-request.schema.json):
+// the saved plan's digests, its workspace and versions, the summary and every resource change. Digests are sha256
+// (bare hex or "sha256:"); a variable's value is never sent, only the variable set's hash.
+type PlanSubject struct {
+	Kind              string         `json:"kind"` // terraform-plan
+	PlanDigest        string         `json:"planDigest"`
+	PlanJSONDigest    string         `json:"planJsonDigest"`
+	Workspace         PlanWorkspace  `json:"workspace"`
+	Versions          PlanVersions   `json:"versions"`
+	Summary           PlanSummary    `json:"summary"`
+	Targeted          bool           `json:"targeted"`
+	VariableSetDigest string         `json:"variableSetDigest"`
+	Resources         []PlanResource `json:"resources"`
+}
+
+// PlanWorkspace is a Terraform workspace: backend type, state key, workspace name.
+type PlanWorkspace struct {
+	Backend string `json:"backend"`
+	Key     string `json:"key"`
+	Name    string `json:"name"`
+}
+
+// PlanVersions are Terraform's version and each provider's (source address to version).
+type PlanVersions struct {
+	Terraform string            `json:"terraform"`
+	Providers map[string]string `json:"providers"`
+}
+
+// PlanSummary is the plan's counts and the addresses it destroys; the core checks it against the resources.
+type PlanSummary struct {
+	Create             int64    `json:"create"`
+	Update             int64    `json:"update"`
+	Replace            int64    `json:"replace"`
+	Destroy            int64    `json:"destroy"`
+	DestroyedAddresses []string `json:"destroyedAddresses,omitempty"`
+}
+
+// PlanResource is one resource change: address, type, actions, the changed attributes' JSON pointers and Terraform's
+// action_reason.
+type PlanResource struct {
+	Address      string   `json:"address"`
+	Type         string   `json:"type"`
+	Actions      []string `json:"actions"`
+	Fields       []string `json:"fields,omitempty"`
+	ActionReason string   `json:"actionReason,omitempty"`
+}
+
+// ChangeSubject is what a change on record binds to: kind manifest-tree, definition or terraform-plan, its digests
+// (sha256, gitCommit; planJson and variableSet for a plan) and, for a plan, the request's subject.
+type ChangeSubject struct {
+	Kind              string            `json:"kind"`
+	Name              string            `json:"name,omitempty"`
+	Digests           map[string]string `json:"digests"`
+	Flags             []string          `json:"flags,omitempty"`
+	PlanDigest        string            `json:"planDigest,omitempty"`
+	PlanJSONDigest    string            `json:"planJsonDigest,omitempty"`
+	Workspace         *PlanWorkspace    `json:"workspace,omitempty"`
+	Versions          *PlanVersions     `json:"versions,omitempty"`
+	Summary           *PlanSummary      `json:"summary,omitempty"`
+	Targeted          *bool             `json:"targeted,omitempty"`
+	VariableSetDigest string            `json:"variableSetDigest,omitempty"`
+	Resources         []PlanResource    `json:"resources,omitempty"`
+}
+
+// Admission is a verifier's offline admission result for a change's rendered tree (docs/gate.md "The policy in
+// the record"): the engine and version (kyverno/1.19.0), the verdict (pass, warn, fail, skipped, error), the rule
+// set it ran (<repo>//<path>@<commit>) and the blocking and warning finding counts.
+type Admission struct {
+	Engine  string `json:"engine"`
+	Verdict string `json:"verdict"`
+	Bundle  string `json:"bundle,omitempty"`
+	Deny    int64  `json:"deny"`
+	Warn    int64  `json:"warn"`
 }
 
 // ObjectChange is one Kubernetes object a change touches.
@@ -451,12 +531,15 @@ type Change struct {
 	Owner            string            `json:"owner"`
 	Protected        bool              `json:"protected"`
 	TreeDigest       string            `json:"tree_digest"`
+	Subject          *ChangeSubject    `json:"subject"`
 	Paths            []string          `json:"paths"`
 	LinesChanged     int64             `json:"lines_changed"`
 	Objects          []ObjectChange    `json:"objects"`
 	Checks           map[string]string `json:"checks"`
 	PolicyVersion    string            `json:"policy_version"`
 	RepoPolicyDigest *string           `json:"repo_policy_digest"`
+	PolicyRef        string            `json:"policy_ref,omitempty"`
+	Admission        *Admission        `json:"admission,omitempty"`
 	Tier             int               `json:"tier"`
 	Reasons          []Reason          `json:"reasons"`
 	Requirement      *Requirement      `json:"requirement"`
@@ -614,6 +697,13 @@ type ClearanceAnswer struct {
 	TaskID     *string    `json:"task_id"`
 	ExpiresAt  string     `json:"expires_at"`
 	Token      *TokenView `json:"token"`
+}
+
+// WaitAnswer is the wait route's answer (server.WaitAnswer): the change and its token, and whether its state
+// changed (false: the wait timed out).
+type WaitAnswer struct {
+	ClearanceAnswer
+	Changed bool `json:"changed"`
 }
 
 // TokenView is a clearance token: the DSSE envelope, its JWT projection, the nonce, the key and the validity
