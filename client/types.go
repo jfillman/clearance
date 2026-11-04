@@ -31,7 +31,7 @@ const (
 // RecordKinds are the kinds POST /v1/records takes (server.RecordKinds).
 var RecordKinds = []string{"session.open", "run.launch", "run.delete", "run.finish", "human.answer",
 	"session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome",
-	"deploy.exception", "deploy.degraded"}
+	"deploy.exception", "deploy.degraded", "federated.decision"}
 
 // CoverageUnavailable is a tool.call record's coverage: a T0 read the provider allowed while the core was
 // unreachable (the outage policy), posted once it answers.

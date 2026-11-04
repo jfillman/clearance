@@ -58,6 +58,7 @@ cleared by policy, chain verify, the image size and the core's idle memory).
 | Provenance and the GitHub App | `internal/provenance`, `internal/githubapp` | Agent-identity and agent-scope verdicts for a PR from the receipts in the chain; Clearance's own GitHub App: check runs and the deployment protection rule ([docs/provenance-app.md](docs/provenance-app.md)) |
 | `clearance register` | `cmd/clearance/register.go`, `register/action.yml` | A customer's CI registers what it deploys with the gate, authenticated by the workflow's GitHub Actions OIDC token; the GitHub Action builds the Go binary at its own ref |
 | clearance-api | `internal/api`, `contract/clearance-api.json` | The read-only API over evidence, receipts and verdicts, clearances, the policy and its explainer, definitions, the signed grant feed, the record stream and the App's installations; OpenAPI 3.1 ([docs/clearance-api.md](docs/clearance-api.md)) |
+| The Traefik Hub adapter (Unverified) | `internal/federate/traefikhub`, `clearance federate traefik-hub` | Reads Traefik Hub's Sovereign Trust Plane decision and access records, joins them on `trace_id`, correlates a `task_id` where it can, and records each as a claimed `federated.decision` (provider `traefik-hub`); built against the published format, no live Hub yet ([docs/federate-traefik-hub.md](docs/federate-traefik-hub.md)) |
 | Who is calling | `internal/authn`, `internal/directory` | Service-account tokens by TokenReview, people's OIDC ID tokens, GitHub Actions OIDC, another cluster's workloads; groups from a Backstage catalog |
 
 What Clearance does not hold, by design and checked by `internal/boundary`: no session store, no MCP server, no tool
@@ -103,7 +104,7 @@ back to Autopilot in R-3 (decision of 2026-11-02: Clearance decides and records,
 ## Docs
 
 The TechDocs site is `mkdocs.yml` over `docs/` (home, the Go core, clearance-api, the deployment gate, the evidence
-record, the provider protocol and `clearance conformance`, installing, the provenance App), published in Hangar's
+record, the provider protocol and `clearance conformance`, installing, the provenance App, the Traefik Hub adapter), published in Hangar's
 portal from `catalog-info.yaml` (`backstage.io/techdocs-ref: dir:.`). Preview locally with `pip install
 mkdocs-techdocs-core && mkdocs serve`.
 

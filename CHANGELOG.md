@@ -50,6 +50,20 @@ view `outage`, `ProviderEvent` `exception` and `outage`; take this release's cli
 - `provider.conformance`: a `CLEARANCE_PROVIDERS` entry's `conformance` (`clearance-conformance/v1@<date>`) is stamped
   on every record that provider writes.
 - Go client `Clearance`, `Keys`; Python client `get_clearance`, `keys` (models regenerated).
+- C-9, the Traefik Hub adapter (**Unverified**: built against the published record format, no live Hub yet).
+  `internal/federate/traefikhub` and `clearance federate traefik-hub` read Traefik Hub's Sovereign Trust Plane
+  decision records (Hub log) and access records, and join them on `trace_id`. A `task_id` comes from a kept
+  `X-Clearance-Task-Id` header, or from a trace table. Each decision is posted as a claimed `federated.decision`
+  record, provider `traefik-hub`. Coverage is always `observed-not-attributed`, because Hub's PDP decided, not
+  Clearance. A correlated record keeps its `task_id` as a claim and sets `source.correlated: true`. A `--state`
+  file keeps re-runs from posting a line twice. The recorded-format tests run on Traefik's
+  published examples. Includes the `FuzzIngest` fuzz target.
+- `POST /v1/records` takes a new kind, `federated.decision` (core contract, Go client and Python client
+  `RECORD_KINDS`). The core holds it to observation: no rule, tier, effect, outcome, change or tool, and
+  coverage `observed-not-attributed` only (`authorized-and-verified` is refused).
+- docs/federate-traefik-hub.md: the record mapping, how to run the adapter, its sources, and the finding that
+  Hub cannot use `POST /access/v1/evaluation` as its PDP today. Clearance lacks the AuthZEN metadata endpoint,
+  a request profile for a foreign PEP, and an auth path Hub can refresh (Unverified).
 - C-8: every deployment decision records its policy. Each `deploy.*` record carries a `policy` group:
   `ref` (`clearance.yaml@<commit>`, `clearance.yaml@sha256:<digest>` or `baseline`), `version` (the gate baseline
   plus the `clearance.yaml` digest), and the offline admission result the verifier sent: `engine`

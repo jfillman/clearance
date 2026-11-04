@@ -1,0 +1,1 @@
+{"RequestPath":"/refunds","DownstreamStatus":403,"ClientUsername":"alice@example.com","request_X-Evidence-User":"alice@example.com","request_X-Evidence-Agent":"agent-1","trace_id":"5e5e8662ec810c75a0a215e2d8d7e56b","transparency_log_id":"d5b33cf1-1386-4254-b597-6f6fd40dc9af"}

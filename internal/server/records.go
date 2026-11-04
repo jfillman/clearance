@@ -20,14 +20,15 @@ import (
 // core was unreachable (tool.call, coverage-unavailable: the outage policy's outbox replay), and the deployment
 // boundary's outcome, exceptions and outage reports (a deployment-gate provider such as the Argo sync).
 // deploy.exception and deploy.degraded are the gate's to check and act on (gate.Service.Report, C-6): their shape
-// is in internal/gate/exception.go and docs/gate.md.
+// is in internal/gate/exception.go and docs/gate.md. A decision another gateway's own policy decision point made
+// is federated.decision: a federated runtime source such as the Traefik Hub adapter (internal/federate/traefikhub).
 //
 // definition.load, definition.unload and definition.reject are not among them: the core writes those itself when a
 // provider publishes its pinned definitions (PUT /v1/definitions, definitions.Service.Apply), so there is one
 // writer of each.
 var RecordKinds = []string{"session.open", "run.launch", "run.delete", "run.finish", "human.answer",
 	"session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome",
-	"deploy.exception", "deploy.degraded"}
+	"deploy.exception", "deploy.degraded", FederatedKind}
 
 // OutageKind is the record of a T0 read the provider allowed while the core was unreachable. Its tool is the tool
 // that was called (record.tool), its coverage is CoverageUnavailable, and everything in it is claimed: the core
@@ -35,6 +36,15 @@ var RecordKinds = []string{"session.open", "run.launch", "run.delete", "run.fini
 const (
 	OutageKind          = "tool.call"
 	CoverageUnavailable = "coverage-unavailable"
+)
+
+// FederatedKind is a decision a federated runtime source observed at another gateway (its own PDP decided; the
+// core decided nothing). Everything in it is claimed, a correlated task_id included, so its coverage is always
+// CoverageObserved: another PDP authorized the call, not Clearance. It carries no Clearance rule, tier, effect,
+// outcome or change.
+const (
+	FederatedKind    = "federated.decision"
+	CoverageObserved = "observed-not-attributed"
 )
 
 // kindSpec is what each kind must carry, and its boundary.
@@ -59,6 +69,7 @@ var recordKinds = map[string]kindSpec{
 	"deploy.exception": {[]string{"principal", "target", "result", "exception", "destination"}, "deployment"},
 	"deploy.degraded": {[]string{"principal", "target", "app", "result", "decision", "coverage", "outage",
 		"destination"}, "deployment"},
+	FederatedKind: {[]string{"decision", "result", "coverage"}, "runtime"},
 }
 
 // RecordRequest is POST /v1/records's body. provider must be the provider the caller authenticates as; kind is the
@@ -222,6 +233,23 @@ func (s *Server) checkOutageRead(e *ProviderEvent) error {
 	return nil
 }
 
+// checkFederated holds a federated.decision to what an observer can say: another PDP's verdict, always
+// observed-not-attributed (a task_id it correlated is a claim; authorized-and-verified would say Clearance knows the
+// call was authorized), and nothing that would read as the core's decision (a rule or tier) or as a write (an
+// effect, an outcome, a change). A tool is refused before this, by event (only tool.call carries one).
+func checkFederated(e *ProviderEvent) error {
+	switch {
+	case *e.Coverage != CoverageObserved:
+		return fmt.Errorf("a %s record's coverage is %s, want %s: another PDP decided, and its correlation is "+
+			"claimed", FederatedKind, *e.Coverage, CoverageObserved)
+	case e.Rule != nil || e.Tier != nil:
+		return fmt.Errorf("a %s record carries no rule or tier: the core decided nothing", FederatedKind)
+	case e.Effect != nil || e.Outcome != nil || e.Change != nil:
+		return fmt.Errorf("a %s record is a decision: no effect, outcome or change", FederatedKind)
+	}
+	return nil
+}
+
 func text(k, v string) error {
 	if len(v) > MaxFieldText || !utf8.ValidString(v) || strings.ContainsRune(v, 0) {
 		return fmt.Errorf("%s is a string of at most %d bytes", k, MaxFieldText)
@@ -261,6 +289,9 @@ func (s *Server) records(w http.ResponseWriter, r *http.Request) {
 	ev, err := body.Record.event(body.Kind, spec, evidence.ISO(s.opt.Clock()))
 	if err == nil && body.Kind == OutageKind {
 		err = s.checkOutageRead(&body.Record)
+	}
+	if err == nil && body.Kind == FederatedKind {
+		err = checkFederated(&body.Record)
 	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

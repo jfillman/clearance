@@ -3972,6 +3972,7 @@
     "tool.call",
     "deploy.outcome",
     "deploy.exception",
-    "deploy.degraded"
+    "deploy.degraded",
+    "federated.decision"
   ]
 }
