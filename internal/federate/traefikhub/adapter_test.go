@@ -171,7 +171,7 @@ func TestLongAndHostileLines(t *testing.T) {
 	}
 }
 
-// TestLineCapAtEOF holds the MaxLine cap to the same byte count with and without a trailing newline.
+// TestLineCapAtEOF holds the MaxLine cap to the same byte count whatever ends the line: \n, \r\n or EOF.
 func TestLineCapAtEOF(t *testing.T) {
 	for _, c := range []struct {
 		in      string
@@ -181,6 +181,9 @@ func TestLineCapAtEOF(t *testing.T) {
 		{strings.Repeat("x", traefikhub.MaxLine) + "\n", 0},
 		{strings.Repeat("x", traefikhub.MaxLine+1), 1},
 		{strings.Repeat("x", traefikhub.MaxLine+1) + "\n", 1},
+		{strings.Repeat("x", traefikhub.MaxLine) + "\r\n", 0},
+		{strings.Repeat("x", traefikhub.MaxLine+1) + "\r\n", 1},
+		{strings.Repeat("x", traefikhub.MaxLine) + "\r", 0},
 	} {
 		_, st, err := traefikhub.ParseDecisions(strings.NewReader(c.in))
 		if err != nil || st.Lines != 1 || st.TooLong != c.tooLong {
@@ -260,6 +263,13 @@ func TestTheCoreHoldsFederatedRecordsToObservation(t *testing.T) {
 		if _, err := f.client.Record(context.Background(), &r); err == nil {
 			t.Errorf("%s: recorded", name)
 		}
+	}
+	// The refusal names the coverage that was sent, then the one the core wants.
+	r := base()
+	r.Record.Coverage = client.String("authorized-and-verified")
+	if _, err := f.client.Record(context.Background(), &r); err == nil ||
+		!strings.Contains(err.Error(), "coverage is authorized-and-verified, want observed-not-attributed") {
+		t.Fatalf("got %v", err)
 	}
 	// Another provider's principal may not write as traefik-hub.
 	other := f.clientAs(t, "autopilot-system/clearance", "traefik-hub")

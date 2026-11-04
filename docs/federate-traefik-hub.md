@@ -99,6 +99,11 @@ The ledger is append-only, so a second run over a log that has grown must not po
 keeps the key of each record already posted (the SHA-256 of its decision line), one key per line, appended as each
 record lands. A run stops at the first failed post, and the next run picks up from there.
 
+Delivery is at least once. A key is marked after the core answers, so a record the core wrote but whose answer
+was lost is posted again by the next run. The alternative, marking before the post, would lose a record for good
+whenever the post never landed. A repeat is recognisable because it carries the same `subject.digests.decisionLine`.
+The core does not de-duplicate `POST /v1/records`. If it ever should, that is a core change, keyed on that digest.
+
 ## Running it
 
 1. Configure Hub. These are the Helm values the Transparency Logs page requires or documents:
@@ -139,7 +144,7 @@ record lands. A run stops at the first failed post, and the next run picks up fr
    stderr: lines read, skipped, paired, correlated, posted. Exit 0 means done, 1 means a failure, 2 means a usage
    error.
 
-Limits: each line is at most 64 KiB, each file at most 1,000,000 lines, and each string is kept to 1 KiB of valid
+Limits: each line is at most 64 KiB (not counting its `\n` or `\r\n`), each file at most 1,000,000 lines, and each string is kept to 1 KiB of valid
 UTF-8 with control characters removed. A line that is not JSON is counted, not fatal. `FuzzIngest` covers the
 parser.
 

@@ -227,8 +227,8 @@ func (s *Server) checkOutageRead(e *ProviderEvent) error {
 func checkFederated(e *ProviderEvent) error {
 	switch {
 	case *e.Coverage != CoverageObserved:
-		return fmt.Errorf("a %s record's coverage is %s: another PDP decided, and its correlation is claimed",
-			FederatedKind, CoverageObserved)
+		return fmt.Errorf("a %s record's coverage is %s, want %s: another PDP decided, and its correlation is "+
+			"claimed", FederatedKind, *e.Coverage, CoverageObserved)
 	case e.Rule != nil || e.Tier != nil:
 		return fmt.Errorf("a %s record carries no rule or tier: the core decided nothing", FederatedKind)
 	case e.Effect != nil || e.Outcome != nil || e.Change != nil:

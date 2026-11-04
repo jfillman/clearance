@@ -110,16 +110,15 @@ func eachLine(r io.Reader, st *ReadStats, f func([]byte)) error {
 	}
 }
 
-// readLine reads one line without its newline. A line over MaxLine is read to its end and dropped (tooLong).
+// readLine reads one line without its terminator (\n or \r\n). A line whose content is over MaxLine bytes is read
+// to its end and dropped (tooLong). The terminator is not counted, so a MaxLine line is kept whether it ends in
+// \n, \r\n or nothing (EOF).
 func readLine(br *bufio.Reader) (line []byte, tooLong bool, err error) {
+	const keep = MaxLine + 2 // room for a \r\n terminator
 	for {
 		chunk, err := br.ReadSlice('\n')
 		if !tooLong {
-			limit := MaxLine
-			if bytes.HasSuffix(chunk, []byte("\n")) {
-				limit++ // the newline; a last line at EOF has none
-			}
-			if len(line)+len(chunk) > limit {
+			if len(line)+len(chunk) > keep {
 				tooLong, line = true, nil
 			} else {
 				line = append(line, chunk...)
@@ -128,7 +127,15 @@ func readLine(br *bufio.Reader) (line []byte, tooLong bool, err error) {
 		if err == bufio.ErrBufferFull {
 			continue
 		}
-		return bytes.TrimSuffix(line, []byte("\n")), tooLong, err
+		if tooLong {
+			return nil, true, err
+		}
+		line = bytes.TrimSuffix(line, []byte("\n"))
+		line = bytes.TrimSuffix(line, []byte("\r"))
+		if len(line) > MaxLine {
+			return nil, true, err
+		}
+		return line, false, err
 	}
 }
 
