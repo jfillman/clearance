@@ -9,6 +9,8 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-11-03
+
 C-1: the clearance token. Additive on the wire, with one exception for strict clients: a change's view gains
 `task_id`, and its approvals gain `sub` and `iss`, so a Go or Python client of an earlier release that decodes gate
 answers strictly refuses them; take this release's clients (or `AllowUnknownFields`). Nothing changes for a
@@ -616,7 +618,8 @@ What the Autopilot gateway needs of the core before the hangar-dev cutover (R-3e
   scope, narrow-only limits, CEL policy, sessions, the hash-chained audit log and the gateway; the Hangar pack's
   `glidepath.*` and `airframe.*` tools over glidepath-api and a GET-only Kubernetes adapter.
 
-[Unreleased]: https://github.com/jfillman/clearance/compare/v0.30.0...HEAD
+[Unreleased]: https://github.com/jfillman/clearance/compare/v0.31.0...HEAD
+[0.31.0]: https://github.com/jfillman/clearance/compare/v0.30.0...v0.31.0
 [0.30.0]: https://github.com/jfillman/clearance/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/jfillman/clearance/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/jfillman/clearance/compare/v0.27.1...v0.28.0
