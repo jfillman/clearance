@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jfillman/clearance/internal/evidence"
@@ -21,7 +22,9 @@ type memStore struct {
 	defs    []store.Definition
 	tokens  []store.Token
 	keys    []store.SigningKey
+	feeds   []store.Feed
 	fail    error
+	mu      sync.RWMutex // the stream tests append while a stream reads (Head, EvidenceAfter, DeploysAfter)
 }
 
 var _ Store = (*memStore)(nil)
@@ -103,6 +106,11 @@ func (m *memStore) matches(r Record, f EvidenceFilter) bool {
 			continue
 		}
 		if got, ok := str(r[field]); !ok || got != want {
+			return false
+		}
+	}
+	if f.Installation != "" {
+		if p, _ := str(r["principal"]); p != InstallationPrincipal(f.Installation) {
 			return false
 		}
 	}
@@ -207,8 +215,17 @@ func (m *memStore) Counts(_ context.Context, f EvidenceFilter, v *Viewer, by str
 	return group(keys), m.fail
 }
 
-func (m *memStore) ByPR(_ context.Context, tools []string, repo, pr string, v *Viewer) ([]Record, error) {
+func (m *memStore) ByPR(_ context.Context, tools []string, f PRFilter, v *Viewer) ([]Record, error) {
+	repo, pr := f.Repo, f.PR
 	owners := m.owners()
+	checked := map[string]bool{} // the repo#pr targets the installation's provenance.verify records name
+	inst := InstallationPrincipal(f.Installation)
+	for _, r := range m.recs {
+		if p, _ := str(r["principal"]); f.Installation != "" && p == inst && r["tool"] == "provenance.verify" {
+			t, _ := str(r["target"])
+			checked[t] = true
+		}
+	}
 	out := []Record{}
 	for i := len(m.recs) - 1; i >= 0 && len(out) < MaxLimit; i-- {
 		r := m.recs[i]
@@ -225,6 +242,18 @@ func (m *memStore) ByPR(_ context.Context, tools []string, repo, pr string, v *V
 			hit = hit || target == repo+"#"+pr
 		} else {
 			hit = hit || strings.HasPrefix(target, repo+"#")
+		}
+		if hit && f.Installation != "" {
+			if f.ByInstaller {
+				p, _ := str(r["principal"])
+				hit = p == inst
+			} else {
+				on := target
+				if eff != nil && er != "" && ep != nil {
+					on = er + "#" + *ep
+				}
+				hit = checked[on]
+			}
 		}
 		if hit {
 			out = append(out, r)
@@ -386,5 +415,112 @@ func (m *memStore) SigningKeys(_ context.Context, since time.Time) ([]store.Sign
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, m.fail
+}
+
+func (m *memStore) appendRec(r Record) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.recs = append(m.recs, r)
+}
+
+func (m *memStore) Head(context.Context) (int64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if len(m.recs) == 0 {
+		return -1, m.fail
+	}
+	n, _ := seqOf(m.recs[len(m.recs)-1])
+	return n, m.fail
+}
+
+func (m *memStore) EvidenceAfter(_ context.Context, f EvidenceFilter, v *Viewer, after int64, limit int) ([]Record, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	owners := m.owners()
+	out := []Record{}
+	for _, r := range m.recs {
+		if seq, _ := seqOf(r); seq > after && len(out) < limit && m.sees(r, v, owners) && m.matches(r, f) {
+			out = append(out, r)
+		}
+	}
+	return out, m.fail
+}
+
+func (m *memStore) DeploysAfter(_ context.Context, after int64, limit int) ([]DeployEvent, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := []DeployEvent{}
+	for _, r := range m.recs {
+		seq, _ := seqOf(r)
+		tool, _ := str(r["tool"])
+		ch, isObj := r["change"].(map[string]any)
+		if seq <= after || !strings.HasPrefix(tool, "deploy.") || !isObj || len(out) >= limit {
+			continue
+		}
+		ts, _ := str(r["ts"])
+		d := DeployEvent{Seq: seq, Tool: tool, TS: ts, Summary: mustJSON(ch)}
+		id, _ := str(ch["id"])
+		for _, c := range m.changes {
+			if c.ID == id {
+				d.Change = c.Record
+			}
+		}
+		out = append(out, d)
+	}
+	return out, m.fail
+}
+
+func (m *memStore) Feed(_ context.Context, cluster string) (*store.Feed, error) {
+	for _, f := range m.feeds {
+		if f.Cluster == cluster {
+			f := f
+			return &f, m.fail
+		}
+	}
+	return nil, m.fail
+}
+
+func (m *memStore) Installations(context.Context) ([]Installation, error) {
+	byID := map[string]*Installation{}
+	var order []string
+	for _, r := range m.recs {
+		p, _ := str(r["principal"])
+		if !strings.HasPrefix(p, "app:") {
+			continue
+		}
+		inst := byID[p]
+		if inst == nil {
+			inst = newInstallation(p)
+			byID[p] = inst
+			order = append(order, p)
+		}
+		seq, _ := seqOf(r)
+		tool, _ := str(r["tool"])
+		ts, _ := str(r["ts"])
+		inst.add(tool, 1, seq, seq, ts, ts)
+		target, _ := str(r["target"])
+		switch tool {
+		case "app.installation":
+			result, _ := str(r["result"])
+			var acc *string
+			if t, ok := str(r["target"]); ok {
+				acc = &t
+			}
+			inst.Action, inst.Status = nil, "active"
+			inst.last(acc, result)
+		case "provenance.verify":
+			if repo, _, ok := strings.Cut(target, "#"); ok && !in(inst.Repos, repo) {
+				inst.Repos = append(inst.Repos, repo)
+			}
+		}
+	}
+	sort.Strings(order)
+	out := []Installation{}
+	for _, p := range order {
+		inst := byID[p]
+		sort.Strings(inst.Repos)
+		out = append(out, *inst)
+	}
 	return out, m.fail
 }
