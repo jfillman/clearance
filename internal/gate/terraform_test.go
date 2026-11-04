@@ -349,7 +349,8 @@ func TestARegisteredPlanIsRecordedWithItsSubject(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The same through the HTTP route.
-	code, ans := call(serve(f), "POST", "/v1/clearances", "ci", tfChange(plan(nil, res("aws_db_instance.main", "aws_db_instance", update, "/tags/x")), map[string]any{"pr": 13}), nil)
+	other := map[string]any{"planDigest": canon.SHA256Hex([]byte("another plan"))}
+	code, ans := call(serve(f), "POST", "/v1/clearances", "ci", tfChange(plan(other, res("aws_db_instance.main", "aws_db_instance", update, "/tags/x")), map[string]any{"pr": 13}), nil)
 	if code != 200 || fmt.Sprint(ans["tier"]) != "3" || ans["subject"].(map[string]any)["kind"] != "terraform-plan" {
 		t.Fatal(code, ans)
 	}

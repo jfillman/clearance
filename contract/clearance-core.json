@@ -878,6 +878,25 @@
         ],
         "type": "object"
       },
+      "GateAppliedChange": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "address"
+        ],
+        "type": "object"
+      },
       "GateApproval": {
         "properties": {
           "at": {
@@ -1012,6 +1031,16 @@
           },
           "objects_count": {
             "type": "integer"
+          },
+          "outcome": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "owner": {
             "type": "string"
@@ -1344,6 +1373,108 @@
           "name",
           "namespace",
           "op"
+        ],
+        "type": "object"
+      },
+      "GateOutcome": {
+        "properties": {
+          "applied": {
+            "type": "boolean"
+          },
+          "at": {
+            "type": "string"
+          },
+          "exception": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "matched": {
+            "type": "boolean"
+          },
+          "plan_digest": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "applied",
+          "at",
+          "matched",
+          "plan_digest",
+          "seq"
+        ],
+        "type": "object"
+      },
+      "GateOutcomeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/GateAppliedChange"
+            },
+            "type": "array"
+          },
+          "error": {
+            "type": "string"
+          },
+          "finishedAt": {
+            "type": "string"
+          },
+          "planDigest": {
+            "type": "string"
+          },
+          "startedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "applied",
+          "finishedAt",
+          "planDigest",
+          "startedAt"
+        ],
+        "type": "object"
+      },
+      "GateOutcomeResult": {
+        "properties": {
+          "audit_seq": {
+            "type": "integer"
+          },
+          "change": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateChange"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "exception_seq": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "matched": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "audit_seq",
+          "change",
+          "exception_seq",
+          "matched"
         ],
         "type": "object"
       },
@@ -2855,6 +2986,111 @@
         "summary": "A person who could clear a holding change denies it, with a reason.",
         "x-clearance-auth": "bearer",
         "x-clearance-max-body": 65536
+      }
+    },
+    "/v1/clearances/{change_id}/outcome": {
+      "post": {
+        "operationId": "recordChangeOutcome",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "change_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GateOutcomeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateOutcomeResult"
+                }
+              }
+            },
+            "description": "the change with its outcome, and the records' seqs"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateErrorBody"
+                }
+              }
+            },
+            "description": "a malformed body, or a change that is not a terraform-plan (DG-SUBJECT)"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no bearer token, or one the authenticator refused"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateErrorBody"
+                }
+              }
+            },
+            "description": "the caller did not register this change"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateErrorBody"
+                }
+              }
+            },
+            "description": "no such change, or a Clearance that keeps no changes (DG-OFF)"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateErrorBody"
+                }
+              }
+            },
+            "description": "the change is not cleared, or its outcome is already recorded (DG-STATE)"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is over the route's cap"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The outcome of a cleared terraform-plan change's apply, once, from the principal that registered the change: whether it ran, the sha256 of the plan file applied, the resources from the apply's JSON log, when it started and finished, and its error. Recorded as deploy.outcome with matched (verified: the applied digest is the cleared one); a mismatch is also a deploy.exception of kind digest-mismatch. A second outcome is DG-STATE.",
+        "x-clearance-auth": "bearer",
+        "x-clearance-max-body": 4194304
       }
     },
     "/v1/clearances/{change_id}/wait": {

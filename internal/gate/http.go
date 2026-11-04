@@ -25,8 +25,10 @@ type Handler struct {
 	Log *slog.Logger
 }
 
-// Routes registers POST /v1/clearances, POST /v1/clearances/{change_id}/clear and .../deny.
+// Routes registers POST /v1/clearances, POST /v1/clearances/{change_id}/clear and .../deny, and a plan's
+// .../outcome (G-TF-2).
 func (h *Handler) Routes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /v1/clearances/{change_id}/outcome", h.outcome)
 	mux.HandleFunc("POST /v1/clearances", h.register)
 	mux.HandleFunc("POST /v1/clearances/{change_id}/clear", h.clear)
 	mux.HandleFunc("POST /v1/clearances/{change_id}/deny", h.deny)

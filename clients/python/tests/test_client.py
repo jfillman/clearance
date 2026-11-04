@@ -159,6 +159,35 @@ def test_the_gate(core):
     assert cc.CoreClient(core.url).keys().keys == []
 
 
+def test_a_plan_outcome(core):
+    """G-TF-2: a tag-only plan clears by policy; its registrant reports the apply once, and a second is DG-STATE."""
+    digest = "e6" * 32
+    plan = {"kind": "terraform-plan", "planDigest": digest, "planJsonDigest": "4f" * 32, "variableSetDigest": "1c" * 32,
+            "workspace": {"backend": "s3", "key": "network/lab/terraform.tfstate", "name": "default"},
+            "versions": {"terraform": "1.9.8", "providers": {}},
+            "summary": {"create": 0, "update": 1, "replace": 0, "destroy": 0, "destroyedAddresses": []},
+            "targeted": False,
+            "resources": [{"address": "aws_vpc.lab", "type": "aws_vpc", "actions": ["update"], "fields": ["/tags/Owner"]}]}
+    change = {"app": "network", "env": "lab", "repo": "jfillman/hangar-infra", "pr": 0, "head": HEAD,
+              "proposer": "user:dana", "owner": "group:default/team-gate", "paths": ["network/lab/main.tf"],
+              "checks": {"ci": "pass", "provenance": "not-agent"}, "subject": plan}
+    ci = cc.CoreClient(core.url, token=CI)
+    ch = ci.register_change(change)
+    assert ch.state == "cleared" and ci.register_change(change).id == ch.id
+    outcome = {"applied": True, "planDigest": "sha256:" + digest,
+               "changes": [{"address": "aws_vpc.lab", "action": "update", "status": "complete"}],
+               "startedAt": "2026-01-01T00:00:00Z", "finishedAt": "2026-01-01T00:00:09Z"}
+    got = ci.record_change_outcome(ch.id, outcome)
+    assert isinstance(got, cc.GateOutcomeResult) and got.matched is True and got.exception_seq is None
+    assert got.change.outcome.seq == got.audit_seq
+    with pytest.raises(cc.CoreRequestError) as e:
+        ci.record_change_outcome(ch.id, outcome)
+    assert e.value.status == 409
+    with pytest.raises(cc.CoreRequestError) as e:
+        cc.CoreClient(core.url, token="user:admin").record_change_outcome(ch.id, outcome)
+    assert e.value.status == 403
+
+
 def test_refusals_are_request_errors_not_outages(core):
     req = corpus_request(PR_OPEN_ALLOWED)
     for token, status in ((None, 401), ("someone/else", 403), ("user:alice", 403)):
