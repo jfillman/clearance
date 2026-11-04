@@ -1,0 +1,75 @@
+# Spike a: the three shapes, on the scratch Argo CD (namespace clearance-spike-argo).
+# control:     today's tenant shape (Helm source + $appsrc ref), unchanged, as the baseline render.
+# a1:          the plugin source IS the airframe chart; its value files name $appsrc paths the way a Helm source does.
+# a2:          the plugin REPLACES the Helm source: it sits on the values repo and fetches the chart at a pinned tag;
+#              a plain directory source and the ref source stay beside it.
+# deny:        the plugin exits non-zero (G-ARGO-4's denial / outage-hold path).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: spike-control, namespace: clearance-spike-argo}
+spec:
+  project: spike
+  destination: {server: https://kubernetes.default.svc, namespace: clearance-spike-argo}
+  sources:
+    - repoURL: https://github.com/jfillman/airframe.git
+      targetRevision: v0.3.168
+      path: charts/airframe-application
+      helm:
+        ignoreMissingValueFiles: true
+        valueFiles: [$appsrc/docs/spikes/g-argo-1/values/prod.yaml]
+    - {repoURL: https://github.com/jfillman/clearance.git, targetRevision: g-argo-1-design, ref: appsrc}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: spike-a1, namespace: clearance-spike-argo}
+spec:
+  project: spike
+  destination: {server: https://kubernetes.default.svc, namespace: clearance-spike-argo}
+  sources:
+    - repoURL: https://github.com/jfillman/airframe.git
+      targetRevision: v0.3.168
+      path: charts/airframe-application
+      plugin:
+        name: clearance-spike
+        parameters:
+          - {name: mode, string: chart-here}
+          - {name: valueFiles, string: $appsrc/docs/spikes/g-argo-1/values/prod.yaml}
+          - {name: dropKinds, string: Namespace}
+    - {repoURL: https://github.com/jfillman/clearance.git, targetRevision: g-argo-1-design, ref: appsrc}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: spike-a2, namespace: clearance-spike-argo}
+spec:
+  project: spike
+  destination: {server: https://kubernetes.default.svc, namespace: clearance-spike-prot}
+  sources:
+    - repoURL: https://github.com/jfillman/clearance.git
+      targetRevision: g-argo-1-design
+      path: docs/spikes/g-argo-1/values
+      plugin:
+        name: clearance-spike
+        parameters:
+          - {name: mode, string: values-here}
+          - {name: chartRepo, string: https://github.com/jfillman/airframe.git}
+          - {name: chartRevision, string: v0.3.168}
+          - {name: chartPath, string: charts/airframe-application}
+          - {name: valueFiles, string: prod.yaml}
+          - {name: dropKinds, string: Namespace}
+          - {name: grant, string: spike-grant}
+    - {repoURL: https://github.com/jfillman/clearance.git, targetRevision: g-argo-1-design, path: docs/spikes/g-argo-1/extra}
+    - {repoURL: https://github.com/jfillman/clearance.git, targetRevision: g-argo-1-design, ref: appsrc}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: spike-deny, namespace: clearance-spike-argo}
+spec:
+  project: spike
+  destination: {server: https://kubernetes.default.svc, namespace: clearance-spike-argo}
+  sources:
+    - repoURL: https://github.com/jfillman/clearance.git
+      targetRevision: g-argo-1-design
+      path: docs/spikes/g-argo-1/values
+      plugin:
+        name: clearance-spike
+        parameters: [{name: mode, string: deny}]
