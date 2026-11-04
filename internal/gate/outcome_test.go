@@ -8,11 +8,13 @@ package gate_test
 import (
 	"errors"
 	"fmt"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jfillman/clearance/internal/authn"
 	"github.com/jfillman/clearance/internal/canon"
 	"github.com/jfillman/clearance/internal/evidence"
 	"github.com/jfillman/clearance/internal/gate"
@@ -364,4 +366,25 @@ func TestTheOutcomeRoute(t *testing.T) {
 	if code, ans := call(mux, "POST", path, "ci", body, nil); code != 409 || ans["rule"] != "DG-STATE" {
 		t.Fatal(code, ans)
 	}
+}
+
+// FuzzOutcomeRoute: whatever the body, the outcome route answers (never panics), and a 200 is an outcome recorded
+// once.
+func FuzzOutcomeRoute(f *testing.F) {
+	f.Add(`{"applied":true,"planDigest":"` + planDigest + `","changes":[{"address":"aws_vpc.lab","action":"update","status":"complete"}],"startedAt":"2026-09-26T12:00:00Z","finishedAt":"2026-09-26T12:00:09Z"}`)
+	f.Add(`{"applied":false,"planDigest":"sha256:` + strings.Repeat("ab", 32) + `","startedAt":"2026-09-26T12:00:00Z","finishedAt":"2026-09-26T12:00:00Z","error":"x"}`)
+	f.Add(`{"applied":null}`)
+	f.Add(`{}{}`)
+	f.Fuzz(func(t *testing.T, body string) {
+		g := newGate(t)
+		a := g.register(t, "ci", tfChange(tagOnly, nil))
+		r := httptest.NewRequest("POST", "/v1/clearances/"+a.ID+"/outcome", strings.NewReader(body))
+		r = r.WithContext(authn.WithPrincipal(r.Context(), principals["ci"]))
+		w := httptest.NewRecorder()
+		serve(g).ServeHTTP(w, r)
+		n := len(g.records(t, "deploy.outcome"))
+		if (w.Code == 200) != (n == 1) || n > 1 {
+			t.Fatalf("%d with %d outcomes: %s", w.Code, n, w.Body)
+		}
+	})
 }

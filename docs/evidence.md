@@ -103,6 +103,10 @@ func Stored(r map[string]any) map[string]any
 
 - The core's own decision records (POST /access/v1/evaluation, the gate routes): the core's provider and
   `GatewayVerified` (the v0 verified set plus `provider`).
+- The change-bound outcome (POST /v1/clearances/{id}/outcome, G-TF-2): the core seals `deploy.outcome` itself with
+  `GatewayVerified` plus `matched` (the core compared the applied plan digest with the cleared one); `outcome`
+  {applied, digests, changes, started_at, finished_at, error} is the reporter's claim. A mismatch adds a
+  `deploy.exception` (`exception.kind: digest-mismatch`, `expected`, `observed`; `coverage: out-of-band-detected`).
 - A registered provider's own records (POST /v1/records: session.open, run.launch, run.finish, deploy.outcome,
   ...): that provider's name and version, and `evidence.ProviderVerified` (only `provider` is verified; everything
   the provider says is claimed). Pass the provider's `subject` in the event. A `tool.call` record from a provider is
@@ -182,7 +186,7 @@ The six questions against those records:
 | 2 | Who or what initiated it, with confidence | **Yes, strongest at runtime.** principal + agent + session + task_id are verified on every record (seq 0, 3, 16, 139); 141 adds a provenance level for the PR, as a result string | `principal`, `agent`, `task_id`, `initiator`, `provenance` {level, signals} | both; the gateway has the strongest signal |
 | 3 | Was it authorized before it went live: policy, tier, approver, approver is not author | **Partly.** decision, rule and tier are verified (seq 3: deny R006, tier 1); 336 says "cleared by policy" in `result`. No policy version, no approver identity (405's principal is `app:177375213`, the App, not a person) | `policy` {ref, engine, version}, `rules`, `reason`, `approvals` [{sub, iss}], `token` | both; the shared core |
 | 4 | Was it tested: CI run and results | **No.** Nothing in any record | a provider's claimed `outcome`/`source` from the PR and pipeline (CI attestation reference) | the deployment gate, from the PR and pipeline |
-| 5 | What actually deployed: sync result with a digest matching the cleared one | **No.** 405 says the GitHub deployment was approved, not what landed | `outcome` {applied, observed_revision, digests, health} on deploy.outcome, compared with the cleared `subject` | the deployment gate (R-1d deploy.outcome, G-ARGO) |
+| 5 | What actually deployed: sync result with a digest matching the cleared one | **No.** 405 says the GitHub deployment was approved, not what landed | `outcome` {applied, observed_revision, digests, health} on deploy.outcome, compared with the cleared `subject`; for a Terraform plan the core compares them itself (`matched`, G-TF-2) and a mismatch is a `deploy.exception` | the deployment gate (R-1d deploy.outcome, G-ARGO; G-TF-2's outcome route) |
 | 6 | Rollback available and whether it was used | **No** | `outcome.rollback` {available, used, to} | the deployment gate |
 
 Result, as the architecture predicted: the runtime record answers 2 well and 3 in part, and has nothing for 1, 4,

@@ -175,13 +175,13 @@ For every change to a protected environment:
    Terraform, a `subject` of kind `terraform-plan` instead, whose `planDigest` (the saved plan file's sha256) becomes
    the change's `tree_digest` ([gate.md](gate.md#the-terraform-plan-subject-g-tf-1)). That digest is the subject the
    clearance binds to; a placeholder (64 copies of one digit, or sha256 of nothing) binds to nothing and is flagged
-   or refused. Registration is idempotent by repo, PR and head; a new head on the
-   same PR supersedes the old one. The answer is the change as recorded: `id`, `tier`, `reasons`, `requirement`,
+   or refused. Registration is idempotent by repo, PR and head (a plan: by repo, workspace and plan digest,
+   G-TF-2); a new head on the same PR supersedes the old one. The answer is the change as recorded: `id`, `tier`, `reasons`, `requirement`,
    `state`, `tree_digest`, `target`, `expires_at`.
 2. **Hold while `state` is `holding`.** Tiers 0 and 1 clear by policy at once; tier 2 waits for one person from the
    owner group, tier 3 for one owner and one outside, never the proposer. Nothing is applied while the change holds.
-   Today the provider learns the state by sending the same registration again (see
-   [Not served yet](#not-served-yet)).
+   Wait on `GET /v1/clearances/{id}/wait?state=holding&timeout=60` (C-10): it answers as soon as the state
+   changes, with the token once cleared.
 3. **Release on `cleared`, once, and only the cleared digest.** Re-hash what is about to be applied and compare it
    with `tree_digest`; if they differ, do not apply (a push after clearing is a new head, so a new change). Apply
    exactly once.
@@ -209,9 +209,9 @@ For every change to a protected environment:
 
 | What | Route or piece | Why a provider needs it | Interim |
 | --- | --- | --- | --- |
-| Wait for a decision | `GET /v1/clearances/{id}/wait?timeout=` (G-TF-2, shared with G-ARGO-5) | A held change can wait days; the PreSync hook and `clearance hold` need to block on it | Poll `GET /v1/clearances/{id}` on the core (below) every few seconds: it answers the state and, once cleared, the token, and writes no change row. The long-poll is G-TF-2's, on the same route's `/wait` |
+| Wait for a decision | `GET /v1/clearances/{id}/wait?state=&timeout=` (C-10, used by G-TF and G-ARGO-5) | A held change can wait days; the PreSync hook and `clearance hold` need to block on it | **Built** (C-10): long-polls up to 60 s for any subject kind and answers the state and, once cleared, the token |
 | Read a change | `GET /v1/clearances/{id}` on the core | A provider that did not register the change (the grant-sync agent, a reconciler) learns its state and its token | **Built** (C-1): for every registered provider and the verifier that registered the change; clearance-api's feed readers read a cluster's cleared changes there |
-| Change-bound outcome | `POST /v1/clearances/{id}/outcome` (G-TF-2) | The core should compare the applied digest with the cleared one, write `matched`, and file `deploy.exception` on a mismatch | `deploy.outcome` through `POST /v1/records`, which is all claimed: the core checks neither that `change.id` exists nor that the digest matches |
+| Change-bound outcome | `POST /v1/clearances/{id}/outcome` (G-TF-2) | The core compares the applied digest with the cleared one, writes `matched`, and files `deploy.exception` (digest-mismatch) on a mismatch | **Built** for terraform-plan changes, from the registrant ([gate.md](gate.md#hold-release-and-outcome-for-a-plan-g-tf-2-built)). A manifest change's provider still posts `deploy.outcome` through `POST /v1/records`, all claimed |
 | Signed clearance token | issued on `deploy.clear` (C-1) | Lets a provider (and admission) verify offline that a release binds this digest, without trusting the poll answer | **Built** (C-1): a DSSE envelope and its JWT projection, verified against `GET /v1/keys` ([core.md](core.md#the-clearance-token)) |
 | A group directory in the Go core | `gate.Service.Directory` (nil from `core.Build`) | Without it nobody is in any group, so no person can clear a tier-2 or tier-3 change on `clearance core` | The harness sets its own directory on the built core; a deployment needs R-2 to wire one (the Python core reads Tower's catalog) |
 | Conformance in records | `provider.conformance` (reserved in the v1 schema) | A record says which suite its writer passed | **Built** (C-1): `CLEARANCE_PROVIDERS` entries take `conformance` (`clearance-conformance/v1@2026-11-03`: the report's `suite` and the date it passed), stamped on every record the provider writes |

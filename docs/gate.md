@@ -132,8 +132,9 @@ something; auditors see all. The run that drafted the change links by `task_id` 
 Gateway (writes, delegate model): `POST /v1/clearances` (the check: register or re-evaluate a change; the caller is a
 verifier, like `/v1/provenance`), `POST /v1/clearances/{id}/clear`, `POST /v1/clearances/{id}/deny` `{reason}`.
 The core also answers `GET /v1/clearances/{id}` (C-1) to a registered provider and to the verifier that registered
-the change: the state and the live clearance token, the read a gate provider waits on (the long-poll wait,
-`.../{id}/wait`, is G-TF-2's on this route).
+the change: the state and the live clearance token, the read a gate provider waits on (and its long-poll,
+`.../{id}/wait`, C-10), and `POST /v1/clearances/{id}/outcome` (G-TF-2): a terraform-plan change's apply result, from
+its registrant.
 clearance-api (reads): `GET /v1/clearances?app&env&state&since`, `GET /v1/clearances/{id}`, `GET /v1/clearances/counts`,
 and the policy in force per environment `GET /v1/clearance-policy?app&env` (the tiers and approvers that apply).
 
@@ -761,9 +762,10 @@ is `CLEARANCE_GATE_UNBOUND_TREE` (chart `gate.unboundTree`):
 
 ## The terraform-plan subject (G-TF-1)
 
-Status: **Built** in the core (classification, the request and the record); **not built**: anything that produces a
-plan subject. The plan parser and CI step that post it (G-TF-2), the hold between plan and apply, and detection of
-applies that went around the gate come next; nothing in Glidepath or the lab's `jfillman/hangar-infra` posts one yet.
+Status: **Built** in the core (classification, the request and the record); the hold, release and outcome on the
+core API are G-TF-2's (next section, Built). **Not built**: anything that produces a plan subject. The CLI and CI
+step that post it (G-TF-3) and detection of applies that went around the gate (G-TF-5) come next; nothing in
+Glidepath or the lab's `jfillman/hangar-infra` posts one yet.
 
 A change's **subject** is what it binds to. Beside the Kubernetes object diff (kind `manifest-tree`, described by
 `treeDigest` and `objects`) and an agent definition's release (kind `definition`), a change can now be a saved
@@ -861,3 +863,76 @@ plan). A manifest change's subject is `{kind: manifest-tree, digests: {sha256, g
 `tree_digest`. clearance-api returns the stored change as it is, so the list shows `subject.kind` for every change
 registered from this release on (and for older ones once they are written again). A cleared plan's clearance token
 (C-1) has `subjects.kind: terraform-plan` and binds the plan's digest as `subjects.plan_digest` (no `tree_root`).
+
+## Hold, release and outcome for a plan (G-TF-2, Built)
+
+Status: **Built** in the core (`internal/gate/outcome.go`, `terraform.go`, `request.go`); no caller yet. The CLI that
+holds, releases and reports (`clearance hold`, `release`, `report`) is G-TF-3; the lab workflow is G-TF-4.
+
+**Registration is idempotent by repository, workspace and plan.** A terraform-plan change's id is `ch-` and the first
+16 hex of sha256 over the JSON array `["terraform-plan", repo, backend, key, name, planDigest]`, not of
+`repo#pr@head`. The same saved plan registered again (a re-run, another job, the merge commit) is the same change:
+a holding one is re-evaluated with the new checks, a decided one returned as it stands, with one `deploy.request`.
+Another workspace, state key or plan is another change, so two workspaces planned at one commit no longer collide.
+Superseding is unchanged: a new head on the same pull request supersedes the heads still holding.
+
+**The hold is 24 hours.** A plan goes stale as the state moves, so a terraform-plan change expires one day after it
+is registered (`GatePolicy.PlanTTLDays`, `DefaultPlanTTLDays = 1`; `GET /v1/clearance-policy` serves
+`terraform.ttlHours: 24`). A gitops change keeps the 7-day TTL. A `clearance.yaml` `ttlDays` still only shortens:
+the plan's TTL is the shorter of the two. The expiry loop writes `deploy.expire` (`result: "not cleared within 24
+hours"`, principal `policy`), and the token horizon (C-1) follows the same TTL after the clear.
+
+**Waiting and release.** There is no plan-specific wait route: the provider long-polls C-10's
+`GET /v1/clearances/{id}/wait?state=holding&timeout=60` as the registering principal, and on `cleared` the answer
+carries the clearance token, whose `subjects.kind` is `terraform-plan` and `subjects.plan_digest` the plan's digest
+(`token.Expect.PlanDigest` refuses a token for another plan). The release step re-hashes the saved plan and applies
+only when it equals the cleared digest (G-TF-3).
+
+**The outcome.** `POST /v1/clearances/{change_id}/outcome`, for the principal that registered the change only (the
+same workflow's OIDC subject, or the same verifier), strictly decoded (unknown fields refused, 4 MiB cap):
+
+```json
+{"applied": true, "planDigest": "sha256:<the saved plan file that was applied>",
+ "changes": [{"address": "aws_vpc.lab", "action": "update", "status": "complete"}],
+ "startedAt": "2026-11-03T12:00:00Z", "finishedAt": "2026-11-03T12:00:09Z", "error": ""}
+```
+
+`changes` come from `terraform apply -json`'s apply hooks (address, `hook.action`: noop, create, read, update,
+replace, delete, move, import, remove, forget; `status` complete or errored), at most 2000; no values. `error` is the
+apply's error (at most 4 KiB), when it failed. `finishedAt` is not before `startedAt` nor more than 5 minutes ahead
+of the core's clock.
+
+The core compares `planDigest` with the digest the change was cleared for and, in one transaction:
+
+- writes `deploy.outcome` (principal: the registrant; `decision` null) with **`matched`** (verified: the core's
+  comparison), `outcome {applied, digests: {sha256: <applied>}, changes, started_at, finished_at, error}` (claimed:
+  the reporter's), `destination {environment, cluster?}`, and the change summary whose `tree` is the cleared digest;
+- on a mismatch also writes **`deploy.exception`** of kind `digest-mismatch`, in C-6's shape: `exception {kind,
+  expected: "sha256:<cleared>", observed: "sha256:<applied>", detected_at, detail}` (the detail names the outcome's
+  seq), `coverage: out-of-band-detected`, the change named by `change.id`;
+- keeps the outcome on the change: `outcome {seq, applied, matched, plan_digest, at, exception}`.
+
+The answer is `{change, matched, audit_seq, exception_seq}`. A failed apply is an outcome too (`applied: false`, its
+error recorded).
+
+**The outcome's state machine.** One outcome per change, and only for a cleared one:
+
+| Situation | Answer |
+| --- | --- |
+| a cleared terraform-plan change, first outcome, from its registrant | 200; `deploy.outcome` (and `deploy.exception` on a mismatch) |
+| a second outcome for the same change, matched or not | 409 `DG-STATE` ("already recorded (seq N)") |
+| a holding, denied, expired or superseded change | 409 `DG-STATE` |
+| a caller that did not register the change | 403 `DG-FORBIDDEN` |
+| a manifest-tree or definition change | 400 `DG-SUBJECT` (its provider reports `deploy.outcome` through `POST /v1/records`) |
+| no such change; the gate off | 404 `DG-UNKNOWN`; 404 `DG-OFF` |
+| a malformed body | 400 |
+
+Every refusal records nothing. Go client `ChangeOutcome`, Python client `record_change_outcome`.
+
+**With C-6 (clearance#59, not merged when this was built).** C-6's state machine moves a change named by a
+`deploy.exception` from cleared to `exception` and revokes its token. This route writes the record in C-6's shape but
+does not move the state on its own: the move needs C-6's `writer.move` and the `exception` state. Once both are on
+main, the mismatch branch of `Service.Outcome` calls `w.move(c, StateException, "exception: digest-mismatch", ...)`
+and sets `c.Ended`, a few lines; a second outcome stays `DG-STATE` either way (the change then is in `exception`, and
+has an outcome). Until then a mismatched change stays `cleared` with its outcome recorded and its token live until
+its horizon.
