@@ -3,7 +3,7 @@
   "$id": "https://clearance.hangarplatform.dev/schemas/evidence/v1.json",
   "title": "clearance.evidence/v1",
   "description": "One Clearance evidence record (docs/evidence.md). Flat: every field is a top-level key, grouped by x-clearance-group into Identities, Source, Target, Provenance, Decision, Outcome, Coverage, Assurance, Intent and Integrity, and tagged verified or claimed by the record's own lists. Fields not listed here are allowed and are claimed unless the writer verified them. The chain rule is the same for every version.",
-  "x-clearance-revision": 2,
+  "x-clearance-revision": 3,
   "x-clearance-groups": [
     "identities",
     "source",
@@ -507,10 +507,224 @@
       "x-clearance-group": "outcome",
       "description": "Optional: deployment result, observed revision and digest, health, rollback."
     },
+    "exception": {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "out-of-band",
+            "drift",
+            "untraced-apply",
+            "digest-mismatch"
+          ]
+        },
+        "objects": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "kind",
+              "name"
+            ]
+          }
+        },
+        "addresses": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "actor": {
+          "type": "string"
+        },
+        "expected": {
+          "type": "string"
+        },
+        "observed": {
+          "type": "string"
+        },
+        "state": {
+          "type": "object",
+          "properties": {
+            "backend": {
+              "type": "string"
+            },
+            "key": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          }
+        },
+        "detected_at": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        }
+      },
+      "x-clearance-group": "outcome",
+      "description": "Revision 3 (C-6): on deploy.exception, what landed outside a clearance and how it was found: out-of-band (objects), drift (addresses or objects), untraced-apply (actor), digest-mismatch (expected, observed; the record names the change). Claimed; the core sets coverage from the kind."
+    },
     "coverage": {
       "type": "string",
       "x-clearance-group": "coverage",
       "description": "How the event was observed: authorized-and-verified, observed-not-attributed, out-of-band-detected or coverage-unavailable (an enum in v1; v0-draft rows carry what they were written with)."
+    },
+    "outage": {
+      "type": "object",
+      "required": [
+        "from",
+        "to"
+      ],
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "x-clearance-group": "coverage",
+      "description": "Revision 3 (C-6): on deploy.degraded, the window the provider could not reach the core (RFC 3339). Claimed."
+    },
+    "outage_policy": {
+      "type": "object",
+      "required": [
+        "action",
+        "source",
+        "conforms"
+      ],
+      "properties": {
+        "action": {
+          "enum": [
+            "allow-and-record",
+            "hold"
+          ]
+        },
+        "source": {
+          "enum": [
+            "change",
+            "baseline",
+            "unknown-tier"
+          ]
+        },
+        "conforms": {
+          "type": "boolean"
+        }
+      },
+      "x-clearance-group": "coverage",
+      "description": "Revision 3 (C-6): on deploy.degraded, added and verified by the core: the outage policy's action for the change (its registered outage, the baseline for the claimed tier, or hold for an unknown tier) and whether the provider's decision conformed."
+    },
+    "breakglass": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^bg-[0-9a-f]{16}$"
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "cluster",
+            "env"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "cluster": {
+              "type": "string"
+            },
+            "env": {
+              "type": "string"
+            },
+            "app": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "ttl_seconds": {
+              "type": "integer"
+            },
+            "expires_at": {
+              "type": "string"
+            },
+            "opened_by": {
+              "type": "string"
+            },
+            "open_seq": {
+              "type": "integer"
+            },
+            "closed_by": {
+              "type": "string"
+            }
+          }
+        }
+      ],
+      "x-clearance-group": "coverage",
+      "description": "Revision 3 (C-6), verified: on breakglass.open and breakglass.close the window {id, cluster, env, app, ...}; on a deploy.exception or deploy.degraded inside an open window, the window's id."
+    },
+    "window": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "x-clearance-group": "coverage",
+      "description": "Revision 3 (C-6): on breakglass.close, when the window was open. Verified."
+    },
+    "changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "seq": {
+            "type": "integer"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "target": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ts": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          }
+        }
+      },
+      "x-clearance-group": "coverage",
+      "description": "Revision 3 (C-6): on breakglass.close, the records the store holds about the window's environment written while it was open (at most 200; reported is the full count, truncated says when the list or the scan was cut). Verified."
+    },
+    "reported": {
+      "type": "integer",
+      "x-clearance-group": "coverage",
+      "description": "Revision 3 (C-6): on breakglass.close, how many records the window had. Verified."
+    },
+    "truncated": {
+      "type": "boolean",
+      "x-clearance-group": "coverage",
+      "description": "Revision 3 (C-6): on breakglass.close, whether changes was cut. Verified."
+    },
+    "limitations": {
+      "type": "string",
+      "x-clearance-group": "coverage",
+      "description": "Revision 3 (C-6): on breakglass.close, what the record store cannot know about the window. Verified."
     },
     "assurance": {
       "enum": [

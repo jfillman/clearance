@@ -60,6 +60,7 @@ the inbox, trigger history, results), so the Go API serves only Clearance's own 
 | getContract | `GET /v1/contract` | **ported**; an OpenAPI 3.1 document since C-10, naming `x-clearance-core` (`CLEARANCE_CORE_URL`) and `x-clearance-gateway` |
 | (healthz, readyz) | `GET /healthz`, `/readyz` | **ported**; readyz checks the database |
 | (new) listDefinitions | `GET /v1/definitions` | **new**: the definitions Clearance holds, api.py's agent view without the gateway's `hold` |
+| (new) listExceptions | `GET /v1/exceptions` | **new** (C-6): the packet's exceptions: every `deploy.exception` (`kind=` out-of-band, drift, untraced-apply, digest-mismatch), `deploy.degraded`, `breakglass.open`, `breakglass.close`, and every `coverage-unavailable` record; `tool`, `kind`, `app`, `since`, `until`, `limit`, `after`; newest first, cursor `seq`, scoped like the evidence list ([gate.md](gate.md#the-packets-exceptions)) |
 | (new) getKeys | `GET /v1/keys` | **new** (C-1): the clearance token verification keys, a JWKS, from `clearance_signing_keys`; public |
 | (new) getGrantFeed | `GET /v1/grant-feeds/{cluster}` | **new** (C-10): the cluster's **signed** grant feed, for grant-sync (below) |
 | (new) listInstallations | `GET /v1/github/installations` | **new** (C-10): the GitHub App's installations as the records name them |
@@ -197,7 +198,9 @@ plus the authenticator's (`authn.EnvVars`: `CLEARANCE_AUDIENCE`, `CLEARANCE_OIDC
 
 The schema has the primary key on `seq`, `clearance_evidence_receipt`, `clearance_evidence_app` (C-10: the App
 installations' records, `((record->>'principal'), seq) WHERE principal LIKE 'app:%'`, behind
-`/v1/github/installations` and the installation filter) and the `clearance_changes` indexes; this package adds none
+`/v1/github/installations` and the installation filter) and the `clearance_changes` indexes and (C-6)
+`clearance_evidence_exceptions`, a partial index on `seq` whose predicate `GET /v1/exceptions` repeats word for word
+(`TestExceptionsUseTheIndex`); this package adds none
 (the core owns the schema). The stream reads the primary key's range above its cursor; the signed feed is one row
 of `clearance_feeds` by its primary key. The list is paged by `seq DESC` on the primary key and every filter is
 applied on the way; at the lab's size that is well inside the statement timeout. Before the chain is large, the

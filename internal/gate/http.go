@@ -2,6 +2,7 @@ package gate
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"github.com/jfillman/clearance/internal/vocab"
 	"io"
@@ -32,6 +33,56 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/clearances", h.register)
 	mux.HandleFunc("POST /v1/clearances/{change_id}/clear", h.clear)
 	mux.HandleFunc("POST /v1/clearances/{change_id}/deny", h.deny)
+	mux.HandleFunc("POST /v1/breakglass", h.openBreakglass)
+	mux.HandleFunc("POST /v1/breakglass/{id}/close", h.closeBreakglass)
+}
+
+func (h *Handler) openBreakglass(w http.ResponseWriter, r *http.Request) {
+	p, ok := authn.From(r.Context())
+	if !ok {
+		httpjson.Write(w, http.StatusUnauthorized, map[string]any{"error": "a bearer token is required"})
+		return
+	}
+	raw, err := io.ReadAll(io.LimitReader(r.Body, MaxBreakglassBody+1))
+	if err != nil {
+		httpjson.Write(w, http.StatusBadRequest, map[string]any{"error": "the body could not be read"})
+		return
+	}
+	if len(raw) > MaxBreakglassBody {
+		httpjson.Write(w, http.StatusRequestEntityTooLarge, map[string]any{"error": "body too large"})
+		return
+	}
+	var req BreakglassRequest
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil || dec.More() {
+		msg := "the body is {reason, ttl, cluster, env, app?}"
+		if err != nil {
+			msg += ": " + err.Error()
+		}
+		httpjson.Write(w, http.StatusBadRequest, map[string]any{"error": msg})
+		return
+	}
+	out, err := h.Svc.OpenBreakglass(r.Context(), p, req, r.Header.Get(vocab.Get().OnBehalfOfHeader))
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, out)
+}
+
+func (h *Handler) closeBreakglass(w http.ResponseWriter, r *http.Request) {
+	p, ok := authn.From(r.Context())
+	if !ok {
+		httpjson.Write(w, http.StatusUnauthorized, map[string]any{"error": "a bearer token is required"})
+		return
+	}
+	out, err := h.Svc.CloseBreakglass(r.Context(), p, r.PathValue("id"), r.Header.Get(vocab.Get().OnBehalfOfHeader))
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, out)
 }
 
 func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
@@ -105,11 +156,14 @@ func (h *Handler) fail(w http.ResponseWriter, err error) {
 	var ge *Error
 	var bc *BadChange
 	var nv *NotVerifier
+	var br *BadReport
 	switch {
 	case errors.As(err, &nv):
 		httpjson.Write(w, http.StatusForbidden, map[string]any{"error": nv.Message})
 	case errors.As(err, &bc):
 		httpjson.Write(w, http.StatusBadRequest, map[string]any{"error": bc.Message})
+	case errors.As(err, &br):
+		httpjson.Write(w, http.StatusBadRequest, map[string]any{"error": br.Message})
 	case errors.As(err, &ge):
 		httpjson.Write(w, ge.Status, ErrorBody{ge.Message, ge.Rule, ge.Hint})
 	default:

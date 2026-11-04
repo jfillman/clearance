@@ -152,6 +152,14 @@ app.kubernetes.io/component: {{ .component }}
 - name: CLEARANCE_TRUSTED_REGISTRIES
   value: {{ include "clearance.csv" . | quote }}
 {{- end }}
+{{- with .Values.gate.protectedEnvironments }}
+- name: CLEARANCE_PROTECTED_ENVIRONMENTS
+  value: {{ include "clearance.csv" . | quote }}
+{{- end }}
+{{- with .Values.gate.breakglassMaxTTL }}
+- name: CLEARANCE_BREAKGLASS_MAX_TTL
+  value: {{ . | quote }}
+{{- end }}
 {{- with .Values.gate.unboundTree }}
 - name: CLEARANCE_GATE_UNBOUND_TREE
   value: {{ . | quote }}
