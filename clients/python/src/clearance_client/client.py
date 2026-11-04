@@ -241,6 +241,15 @@ class CoreClient:
         return self._call("denyChange", {"reason": reason}, params={"change_id": change_id},
                           on_behalf_of=on_behalf_of, retry=_RETRY_UNSENT)
 
+    def get_clearance(self, change_id: str) -> m.GateClearanceAnswer:
+        """A change's state and its live clearance token (None when it has none); the caller is a registered
+        provider or the verifier that registered the change."""
+        return self._call("getClearance", None, params={"change_id": change_id}, retry=_RETRY_ANY)
+
+    def keys(self) -> m.TokenJWKS:
+        """The clearance token verification keys (a JWKS); public."""
+        return self._call("getKeys", None, retry=_RETRY_ANY)
+
     def verify_provenance(self, request: Mapping[str, Any]) -> m.ProvenanceVerdict:
         """A pull request's agent-identity and agent-scope verdicts; the caller is a verifier."""
         return self._call("verifyProvenance", request, retry=_RETRY_ANY)

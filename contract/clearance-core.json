@@ -857,10 +857,16 @@
           "at": {
             "type": "string"
           },
+          "iss": {
+            "type": "string"
+          },
           "person": {
             "type": "string"
           },
           "role": {
+            "type": "string"
+          },
+          "sub": {
             "type": "string"
           },
           "via": {
@@ -1038,6 +1044,12 @@
           "target": {
             "type": "string"
           },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "tier": {
             "type": "integer"
           },
@@ -1085,9 +1097,87 @@
           "state",
           "superseded_by",
           "target",
+          "task_id",
           "tier",
           "tree_digest",
           "updated_at"
+        ],
+        "type": "object"
+      },
+      "GateClearanceAnswer": {
+        "properties": {
+          "app": {
+            "type": "string"
+          },
+          "cleared_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cluster": {
+            "type": "string"
+          },
+          "env": {
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "Python datetime.isoformat() of an aware time",
+            "type": "string"
+          },
+          "head": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "pr": {
+            "type": "integer"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tier": {
+            "type": "integer"
+          },
+          "token": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateTokenView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tree_digest": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "app",
+          "cleared_by",
+          "cluster",
+          "env",
+          "expires_at",
+          "head",
+          "id",
+          "pr",
+          "repo",
+          "state",
+          "task_id",
+          "tier",
+          "token",
+          "tree_digest"
         ],
         "type": "object"
       },
@@ -1249,6 +1339,37 @@
           "outsideGroups",
           "owner",
           "ownerGroup"
+        ],
+        "type": "object"
+      },
+      "GateTokenView": {
+        "properties": {
+          "dsse": {
+            "$ref": "#/components/schemas/TokenEnvelope"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "issued_at": {
+            "type": "string"
+          },
+          "jwt": {
+            "type": "string"
+          },
+          "key_id": {
+            "type": "string"
+          },
+          "nonce": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "dsse",
+          "expires_at",
+          "issued_at",
+          "jwt",
+          "key_id",
+          "nonce"
         ],
         "type": "object"
       },
@@ -1779,6 +1900,92 @@
         ],
         "type": "object"
       },
+      "TokenEnvelope": {
+        "properties": {
+          "payload": {
+            "type": "string"
+          },
+          "payloadType": {
+            "type": "string"
+          },
+          "signatures": {
+            "items": {
+              "$ref": "#/components/schemas/TokenSignature"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "payload",
+          "payloadType",
+          "signatures"
+        ],
+        "type": "object"
+      },
+      "TokenJWK": {
+        "properties": {
+          "alg": {
+            "type": "string"
+          },
+          "crv": {
+            "type": "string"
+          },
+          "kid": {
+            "type": "string"
+          },
+          "kty": {
+            "type": "string"
+          },
+          "use": {
+            "type": "string"
+          },
+          "x": {
+            "type": "string"
+          },
+          "y": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "alg",
+          "crv",
+          "kid",
+          "kty",
+          "use",
+          "x",
+          "y"
+        ],
+        "type": "object"
+      },
+      "TokenJWKS": {
+        "properties": {
+          "keys": {
+            "items": {
+              "$ref": "#/components/schemas/TokenJWK"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "keys"
+        ],
+        "type": "object"
+      },
+      "TokenSignature": {
+        "properties": {
+          "keyid": {
+            "type": "string"
+          },
+          "sig": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "keyid",
+          "sig"
+        ],
+        "type": "object"
+      },
       "WebhookAnswer": {
         "properties": {
           "result": {
@@ -2036,6 +2243,81 @@
         "summary": "The clearance-gate check registers (or re-evaluates) a change to a protected environment; the caller is a verifier (CLEARANCE_VERIFIERS).",
         "x-clearance-auth": "bearer",
         "x-clearance-max-body": 4194304
+      }
+    },
+    "/v1/clearances/{change_id}": {
+      "get": {
+        "operationId": "getClearance",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "change_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateClearanceAnswer"
+                }
+              }
+            },
+            "description": "the change and its token"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no bearer token, or one the authenticator refused"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateErrorBody"
+                }
+              }
+            },
+            "description": "no such change, or a Clearance that keeps no changes (DG-OFF)"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the store could not record it: treat as unreachable (fail closed)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "A change's state and its live clearance token (a DSSE envelope and its JWT projection; null when the change is not cleared, its token was revoked by a new head, or it lapsed). For a registered provider and the verifier that registered the change; people read changes through clearance-api. A token with less than half its life left is re-issued (same nonce) before it is returned.",
+        "x-clearance-auth": "bearer",
+        "x-clearance-max-body": 65536
       }
     },
     "/v1/clearances/{change_id}/clear": {
@@ -2635,6 +2917,37 @@
         "summary": "The Clearance GitHub App's webhook: verified by its signature, queued, answered at once.",
         "x-clearance-auth": "github-signature",
         "x-clearance-max-body": 26214400
+      }
+    },
+    "/v1/keys": {
+      "get": {
+        "operationId": "getKeys",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenJWKS"
+                }
+              }
+            },
+            "description": "the key set"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the store could not record it: treat as unreachable (fail closed)"
+          }
+        },
+        "security": [],
+        "summary": "The clearance token verification keys, a JWKS (EC P-256, ES256, kid = the RFC 7638 thumbprint): the key in use and keys retired within the last 24 hours. Public: a verifier checks tokens offline with it.",
+        "x-clearance-auth": "none",
+        "x-clearance-max-body": 65536
       }
     },
     "/v1/provenance": {

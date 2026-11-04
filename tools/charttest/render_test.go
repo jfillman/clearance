@@ -414,3 +414,41 @@ func TestRefused(t *testing.T) {
 		})
 	}
 }
+
+// The signing key is an existing Secret, mounted read-only for the core only; the api never sees it, and the feed
+// readers reach the api as <principal>=<cluster>.
+func TestTheSigningKeyIsTheCoresAlone(t *testing.T) {
+	objs := render(t, "-f", valuesFile("full-values.yaml"))
+	core, api := find(objs, "Deployment", "t-clearance-core"), find(objs, "Deployment", "t-clearance-api")
+	e := env(container(t, core))
+	if e["CLEARANCE_SIGNING_KEY_FILE"] != "/etc/clearance/signing/signing-key.pem" || e["CLEARANCE_TOKEN_TTL"] != "10m" {
+		t.Errorf("core env %q %q", e["CLEARANCE_SIGNING_KEY_FILE"], e["CLEARANCE_TOKEN_TTL"])
+	}
+	var vol obj
+	for _, v := range get(core, "spec", "template", "spec", "volumes").([]any) {
+		if get(v, "name") == "signing-key" {
+			vol = v.(obj)
+		}
+	}
+	if get(vol, "secret", "secretName") != "clearance-signing-key" || fmt.Sprint(get(vol, "secret", "defaultMode")) != "256" ||
+		get(vol, "secret", "items", 0, "key") != "signing-key.pem" {
+		t.Errorf("signing volume %v", vol)
+	}
+	for _, v := range get(api, "spec", "template", "spec", "volumes").([]any) {
+		if get(v, "name") == "signing-key" || get(v, "secret", "secretName") == "clearance-signing-key" {
+			t.Error("the api mounts the signing key")
+		}
+	}
+	ae := env(container(t, api))
+	if _, ok := ae["CLEARANCE_SIGNING_KEY_FILE"]; ok {
+		t.Error("the api is told where the signing key is")
+	}
+	if ae["CLEARANCE_API_FEED_READERS"] != "hangar-prod/clearance-system/clearance-agent=hangar-prod" {
+		t.Errorf("feed readers %q", ae["CLEARANCE_API_FEED_READERS"])
+	}
+	// Without a Secret named, nothing is mounted and no tokens are issued.
+	min := find(render(t, "-f", valuesFile("minimal-values.yaml")), "Deployment", "t-clearance-core")
+	if _, ok := env(container(t, min))["CLEARANCE_SIGNING_KEY_FILE"]; ok {
+		t.Error("a key file without a Secret")
+	}
+}

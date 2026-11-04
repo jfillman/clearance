@@ -30,12 +30,17 @@ func (t *PyTime) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// Approval is one person's clearance: {person, via, role, at}.
+// Approval is one person's clearance: {person, via, role, at, sub, iss}. sub and iss name the person at their
+// identity provider: the ID token's subject and issuer when the person signed in themselves; the person as the
+// delegate named them and "delegate:<delegate>" when a delegate (a portal) acted for them. Approvals recorded
+// before C-1 have neither.
 type Approval struct {
 	Person string  `json:"person"`
 	Via    *string `json:"via"`
 	Role   string  `json:"role"`
 	At     string  `json:"at"`
+	Sub    string  `json:"sub,omitempty"`
+	Iss    string  `json:"iss,omitempty"`
 }
 
 // Deployment is a GitHub Actions deployment waiting on a change (github_app.py's deployment protection rule).
@@ -66,6 +71,7 @@ type Change struct {
 	Proposer         string            `json:"proposer"`
 	ProposerKind     string            `json:"proposer_kind"`
 	Agent            *string           `json:"agent"`
+	TaskID           *string           `json:"task_id"`
 	Owner            string            `json:"owner"`
 	Protected        bool              `json:"protected"`
 	TreeDigest       string            `json:"tree_digest"`
@@ -149,7 +155,7 @@ func (c *Change) RequirementObj() *Requirement { return c.Requirement }
 func Open(req ChangeRequest, cl Classification, now time.Time, registeredBy string) *Change {
 	reasons := append([]Reason(nil), cl.Reasons...)
 	c := &Change{ID: req.ID(), App: req.App, Env: req.Env, Cluster: req.Cluster, Repo: req.Repo, PR: req.PR,
-		Head: req.Head, Base: req.Base, Proposer: req.Proposer, ProposerKind: req.ProposerKind, Agent: req.Agent,
+		Head: req.Head, Base: req.Base, Proposer: req.Proposer, ProposerKind: req.ProposerKind, Agent: req.Agent, TaskID: req.TaskID,
 		Owner: req.Owner, Protected: req.Protected, TreeDigest: req.TreeDigest, Paths: append([]string(nil), req.Paths...),
 		LinesChanged: req.LinesChanged, Objects: append([]ObjectChange(nil), req.Objects...), Checks: copyChecks(req.Checks),
 		PolicyVersion: cl.Policy.Version, RepoPolicyDigest: cl.Policy.RepoPolicyDigest, Tier: cl.Tier, Reasons: reasons,
