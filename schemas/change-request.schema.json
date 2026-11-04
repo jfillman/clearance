@@ -426,83 +426,90 @@
               "description": "The plan was made with -target."
             },
             "resources": {
-              "type": "array",
-              "maxItems": 2000,
-              "items": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "address",
-                  "type",
-                  "actions"
-                ],
-                "properties": {
-                  "address": {
-                    "type": "string",
-                    "pattern": "^[^\u0000-\u001f\u007f-\u009f]+$",
-                    "maxLength": 1024,
-                    "description": "The resource address (aws_iam_role.ci, module.net.aws_security_group.web[\"a\"]); it names the type."
-                  },
-                  "type": {
-                    "type": "string",
-                    "pattern": "^[a-z0-9][a-z0-9_]{0,127}$",
-                    "description": "The resource type."
-                  },
-                  "actions": {
-                    "description": "Terraform's action list (resource_changes[].change.actions).",
-                    "enum": [
-                      [
-                        "no-op"
-                      ],
-                      [
-                        "create"
-                      ],
-                      [
-                        "read"
-                      ],
-                      [
-                        "update"
-                      ],
-                      [
-                        "delete"
-                      ],
-                      [
-                        "delete",
-                        "create"
-                      ],
-                      [
-                        "create",
-                        "delete"
-                      ]
-                    ]
-                  },
-                  "fields": {
-                    "type": "array",
-                    "maxItems": 400,
-                    "items": {
-                      "type": "string",
-                      "pattern": "^/[^\u0000-\u001f\u007f-\u009f]*$",
-                      "maxLength": 1024
-                    },
-                    "description": "JSON pointers of the attributes an update changes: names only, never values."
-                  },
-                  "actionReason": {
-                    "description": "Terraform's action_reason; replace_by_request is a -replace.",
-                    "oneOf": [
-                      {
-                        "type": "null"
-                      },
-                      {
-                        "const": ""
-                      },
-                      {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "array",
+                  "maxItems": 2000,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "address",
+                      "type",
+                      "actions"
+                    ],
+                    "properties": {
+                      "address": {
                         "type": "string",
-                        "pattern": "^[a-z_]{1,64}$"
+                        "pattern": "^[^\u0000-\u001f\u007f-\u009f]+$",
+                        "maxLength": 1024,
+                        "description": "The resource address (aws_iam_role.ci, module.net.aws_security_group.web[\"a\"]); it names the type."
+                      },
+                      "type": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9][a-z0-9_]{0,127}$",
+                        "description": "The resource type."
+                      },
+                      "actions": {
+                        "description": "Terraform's action list (resource_changes[].change.actions).",
+                        "enum": [
+                          [
+                            "no-op"
+                          ],
+                          [
+                            "create"
+                          ],
+                          [
+                            "read"
+                          ],
+                          [
+                            "update"
+                          ],
+                          [
+                            "delete"
+                          ],
+                          [
+                            "delete",
+                            "create"
+                          ],
+                          [
+                            "create",
+                            "delete"
+                          ]
+                        ]
+                      },
+                      "fields": {
+                        "type": "array",
+                        "maxItems": 400,
+                        "items": {
+                          "type": "string",
+                          "pattern": "^/[^\u0000-\u001f\u007f-\u009f]*$",
+                          "maxLength": 1024
+                        },
+                        "description": "JSON pointers of the attributes an update changes: names only, never values."
+                      },
+                      "actionReason": {
+                        "description": "Terraform's action_reason; replace_by_request is a -replace.",
+                        "oneOf": [
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "const": ""
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^[a-z_]{1,64}$"
+                          }
+                        ]
                       }
-                    ]
+                    }
                   }
                 }
-              }
+              ]
             }
           }
         }

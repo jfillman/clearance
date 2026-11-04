@@ -51,7 +51,7 @@ type PlanSummary struct {
 	Update             int64    `json:"update"`
 	Replace            int64    `json:"replace"`
 	Destroy            int64    `json:"destroy"`
-	DestroyedAddresses []string `json:"destroyedAddresses"`
+	DestroyedAddresses []string `json:"destroyedAddresses,omitempty"`
 }
 
 // Resource is one resource change in the plan (terraform show -json's resource_changes[]): its address and type,
@@ -61,7 +61,7 @@ type Resource struct {
 	Address      string   `json:"address"`
 	Type         string   `json:"type"`
 	Actions      []string `json:"actions"`
-	Fields       []string `json:"fields"`
+	Fields       []string `json:"fields,omitempty"`
 	ActionReason string   `json:"actionReason,omitempty"`
 }
 
@@ -207,7 +207,11 @@ func parsePlanSubject(v any) (*Subject, error) {
 		targeted = b
 	}
 	s.Targeted = &targeted
+	// resources is required; null is an empty list (a Go client's nil slice), and the summary must then be empty.
 	rawRes, isList := d["resources"].([]any)
+	if r, present := d["resources"]; present && r == nil {
+		rawRes, isList = []any{}, true
+	}
 	if !isList || len(rawRes) > MaxResources {
 		return nil, bad("subject.resources is a list of at most %d resource changes", MaxResources)
 	}

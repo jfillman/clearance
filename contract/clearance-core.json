@@ -1242,7 +1242,6 @@
         "required": [
           "create",
           "destroy",
-          "destroyedAddresses",
           "replace",
           "update"
         ],
@@ -1320,7 +1319,6 @@
         "required": [
           "actions",
           "address",
-          "fields",
           "type"
         ],
         "type": "object"

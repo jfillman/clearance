@@ -599,14 +599,14 @@ class GatePlanSummary(Model):
     _FIELDS: ClassVar[tuple[Field, ...]] = (
         Field("create", "create", ("int",), True),
         Field("destroy", "destroy", ("int",), True),
-        Field("destroyedAddresses", "destroyedAddresses", ("list", ("str",)), True),
+        Field("destroyedAddresses", "destroyedAddresses", ("list", ("str",)), False),
         Field("replace", "replace", ("int",), True),
         Field("update", "update", ("int",), True),
     )
 
     create: int
     destroy: int
-    destroyedAddresses: list[str]
+    destroyedAddresses: list[str] | None = None
     replace: int
     update: int
 
@@ -654,14 +654,14 @@ class GateResource(Model):
         Field("actionReason", "actionReason", ("str",), False),
         Field("actions", "actions", ("list", ("str",)), True),
         Field("address", "address", ("str",), True),
-        Field("fields", "fields", ("list", ("str",)), True),
+        Field("fields", "fields", ("list", ("str",)), False),
         Field("type", "type", ("str",), True),
     )
 
     actionReason: str | None = None
     actions: list[str]
     address: str
-    fields: list[str]
+    fields: list[str] | None = None
     type: str
 
 

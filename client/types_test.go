@@ -170,3 +170,29 @@ func TestTheMirrorCheckCatchesADifference(t *testing.T) {
 		t.Fatalf("want 3 differences (omitempty, extra, missing), got %v", diffs)
 	}
 }
+
+// A plan built with the client's zero values (nil fields, destroyed addresses and resources) is a request the core
+// takes: nothing marshals to a null the parser refuses (PR Lens, clearance#54).
+func TestAPlanSubjectWithNilListsParses(t *testing.T) {
+	sha := strings.Repeat("ab", 32)
+	for _, resources := range [][]client.PlanResource{nil, {{Address: "aws_vpc.lab", Type: "aws_vpc", Actions: []string{"no-op"}}}} {
+		req := client.ChangeRequest{App: "network", Env: "lab", Repo: "jfillman/hangar-infra", Head: strings.Repeat("a", 40),
+			Proposer: "user:dana", Protected: true, Paths: []string{}, Objects: []client.ObjectChange{}, Checks: map[string]string{},
+			Subject: &client.PlanSubject{Kind: "terraform-plan", PlanDigest: sha, PlanJSONDigest: strings.Repeat("cd", 32),
+				VariableSetDigest: strings.Repeat("ef", 32), Workspace: client.PlanWorkspace{Backend: "s3", Key: "k", Name: "default"},
+				Versions: client.PlanVersions{Terraform: "1.9.8"}, Resources: resources}}
+		raw, err := json.Marshal(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var v any
+		dec := json.NewDecoder(strings.NewReader(string(raw)))
+		dec.UseNumber()
+		if err := dec.Decode(&v); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := gate.ParseRequest(v); err != nil {
+			t.Fatalf("%s: %v", raw, err)
+		}
+	}
+}

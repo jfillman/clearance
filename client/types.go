@@ -458,7 +458,7 @@ type PlanSummary struct {
 	Update             int64    `json:"update"`
 	Replace            int64    `json:"replace"`
 	Destroy            int64    `json:"destroy"`
-	DestroyedAddresses []string `json:"destroyedAddresses"`
+	DestroyedAddresses []string `json:"destroyedAddresses,omitempty"`
 }
 
 // PlanResource is one resource change: address, type, actions, the changed attributes' JSON pointers and Terraform's
@@ -467,7 +467,7 @@ type PlanResource struct {
 	Address      string   `json:"address"`
 	Type         string   `json:"type"`
 	Actions      []string `json:"actions"`
-	Fields       []string `json:"fields"`
+	Fields       []string `json:"fields,omitempty"`
 	ActionReason string   `json:"actionReason,omitempty"`
 }
 

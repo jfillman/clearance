@@ -430,6 +430,7 @@ func TestTheChangeRequestSchemaMatchesTheParser(t *testing.T) {
 		"plan, a placeholder":          tfChange(func() map[string]any { s := plan(nil); s["planDigest"] = strings.Repeat("a", 64); return s }(), nil),
 		"plan, bad action":             tfChange(plan(nil, res("aws_vpc.lab", "aws_vpc", []string{"move"})), nil),
 		"plan, unknown field":          tfChange(func() map[string]any { s := plan(nil); s["raw"] = "x"; return s }(), nil),
+		"plan, null resources":         tfChange(func() map[string]any { s := plan(nil); s["resources"] = nil; return s }(), nil),
 		"plan, objects":                tfChange(ok, map[string]any{"objects": replicas}),
 		"plan, a value in fields":      tfChange(plan(nil, res("aws_vpc.lab", "aws_vpc", update, "tags=x")), nil),
 	}
@@ -444,7 +445,7 @@ func TestTheChangeRequestSchemaMatchesTheParser(t *testing.T) {
 			accepted++
 		}
 	}
-	if accepted != 5 {
-		t.Errorf("%d of %d bodies accepted, want 5 (the comparison would be vacuous)", accepted, len(bodies))
+	if accepted != 6 {
+		t.Errorf("%d of %d bodies accepted, want 6 (the comparison would be vacuous)", accepted, len(bodies))
 	}
 }
