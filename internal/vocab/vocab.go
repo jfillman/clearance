@@ -17,6 +17,11 @@
 //	                                  group (default none: such a change has no owner group)
 //	CLEARANCE_V0_PROVIDER             name/version of the provider rows written before providers were recorded are
 //	                                  projected with (default unrecorded/unrecorded)
+//	CLEARANCE_AI_COAUTHORS            comma-separated matchers on a commit's Co-Authored-By, Assisted-by and
+//	                                  Generated-by trailers that name an AI coding agent: "<email>" or "Name <email>"
+//	                                  (case-insensitive, whitespace collapsed). A PR Clearance has no record of whose
+//	                                  head commit carries one is agent-unattested, a warning (provenance). Default
+//	                                  DefaultAICoauthors; "none" turns the check off
 package vocab
 
 import (
@@ -36,6 +41,8 @@ type Vocabulary struct {
 	OwnerFallback        string
 	V0ProviderName       string
 	V0ProviderVersion    string
+	// AICoauthors match the commit trailers an AI coding agent outside Clearance leaves (empty: the check is off).
+	AICoauthors []Coauthor
 	// From the policy bundles (decide.Engine), not the environment.
 	PRTools         []string
 	ProfileSections []string
@@ -44,7 +51,7 @@ type Vocabulary struct {
 // EnvVars are the variables FromEnv reads.
 var EnvVars = []string{"CLEARANCE_ON_BEHALF_OF_HEADER", "CLEARANCE_TRAILER_PREFIX", "CLEARANCE_RUN_IDENTITY_NAMESPACE",
 	"CLEARANCE_BASELINE_DENY_PATHS", "CLEARANCE_BASELINE_DENY_FIELDS", "CLEARANCE_GATE_OUTSIDE_GROUPS",
-	"CLEARANCE_GATE_OWNER_FALLBACK", "CLEARANCE_V0_PROVIDER"}
+	"CLEARANCE_GATE_OWNER_FALLBACK", "CLEARANCE_V0_PROVIDER", "CLEARANCE_AI_COAUTHORS"}
 
 // Default is Clearance's own vocabulary.
 func Default() Vocabulary {
@@ -52,7 +59,8 @@ func Default() Vocabulary {
 		OnBehalfOfHeader: "X-Clearance-On-Behalf-Of", TrailerPrefix: "Clearance-", RunIdentityNamespace: "agent-runs",
 		BaselineDenyPaths: []string{"CODEOWNERS", "**/CODEOWNERS", ".github/**"}, BaselineDenyFields: []string{},
 		OutsideGroups: []string{}, V0ProviderName: "unrecorded", V0ProviderVersion: "unrecorded",
-		PRTools: []string{"repo.pr.open", "repo.pr.open_upper"}, ProfileSections: []string{},
+		AICoauthors: DefaultAICoauthors(),
+		PRTools:     []string{"repo.pr.open", "repo.pr.open_upper"}, ProfileSections: []string{},
 	}
 }
 
@@ -114,6 +122,13 @@ func FromEnv(get func(string) string) (Vocabulary, error) {
 			return v, fmt.Errorf("CLEARANCE_V0_PROVIDER: %q is not name/version", s)
 		}
 		v.V0ProviderName, v.V0ProviderVersion = name, ver
+	}
+	if s := get("CLEARANCE_AI_COAUTHORS"); s != "" {
+		cs, err := ParseCoauthors(s)
+		if err != nil {
+			return v, fmt.Errorf("CLEARANCE_AI_COAUTHORS: %w", err)
+		}
+		v.AICoauthors = cs
 	}
 	return v, nil
 }

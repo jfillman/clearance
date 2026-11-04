@@ -21,6 +21,7 @@ func Lab() vocab.Vocabulary {
 		BaselineDenyFields: []string{"/extraManifests", "/networkPolicy", "/httpRoute", "/release", "/releaseTracking", "/rollout/image"},
 		OutsideGroups:      []string{"group:default/admins"}, OwnerFallback: "group:default/admins",
 		V0ProviderName: "autopilot-gateway", V0ProviderVersion: "unrecorded",
+		AICoauthors:     vocab.DefaultAICoauthors(),
 		PRTools:         []string{"repo.pr.open", "repo.pr.open_upper", "glidepath.cicd.propose"},
 		ProfileSections: []string{"glidepath", "airframe"},
 	}

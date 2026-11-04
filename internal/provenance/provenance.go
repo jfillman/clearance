@@ -3,13 +3,19 @@
 // the Clearance GitHub App) posts on every PR. The evidence is the receipt Clearance wrote when its own call opened
 // the PR; nothing the PR says about itself is trusted.
 //
-//	identity  confirmed | not-agent | AI001 forged trailers | AI002 agents' login, no record | AI003 commits added
-//	          after the agent's | AI004 trailers differ from the record
-//	scope     in-scope | not-agent | AS001 a path the agent's commit did not carry | AS002 a path the definition
+//	identity  confirmed | not-agent | unattested (a warning) | AI001 forged trailers | AI002 agents' login, no record |
+//	          AI003 commits added after the agent's | AI004 trailers differ from the record
+//	scope     in-scope | not-agent | unattested (a warning) | AS001 a path the agent's commit did not carry | AS002 a path the definition
 //	          denies | AS003 the repo left repos.allow | AS004 the definition is gone
+//
+// unattested: Clearance has no record of the PR and it carries none of the other agent signals, but a commit carries
+// an AI coding agent's co-author trailer (vocab.AICoauthors): agent work outside Clearance, with no attestation. It is
+// a warning, never a failure (ok is true; the App's check concludes neutral) and no rule: the user's decision of
+// 2026-11-04 (warn-only), docs/provenance-app.md.
 package provenance
 
 import (
+	"errors"
 	"fmt"
 	"github.com/jfillman/clearance/internal/vocab"
 	"regexp"
@@ -29,6 +35,15 @@ var TrailerKeys = []string{"task", "session", "run", "agent"}
 
 // MaxPaths caps a request's paths.
 const MaxPaths = 3000
+
+// MaxCoauthors caps a request's co-author trailers, and MaxTrailer one trailer's length.
+const (
+	MaxCoauthors = 200
+	MaxTrailer   = 1024
+)
+
+// Unattested is the status of agent work Clearance has no record of: an AI co-author trailer and nothing else.
+const Unattested = "unattested"
 
 var (
 	shaRx  = regexp.MustCompile(`^[0-9a-f]{40}\z`)
@@ -53,9 +68,18 @@ type Request struct {
 	Paths    []string
 	Author   string
 	Trailers map[string]string // lower-cased keys, only TrailerKeys
+	// Coauthors are the PR's Co-Authored-By, Assisted-by and Generated-by trailers, each with its commit; Verify
+	// matches them against vocab.AICoauthors.
+	Coauthors []CoauthorTrailer
 }
 
-var requestKeys = map[string]bool{"repo": true, "pr": true, "head": true, "paths": true, "author": true, "trailers": true}
+// CoauthorTrailer is one co-author trailer line and the commit whose message carries it.
+type CoauthorTrailer struct {
+	Commit  string `json:"commit"`
+	Trailer string `json:"trailer"`
+}
+
+var requestKeys = map[string]bool{"repo": true, "pr": true, "head": true, "paths": true, "author": true, "trailers": true, "coauthors": true}
 
 // ParseRequest is Request.from_dict, refusing unknown fields (strict decoding; provenance.py ignored them).
 func ParseRequest(v any) (Request, error) {
@@ -114,12 +138,51 @@ func ParseRequest(v any) (Request, error) {
 			}
 		}
 	}
+	var coauthors []CoauthorTrailer
+	if v, present := d["coauthors"]; present && v != nil {
+		list, ok := v.([]any)
+		if !ok || len(list) > MaxCoauthors {
+			return Request{}, &BadRequest{fmt.Sprintf("coauthors is a list of at most %d {commit, trailer} objects", MaxCoauthors)}
+		}
+		for i, x := range list {
+			c, err := parseCoauthor(x)
+			if err != nil {
+				return Request{}, &BadRequest{fmt.Sprintf("coauthors[%d]: %s", i, err.Error())}
+			}
+			coauthors = append(coauthors, c)
+		}
+	}
 	for k := range d {
 		if !requestKeys[k] {
 			return Request{}, &BadRequest{"unknown field " + pycompat.Repr(k)}
 		}
 	}
-	return Request{strings.ToLower(repo), pr, head, paths, author, known}, nil
+	return Request{strings.ToLower(repo), pr, head, paths, author, known, coauthors}, nil
+}
+
+func parseCoauthor(x any) (CoauthorTrailer, error) {
+	m, ok := x.(map[string]any)
+	if !ok {
+		return CoauthorTrailer{}, errors.New("is a {commit, trailer} object")
+	}
+	for k := range m {
+		if k != "commit" && k != "trailer" {
+			return CoauthorTrailer{}, errors.New("unknown field " + pycompat.Repr(k))
+		}
+	}
+	commit, ok := m["commit"].(string)
+	if !ok || !shaRx.MatchString(commit) {
+		return CoauthorTrailer{}, errors.New("commit is a 40-character commit sha")
+	}
+	tr, ok := m["trailer"].(string)
+	if !ok || len(tr) > MaxTrailer || strings.ContainsAny(tr, "\r\n") {
+		return CoauthorTrailer{}, fmt.Errorf("trailer is one line of at most %d characters", MaxTrailer)
+	}
+	key, _, _ := strings.Cut(tr, ":")
+	if !strings.Contains(tr, ":") || !vocab.IsCoauthorKey(key) {
+		return CoauthorTrailer{}, errors.New("trailer is a Co-Authored-By, Assisted-by or Generated-by trailer")
+	}
+	return CoauthorTrailer{commit, strings.TrimSpace(tr)}, nil
 }
 
 // Body is the request as a JSON object (what provenance_from_app digests: repo, pr, head, author, paths, trailers).
@@ -132,7 +195,15 @@ func (r Request) Body() map[string]any {
 	for k, v := range r.Trailers {
 		tr[k] = v
 	}
-	return map[string]any{"repo": r.Repo, "pr": r.PR, "head": r.Head, "author": r.Author, "paths": paths, "trailers": tr}
+	out := map[string]any{"repo": r.Repo, "pr": r.PR, "head": r.Head, "author": r.Author, "paths": paths, "trailers": tr}
+	if len(r.Coauthors) > 0 { // absent when empty, so a request without them digests as it did before
+		cs := make([]any, len(r.Coauthors))
+		for i, c := range r.Coauthors {
+			cs[i] = map[string]any{"commit": c.Commit, "trailer": c.Trailer}
+		}
+		out["coauthors"] = cs
+	}
+	return out
 }
 
 // Violation is one scope violation.
@@ -150,6 +221,8 @@ type Check struct {
 	Message    string       `json:"message"`
 	Hint       string       `json:"hint"`
 	Violations *[]Violation `json:"violations,omitempty"`
+	// Coauthor is the AI co-author trailer an unattested verdict rests on (the first that matched).
+	Coauthor *CoauthorTrailer `json:"coauthor,omitempty"`
 }
 
 func check(ok bool, status, message, hint string, rule *string) Check {
@@ -218,6 +291,7 @@ func Verify(req Request, receipts []store.Record, defs Lookup, agentLogins []str
 	}
 	if rec == nil {
 		var ident Check
+		ai := firstAICoauthor(req) // the existing signals win: forged trailers and the agents' login are failures
 		switch {
 		case req.Trailers["task"] != "" || req.Trailers["session"] != "":
 			task, ok := req.Trailers["task"]
@@ -229,16 +303,25 @@ func Verify(req Request, receipts []store.Record, defs Lookup, agentLogins []str
 		case byAgentLogin:
 			ident = check(false, "unrecorded", fmt.Sprintf("the PR is authored by %s, an agents' login, but Clearance has no record of opening it", req.Author),
 				"The agents' GitHub App was used outside Clearance. Close the PR and review the App's credentials and installations.", rule("AI002"))
+		case ai != nil:
+			ident = check(true, Unattested, fmt.Sprintf("co-authored by an AI agent outside Clearance: commit %s carries %q, and Clearance has no record of opening this PR, so it carries no Clearance attestation",
+				pycompat.Truncate(ai.Commit, 12), ai.Trailer),
+				"Review it as a person's change: no agent gate vouches for it. Agent work that should be attested goes through Clearance.", nil)
+			ident.Coauthor = ai
 		default:
 			ident = check(true, "not-agent", "not an agent PR: no Clearance record, no "+strings.TrimSuffix(vocab.Get().TrailerPrefix, "-")+" trailers, and not authored by an agents' login", "", nil)
 		}
 		var scope Check
-		if ident.OK {
+		switch {
+		case ident.Status == Unattested:
+			scope = check(true, Unattested, "co-authored by an AI agent outside Clearance: no record to check the scope against", ident.Hint, nil)
+			scope.Coauthor = ident.Coauthor
+		case ident.OK:
 			scope = check(true, "not-agent", "not an agent PR", "", nil)
-		} else {
+		default:
 			scope = check(false, "unknown", "no record to check the scope against", ident.Hint, ident.Rule)
 		}
-		return Verdict{AgentPR: !ident.OK, Identity: ident, Scope: scope}
+		return Verdict{AgentPR: !ident.OK || ident.Status == Unattested, Identity: ident, Scope: scope}
 	}
 	eff, _ := rec["effect"].(map[string]any)
 	if eff == nil {
@@ -271,6 +354,21 @@ func Verify(req Request, receipts []store.Record, defs Lookup, agentLogins []str
 			pycompat.Str(rec["agent"]), pycompat.Str(rec["task_id"]), pycompat.Str(rec["session"]), pycompat.Str(rec["seq"])), "", nil)
 	}
 	return Verdict{AgentPR: true, Identity: ident, Scope: scopeOf(req, rec, eff, defs), Record: summary}
+}
+
+// firstAICoauthor is the first of the request's co-author trailers an AI co-author matcher matches, or nil.
+func firstAICoauthor(req Request) *CoauthorTrailer {
+	cs := vocab.Get().AICoauthors
+	if len(cs) == 0 {
+		return nil
+	}
+	for _, c := range req.Coauthors {
+		if vocab.MatchTrailer(cs, c.Trailer) {
+			c := c
+			return &c
+		}
+	}
+	return nil
 }
 
 func scopeOf(req Request, rec store.Record, eff map[string]any, defs Lookup) Check {

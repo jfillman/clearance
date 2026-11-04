@@ -138,6 +138,12 @@ app.kubernetes.io/component: {{ .component }}
   value: {{ . | quote }}
 {{- end }}
 {{- end }}
+{{- /* vocabulary.aiCoauthors: unset (null) keeps the core's default matchers; a list, even an empty one, is set
+     (empty: "none", the check is off). */}}
+{{- if kindIs "slice" .Values.vocabulary.aiCoauthors }}
+- name: CLEARANCE_AI_COAUTHORS
+  value: {{ (empty .Values.vocabulary.aiCoauthors | ternary "none" (include "clearance.csv" .Values.vocabulary.aiCoauthors)) | quote }}
+{{- end }}
 {{- range $k, $env := dict "baselineDenyPaths" "CLEARANCE_BASELINE_DENY_PATHS" "baselineDenyFields" "CLEARANCE_BASELINE_DENY_FIELDS" "gateOutsideGroups" "CLEARANCE_GATE_OUTSIDE_GROUPS" }}
 {{- with index $.Values.vocabulary $k }}
 - name: {{ $env }}

@@ -37,6 +37,7 @@ vocabulary:
   gateOutsideGroups: ["group:default/admins"]
   gateOwnerFallback: "group:default/admins"
   v0Provider: autopilot-gateway/unrecorded
+  aiCoauthors: ["<noreply@anthropic.com>", "Acme Agent <agent@acme.dev>"]
 gate:
   expireSeconds: 30
   agentLogins: ["hangar-autopilot-agents[bot]"]

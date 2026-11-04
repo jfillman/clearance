@@ -710,6 +710,15 @@ type ProvenanceRequest struct {
 	Paths    []string          `json:"paths"`
 	Author   string            `json:"author,omitempty"`
 	Trailers map[string]string `json:"trailers,omitempty"`
+	// Coauthors are the PR's Co-Authored-By, Assisted-by and Generated-by trailer lines with their commits; the core
+	// matches them against its AI co-author matchers (an unattested verdict, a warning).
+	Coauthors []CoauthorTrailer `json:"coauthors,omitempty"`
+}
+
+// CoauthorTrailer is one co-author trailer line and the commit whose message carries it.
+type CoauthorTrailer struct {
+	Commit  string `json:"commit"`
+	Trailer string `json:"trailer"`
 }
 
 // Verdict is provenance's answer.
@@ -721,14 +730,16 @@ type Verdict struct {
 	AuditSeq *int64         `json:"audit_seq,omitempty"`
 }
 
-// Check is one verdict.
+// Check is one verdict. Status "unattested" (agent work outside Clearance, an AI co-author trailer) is OK: a warning,
+// and Coauthor names the trailer.
 type Check struct {
-	OK         bool         `json:"ok"`
-	Status     string       `json:"status"`
-	Rule       *string      `json:"rule"`
-	Message    string       `json:"message"`
-	Hint       string       `json:"hint"`
-	Violations *[]Violation `json:"violations,omitempty"`
+	OK         bool             `json:"ok"`
+	Status     string           `json:"status"`
+	Rule       *string          `json:"rule"`
+	Message    string           `json:"message"`
+	Hint       string           `json:"hint"`
+	Violations *[]Violation     `json:"violations,omitempty"`
+	Coauthor   *CoauthorTrailer `json:"coauthor,omitempty"`
 }
 
 // Violation is one path an agent's pull request may not touch.

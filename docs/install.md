@@ -96,6 +96,7 @@ unset, so the core's default applies. Lists are joined with commas.
 | `policy.egress` | | NetworkPolicy egress rules for the core and the api to reach the sources (with `networkPolicy.enabled`). |
 | `policy.environments.*` | `CLEARANCE_ENV_*` | `lowerNames`, `lowerPrefixes`, `lowerProjectSuffixes`, `upperRepoPrefixes`: how arguments name an environment tier. |
 | `vocabulary.*` | `CLEARANCE_ON_BEHALF_OF_HEADER`, `_TRAILER_PREFIX`, `_RUN_IDENTITY_NAMESPACE`, `_BASELINE_DENY_PATHS`, `_BASELINE_DENY_FIELDS`, `_GATE_OUTSIDE_GROUPS`, `_GATE_OWNER_FALLBACK`, `_V0_PROVIDER` | The deployment's vocabulary ([core.md](core.md#configuration)); empty values keep the core's defaults. |
+| `vocabulary.aiCoauthors` | `CLEARANCE_AI_COAUTHORS` | The AI co-author matchers (`<email>` or `Name <email>`). Unset (null): the core's default list; an empty list `[]` turns the check off (rendered as `none`). |
 | `audience` | `CLEARANCE_AUDIENCE` | Callers' token audience (default `clearance`). |
 | `gate.expireSeconds` | `CLEARANCE_EXPIRE_SECONDS` | How often expired changes are swept (60). |
 | `core.maxClockSkew` | `CLEARANCE_MAX_CLOCK_SKEW` | How far an evaluation's `context.now` may be from the core's clock, a Go duration (empty: `5m`; at most `24h`). The core refuses `0` (off) here: off is for `clearance core --memory` test cores. |

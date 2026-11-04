@@ -339,3 +339,15 @@ func TestTheGitHubAppsRecordsNameWhoCleared(t *testing.T) {
 		t.Fatalf("%v", rec)
 	}
 }
+
+// The token's provenance level: an unattested PR (AI co-authored, outside Clearance) is never confirmed-human.
+func TestTheProvenanceLevelOfAnUnattestedPr(t *testing.T) {
+	for _, tc := range []struct{ kind, check, want string }{
+		{"person", "not-agent", "confirmed-human"}, {"person", "unattested", "unknown"},
+		{"agent", "confirmed", "confirmed-agent"}, {"agent", "unattested", "probable-agent"}, {"unknown", "unattested", "unknown"},
+	} {
+		if got := gate.ProvenanceLevel(&gate.Change{ProposerKind: tc.kind, Checks: map[string]string{"provenance": tc.check}}); got != tc.want {
+			t.Errorf("%s %s: %s, want %s", tc.kind, tc.check, got, tc.want)
+		}
+	}
+}
