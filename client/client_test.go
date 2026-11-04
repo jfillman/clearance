@@ -4,6 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"github.com/jfillman/clearance/internal/vocab/vocabtest"
@@ -23,6 +26,7 @@ import (
 	"github.com/jfillman/clearance/client"
 	"github.com/jfillman/clearance/internal/core"
 	"github.com/jfillman/clearance/internal/server"
+	"github.com/jfillman/clearance/internal/token"
 )
 
 const (
@@ -49,6 +53,13 @@ func coreServer(t *testing.T) (*core.Core, *httptest.Server) {
 		AgentLogins: []string{vocabtest.AgentLogin}}
 	cfg.Gate.Verifiers = []string{"app-*-cicd/pipeline-runner"}
 	cfg.Gate.Admins = []string{"user:admin"}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader) // a throwaway signing key, this test's only
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Signer, err = token.NewKeySigner(key); err != nil {
+		t.Fatal(err)
+	}
 	c, err := core.Build(context.Background(), cfg, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
@@ -225,6 +236,28 @@ func TestTheGateThroughTheClient(t *testing.T) {
 	}
 	if _, err := newClient(t, srv.URL, "user:admin").Deny(ctx, ch.ID, "too late", ""); !errors.As(err, &api) || api.Status != 409 {
 		t.Fatalf("a deny after a clear: %v", err)
+	}
+	// The cleared change's token, verified offline against the published keys.
+	got, err := verifier.Clearance(ctx, ch.ID)
+	if err != nil || got.State != "cleared" || got.Token == nil || got.Token.JWT == "" {
+		t.Fatalf("%+v %v", got, err)
+	}
+	jwks, err := newClient(t, srv.URL, "").Keys(ctx)
+	if err != nil || len(jwks.Keys) != 1 {
+		t.Fatalf("%+v %v", jwks, err)
+	}
+	rawKeys, _ := json.Marshal(jwks)
+	ks, err := token.ParseJWKS(rawKeys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, _ := json.Marshal(got.Token.DSSE)
+	cl, err := token.Verify(ctx, env, ks, token.Options{Issuer: "clearance", Expect: token.Expect{ClearanceID: ch.ID}})
+	if err != nil || len(cl.Approvals) != 1 || cl.Approvals[0].Person != "user:erin" {
+		t.Fatalf("%+v %v", cl, err)
+	}
+	if _, err := newClient(t, srv.URL, "user:erin").Clearance(ctx, ch.ID); !errors.As(err, &api) || api.Status != 403 {
+		t.Fatalf("a person read the core's clearance route: %v", err)
 	}
 	change.Head = strings.Repeat("e", 40)
 	ch2, err := verifier.RegisterChange(ctx, change)

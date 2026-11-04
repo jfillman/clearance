@@ -44,6 +44,8 @@ func Run(t *testing.T, open Opener) {
 		{"Assurance", testAssurance},
 		{"Changes", testChanges},
 		{"Definitions", testDefinitions},
+		{"Tokens", testTokens},
+		{"SigningKeys", testSigningKeys},
 		{"Concurrent", testConcurrent},
 		{"CancelledContext", testCancelled},
 		{"PythonChainExtended", testPythonChainExtended},
@@ -577,5 +579,132 @@ func testPythonChainExtended(t *testing.T, open Opener) {
 	}
 	if !bytes.Equal(got.Bytes(), want) {
 		t.Fatalf("the extended chain differs from go-extended.jsonl (which Python's audit.verify accepted):\n%s", got.String())
+	}
+}
+
+func putToken(t *testing.T, s store.Store, tks ...store.Token) {
+	t.Helper()
+	if err := s.Atomic(bg, func(tx store.Tx) error {
+		for _, tk := range tks {
+			if err := tx.PutToken(bg, tk); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func tokenIDs(tks []store.Token, err error) string {
+	if err != nil {
+		return "error: " + err.Error()
+	}
+	out := ""
+	for _, tk := range tks {
+		out += tk.ChangeID + " "
+	}
+	return out
+}
+
+func testTokens(t *testing.T, open Opener) {
+	s := open(t, nil)
+	t0 := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	tok := func(id, kid string, exp time.Duration) store.Token {
+		return store.Token{ChangeID: id, Cluster: "prod-1", Nonce: "n-" + id, KeyID: kid, IssuedAt: t0,
+			ExpiresAt: t0.Add(exp), Envelope: json.RawMessage(`{"payloadType":"x","payload":"e30=","signatures":[]}`),
+			JWT: "a.b.c"}
+	}
+	revoked := tok("t4", "k1", time.Minute)
+	at := t0.Add(time.Second)
+	revoked.RevokedAt = &at
+	putToken(t, s, tok("t1", "k1", 10*time.Minute), tok("t2", "k1", time.Minute), tok("t3", "k0", time.Hour), revoked)
+	got, err := s.Token(bg, "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Cluster != "prod-1" || got.Nonce != "n-t1" || !got.ExpiresAt.Equal(t0.Add(10*time.Minute)) || got.RevokedAt != nil ||
+		got.JWT != "a.b.c" || !json.Valid(got.Envelope) {
+		t.Fatalf("Token = %+v", got)
+	}
+	r, _ := s.Token(bg, "t4")
+	if r.RevokedAt == nil || !r.RevokedAt.Equal(at) {
+		t.Fatalf("revoked_at %v", r.RevokedAt)
+	}
+	if _, err := s.Token(bg, "nope"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal(err)
+	}
+	// Due: not revoked, and expiring before due or signed by another key; soonest first.
+	for _, c := range []struct{ name, got, want string }{
+		{"due soon", tokenIDs(s.TokensDue(bg, t0.Add(5*time.Minute), "k1", 10)), "t2 t3 "},
+		{"due later", tokenIDs(s.TokensDue(bg, t0.Add(30*time.Minute), "k1", 10)), "t2 t1 t3 "},
+		{"limit", tokenIDs(s.TokensDue(bg, t0.Add(30*time.Minute), "k1", 1)), "t2 "},
+		{"other key", tokenIDs(s.TokensDue(bg, t0, "k0", 10)), "t2 t1 "},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s = %q, want %q", c.name, c.got, c.want)
+		}
+	}
+	// The upsert replaces the row; a rolled-back write leaves it.
+	moved := tok("t1", "k2", 20*time.Minute)
+	moved.Nonce = "n2"
+	putToken(t, s, moved)
+	if got, _ := s.Token(bg, "t1"); got.Nonce != "n2" || got.KeyID != "k2" {
+		t.Fatalf("upsert: %+v", got)
+	}
+	boom := errors.New("boom")
+	if err := s.Atomic(bg, func(tx store.Tx) error {
+		if err := tx.PutToken(bg, tok("t1", "k9", time.Hour)); err != nil {
+			return err
+		}
+		if in, _ := tx.Token(bg, "t1"); in.KeyID != "k9" {
+			t.Errorf("a transaction does not see its own token write: %+v", in)
+		}
+		return boom
+	}); !errors.Is(err, boom) {
+		t.Fatal(err)
+	}
+	if got, _ := s.Token(bg, "t1"); got.KeyID != "k2" {
+		t.Fatalf("rollback: %+v", got)
+	}
+}
+
+func testSigningKeys(t *testing.T, open Opener) {
+	s := open(t, nil)
+	t0 := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	use := func(kid string, at time.Time) {
+		t.Helper()
+		if err := s.Atomic(bg, func(tx store.Tx) error {
+			return tx.UseSigningKey(bg, store.SigningKey{KeyID: kid, JWK: json.RawMessage(`{"kid":"` + kid + `"}`)}, at)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	names := func(ks []store.SigningKey, err error) string {
+		if err != nil {
+			return err.Error()
+		}
+		out := ""
+		for _, k := range ks {
+			r := "-"
+			if k.RetiredAt != nil {
+				r = k.RetiredAt.Sub(t0).String()
+			}
+			out += k.KeyID + "@" + r + " "
+		}
+		return out
+	}
+	use("k1", t0)
+	use("k1", t0.Add(time.Hour)) // a restart with the same key changes nothing
+	use("k2", t0.Add(2*time.Hour))
+	if got := names(s.SigningKeys(bg, t0)); got != "k2@- k1@2h0m0s " {
+		t.Fatalf("after rotation: %q", got)
+	}
+	if got := names(s.SigningKeys(bg, t0.Add(3*time.Hour))); got != "k2@- " {
+		t.Fatalf("retired before since: %q", got)
+	}
+	use("k1", t0.Add(4*time.Hour)) // rolled back to the old key
+	if got := names(s.SigningKeys(bg, t0.Add(3*time.Hour))); got != "k2@4h0m0s k1@- " {
+		t.Fatalf("roll back: %q", got)
 	}
 }

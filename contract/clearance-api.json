@@ -142,7 +142,8 @@
       "roles": [
         "person",
         "delegate",
-        "auditor"
+        "auditor",
+        "feed"
       ],
       "params": [
         "app",
@@ -153,9 +154,10 @@
         "tier",
         "since",
         "limit",
-        "after"
+        "after",
+        "cluster"
       ],
-      "summary": "The deployment gate's changes, newest first: tier and why, state (holding, cleared, denied, expired, superseded), the requirement and the approvals so far, what the grant binds to. A person sees their apps' changes and the ones their groups may clear; the cursor is updated_at"
+      "summary": "The deployment gate's changes, newest first: tier and why, state (holding, cleared, denied, expired, superseded), the requirement and the approvals so far, what the grant binds to. A person sees their apps' changes and the ones their groups may clear; the cursor is updated_at. cluster=<c>&state=cleared is the grant feed: the cluster's cleared changes whose clearance token is live, each with its token; a feed reader (CLEARANCE_API_FEED_READERS) may read only that, for its own clusters"
     },
     {
       "operationId": "countClearances",
@@ -182,10 +184,11 @@
       "roles": [
         "person",
         "delegate",
-        "auditor"
+        "auditor",
+        "feed"
       ],
       "params": [],
-      "summary": "One change: the objects and paths it touches, every reason for its tier, the requirement, the approvals, the checks as last reported"
+      "summary": "One change: the objects and paths it touches, every reason for its tier, the requirement, the approvals, the checks as last reported, and its live clearance token (null when it has none)"
     },
     {
       "operationId": "getClearancePolicy",
@@ -212,6 +215,16 @@
         "full"
       ],
       "summary": "The agent definitions Clearance decides with: the bundled set and the cluster pins the core stored, each with its source; rejected pins with the reason. full=1 (auditors) adds instructions"
+    },
+    {
+      "operationId": "getKeys",
+      "method": "GET",
+      "path": "/v1/keys",
+      "roles": [
+        "any"
+      ],
+      "params": [],
+      "summary": "The clearance token verification keys, a JWKS (EC P-256, ES256, kid = the RFC 7638 thumbprint): the key the core signs with and keys retired within the last 24 hours. Public"
     },
     {
       "operationId": "getContract",
@@ -278,7 +291,7 @@
     },
     "getClearance": {
       "200": {
-        "$ref": "#/schemas/GateChange"
+        "$ref": "#/schemas/ClearanceView"
       },
       "401": {
         "$ref": "#/schemas/ErrorBody"
@@ -332,6 +345,14 @@
         "$ref": "#/schemas/ErrorBody"
       }
     },
+    "getKeys": {
+      "200": {
+        "$ref": "#/schemas/TokenJWKS"
+      },
+      "503": {
+        "$ref": "#/schemas/ErrorBody"
+      }
+    },
     "getPolicy": {
       "200": {
         "$ref": "#/schemas/PolicyDoc"
@@ -351,7 +372,7 @@
         "properties": {
           "items": {
             "items": {
-              "$ref": "#/schemas/GateChange"
+              "$ref": "#/schemas/ListedChange"
             },
             "type": "array"
           },
@@ -462,6 +483,237 @@
     }
   },
   "schemas": {
+    "ClearanceView": {
+      "properties": {
+        "agent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "app": {
+          "type": "string"
+        },
+        "approvals": {
+          "items": {
+            "$ref": "#/schemas/GateApproval"
+          },
+          "type": "array"
+        },
+        "base": {
+          "type": "string"
+        },
+        "checks": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "cleared_by": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "created_at": {
+          "description": "Python datetime.isoformat() of an aware time",
+          "type": "string"
+        },
+        "decided_at": {
+          "oneOf": [
+            {
+              "description": "Python datetime.isoformat() of an aware time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "denied_by": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deny_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deployments": {
+          "items": {
+            "$ref": "#/schemas/GateDeployment"
+          },
+          "type": "array"
+        },
+        "env": {
+          "type": "string"
+        },
+        "expires_at": {
+          "description": "Python datetime.isoformat() of an aware time",
+          "type": "string"
+        },
+        "head": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "lines_changed": {
+          "type": "integer"
+        },
+        "objects": {
+          "items": {
+            "$ref": "#/schemas/GateObjectChange"
+          },
+          "type": "array"
+        },
+        "objects_count": {
+          "type": "integer"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "paths": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "paths_count": {
+          "type": "integer"
+        },
+        "policy_version": {
+          "type": "string"
+        },
+        "pr": {
+          "type": "integer"
+        },
+        "proposer": {
+          "type": "string"
+        },
+        "proposer_kind": {
+          "type": "string"
+        },
+        "protected": {
+          "type": "boolean"
+        },
+        "reasons": {
+          "items": {
+            "$ref": "#/schemas/GateReason"
+          },
+          "type": "array"
+        },
+        "registered_by": {
+          "type": "string"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "repo_policy_digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requirement": {
+          "oneOf": [
+            {
+              "$ref": "#/schemas/GateRequirement"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "type": "string"
+        },
+        "superseded_by": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tier": {
+          "type": "integer"
+        },
+        "token": {
+          "oneOf": [
+            {
+              "$ref": "#/schemas/GateTokenView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tree_digest": {
+          "type": "string"
+        },
+        "updated_at": {
+          "description": "Python datetime.isoformat() of an aware time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent",
+        "app",
+        "approvals",
+        "base",
+        "checks",
+        "cleared_by",
+        "cluster",
+        "created_at",
+        "decided_at",
+        "denied_by",
+        "deny_reason",
+        "deployments",
+        "env",
+        "expires_at",
+        "head",
+        "id",
+        "lines_changed",
+        "objects",
+        "objects_count",
+        "owner",
+        "paths",
+        "paths_count",
+        "policy_version",
+        "pr",
+        "proposer",
+        "proposer_kind",
+        "protected",
+        "reasons",
+        "registered_by",
+        "repo",
+        "repo_policy_digest",
+        "requirement",
+        "state",
+        "superseded_by",
+        "target",
+        "task_id",
+        "tier",
+        "token",
+        "tree_digest",
+        "updated_at"
+      ],
+      "type": "object"
+    },
     "CostSum": {
       "properties": {
         "cache_creation_input_tokens": {
@@ -1035,10 +1287,16 @@
         "at": {
           "type": "string"
         },
+        "iss": {
+          "type": "string"
+        },
         "person": {
           "type": "string"
         },
         "role": {
+          "type": "string"
+        },
+        "sub": {
           "type": "string"
         },
         "via": {
@@ -1068,219 +1326,6 @@
       "required": [
         "outside",
         "owner"
-      ],
-      "type": "object"
-    },
-    "GateChange": {
-      "properties": {
-        "agent": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "app": {
-          "type": "string"
-        },
-        "approvals": {
-          "items": {
-            "$ref": "#/schemas/GateApproval"
-          },
-          "type": "array"
-        },
-        "base": {
-          "type": "string"
-        },
-        "checks": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "type": "object"
-        },
-        "cleared_by": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "cluster": {
-          "type": "string"
-        },
-        "created_at": {
-          "description": "Python datetime.isoformat() of an aware time",
-          "type": "string"
-        },
-        "decided_at": {
-          "oneOf": [
-            {
-              "description": "Python datetime.isoformat() of an aware time",
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "denied_by": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "deny_reason": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "deployments": {
-          "items": {
-            "$ref": "#/schemas/GateDeployment"
-          },
-          "type": "array"
-        },
-        "env": {
-          "type": "string"
-        },
-        "expires_at": {
-          "description": "Python datetime.isoformat() of an aware time",
-          "type": "string"
-        },
-        "head": {
-          "type": "string"
-        },
-        "id": {
-          "type": "string"
-        },
-        "lines_changed": {
-          "type": "integer"
-        },
-        "objects": {
-          "items": {
-            "$ref": "#/schemas/GateObjectChange"
-          },
-          "type": "array"
-        },
-        "objects_count": {
-          "type": "integer"
-        },
-        "owner": {
-          "type": "string"
-        },
-        "paths": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "paths_count": {
-          "type": "integer"
-        },
-        "policy_version": {
-          "type": "string"
-        },
-        "pr": {
-          "type": "integer"
-        },
-        "proposer": {
-          "type": "string"
-        },
-        "proposer_kind": {
-          "type": "string"
-        },
-        "protected": {
-          "type": "boolean"
-        },
-        "reasons": {
-          "items": {
-            "$ref": "#/schemas/GateReason"
-          },
-          "type": "array"
-        },
-        "registered_by": {
-          "type": "string"
-        },
-        "repo": {
-          "type": "string"
-        },
-        "repo_policy_digest": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "requirement": {
-          "oneOf": [
-            {
-              "$ref": "#/schemas/GateRequirement"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "state": {
-          "type": "string"
-        },
-        "superseded_by": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "target": {
-          "type": "string"
-        },
-        "tier": {
-          "type": "integer"
-        },
-        "tree_digest": {
-          "type": "string"
-        },
-        "updated_at": {
-          "description": "Python datetime.isoformat() of an aware time",
-          "type": "string"
-        }
-      },
-      "required": [
-        "agent",
-        "app",
-        "approvals",
-        "base",
-        "checks",
-        "cleared_by",
-        "cluster",
-        "created_at",
-        "decided_at",
-        "denied_by",
-        "deny_reason",
-        "deployments",
-        "env",
-        "expires_at",
-        "head",
-        "id",
-        "lines_changed",
-        "objects",
-        "objects_count",
-        "owner",
-        "paths",
-        "paths_count",
-        "policy_version",
-        "pr",
-        "proposer",
-        "proposer_kind",
-        "protected",
-        "reasons",
-        "registered_by",
-        "repo",
-        "repo_policy_digest",
-        "requirement",
-        "state",
-        "superseded_by",
-        "target",
-        "tier",
-        "tree_digest",
-        "updated_at"
       ],
       "type": "object"
     },
@@ -1528,6 +1573,267 @@
       ],
       "type": "object"
     },
+    "GateTokenView": {
+      "properties": {
+        "dsse": {
+          "$ref": "#/schemas/TokenEnvelope"
+        },
+        "expires_at": {
+          "type": "string"
+        },
+        "issued_at": {
+          "type": "string"
+        },
+        "jwt": {
+          "type": "string"
+        },
+        "key_id": {
+          "type": "string"
+        },
+        "nonce": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "dsse",
+        "expires_at",
+        "issued_at",
+        "jwt",
+        "key_id",
+        "nonce"
+      ],
+      "type": "object"
+    },
+    "ListedChange": {
+      "properties": {
+        "agent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "app": {
+          "type": "string"
+        },
+        "approvals": {
+          "items": {
+            "$ref": "#/schemas/GateApproval"
+          },
+          "type": "array"
+        },
+        "base": {
+          "type": "string"
+        },
+        "checks": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "cleared_by": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "created_at": {
+          "description": "Python datetime.isoformat() of an aware time",
+          "type": "string"
+        },
+        "decided_at": {
+          "oneOf": [
+            {
+              "description": "Python datetime.isoformat() of an aware time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "denied_by": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deny_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deployments": {
+          "items": {
+            "$ref": "#/schemas/GateDeployment"
+          },
+          "type": "array"
+        },
+        "env": {
+          "type": "string"
+        },
+        "expires_at": {
+          "description": "Python datetime.isoformat() of an aware time",
+          "type": "string"
+        },
+        "head": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "lines_changed": {
+          "type": "integer"
+        },
+        "objects": {
+          "items": {
+            "$ref": "#/schemas/GateObjectChange"
+          },
+          "type": "array"
+        },
+        "objects_count": {
+          "type": "integer"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "paths": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "paths_count": {
+          "type": "integer"
+        },
+        "policy_version": {
+          "type": "string"
+        },
+        "pr": {
+          "type": "integer"
+        },
+        "proposer": {
+          "type": "string"
+        },
+        "proposer_kind": {
+          "type": "string"
+        },
+        "protected": {
+          "type": "boolean"
+        },
+        "reasons": {
+          "items": {
+            "$ref": "#/schemas/GateReason"
+          },
+          "type": "array"
+        },
+        "registered_by": {
+          "type": "string"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "repo_policy_digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requirement": {
+          "oneOf": [
+            {
+              "$ref": "#/schemas/GateRequirement"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "type": "string"
+        },
+        "superseded_by": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tier": {
+          "type": "integer"
+        },
+        "token": {
+          "oneOf": [
+            {
+              "$ref": "#/schemas/GateTokenView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tree_digest": {
+          "type": "string"
+        },
+        "updated_at": {
+          "description": "Python datetime.isoformat() of an aware time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent",
+        "app",
+        "approvals",
+        "base",
+        "checks",
+        "cleared_by",
+        "cluster",
+        "created_at",
+        "decided_at",
+        "denied_by",
+        "deny_reason",
+        "deployments",
+        "env",
+        "expires_at",
+        "head",
+        "id",
+        "lines_changed",
+        "objects",
+        "objects_count",
+        "owner",
+        "paths",
+        "paths_count",
+        "policy_version",
+        "pr",
+        "proposer",
+        "proposer_kind",
+        "protected",
+        "reasons",
+        "registered_by",
+        "repo",
+        "repo_policy_digest",
+        "requirement",
+        "state",
+        "superseded_by",
+        "target",
+        "task_id",
+        "tier",
+        "tree_digest",
+        "updated_at"
+      ],
+      "type": "object"
+    },
     "PolicyDoc": {
       "properties": {
         "packs": {
@@ -1644,6 +1950,92 @@
       },
       "required": [
         "items"
+      ],
+      "type": "object"
+    },
+    "TokenEnvelope": {
+      "properties": {
+        "payload": {
+          "type": "string"
+        },
+        "payloadType": {
+          "type": "string"
+        },
+        "signatures": {
+          "items": {
+            "$ref": "#/schemas/TokenSignature"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "payload",
+        "payloadType",
+        "signatures"
+      ],
+      "type": "object"
+    },
+    "TokenJWK": {
+      "properties": {
+        "alg": {
+          "type": "string"
+        },
+        "crv": {
+          "type": "string"
+        },
+        "kid": {
+          "type": "string"
+        },
+        "kty": {
+          "type": "string"
+        },
+        "use": {
+          "type": "string"
+        },
+        "x": {
+          "type": "string"
+        },
+        "y": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "alg",
+        "crv",
+        "kid",
+        "kty",
+        "use",
+        "x",
+        "y"
+      ],
+      "type": "object"
+    },
+    "TokenJWKS": {
+      "properties": {
+        "keys": {
+          "items": {
+            "$ref": "#/schemas/TokenJWK"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "keys"
+      ],
+      "type": "object"
+    },
+    "TokenSignature": {
+      "properties": {
+        "keyid": {
+          "type": "string"
+        },
+        "sig": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "keyid",
+        "sig"
       ],
       "type": "object"
     },

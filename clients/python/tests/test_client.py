@@ -149,6 +149,14 @@ def test_the_gate(core):
     with pytest.raises(cc.CoreRequestError) as e:
         admin.deny_change(ch.id, "again")
     assert e.value.status in (403, 409)
+    # The core's read of one change: the registering verifier may; a person may not (clearance-api is theirs). A
+    # core without a signing key issues no token and publishes no key.
+    got = cc.CoreClient(core.url, token=CI).get_clearance(ch.id)
+    assert isinstance(got, cc.GateClearanceAnswer) and got.id == ch.id and got.token is None
+    with pytest.raises(cc.CoreRequestError) as e:
+        admin.get_clearance(ch.id)
+    assert e.value.status == 403
+    assert cc.CoreClient(core.url).keys().keys == []
 
 
 def test_refusals_are_request_errors_not_outages(core):

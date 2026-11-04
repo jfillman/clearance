@@ -36,6 +36,8 @@ The contract is [`contract/clearance-core.json`](https://github.com/jfillman/cle
 | `POST /v1/records` | a registered provider | One of the provider's own records: `session.open`, `run.launch`, `run.delete`, `run.finish`, `human.answer`, `session.freeze`, `session.end`, `trigger.hold`, `trigger.release`, `tool.call` (an outage read, `coverage-unavailable`), `deploy.outcome`, `deploy.exception`. |
 | `PUT /v1/definitions` | the provider registered with `definitions: true` | The provider's whole set of cluster-pinned agent definitions replaces the core's. The core decides each pin and records each change once (`definition.load`, `definition.unload`, `definition.reject`). |
 | `POST /v1/clearances`, `/v1/clearances/{change_id}/clear`, `/v1/clearances/{change_id}/deny` | a verifier; a person or a delegate | The deployment gate ([gate.md](gate.md)), at the Python core's paths. |
+| `GET /v1/clearances/{change_id}` | a registered provider, or the verifier that registered the change | The change's state and its live [clearance token](#the-clearance-token) (`null` when it has none). A token with under half its life left is re-issued first. People read changes through clearance-api. |
+| `GET /v1/keys` | anyone (no token) | The token verification keys, a JWKS: the key in use and keys retired in the last 24 hours. |
 | `POST /v1/definitions/review` | a verifier, a person, or a delegate naming one | Would Clearance load this agent definition, and how much more may its agent do (the definition-change tier). Stateless, unrecorded. |
 | `POST /v1/provenance` | a verifier | The agent-identity and agent-scope verdicts for a pull request, recorded as `provenance.verify`. |
 | `POST /v1/github/webhook` | GitHub (HMAC signature, no bearer token) | The Clearance GitHub App ([provenance-app.md](provenance-app.md)). |
@@ -65,6 +67,11 @@ A JSON array (at most 64 KiB), strictly decoded. Without it no caller may evalua
 - `intent_capture` is `redacted` (the default) or `full`, for its records' intent text.
 - `definitions: true` lets the provider publish its cluster-pinned agent definitions (`PUT /v1/definitions`). At
   most one provider has it, because a publish replaces the whole set: two publishers would undo each other.
+- `conformance` is the conformance suite the provider passed and when, as `<suite>/v<n>[@YYYY-MM-DD]`
+  (`clearance-conformance/v1@2026-11-03`; `clearance conformance` prints the suite). The core stamps it on every
+  record the provider writes as `provider.conformance`, the field the v1 schema reserved. Records written before
+  the field was set, and the core's own records, have none. The registration says it; the core does not run the
+  suite.
 
 ### Decisions, outcomes and records
 
@@ -145,6 +152,10 @@ All configuration comes from the environment. An empty variable counts as unset.
 | `MODEL_ROUTES` | `alias=upstream,...`: the model aliases a definition release may name. When unset they are not checked. |
 | `RUNTIME_IMAGES_EXTRA` | Globs a definition's `runtime.image` may match. |
 | `CLEARANCE_TRUSTED_REGISTRIES` | Comma-separated image prefixes, each ending in `/`, that a tier-1 image bump may come from; an image bump from anywhere else is tier 2 (`image:not-trusted-registry`) and held for the owner group. Unset: any registry (the product default). Hangar sets `ghcr.io/riley-roooo/` (decided 2026-11-03, live from the R-4 cutover). |
+| `CLEARANCE_SIGNING_KEY_FILE` | The [clearance token](#the-clearance-token) signing key: a PEM ECDSA P-256 private key (SEC 1 `EC PRIVATE KEY` or PKCS #8 `PRIVATE KEY`), read once at start. Unset: no tokens are issued, and the core logs a warning. |
+| `CLEARANCE_SIGNING_KMS` | A KMS key reference. Reserved: the KMS signer is not built, and the core refuses to start with it set. |
+| `CLEARANCE_TOKEN_TTL` | Each token's life, a Go duration (default `15m`; `1m` to `24h`, and at least four times `CLEARANCE_EXPIRE_SECONDS`, the refresh interval). |
+| `CLEARANCE_TOKEN_ISSUER` | The tokens' `iss`, which verifiers check (default `clearance`). |
 | `CLEARANCE_GITHUB_APP_ID`, `CLEARANCE_GITHUB_APP_KEY_FILE`, `CLEARANCE_GITHUB_APP_WEBHOOK_SECRET_FILE` | The Clearance GitHub App. Set all three or none. The key and secret are read from files. |
 | `CLEARANCE_GITHUB_APP_COMMENTS` | `off` (default) or `agent-failures`. |
 | `CLEARANCE_GITHUB_API` | The GitHub API base (default `https://api.github.com`). |
@@ -175,6 +186,144 @@ The source of truth is the package documentation of `internal/core`, `internal/b
 `authn.EnvVars`. `clearance register`
 reads `CLEARANCE_URL` and GitHub Actions' `GITHUB_EVENT_PATH`, `GITHUB_REPOSITORY`, `GITHUB_SHA` and
 `GITHUB_ACTOR`.
+
+## The clearance token
+
+**Status: Built** (C-1). Not yet deployed: hangar-dev runs v0.30.0 until a release carries it and the lab key
+exists ([install.md](install.md#the-clearance-token-signing-key)). Nothing consumes a token yet: the Argo CD grant
+sync (G-ARGO-3), the Config Management Plugin (G-ARGO-4), the PreSync wait (G-ARGO-5) and the Terraform gate
+(G-TF-2) are the consumers.
+
+When the deployment gate clears a change (`deploy.clear`, by policy or when the last person needed approves), the
+core signs a short-lived token that says so and what it is bound to. Package `internal/token`; the gate's side is
+`internal/gate/token.go`.
+
+### Format: a DSSE envelope, with a JWT projection
+
+Decided in the build spec (section 14, C-1) and kept here: one set of claims, signed twice with one key.
+
+- **The DSSE envelope** (`payloadType` `application/vnd.clearance.token.v1+json`): the payload is the claims JSON,
+  the signature is ECDSA over SHA-256 of DSSE's pre-authentication encoding, ASN.1 DER, as Sigstore writes it. This
+  is the format the attestation signer (C-2) uses, so one signing path serves tokens and attestations, and any
+  DSSE verifier checks it.
+- **The JWT projection**: a compact JWS, header `{"alg": "ES256", "kid": <key id>, "typ": "clearance-token+jwt"}`,
+  the same claims as its payload. For the PreSync hook and anything else that speaks JWT.
+
+Both carry the same claims. A verifier may check either one and gets the same answer.
+
+### Claims
+
+| Claim | What it is |
+|---|---|
+| `_type` | `clearance.token/v1` |
+| `iss` | `CLEARANCE_TOKEN_ISSUER` |
+| `sub` | the clearance (change) id |
+| `iat`, `exp` | NumericDate seconds. `exp` is at most `iat` + `CLEARANCE_TOKEN_TTL`, never past the change's horizon (below), and never more than 24 hours after `iat`, whoever signed it |
+| `nonce` | 128 random bits, base64url: this clearance's issuance (below) |
+| `clearance` | `{id, cleared_by: "policy" \| "people", decided_at}` |
+| `subjects` | `{kind: "manifest-tree", repo, pr, commit, base, tree_root, images}`: the binding is `tree_root` (a Terraform change's is `plan_digest`, from G-TF-1); `commit` and `images` (every image the objects name, sorted) are cross-references |
+| `objects` | each object the change touches: `{apiVersion, kind, namespace, name, rendered, changed, op}`; `rendered` is its rendered hash as the verifier reported it |
+| `target` | `{cluster, env, app}` |
+| `tier` | 0 to 3 |
+| `policy` | `{ref, repo_policy_digest, engine: "clearance-gate", engine_version, verdict: "clear" \| "hold"}`: the baseline's version, the repo's `clearance.yaml` digest, and the engine's verdict (`hold` when people cleared it) |
+| `provenance` | `{level, check, proposer, proposer_kind, agent, task_id}`: `level` is the evidence schema's (`confirmed-agent` for an agent PR the agent gates confirmed, `probable-agent` for another agent PR, `confirmed-human` for a person's PR the gates found no agent in, else `unknown`); `task_id` is the run's, when the registration names it (`taskId`) |
+| `approvals` | each person: `{sub, iss, person, via, role, at}` (below); empty when policy cleared it |
+
+A decoded payload (a tier-2 change one person cleared through Tower):
+
+```json
+{
+  "_type": "clearance.token/v1",
+  "iss": "clearance",
+  "sub": "ch-5f0c2a9e1d3b7a41",
+  "iat": 1793707200,
+  "exp": 1793708100,
+  "nonce": "q0bUo8m1V3m6l2b0kJ8m3A",
+  "clearance": {"id": "ch-5f0c2a9e1d3b7a41", "cleared_by": "people", "decided_at": "2026-11-03T12:00:00+00:00"},
+  "subjects": {"kind": "manifest-tree", "repo": "jfillman/gitops-gate-api", "pr": 7,
+               "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+               "tree_root": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "images": []},
+  "objects": [{"apiVersion": "argoproj.io/v1alpha1", "kind": "Rollout", "namespace": "app-gate-api-prod",
+               "name": "gate-api", "rendered": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+               "changed": true, "op": "changed"}],
+  "target": {"cluster": "hangar-prod", "env": "prod", "app": "gate-api"},
+  "tier": 2,
+  "policy": {"ref": "baseline-2026-10-31", "engine": "clearance-gate", "engine_version": "0.31.0", "verdict": "hold"},
+  "provenance": {"level": "confirmed-human", "check": "not-agent", "proposer": "user:dana", "proposer_kind": "person"},
+  "approvals": [{"sub": "user:erin", "iss": "delegate:hangar-prod/app-backstage-prod/backstage", "person": "user:erin",
+                 "via": "hangar-prod/app-backstage-prod/backstage", "role": "owner", "at": "2026-11-03T12:00:00Z"}]
+}
+```
+
+### Approvals name the person
+
+An approval names the person at their identity provider, and the delegate it came through, never only the service
+that relayed it:
+
+- **A person signed in themselves** (their OIDC ID token at the core): `sub` and `iss` are the token's subject and
+  the configured issuer, as signed.
+- **Through a delegate** (Tower's Backstage, naming the person in the on-behalf-of header): `sub` is the person as
+  the delegate named them, `iss` is `delegate:<the delegate's principal>`, and `via` names the delegate. The core
+  verified the delegate, not the person: the delegate is the issuer of that assertion. When a delegate forwards the
+  person's own ID token instead, the approval will carry the IdP's subject and issuer (the token-forwarding work).
+- **Policy**: no person. `approvals` is empty and `cleared_by` is `policy`.
+
+The change view's approvals (`GET /v1/clearances/{id}`, both APIs) carry `sub` and `iss`; approvals recorded before
+C-1 have neither, and the token names them `sub: <person>`, `iss: unattested`. The `deploy.clear` record carries
+`approvals` (the schema's `{sub, iss, via, at}`, plus `person` and `role`), `cleared_by`, and `token` (the nonce)
+when it issued one. The GitHub App's `deploy.request` and `deploy.answer` records, written as `app:<installation>`,
+carry the same `approvals` and `cleared_by` once the change is cleared, so a record of the App approving a
+deployment names who cleared it, or says `policy`.
+
+### Nonce, replay and a new head
+
+- **Issue.** A token is issued in the transaction that clears the change; its row (`clearance_tokens`) holds the
+  nonce. If signing fails, the clear rolls back: a change is never cleared without its token.
+- **Refresh.** While the change stays cleared, the core re-issues the token before it expires (when under half its
+  life is left: on the expiry loop's tick, `CLEARANCE_EXPIRE_SECONDS`, and on a read through the core), with the
+  same nonce. A token signed by a key the core no longer uses is re-issued at once.
+- **Horizon.** A change's tokens are valid until its horizon: as long after it was cleared as it could have held
+  (the gate TTL, 7 days by default, or the repo's tighter `ttlDays`). Past it the token lapses and is revoked, and
+  the change must be registered again on a new head to deploy.
+- **A new head invalidates it.** Registering a new head on the same pull request (for a pushed commit, `pr` 0: the
+  same app, environment and cluster) revokes the older head's token, recorded as `deploy.revoke` (`token`: the
+  nonce, result `token revoked: superseded by <head>`). The grant feed stops listing it at once.
+- **Replay.** A token is acted on only while its nonce is the clearance's live one: the core's check
+  (`gate.Service.CheckNonce`) refuses a token whose clearance has another nonce, a revoked one, or no longer
+  cleared. A one-shot consumer (the PreSync hook) keeps `token.NonceCache`, which accepts a nonce once until its
+  token expires and fails closed when full. An offline grant sync verifies signature, expiry and binding, and relies
+  on the feed for revocation.
+
+### Verifying
+
+`token.Verify` (the envelope) and `token.VerifyJWT` check: the key (`GET /v1/keys`), the signature, strict
+decoding of what was signed (an unknown claim is refused), `iss`, `exp` and `iat` (30 s leeway), the lifetime cap,
+the binding the caller expects (`Expect`: clearance id, tree root, plan digest, commit, cluster), and the nonce
+when a checker is given. `Claims.Covers(apiVersion, kind, namespace, name, rendered)` is admission's question: is
+this object listed with this rendered hash. The parsers are fuzzed (`FuzzVerifyEnvelope`, `FuzzVerifyJWT`,
+`FuzzParseJWKS`).
+
+### The key
+
+**ECDSA P-256 (ES256), from a file.** Chosen over Ed25519 because every consumer and signer in the path takes it:
+ES256 is the JWS algorithm every JWT library and Kubernetes' own OIDC verification support (the core already accepts
+it for people's ID tokens); Sigstore's DSSE tooling and cosign keys default to ECDSA P-256; and every KMS a customer
+might hold the key in signs ECDSA P-256 with SHA-256 and returns DER (AWS KMS `ECC_NIST_P256`, Google Cloud KMS
+`EC_SIGN_P256_SHA256`, Azure Key Vault `ES256`, Vault transit `ecdsa-p256`), while Ed25519 support across them is
+uneven. The signature code is the standard library's (`crypto/ecdsa`); there is no custom crypto.
+
+- **The lab**: a PEM file from a Secret the deployment names (`signing.existingSecret`), mounted read-only for the
+  core only. The chart never creates it, the api never mounts it, and it is never logged.
+- **Publication**: at start the core writes the public key to `clearance_signing_keys` and retires the one it used
+  before. `GET /v1/keys` (the core and clearance-api) serves the key in use and keys retired in the last 24 hours,
+  each `kid` its RFC 7638 thumbprint, so verifiers check tokens offline and a rotation does not strand tokens in
+  flight.
+- **Rotation**: replace the Secret's key and restart the core. Its first refresh re-signs every live token with the
+  new key; verifiers that cache keys refetch on an unknown `kid`.
+- **KMS**: `signing.kms` (`CLEARANCE_SIGNING_KMS`) is the chart's reference for a KMS-held key. The KMS signer is
+  not built: the core refuses to start with it set. The interface it implements is `token.Signer` (`KeyID()`,
+  `Public()`, `Sign(ctx, sha256 digest) -> DER`), which is what the KMS signing APIs above take and return; the
+  token code does not change for it. A hosted Clearance (C-13) needs it.
 
 ## The decision engine (`internal/decide`)
 
@@ -296,7 +445,11 @@ vocabulary (`vocabulary.*`): see [install.md](install.md).
 
 - **Same tables.** The core keeps `clearance_evidence`, `clearance_changes` and `clearance_definitions`, with the
   columns, indexes and jsonb shapes the Python core created (`pg.py` SCHEMA, verbatim, `CREATE ... IF NOT EXISTS`
-  only). So the Go core can take over the live hangar-dev database at cutover without a migration. The gateway's
+  only). So the Go core can take over the live hangar-dev database at cutover without a migration. C-1 adds two
+  tables of its own, created the same way on the next start: `clearance_tokens` (one row per cleared change: the
+  cluster, nonce, key id, validity, revocation, the DSSE envelope and the JWT; indexed for the grant feed by
+  `(cluster, expires_at)` and for the refresh by `expires_at`, both where not revoked) and `clearance_signing_keys`
+  (the public keys the core has signed with). The chart's reader role reads them through its default privileges. The gateway's
   tables (sessions, artifacts, inbox, events, holds, results) are not the core's and are left alone.
 - **One writer.** Opening a writable store takes the advisory lock the Python core takes (`LockKey`, pg.py's
   `"clr0"`) on a dedicated connection and holds it for the store's life. Every write runs on that connection, and a

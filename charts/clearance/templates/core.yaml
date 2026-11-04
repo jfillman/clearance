@@ -80,6 +80,22 @@ spec:
             - name: MODEL_ROUTES
               value: {{ include "clearance.csv" . | quote }}
             {{- end }}
+            {{- if .Values.signing.existingSecret }}
+            - name: CLEARANCE_SIGNING_KEY_FILE
+              value: /etc/clearance/signing/{{ .Values.signing.key }}
+            {{- end }}
+            {{- with .Values.signing.kms }}
+            - name: CLEARANCE_SIGNING_KMS
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.token.ttl }}
+            - name: CLEARANCE_TOKEN_TTL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.token.issuer }}
+            - name: CLEARANCE_TOKEN_ISSUER
+              value: {{ . | quote }}
+            {{- end }}
             {{- if .Values.githubApp.enabled }}
             - name: CLEARANCE_GITHUB_APP_ID
               value: {{ required "githubApp.appId is required with githubApp.enabled" .Values.githubApp.appId | quote }}
@@ -110,6 +126,11 @@ spec:
               mountPath: /etc/clearance/github-app
               readOnly: true
             {{- end }}
+            {{- if .Values.signing.existingSecret }}
+            - name: signing-key
+              mountPath: /etc/clearance/signing
+              readOnly: true
+            {{- end }}
             {{- with .Values.core.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -123,6 +144,14 @@ spec:
             items:
               - {key: {{ .Values.githubApp.privateKeyKey | quote }}, path: {{ .Values.githubApp.privateKeyKey | quote }}}
               - {key: {{ .Values.githubApp.webhookSecretKey | quote }}, path: {{ .Values.githubApp.webhookSecretKey | quote }}}
+        {{- end }}
+        {{- if .Values.signing.existingSecret }}
+        - name: signing-key
+          secret:
+            secretName: {{ .Values.signing.existingSecret }}
+            defaultMode: 0400
+            items:
+              - {key: {{ .Values.signing.key | quote }}, path: {{ .Values.signing.key | quote }}}
         {{- end }}
         {{- with .Values.core.extraVolumes }}
         {{- toYaml . | nindent 8 }}

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jfillman/clearance/internal/evidence"
 	"github.com/jfillman/clearance/internal/store"
@@ -19,6 +20,8 @@ type memStore struct {
 	recs    []Record // in seq order, each with "assurance"
 	changes []store.Change
 	defs    []store.Definition
+	tokens  []store.Token
+	keys    []store.SigningKey
 	fail    error
 }
 
@@ -337,7 +340,9 @@ func (m *memStore) Verify(context.Context) (Verified, error) {
 }
 
 type changeView struct {
+	ID          string  `json:"id"`
 	App         string  `json:"app"`
+	Cluster     string  `json:"cluster"`
 	Env         string  `json:"env"`
 	State       string  `json:"state"`
 	Repo        string  `json:"repo"`
@@ -373,8 +378,13 @@ func (m *memStore) filtered(f ChangeFilter, v *Viewer, list bool) ([]store.Chang
 			continue
 		}
 		if list && ((f.Repo != "" && c.Repo != f.Repo) || (f.PR != nil && int64(c.PR) != *f.PR) ||
-			(f.Tier != nil && cv.Tier != *f.Tier)) {
+			(f.Tier != nil && cv.Tier != *f.Tier) || (f.Cluster != "" && cv.Cluster != f.Cluster)) {
 			continue
+		}
+		if list && f.LiveAt != nil {
+			if _, live := m.live([]string{cv.ID}, *f.LiveAt)[cv.ID]; !live {
+				continue
+			}
 		}
 		if f.Since != "" && cv.UpdatedAt < f.Since {
 			continue
@@ -438,3 +448,30 @@ func (m *memStore) ChangeCounts(_ context.Context, f ChangeFilter, v *Viewer, by
 func (m *memStore) Definitions(context.Context) ([]store.Definition, error) { return m.defs, m.fail }
 
 func (m *memStore) Ping(context.Context) error { return m.fail }
+
+func (m *memStore) live(ids []string, now time.Time) map[string]store.Token {
+	out := map[string]store.Token{}
+	for _, tk := range m.tokens {
+		for _, id := range ids {
+			if tk.ChangeID == id && tk.RevokedAt == nil && tk.ExpiresAt.After(now) {
+				out[id] = tk
+			}
+		}
+	}
+	return out
+}
+
+func (m *memStore) Tokens(_ context.Context, ids []string, now time.Time) (map[string]store.Token, error) {
+	return m.live(ids, now), m.fail
+}
+
+func (m *memStore) SigningKeys(_ context.Context, since time.Time) ([]store.SigningKey, error) {
+	out := []store.SigningKey{}
+	for _, k := range m.keys {
+		if k.RetiredAt == nil || k.RetiredAt.After(since) {
+			out = append(out, k)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, m.fail
+}

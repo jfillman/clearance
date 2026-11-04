@@ -97,7 +97,7 @@ func (v tokenVerifier) verify(ctx context.Context, token, rejected string) (map[
 
 // OIDCAuthenticator is a person's ID token: signed by the issuer (RS256 or ES256 only, never none or HMAC), for
 // this audience, not expired. The principal is "user:" + UserClaim (email by default, which Dex sets from the
-// connector). Allowed names who may sign in at all (fnmatch globs on the claim's value): an issuer that federates a
+// connector), with the token's sub and the issuer as its Claims. Allowed names who may sign in at all (fnmatch globs on the claim's value): an issuer that federates a
 // public identity provider authenticates anyone with an account there, so a valid token alone is not a grant.
 // Empty allows nobody.
 type OIDCAuthenticator struct {
@@ -137,7 +137,12 @@ func (a *OIDCAuthenticator) Authenticate(ctx context.Context, token string) (Pri
 	if !pycompat.MatchAny(who, a.Allowed) {
 		return Principal{}, refuse(uc + " is not allowed to sign in to this Clearance")
 	}
-	return Principal{ID: "user:" + who, Kind: KindPerson}, nil
+	// The person at their identity provider (sub and iss, as signed): what an approval records (C-1).
+	id := map[string]any{"iss": a.Issuer}
+	if sub, ok := claims["sub"].(string); ok && sub != "" {
+		id["sub"] = sub
+	}
+	return Principal{ID: "user:" + who, Kind: KindPerson, Claims: id}, nil
 }
 
 // ForeignWorkloadAuthenticator is a service-account token from another cluster, verified against that cluster's

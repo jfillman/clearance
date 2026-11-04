@@ -127,13 +127,21 @@ var ErrInvalid = errors.New("evidence: not a v1 record")
 // The Python core accepted these and broke its own chain on the next start; Go refuses them up front.
 var ErrNotStorable = errors.New("evidence: event would not survive Postgres jsonb unchanged")
 
-// Provider is the registered provider a record names: who wrote it, at what version.
+// Provider is the registered provider a record names: who wrote it, at what version, and the conformance suite it
+// passed when its registration says so (provider.conformance, e.g. "clearance-conformance/v1@2026-11-03").
 type Provider struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
+	Name        string `json:"name"`
+	Version     string `json:"version"`
+	Conformance string `json:"conformance,omitempty"`
 }
 
-func (p Provider) value() map[string]any { return map[string]any{"name": p.Name, "version": p.Version} }
+func (p Provider) value() map[string]any {
+	v := map[string]any{"name": p.Name, "version": p.Version}
+	if p.Conformance != "" {
+		v["conformance"] = p.Conformance
+	}
+	return v
+}
 
 // Writer is how a writer seals its events (audit.py Writer). R-1d builds one per call: the core's own decision
 // records use the core's provider and GatewayVerified; a registered provider's records use that provider (from
@@ -152,6 +160,8 @@ var (
 	digestAlg    = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]{0,31}$`)
 	hex64        = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	hex40        = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	// ConformanceRx is provider.conformance: the suite and its version, and the date the provider passed it.
+	ConformanceRx = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,62}/v[0-9]{1,4}(@[0-9]{4}-[0-9]{2}-[0-9]{2})?$`)
 )
 
 func (w Writer) check() (capture string, verified map[string]bool, err error) {
@@ -160,6 +170,9 @@ func (w Writer) check() (capture string, verified map[string]bool, err error) {
 	}
 	if n := utf8.RuneCountInString(w.Provider.Version); n == 0 || n > 64 {
 		return "", nil, fmt.Errorf("%w: provider version is 1 to 64 characters", ErrInvalid)
+	}
+	if c := w.Provider.Conformance; c != "" && !ConformanceRx.MatchString(c) {
+		return "", nil, fmt.Errorf("%w: provider conformance %q is not <suite>/v<n>[@<date>]", ErrInvalid, c)
 	}
 	capture = w.IntentCapture
 	if capture == "" {
