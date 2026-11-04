@@ -121,6 +121,43 @@ func TestAMatchedAndAMismatchedOutcome(t *testing.T) {
 	if stored.Outcome == nil || stored.Outcome.Matched || stored.Outcome.Exception == nil {
 		t.Fatalf("stored %+v", stored.Outcome)
 	}
+	// The mismatch takes the clearance away (C-6): the change is in exception, ended by that record, and its
+	// token is revoked in the same transaction, a deploy.revoke after the exception.
+	if stored.State != gate.StateException || out.Change.State != gate.StateException || stored.Ended == nil ||
+		stored.Ended.Seq != *out.ExceptionSeq || stored.Ended.Tool != gate.KindException || stored.Ended.Kind != "digest-mismatch" {
+		t.Fatalf("%s ended %+v", stored.State, stored.Ended)
+	}
+	if tk := f.token(t, b.ID); tk.RevokedAt == nil {
+		t.Fatal("the mismatched change's token is still live")
+	} else {
+		var revoked store.Record
+		for _, r := range f.records(t, "deploy.revoke") {
+			if c, _ := r["change"].(map[string]any); c["id"] == b.ID {
+				revoked = r
+			}
+		}
+		rs, _ := gate.SeqInt(revoked["seq"])
+		if revoked == nil || revoked["result"] != "token revoked: exception: digest-mismatch" || revoked["token"] != tk.Nonce ||
+			rs <= *out.ExceptionSeq {
+			t.Fatalf("%v", revoked)
+		}
+	}
+	// The matched change keeps its clearance and its token.
+	if got := f.get(t, a.ID); got.State != gate.StateCleared || got.Ended != nil {
+		t.Fatalf("%s %+v", got.State, got.Ended)
+	}
+	if tk := f.token(t, a.ID); tk.RevokedAt != nil {
+		t.Fatal("a matched outcome revoked the token")
+	}
+	if n := len(f.records(t, "deploy.revoke")); n != 1 {
+		t.Fatalf("%d deploy.revoke records", n)
+	}
+	f.consistent(t, a.ID)
+	f.consistent(t, b.ID)
+	// A second outcome is still DG-STATE.
+	if r, s := ruleOf(func() error { _, err := f.svc.Outcome(f.ctx, principals["ci"], b.ID, applied(cleared)); return err }()); r != "DG-STATE" || s != 409 {
+		t.Fatal(r, s)
+	}
 }
 
 // The outcome's state machine: once per change (a second is DG-STATE, matched or not), only for a cleared plan,

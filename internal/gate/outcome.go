@@ -161,7 +161,7 @@ func (s *Service) Outcome(ctx context.Context, p authn.Principal, changeID strin
 			return gerr("DG-STATE", fmt.Sprintf("this change's outcome is already recorded (seq %d)", c.Outcome.Seq),
 				"One outcome per change: a new plan registers a new change.", 409)
 		}
-		if c.State != "cleared" {
+		if c.State != StateCleared {
 			return gerr("DG-STATE", "this change is "+c.State+": only a cleared change has an outcome",
 				"Apply a plan only once its change is cleared.", 409)
 		}
@@ -191,7 +191,7 @@ func (s *Service) Outcome(ctx context.Context, p authn.Principal, changeID strin
 		if !matched {
 			detail := fmt.Sprintf("deploy.outcome seq %d reports the plan sha256:%s; the change was cleared for sha256:%s",
 				seq, o.digest, cleared)
-			x := w.record(p.ID, nil, "deploy.exception", c, "", nil, "digest mismatch: what was applied is not what was cleared", args,
+			x := w.record(p.ID, nil, KindException, c, "", nil, "digest mismatch: what was applied is not what was cleared", args,
 				map[string]any{"decision": nil, "coverage": "out-of-band-detected", "destination": dest,
 					"exception": map[string]any{"kind": "digest-mismatch", "expected": "sha256:" + cleared,
 						"observed": "sha256:" + o.digest, "detected_at": w.now.Format(time.RFC3339), "detail": detail}})
@@ -200,6 +200,14 @@ func (s *Service) Outcome(ctx context.Context, p authn.Principal, changeID strin
 			}
 		}
 		now := PyTime{w.now}
+		if exc != nil {
+			// What was applied is not what was cleared: the change leaves cleared for exception (C-6), and its token
+			// is revoked in this transaction (deploy.revoke).
+			w.move(c, StateException, "exception: digest-mismatch", map[string]any{"exception": *exc, "kind": "digest-mismatch"})
+			c.Ended = &Ended{Seq: *exc, Tool: KindException, Kind: "digest-mismatch"}
+			c.DecidedAt = &now
+			w.settle(c)
+		}
 		c.Outcome = &Outcome{Seq: seq, Applied: o.applied, Matched: matched, PlanDigest: o.digest, At: pycompat.ISO(w.now), Exception: exc}
 		c.UpdatedAt = now
 		w.put(c)

@@ -7,8 +7,8 @@ a provider implements, written from the routes the Go core serves today (`intern
 
 Status: **Built** (R-1f) for everything the core serves today: the two roles, the conformance control interface,
 `clearance conformance`, and the reference fakes; the core's read of a change and the signed clearance token are
-**Built** (C-1). The wait route and the change-bound outcome route are **Proposal** (G-TF-2, C-10); the section
-[Not served yet](#not-served-yet) says how a provider works without them.
+**Built** (C-1). The wait route (C-10) and the change-bound outcome route for a terraform-plan change (G-TF-2)
+are **Built**; the section [Not served yet](#not-served-yet) lists what still is not.
 
 ## What you get
 

@@ -170,7 +170,8 @@ view `outage`, `ProviderEvent` `exception` and `outage`; take this release's cli
   `terraform apply -json`; strictly decoded, 4 MiB cap). The core records `deploy.outcome` with `matched` (verified:
   the applied plan digest is the cleared one) and, on a mismatch, a `deploy.exception` of kind `digest-mismatch`
   (C-6's shape: `expected`, `observed`, `coverage: out-of-band-detected`), and keeps `outcome {seq, applied,
-  matched, plan_digest, at, exception}` on the change. A second outcome, or one for a change that is not cleared, is
+  matched, plan_digest, at, exception}` on the change. A mismatch moves the change from `cleared` to `exception`
+  (C-6's state machine; `ended` names the exception) and revokes its token (`deploy.revoke`) in the same transaction. A second outcome, or one for a change that is not cleared, is
   `DG-STATE` (409); another caller is `DG-FORBIDDEN`; a manifest change is `DG-SUBJECT`. Go client `ChangeOutcome`,
   Python client `record_change_outcome`; contracts and models regenerated; a fuzz target for the route.
 - A plan waits on C-10's `GET /v1/clearances/{id}/wait` like any change, and wakes cleared with a token bound to

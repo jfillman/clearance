@@ -748,9 +748,9 @@ partial index `clearance_evidence_exceptions`. Filters: `tool`, `kind` (an excep
 ### Not yet
 
 - The providers that file these records: the Argo agent's exceptions and break-glass marker (G-ARGO-3), Terraform
-  drift and untraced-apply detection (G-TF-3), the change-bound outcome route that writes `digest-mismatch` itself
-  (G-TF-2: the record shape is defined here; `gate.Service.Report` with kind `digest-mismatch` and `change.id` is
-  what it calls).
+  drift and untraced-apply detection (G-TF-5). The change-bound outcome route that writes `digest-mismatch` itself is
+  **Built** (G-TF-2, [below](#hold-release-and-outcome-for-a-plan-g-tf-2-built)): it writes the record in this
+  shape and moves the change to `exception` with the same edge.
 - The packet itself (C-4, C-5) and its coverage statement (counts by coverage and degraded windows).
 - A report that arrives after its break-glass window closed is not tagged with it.
 
@@ -1090,7 +1090,8 @@ The core compares `planDigest` with the digest the change was cleared for and, i
 - on a mismatch also writes **`deploy.exception`** of kind `digest-mismatch`, in C-6's shape: `exception {kind,
   expected: "sha256:<cleared>", observed: "sha256:<applied>", detected_at, detail}` (the detail names the outcome's
   seq), `coverage: out-of-band-detected`, the change named by `change.id`;
-- keeps the outcome on the change: `outcome {seq, applied, matched, plan_digest, at, exception}`.
+- keeps the outcome on the change: `outcome {seq, applied, matched, plan_digest, at, exception}`;
+- on a mismatch moves the change to `exception` and revokes its token (`deploy.revoke`), below.
 
 The answer is `{change, matched, audit_seq, exception_seq}`. A failed apply is an outcome too (`applied: false`, its
 error recorded).
@@ -1099,7 +1100,7 @@ error recorded).
 
 | Situation | Answer |
 | --- | --- |
-| a cleared terraform-plan change, first outcome, from its registrant | 200; `deploy.outcome` (and `deploy.exception` on a mismatch) |
+| a cleared terraform-plan change, first outcome, from its registrant | 200; `deploy.outcome`; on a mismatch also `deploy.exception` and `deploy.revoke`, and the change is `exception` |
 | a second outcome for the same change, matched or not | 409 `DG-STATE` ("already recorded (seq N)") |
 | a holding, denied, expired or superseded change | 409 `DG-STATE` |
 | a caller that did not register the change | 403 `DG-FORBIDDEN` |
@@ -1109,10 +1110,10 @@ error recorded).
 
 Every refusal records nothing. Go client `ChangeOutcome`, Python client `record_change_outcome`.
 
-**With C-6 (clearance#59, not merged when this was built).** C-6's state machine moves a change named by a
-`deploy.exception` from cleared to `exception` and revokes its token. This route writes the record in C-6's shape but
-does not move the state on its own: the move needs C-6's `writer.move` and the `exception` state. Once both are on
-main, the mismatch branch of `Service.Outcome` calls `w.move(c, StateException, "exception: digest-mismatch", ...)`
-and sets `c.Ended`, a few lines; a second outcome stays `DG-STATE` either way (the change then is in `exception`, and
-has an outcome). Until then a mismatched change stays `cleared` with its outcome recorded and its token live until
-its horizon.
+**A mismatch takes the clearance away (C-6).** In the same transaction as the two records, the change moves from
+`cleared` to `exception` along C-6's state machine (`gate.Transitions`), its `ended` names the `deploy.exception`
+(seq, tool, kind `digest-mismatch`), and its token is revoked: a `deploy.revoke` record, "token revoked: exception:
+digest-mismatch". A GitHub deployment of it is then rejected. A matched outcome leaves the change `cleared` with its
+token live until its horizon. A second outcome is `DG-STATE` either way (the change has an outcome, and a mismatched
+one is no longer cleared). The core writes this exception itself, so it is not checked by `gate.CheckReport` and is
+not tagged with a break-glass window: a plan names no cluster.
