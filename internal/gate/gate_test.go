@@ -745,7 +745,7 @@ func TestTheViewHasPythonsKeysInOrder(t *testing.T) {
 	out := f.register(t, "ci", change(map[string]any{"objects": replicas}))
 	raw, _ := json.Marshal(out)
 	keys := []string{"id", "app", "env", "cluster", "repo", "pr", "head", "base", "proposer", "proposer_kind", "agent", "task_id", "owner",
-		"protected", "tree_digest", "paths", "lines_changed", "objects", "checks", "policy_version", "repo_policy_digest", "tier",
+		"protected", "tree_digest", "paths", "lines_changed", "objects", "checks", "policy_version", "repo_policy_digest", "policy_ref", "tier",
 		"reasons", "requirement", "state", "created_at", "updated_at", "expires_at", "registered_by", "approvals", "cleared_by",
 		"decided_at", "deny_reason", "denied_by", "superseded_by", "deployments", "target", "objects_count", "paths_count", "outage"}
 	dec := json.NewDecoder(strings.NewReader(string(raw)))
@@ -862,5 +862,198 @@ func TestAWorkflowRegistersForItsOwnRepositoryOnly(t *testing.T) {
 	_, err = svc.Register(context.Background(), wf, body("jfillman/gate-api"))
 	if r, s := ruleOf(err); r != "DG-REPO" || s != 403 {
 		t.Fatal(err)
+	}
+}
+
+// -- the policy-engine verdict in the record (C-8) ---------------------------------------------------------------------
+
+var kyvernoPass = map[string]any{"engine": "kyverno/1.19.0", "verdict": "pass",
+	"bundle": "https://github.com/jfillman/gitops-hangar-dev.git//30-policy@" + strings.Repeat("d", 40), "deny": 0, "warn": 1}
+
+func policyOf(t *testing.T, r store.Record) map[string]any {
+	t.Helper()
+	p, ok := r["policy"].(map[string]any)
+	if !ok {
+		t.Fatalf("record %v has no policy group", r["tool"])
+	}
+	return p
+}
+
+func TestEveryDeploymentRecordCarriesThePolicyRefEngineAndVerdict(t *testing.T) {
+	f := newGate(t)
+	commit := strings.Repeat("9", 40)
+	tighter := map[string]any{"ttlDays": 3}
+	out := f.register(t, "ci", change(map[string]any{"objects": imageBump, "policy": tighter, "policyCommit": commit,
+		"admission": kyvernoPass, "checks": map[string]any{"ci": "pass", "provenance": "not-agent", "render": "ok"}}))
+	if out.State != "cleared" || out.PolicyRef != "clearance.yaml@"+commit || out.Admission == nil || out.Admission.Warn != 1 ||
+		out.Checks["admission"] != "pass" {
+		t.Fatal(out)
+	}
+	recs := f.records(t, "")
+	if len(recs) != 2 {
+		t.Fatal(len(recs))
+	}
+	want := map[string]any{"ref": "clearance.yaml@" + commit, "version": "baseline-2026-10-31+sha256:" + *out.RepoPolicyDigest,
+		"engine": "kyverno/1.19.0", "verdict": "pass", "bundle": kyvernoPass["bundle"]}
+	for _, r := range recs {
+		if got := policyOf(t, r); !reflect.DeepEqual(got, want) {
+			t.Fatalf("%v: %v", r["tool"], got)
+		}
+		// the verifier reported it: claimed, never verified
+		if !inList(r["claimed"], "policy") || inList(r["verified"], "policy") {
+			t.Fatal(r["claimed"], r["verified"])
+		}
+	}
+	// the same change from a later clearance.yaml commit is another ref (and a new head, so a new change)
+	later := strings.Repeat("8", 40)
+	f.register(t, "ci", change(map[string]any{"head": strings.Repeat("2", 40), "objects": imageBump, "policy": tighter,
+		"policyCommit": later, "admission": kyvernoPass}))
+	recs = f.records(t, "deploy.clear")
+	if got := policyOf(t, recs[len(recs)-1])["ref"]; got != "clearance.yaml@"+later {
+		t.Fatal(got)
+	}
+	if _, err := memory.Load(f.records(t, "")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWithoutAnAdmissionResultTheRecordSaysNotEvaluated(t *testing.T) {
+	f := newGate(t)
+	out := f.register(t, "ci", change(map[string]any{"objects": replicas}))
+	if out.State != "holding" || out.PolicyRef != "baseline" || out.Admission != nil {
+		t.Fatal(out)
+	}
+	want := map[string]any{"ref": "baseline", "version": "baseline-2026-10-31", "engine": "none", "verdict": "not-evaluated"}
+	if got := policyOf(t, f.records(t, "deploy.request")[0]); !reflect.DeepEqual(got, want) {
+		t.Fatal(got)
+	}
+	// a clearance.yaml without its commit is named by its content digest
+	out = f.register(t, "ci", change(map[string]any{"pr": 8, "head": strings.Repeat("3", 40), "objects": replicas, "policy": map[string]any{"ttlDays": 2}}))
+	if out.PolicyRef != "clearance.yaml@sha256:"+*out.RepoPolicyDigest {
+		t.Fatal(out.PolicyRef)
+	}
+	// a person's clear of the first change records the same group
+	first := f.records(t, "deploy.request")[0]["change"].(map[string]any)["id"].(string)
+	if _, err := f.svc.Clear(f.ctx, principals["erin"], first, ""); err != nil {
+		t.Fatal(err)
+	}
+	clears := f.records(t, "deploy.clear")
+	if got := policyOf(t, clears[len(clears)-1]); !reflect.DeepEqual(got, want) {
+		t.Fatal(got)
+	}
+}
+
+func TestReRegistrationRecordsTheNewAdmissionVerdict(t *testing.T) {
+	f := newGate(t)
+	pending := map[string]any{"ci": "pending", "provenance": "not-agent", "render": "ok"}
+	warn := map[string]any{"engine": "kyverno/1.19.0", "verdict": "warn", "warn": 2}
+	out := f.register(t, "ci", change(map[string]any{"objects": imageBump, "checks": pending, "admission": warn}))
+	if out.State != "holding" || out.Admission.Verdict != "warn" {
+		t.Fatal(out)
+	}
+	out = f.register(t, "ci", change(map[string]any{"objects": imageBump, "admission": kyvernoPass, "checks": map[string]any{"ci": "pass", "provenance": "not-agent", "render": "ok"}}))
+	if out.State != "cleared" || out.Admission.Verdict != "pass" {
+		t.Fatal(out)
+	}
+	if got := policyOf(t, f.records(t, "deploy.clear")[0])["verdict"]; got != "pass" {
+		t.Fatal(got)
+	}
+	if got := policyOf(t, f.records(t, "deploy.request")[0])["verdict"]; got != "warn" {
+		t.Fatal(got)
+	}
+}
+
+func TestADenyAndAnUnregisteredDeploymentCarryAPolicyGroup(t *testing.T) {
+	f := newGate(t)
+	commit := strings.Repeat("7", 40)
+	fail := map[string]any{"engine": "kyverno/1.19.0", "verdict": "fail", "deny": 1}
+	f.register(t, "ci", change(map[string]any{"objects": imageBump, "policy": map[string]any{"ttlDays": 99}, "policyCommit": commit,
+		"admission": fail, "checks": map[string]any{"ci": "pass", "provenance": "not-agent", "render": "ok"}}))
+	d := policyOf(t, f.records(t, "deploy.deny")[0])
+	if d["ref"] != "clearance.yaml@"+commit || d["version"] != "baseline-2026-10-31" || d["verdict"] != "fail" {
+		t.Fatal(d)
+	}
+	if _, err := f.svc.DeploymentRequested(f.ctx, "1", "jfillman/nothing", head, "prod", 5, ""); err != nil {
+		t.Fatal(err)
+	}
+	reqs := f.records(t, "deploy.request")
+	if got := policyOf(t, reqs[len(reqs)-1]); got["ref"] != "baseline" || got["verdict"] != "not-evaluated" {
+		t.Fatal(got)
+	}
+}
+
+func TestAMalformedAdmissionResultIsRefused(t *testing.T) {
+	commit := strings.Repeat("9", 40)
+	with := func(a any) map[string]any {
+		return change(map[string]any{"admission": a, "checks": map[string]any{"ci": "pass"}})
+	}
+	cases := []struct {
+		bad any
+		msg string
+	}{
+		{with("pass"), "admission is"},
+		{with(map[string]any{"engine": "kyverno", "verdict": "pass"}), "admission.engine"},
+		{with(map[string]any{"engine": "Kyverno/1.19.0", "verdict": "pass"}), "admission.engine"},
+		{with(map[string]any{"engine": "kyverno/1.19.0", "verdict": "ok"}), "admission.verdict"},
+		{with(map[string]any{"engine": "kyverno/1.19.0", "verdict": "pass", "bundle": "a b"}), "admission.bundle"},
+		{with(map[string]any{"engine": "kyverno/1.19.0", "verdict": "pass", "deny": -1}), "admission.deny"},
+		{with(map[string]any{"engine": "kyverno/1.19.0", "verdict": "pass", "rules": 1}), "unknown field"},
+		{change(map[string]any{"admission": kyvernoPass, "checks": map[string]any{"admission": "fail"}}), "checks.admission"},
+		{change(map[string]any{"policyCommit": commit}), "policyCommit names"},
+		{change(map[string]any{"policy": map[string]any{}, "policyCommit": "abc"}), "policyCommit is"},
+	}
+	for _, c := range cases {
+		_, err := gate.ParseRequest(c.bad)
+		var bc *gate.BadChange
+		if !errors.As(err, &bc) || !strings.Contains(bc.Message, c.msg) {
+			t.Errorf("%v: %v", c.msg, err)
+		}
+	}
+}
+
+func TestReRegistrationRefreshesThePolicyRef(t *testing.T) {
+	f := newGate(t)
+	pending := map[string]any{"ci": "pending", "provenance": "not-agent", "render": "ok"}
+	pol := map[string]any{"ttlDays": 3}
+	out := f.register(t, "ci", change(map[string]any{"objects": imageBump, "checks": pending, "policy": pol}))
+	if out.State != "holding" || out.PolicyRef != "clearance.yaml@sha256:"+*out.RepoPolicyDigest {
+		t.Fatal(out.PolicyRef)
+	}
+	commit := strings.Repeat("6", 40)
+	out = f.register(t, "ci", change(map[string]any{"objects": imageBump, "policy": pol, "policyCommit": commit,
+		"checks": map[string]any{"ci": "pass", "provenance": "not-agent", "render": "ok"}}))
+	if out.State != "cleared" || out.PolicyRef != "clearance.yaml@"+commit {
+		t.Fatal(out.State, out.PolicyRef)
+	}
+	if got := policyOf(t, f.records(t, "deploy.clear")[0])["ref"]; got != "clearance.yaml@"+commit {
+		t.Fatal(got)
+	}
+}
+
+func TestThePolicyGroupSitsBesideTheC1FieldsOnEveryDeployRecord(t *testing.T) {
+	f := newGate(t)
+	f.register(t, "ci", change(map[string]any{"objects": imageBump, "admission": kyvernoPass,
+		"checks": map[string]any{"ci": "pass", "provenance": "not-agent", "render": "ok"}}))
+	out := f.register(t, "ci", change(map[string]any{"pr": 9, "head": strings.Repeat("4", 40), "objects": replicas}))
+	if _, err := f.svc.Clear(f.ctx, principals["erin"], out.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	recs := f.records(t, "")
+	if len(recs) < 4 {
+		t.Fatal(len(recs))
+	}
+	for _, r := range recs {
+		p := policyOf(t, r)
+		if p["ref"] == nil || p["engine"] == nil || p["verdict"] == nil {
+			t.Fatalf("%v: %v", r["tool"], p)
+		}
+		if _, ok := r["task_id"]; !ok {
+			t.Fatalf("%v has no task_id", r["tool"])
+		}
+		if r["tool"] == "deploy.clear" {
+			if _, ok := r["cleared_by"]; !ok {
+				t.Fatalf("deploy.clear lost cleared_by beside policy: %v", r)
+			}
+		}
 	}
 }

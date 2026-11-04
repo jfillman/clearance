@@ -873,6 +873,32 @@
         ],
         "type": "object"
       },
+      "GateAdmission": {
+        "properties": {
+          "bundle": {
+            "type": "string"
+          },
+          "deny": {
+            "type": "integer"
+          },
+          "engine": {
+            "type": "string"
+          },
+          "verdict": {
+            "type": "string"
+          },
+          "warn": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "deny",
+          "engine",
+          "verdict",
+          "warn"
+        ],
+        "type": "object"
+      },
       "GateApproval": {
         "properties": {
           "at": {
@@ -1041,6 +1067,16 @@
       },
       "GateChange": {
         "properties": {
+          "admission": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateAdmission"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "agent": {
             "type": [
               "string",
@@ -1156,6 +1192,9 @@
           },
           "paths_count": {
             "type": "integer"
+          },
+          "policy_ref": {
+            "type": "string"
           },
           "policy_version": {
             "type": "string"
@@ -2593,7 +2632,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "description": "gate.ChangeRequest (docs/gate.md): app, env, cluster, repo, pr, head, base, proposer, proposerKind, owner, protected, treeDigest, paths, linesChanged, objects, checks, policy, agent, definition; unknown fields are refused. protected: false is refused (DG-PROTECTED): Clearance decides protection from CLEARANCE_PROTECTED_ENVIRONMENTS, and clears a change elsewhere at tier 0 (unprotected)",
+                "description": "gate.ChangeRequest (docs/gate.md): app, env, cluster, repo, pr, head, base, proposer, proposerKind, owner, protected, treeDigest, paths, linesChanged, objects, checks, policy, policyCommit, admission, agent, definition; unknown fields are refused. protected: false is refused (DG-PROTECTED): Clearance decides protection from CLEARANCE_PROTECTED_ENVIRONMENTS, and clears a change elsewhere at tier 0 (unprotected)",
                 "type": "object"
               }
             }

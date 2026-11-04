@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -26,7 +27,7 @@ func withTokens(t *testing.T) (*fixture, token.KeySet) {
 		t.Fatal(err)
 	}
 	s, _ := token.NewKeySigner(k)
-	f.svc.Tokens = &gate.Tokens{Signer: s, Issuer: "clearance-test", TTL: 15 * time.Minute, EngineVersion: "0.31.0-test"}
+	f.svc.Tokens = &gate.Tokens{Signer: s, Issuer: "clearance-test", TTL: 15 * time.Minute}
 	return f, token.KeySet{s.KeyID(): s.Public()}
 }
 
@@ -77,8 +78,8 @@ func TestAPolicyClearIssuesABoundToken(t *testing.T) {
 	if cl.Subject != c.ID || cl.Subjects.TreeRoot != tree || cl.Subjects.Commit != head || cl.Subjects.Repo != "jfillman/gitops-gate-api" ||
 		cl.Subjects.PR != 7 || len(cl.Subjects.Images) != 1 || cl.Subjects.Images[0] != img ||
 		cl.Target != (token.Target{Cluster: "hangar-prod", Env: "prod", App: "gate-api"}) || cl.Tier != 1 ||
-		cl.Clearance.ClearedBy != "policy" || cl.Policy.Verdict != "clear" || cl.Policy.Ref != c.PolicyVersion ||
-		cl.Policy.EngineVersion != "0.31.0-test" || len(cl.Approvals) != 0 || cl.Nonce != tk.Nonce ||
+		cl.Clearance.ClearedBy != "policy" || cl.Policy != (token.Policy{Ref: "baseline", Version: c.PolicyVersion,
+		Engine: "none", Verdict: "not-evaluated"}) || len(cl.Approvals) != 0 || cl.Nonce != tk.Nonce ||
 		cl.Provenance != (token.Provenance{Level: "confirmed-human", Check: "not-agent", Proposer: "user:dana",
 			ProposerKind: "person", TaskID: "task-42"}) {
 		t.Fatalf("claims %+v", cl)
@@ -92,6 +93,38 @@ func TestAPolicyClearIssuesABoundToken(t *testing.T) {
 	if rec["cleared_by"] != "policy" || rec["token"] != tk.Nonce || len(rec["approvals"].([]any)) != 0 || rec["task_id"] != "task-42" {
 		t.Fatalf("record %v", rec)
 	}
+	samePolicy(t, cl.Policy, rec)
+}
+
+// samePolicy: a token attests its record, so its policy claim is the record's policy group, field for field.
+func samePolicy(t *testing.T, p token.Policy, rec store.Record) {
+	t.Helper()
+	raw, _ := json.Marshal(p)
+	var claim map[string]any
+	_ = json.Unmarshal(raw, &claim)
+	if group := policyOf(t, rec); !reflect.DeepEqual(claim, group) {
+		t.Fatalf("token policy %v, record policy %v", claim, group)
+	}
+}
+
+func TestTheTokensPolicyIsItsClearRecordsPolicyGroup(t *testing.T) {
+	f, ks := withTokens(t)
+	commit := strings.Repeat("9", 40)
+	c := f.register(t, "ci", change(map[string]any{"objects": imageBump, "policy": map[string]any{"ttlDays": 3}, "policyCommit": commit,
+		"admission": kyvernoPass, "checks": map[string]any{"ci": "pass", "provenance": "not-agent", "render": "ok"}}))
+	tk, err := f.st.Token(f.ctx, c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl, err := f.verify(t, ks, tk, f.svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cl.Policy != (token.Policy{Ref: "clearance.yaml@" + commit, Version: "baseline-2026-10-31+sha256:" + *c.RepoPolicyDigest,
+		Engine: "kyverno/1.19.0", Verdict: "pass", Bundle: kyvernoPass["bundle"].(string)}) {
+		t.Fatalf("%+v", cl.Policy)
+	}
+	samePolicy(t, cl.Policy, f.records(t, "deploy.clear")[0])
 }
 
 func TestPeopleClearingIssuesATokenNamingThePersonAtTheirIdP(t *testing.T) {
@@ -125,7 +158,7 @@ func TestPeopleClearingIssuesATokenNamingThePersonAtTheirIdP(t *testing.T) {
 	if len(cl.Approvals) != 2 || cl.Approvals[0] != want[0] || cl.Approvals[1] != want[1] {
 		t.Fatalf("approvals %+v", cl.Approvals)
 	}
-	if cl.Clearance.ClearedBy != "people" || cl.Policy.Verdict != "hold" || cl.Tier != 3 || cl.IssuedAt != T0.Add(time.Minute).Unix() {
+	if cl.Clearance.ClearedBy != "people" || cl.Tier != 3 || cl.IssuedAt != T0.Add(time.Minute).Unix() {
 		t.Fatalf("claims %+v", cl)
 	}
 	recs := f.records(t, "deploy.clear")
@@ -139,6 +172,7 @@ func TestPeopleClearingIssuesATokenNamingThePersonAtTheirIdP(t *testing.T) {
 		ap[0].(map[string]any)["sub"] != "CgRlcmluEgZnaXRodWI" {
 		t.Fatalf("the clearing record: %v", last)
 	}
+	samePolicy(t, cl.Policy, last)
 }
 
 func TestANewHeadRevokesTheTokenAndTheOldOneIsAReplay(t *testing.T) {

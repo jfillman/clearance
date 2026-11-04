@@ -157,9 +157,10 @@ var routeTable = []Route{
 		Summary: "The clearance-gate check registers (or re-evaluates) a change to a protected environment; the caller " +
 			"is a verifier (CLEARANCE_VERIFIERS).",
 		RequestNote: "gate.ChangeRequest (docs/gate.md): app, env, cluster, repo, pr, head, base, proposer, " +
-			"proposerKind, owner, protected, treeDigest, paths, linesChanged, objects, checks, policy, agent, " +
-			"definition; unknown fields are refused. protected: false is refused (DG-PROTECTED): Clearance decides " +
-			"protection from CLEARANCE_PROTECTED_ENVIRONMENTS, and clears a change elsewhere at tier 0 (unprotected)",
+			"proposerKind, owner, protected, treeDigest, paths, linesChanged, objects, checks, policy, policyCommit, " +
+			"admission, agent, definition; unknown fields are refused. protected: false is refused (DG-PROTECTED): " +
+			"Clearance decides protection from CLEARANCE_PROTECTED_ENVIRONMENTS, and clears a change elsewhere at tier " +
+			"0 (unprotected)",
 		Responses: append([]Response{{200, "the change as recorded", gate.Change{}}}, gateErrs...),
 	},
 	{

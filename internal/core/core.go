@@ -415,7 +415,7 @@ func (c *Core) wire(ctx context.Context) error {
 		if err := c.useKey(ctx, cfg.Signer); err != nil {
 			return err
 		}
-		g.Tokens = &gate.Tokens{Signer: cfg.Signer, Issuer: cfg.TokenIssuer, TTL: cfg.TokenTTL, EngineVersion: writer.Provider.Version}
+		g.Tokens = &gate.Tokens{Signer: cfg.Signer, Issuer: cfg.TokenIssuer, TTL: cfg.TokenTTL}
 	} else if !cfg.Gate.Off {
 		c.log.WarnContext(ctx, "gate: no CLEARANCE_SIGNING_KEY_FILE, so no clearance tokens: a gate provider that "+
 			"admits on a token (the Argo CD grant sync) admits nothing")
