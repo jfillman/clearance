@@ -1074,6 +1074,16 @@
           "state": {
             "type": "string"
           },
+          "subject": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateSubject"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "superseded_by": {
             "type": [
               "string",
@@ -1134,6 +1144,7 @@
           "repo_policy_digest",
           "requirement",
           "state",
+          "subject",
           "superseded_by",
           "target",
           "task_id",
@@ -1336,6 +1347,35 @@
         ],
         "type": "object"
       },
+      "GatePlanSummary": {
+        "properties": {
+          "create": {
+            "type": "integer"
+          },
+          "destroy": {
+            "type": "integer"
+          },
+          "destroyedAddresses": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "replace": {
+            "type": "integer"
+          },
+          "update": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "create",
+          "destroy",
+          "replace",
+          "update"
+        ],
+        "type": "object"
+      },
       "GateReason": {
         "properties": {
           "rule": {
@@ -1381,6 +1421,115 @@
         ],
         "type": "object"
       },
+      "GateResource": {
+        "properties": {
+          "actionReason": {
+            "type": "string"
+          },
+          "actions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "address": {
+            "type": "string"
+          },
+          "fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "actions",
+          "address",
+          "type"
+        ],
+        "type": "object"
+      },
+      "GateSubject": {
+        "properties": {
+          "digests": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "flags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "planDigest": {
+            "type": "string"
+          },
+          "planJsonDigest": {
+            "type": "string"
+          },
+          "resources": {
+            "items": {
+              "$ref": "#/components/schemas/GateResource"
+            },
+            "type": "array"
+          },
+          "summary": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GatePlanSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "targeted": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "variableSetDigest": {
+            "type": "string"
+          },
+          "versions": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateVersions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "workspace": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateWorkspace"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "digests",
+          "kind"
+        ],
+        "type": "object"
+      },
       "GateTokenView": {
         "properties": {
           "dsse": {
@@ -1409,6 +1558,43 @@
           "jwt",
           "key_id",
           "nonce"
+        ],
+        "type": "object"
+      },
+      "GateVersions": {
+        "properties": {
+          "providers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "terraform": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "providers",
+          "terraform"
+        ],
+        "type": "object"
+      },
+      "GateWorkspace": {
+        "properties": {
+          "backend": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "backend",
+          "key",
+          "name"
         ],
         "type": "object"
       },
@@ -2025,6 +2211,87 @@
         ],
         "type": "object"
       },
+      "WaitAnswer": {
+        "properties": {
+          "app": {
+            "type": "string"
+          },
+          "changed": {
+            "type": "boolean"
+          },
+          "cleared_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cluster": {
+            "type": "string"
+          },
+          "env": {
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "Python datetime.isoformat() of an aware time",
+            "type": "string"
+          },
+          "head": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "pr": {
+            "type": "integer"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tier": {
+            "type": "integer"
+          },
+          "token": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateTokenView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tree_digest": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "app",
+          "changed",
+          "cleared_by",
+          "cluster",
+          "env",
+          "expires_at",
+          "head",
+          "id",
+          "pr",
+          "repo",
+          "state",
+          "task_id",
+          "tier",
+          "token",
+          "tree_digest"
+        ],
+        "type": "object"
+      },
       "WebhookAnswer": {
         "properties": {
           "result": {
@@ -2195,7 +2462,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "description": "gate.ChangeRequest (docs/gate.md): app, env, cluster, repo, pr, head, base, proposer, proposerKind, owner, protected, treeDigest, paths, linesChanged, objects, checks, policy, policyCommit, admission, agent, definition; unknown fields are refused",
+                "description": "gate.ChangeRequest, schemas/change-request.schema.json (docs/gate.md): app, env, cluster, repo, pr, head, base, proposer, proposerKind, owner, protected, treeDigest, paths, linesChanged, objects, checks, policy, policyCommit, admission, agent, taskId, definition, subject (a saved Terraform plan: kind terraform-plan, planDigest, planJsonDigest, workspace, versions, summary, targeted, variableSetDigest, resources); unknown fields are refused",
                 "type": "object"
               }
             }
@@ -2587,6 +2854,110 @@
         ],
         "summary": "A person who could clear a holding change denies it, with a reason.",
         "x-clearance-auth": "bearer",
+        "x-clearance-max-body": 65536
+      }
+    },
+    "/v1/clearances/{change_id}/wait": {
+      "get": {
+        "operationId": "waitClearance",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "change_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "the state the caller last saw: answer at once if the change is in another",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "seconds to hold the call, 1 to 60 (default 30)",
+            "in": "query",
+            "name": "timeout",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaitAnswer"
+                }
+              }
+            },
+            "description": "the change, its token, and whether it changed"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "a timeout or state that is not valid"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no bearer token, or one the authenticator refused"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateErrorBody"
+                }
+              }
+            },
+            "description": "no such change, or a Clearance that keeps no changes (DG-OFF)"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the store could not be read, or too many calls are waiting"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Long-poll a change: the same answer as getClearance, returned as soon as the change's state is not `state` (default: its state when the call arrived), or after `timeout` seconds (1 to 60, default 30) with changed false. For any subject kind; the same callers as getClearance. The core is the one writer, so it wakes the call on the write itself (an in-process notifier), never by polling the database.",
+        "x-clearance-auth": "bearer",
+        "x-clearance-long-poll": true,
         "x-clearance-max-body": 65536
       }
     },

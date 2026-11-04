@@ -24,6 +24,9 @@
 //	RUNTIME_IMAGES_EXTRA          globs a definition's runtime.image may match
 //	CLEARANCE_TRUSTED_REGISTRIES  comma-separated image prefixes, each ending in "/", a tier-1 image bump may come from;
 //	                              an image from anywhere else is tier 2 (image:not-trusted-registry). Unset: any registry
+//	CLEARANCE_GATE_UNBOUND_TREE   flag (default) | refuse: a manifest-tree registration whose treeDigest is a placeholder
+//	                              (64 copies of one digit, or sha256 of nothing) is flagged tree:unbound, or refused
+//	                              DG-UNBOUND (docs/gate.md, The manifest-tree digest)
 //	CLEARANCE_GITHUB_APP_ID, CLEARANCE_GITHUB_APP_KEY_FILE, CLEARANCE_GITHUB_APP_WEBHOOK_SECRET_FILE
 //	                              the Clearance GitHub App: all three or none
 //	CLEARANCE_GITHUB_APP_COMMENTS off | agent-failures
@@ -149,6 +152,11 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	cfg.Gate = gate.Config{Verifiers: list(get("CLEARANCE_VERIFIERS", "")),
 		Delegates: list(get("CLEARANCE_DELEGATES", "")), Admins: list(get("CLEARANCE_ADMINS", "")),
 		ImageAllow: list(get("RUNTIME_IMAGES_EXTRA", "")), TrustedRegistries: list(get("CLEARANCE_TRUSTED_REGISTRIES", ""))}
+	switch cfg.Gate.UnboundTree = get("CLEARANCE_GATE_UNBOUND_TREE", gate.UnboundFlag); cfg.Gate.UnboundTree {
+	case gate.UnboundFlag, gate.UnboundRefuse:
+	default:
+		return cfg, fmt.Errorf("CLEARANCE_GATE_UNBOUND_TREE is flag or refuse, not %q", cfg.Gate.UnboundTree)
+	}
 	for _, r := range cfg.Gate.TrustedRegistries {
 		// The check is a plain prefix test, so a prefix without its trailing slash would also admit a look-alike
 		// owner (ghcr.io/acme matches ghcr.io/acme-evil/...).
@@ -479,9 +487,14 @@ func (c *Core) Loops(ctx context.Context) {
 	}
 	t := time.NewTicker(every)
 	defer t.Stop()
+	// The grant feeds are re-signed on their own beat, whatever CLEARANCE_EXPIRE_SECONDS is.
+	feeds := time.NewTicker(gate.FeedResign / 2)
+	defer feeds.Stop()
 	c.refresh(ctx) // a restart with a new key re-signs the live tokens at once
 	for {
 		select {
+		case <-feeds.C:
+			c.refreshFeeds(ctx)
 		case <-ctx.Done():
 			if c.App != nil {
 				<-done
@@ -499,7 +512,8 @@ func (c *Core) Loops(ctx context.Context) {
 	}
 }
 
-// refresh re-issues the clearance tokens due and revokes the lapsed (gate.Service.Refresh).
+// refresh re-issues the clearance tokens due and revokes the lapsed (gate.Service.Refresh), then re-signs the grant
+// feeds due (gate.Service.RefreshFeeds).
 func (c *Core) refresh(ctx context.Context) {
 	n, revoked, err := c.Gate.Refresh(ctx)
 	switch {
@@ -507,6 +521,18 @@ func (c *Core) refresh(ctx context.Context) {
 		c.log.ErrorContext(ctx, "gate: refreshing clearance tokens failed", "error", err.Error())
 	case n > 0 || revoked > 0:
 		c.log.InfoContext(ctx, "gate: clearance tokens refreshed", "reissued", n, "revoked", revoked)
+	}
+	c.refreshFeeds(ctx)
+}
+
+// refreshFeeds keeps every cluster's signed grant feed fresh (gate.FeedResign) when none of its tokens changed.
+func (c *Core) refreshFeeds(ctx context.Context) {
+	signed, err := c.Gate.RefreshFeeds(ctx)
+	switch {
+	case err != nil && ctx.Err() == nil:
+		c.log.ErrorContext(ctx, "gate: re-signing grant feeds failed", "error", err.Error(), "signed", signed)
+	case signed > 0:
+		c.log.DebugContext(ctx, "gate: grant feeds re-signed", "clusters", signed)
 	}
 }
 

@@ -45,22 +45,25 @@ the inbox, trigger history, results), so the Go API serves only Clearance's own 
 
 | api.py operation | Path | Go `clearance api` |
 |---|---|---|
-| listEvidence | `GET /v1/evidence` | **ported**; adds `outcomes` (below) |
+| listEvidence | `GET /v1/evidence` | **ported**; adds `outcomes` (below) and `installation` (C-10) |
 | getEvidence | `GET /v1/evidence/{seq}` | **ported** |
 | verifyEvidence | `GET /v1/evidence/verify` | **ported** (auditors) |
-| countEvidence | `GET /v1/evidence/counts` | **ported**; takes every list filter, adds `outcomes` |
+| countEvidence | `GET /v1/evidence/counts` | **ported**; takes every list filter, adds `outcomes` and `installation` |
 | getPolicy | `GET /v1/policy` | **ported** |
 | explainPolicy | `GET /v1/policy/explain` | **ported** (`decide.(*Engine).Trace`) |
-| listReceipts | `GET /v1/receipts` | **ported** |
-| listProvenance | `GET /v1/provenance` | **ported** |
+| listReceipts | `GET /v1/receipts` | **ported**; adds `installation` (C-10) |
+| listProvenance | `GET /v1/provenance` | **ported**; adds `installation` (C-10) |
 | listClearances | `GET /v1/clearances` | **ported**; adds `cluster`, and `cluster=<c>&state=cleared` is the grant feed (C-1, below) |
 | countClearances | `GET /v1/clearances/counts` | **ported** |
 | getClearance | `GET /v1/clearances/{id}` | **ported**; adds `token` (C-1) |
 | getClearancePolicy | `GET /v1/clearance-policy` | **ported** |
-| getContract | `GET /v1/contract` | **ported**; names `core` (`CLEARANCE_CORE_URL`) beside `gateway` |
+| getContract | `GET /v1/contract` | **ported**; an OpenAPI 3.1 document since C-10, naming `x-clearance-core` (`CLEARANCE_CORE_URL`) and `x-clearance-gateway` |
 | (healthz, readyz) | `GET /healthz`, `/readyz` | **ported**; readyz checks the database |
 | (new) listDefinitions | `GET /v1/definitions` | **new**: the definitions Clearance holds, api.py's agent view without the gateway's `hold` |
 | (new) getKeys | `GET /v1/keys` | **new** (C-1): the clearance token verification keys, a JWKS, from `clearance_signing_keys`; public |
+| (new) getGrantFeed | `GET /v1/grant-feeds/{cluster}` | **new** (C-10): the cluster's **signed** grant feed, for grant-sync (below) |
+| (new) listInstallations | `GET /v1/github/installations` | **new** (C-10): the GitHub App's installations as the records name them |
+| (new) streamEvents | `GET /v1/stream` | **new** (C-10): server-sent events of new records and gate state changes |
 
 ### The grant feed and the token (C-1)
 
@@ -91,6 +94,58 @@ Nothing was dropped. Of the Backstage plugins' reads (backstage `plugins/clearan
 `/v1/agents`, `/v1/agents/{name}`, `/v1/sessions`, `/v1/sessions/{id}`, `/v1/sessions/{id}/result`, `/v1/events`,
 `/v1/human/requests` and `/v1/runtimes` move to the gateway's read API with R-3. The Clearance backend's proxy forwards
 only the operations in its vendored contract, so its copy is refreshed with R-3/R-4.
+
+### The gates' reads (C-10, Built)
+
+**The signed grant feed**, `GET /v1/grant-feeds/{cluster}` (roles `feed`, for its own clusters, and `auditor`). The C-1
+feed above is a list of tokens, each verifiable on its own; nothing in it lets a reader tell a whole feed from one a
+path in between trimmed or replayed. This route serves one document the core signed for the cluster:
+
+```json
+{"cluster": "hangar-prod", "seq": 41, "key_id": "<kid>", "issued_at": "...", "expires_at": "...",
+ "feed": {"payloadType": "application/vnd.clearance.grant-feed.v1+json", "payload": "<base64>", "signatures": [...]},
+ "tokens": [{"change_id": "ch-...", "nonce": "...", "key_id": "...", "issued_at": "...", "expires_at": "...",
+             "dsse": {...}, "jwt": "..."}]}
+```
+
+The format, how the core keeps it fresh, and the reader's algorithm are in
+[gate.md, The signed grant feed](gate.md#the-signed-grant-feed-c-10-built). clearance-api holds no key: it serves the
+row the core wrote (`clearance_feeds`), the envelope and the tokens it lists side by side, so a reader never pairs a
+feed with tokens re-issued after it. 404 until the core has signed a feed for the cluster (its first token there).
+
+**GitHub App installations**, `GET /v1/github/installations` (person roles). What the App code records
+(`internal/githubapp`, `internal/provenance`, `internal/gate/deploy.go`) names an installation as principal
+`app:<installation id>`: `app.installation` (target the account, result `<action>: <n> repositories`),
+`provenance.verify` (target `repo#pr`) and `deploy.request`. Each item: `id`, `principal`, `account` and `action` of
+its last `app.installation` record (null when the chain has none), `status` (`active`, `suspended` after `suspend`,
+`removed` after `deleted`), `first_seq`/`last_seq` and `first_ts`/`last_ts`, `records` by tool, and `repos` its checks
+ran on (from `provenance.verify` targets). It is the deployment's operator view: every person may read it, as
+`/v1/clearance-policy`.
+
+**The installation filter**, `installation=<id>`: on `/v1/evidence` and `/v1/evidence/counts` it keeps the records
+`app:<id>` wrote; on `/v1/provenance`, the verdicts it recorded; on `/v1/receipts` (receipts are written by the
+gateway, never by the App), the receipts of pull requests that installation checked (a `provenance.verify` by
+`app:<id>` targets their `repo#pr`). Viewer scoping applies first, as on every read.
+
+**The stream**, `GET /v1/stream` (`text/event-stream`; person roles and `feed`):
+
+- `event: record`, `data:` a record as `getEvidence` serves it; `event: clearance`, `data:` `{seq, tool, ts, change}`
+  with the change summary the `deploy.*` record carried (id, app, env, cluster, head, tree, tier, state, objects): the
+  state as of that record. Each has `id: <seq>`; a record and its clearance event share the seq and the id is on the
+  second, so a reconnect at that id has both.
+- Resume with `Last-Event-ID` (or `after=<seq>`); with neither the stream starts at the head. `types=records`,
+  `types=clearances` or both (the default). Delivery is at least once: dedupe by seq.
+- Scoping is the reads': records as `/v1/evidence` shows them to the viewer, clearance events for changes the
+  viewer may read (`changeVisible`, on the change as stored). A **feed reader** gets clearance events of its clusters
+  only (a cue to re-read its signed feed sooner than its interval; the feed stays the authority), and
+  `types=records` is 403 for it.
+- Cost and bounds: one poller per replica reads the chain's head every second while any stream is open (an indexed
+  `ORDER BY seq DESC LIMIT 1`) and wakes the streams only when it moves; each stream then reads what is new for its
+  viewer in batches of 200 by `seq`. At most 64 streams per replica and 8 per caller (503 with `Retry-After`), a
+  10 s write deadline on every event (a reader that stops reading is dropped, never buffered for), a comment every
+  15 s, and the server ends a stream after 10 minutes. The access log line is written when the stream ends.
+- The Backstage proxy does not forward it (the contract marks it `x-clearance-stream`; the proxy buffers answers);
+  Tower moving from polling to the stream is a follow-up.
 
 ### Differences from api.py on the ported routes
 
@@ -140,8 +195,11 @@ plus the authenticator's (`authn.EnvVars`: `CLEARANCE_AUDIENCE`, `CLEARANCE_OIDC
 
 ### Indexes
 
-The schema has the primary key on `seq`, `clearance_evidence_receipt` and the `clearance_changes` indexes; this
-package adds none (the core owns the schema). The list is paged by `seq DESC` on the primary key and every filter is
+The schema has the primary key on `seq`, `clearance_evidence_receipt`, `clearance_evidence_app` (C-10: the App
+installations' records, `((record->>'principal'), seq) WHERE principal LIKE 'app:%'`, behind
+`/v1/github/installations` and the installation filter) and the `clearance_changes` indexes; this package adds none
+(the core owns the schema). The stream reads the primary key's range above its cursor; the signed feed is one row
+of `clearance_feeds` by its primary key. The list is paged by `seq DESC` on the primary key and every filter is
 applied on the way; at the lab's size that is well inside the statement timeout. Before the chain is large, the
 core's schema should gain (a migration, not done here):
 
@@ -353,12 +411,16 @@ and counted.
 
 ## The contract
 
-`contract/clearance-api.json` is generated from the Go route table and answer types (`go generate ./internal/api`,
-`tools/contract -api`; `TestTheCommittedContractIsCurrent` fails when it drifts). It keeps api.py's shape (`api`,
-`version`, `notes`, `operations` with operationId, method, path, roles, params, summary), which Tower's backend
-vendors and forwards by, and adds `responses` (each operation's answer schemas by status) and `schemas`, reflected
-from the Go types. Until v0.29.0 `tests/test_api.py` checked that api.py served every operation the Go contract
-shares with it, with the same method, path and roles; it held when the Python package left. `/v1` changes are additive only; a breaking change is `/v2`.
+`contract/clearance-api.json` is an **OpenAPI 3.1** document since C-10 (info.version 1.1.0), generated from the Go
+route table and answer types (`go generate ./internal/api`, `tools/contract -api`; `TestTheCommittedContractIsCurrent`
+fails when it drifts, and checks that every route is in it with its roles and query parameters and that every
+`$ref` resolves). The route table stays the source. Each operation carries `x-clearance-roles` (the roles that may
+call it; a portal's backend forwards by method, path and these), its path and query parameters, the statuses it
+answers with their schemas (`components.schemas`, reflected from the Go types), and `security: []` when no token is
+asked. `/v1/stream` answers `text/event-stream` and is marked `x-clearance-stream: true`. `GET /v1/contract` serves
+the same document with `x-clearance-core` and `x-clearance-gateway` when the deployment names them. The pre-C-10
+shape (`api`, `version`, `notes`, `operations`, `responses`, `schemas`; v0.27.0 to v0.30.x) is gone: a reader of it
+moves to `paths` (the Backstage backend reads both). `/v1` changes are additive only; a breaking change is `/v2`.
 
 ## Hangar deployment (apron `55-autopilot/clearance`)
 

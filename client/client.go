@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -242,6 +243,38 @@ func (c *Client) Clearance(ctx context.Context, changeID string) (*ClearanceAnsw
 	return &out, nil
 }
 
+// MaxWait is the longest a Wait holds (the core's bound).
+const MaxWait = 60 * time.Second
+
+// Wait long-polls a change (GET /v1/clearances/{id}/wait): the answer as soon as its state is not known ("" : its
+// state when the call arrives), or after timeout (1 s to MaxWait; 0 is the core's default, 30 s) with Changed
+// false. For any subject kind (a Terraform run, an Argo sync); the same callers as Clearance. The attempt's
+// deadline is Options.Timeout past the wait. A read: retried as an evaluation is.
+func (c *Client) Wait(ctx context.Context, changeID, known string, timeout time.Duration) (*WaitAnswer, error) {
+	if timeout < 0 || timeout > MaxWait || (timeout > 0 && timeout < time.Second) {
+		return nil, fmt.Errorf("clearance client: a wait is 1s to %s", MaxWait)
+	}
+	q := url.Values{}
+	if known != "" {
+		q.Set("state", known)
+	}
+	hold := 30 * time.Second
+	if timeout > 0 {
+		hold = timeout.Truncate(time.Second)
+		q.Set("timeout", strconv.Itoa(int(hold/time.Second)))
+	}
+	path := "/v1/clearances/" + url.PathEscape(changeID) + "/wait"
+	if len(q) > 0 {
+		path += "?" + q.Encode()
+	}
+	var out WaitAnswer
+	if err := c.call(ctx, call{op: "waitClearance", method: "GET", path: path, retry: retryAny, hold: hold},
+		&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // Keys is the clearance token verification keys (GET /v1/keys, a JWKS): what a verifier checks tokens with
 // offline.
 func (c *Client) Keys(ctx context.Context) (*JWKS, error) {
@@ -288,7 +321,8 @@ type call struct {
 	body             any
 	onBehalfOf       string
 	retry            retryClass
-	probe            bool // a health probe: no breaker
+	probe            bool          // a health probe: no breaker
+	hold             time.Duration // a long poll: how long the core may hold the call, added to the timeout
 }
 
 // attemptResult is one attempt's outcome: err is final unless unavailable is set.
@@ -347,7 +381,7 @@ func (c *Client) call(ctx context.Context, cl call, out any) error {
 }
 
 func (c *Client) attempt(ctx context.Context, cl call, payload []byte, out any) attemptResult {
-	actx, cancel := context.WithTimeout(ctx, c.opt.Timeout)
+	actx, cancel := context.WithTimeout(ctx, c.opt.Timeout+cl.hold)
 	defer cancel()
 	var rd io.Reader
 	if payload != nil {

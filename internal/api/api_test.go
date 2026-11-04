@@ -19,8 +19,10 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -33,6 +35,7 @@ import (
 	"github.com/jfillman/clearance/internal/evidence"
 	"github.com/jfillman/clearance/internal/gate"
 	"github.com/jfillman/clearance/internal/profile"
+	"github.com/jfillman/clearance/internal/review"
 	"github.com/jfillman/clearance/internal/store"
 	"github.com/jfillman/clearance/internal/store/memory"
 	"github.com/jfillman/clearance/internal/store/pg"
@@ -213,6 +216,7 @@ type world struct {
 	defs    []store.Definition
 	tokens  []store.Token
 	keys    []store.SigningKey
+	feeds   []store.Feed
 	raw     []map[string]any // stored rows written as they are (v0 fixtures), instead of events
 }
 
@@ -237,7 +241,22 @@ var backends = []backend{
 			}
 			m.recs = append(m.recs, c)
 		}
-		m.changes, m.defs, m.tokens, m.keys = w.changes, w.defs, w.tokens, w.keys
+		m.changes, m.defs, m.tokens, m.keys, m.feeds = w.changes, w.defs, w.tokens, w.keys, w.feeds
+		appenders.Store(Store(m), appender(func(t *testing.T, evs []store.Event, cs []store.Change) {
+			seed(t, st, evs)
+			n := int64(len(m.recs))
+			recs, err := st.Records(bg, n, 1000)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, r := range recs {
+				r["assurance"] = "recorded-not-checkpointed"
+				m.appendRec(r)
+			}
+			m.mu.Lock()
+			m.changes = append(m.changes, cs...)
+			m.mu.Unlock()
+		}))
 		return m, ""
 	}},
 	{"postgres", func(t *testing.T, w world) (Store, string) {
@@ -270,6 +289,11 @@ var backends = []backend{
 					return err
 				}
 			}
+			for _, f := range w.feeds {
+				if err := tx.PutFeed(bg, f); err != nil {
+					return err
+				}
+			}
 			if w.defs != nil {
 				return tx.ReplaceDefinitions(bg, w.defs)
 			}
@@ -278,9 +302,29 @@ var backends = []backend{
 		if err != nil {
 			t.Fatal(err)
 		}
-		return openReader(t, dsn), dsn
+		rd := openReader(t, dsn)
+		appenders.Store(Store(rd), appender(func(t *testing.T, evs []store.Event, cs []store.Change) {
+			seed(t, st, evs)
+			if err := st.Atomic(bg, func(tx store.Tx) error {
+				for _, c := range cs {
+					if err := tx.PutChange(bg, c); err != nil {
+						return err
+					}
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}))
+		return rd, dsn
 	}},
 }
+
+// appender writes more records (and change rows) to a backend's store after it was built: the stream tests'.
+type appender func(t *testing.T, evs []store.Event, cs []store.Change)
+
+// appenders are each built Store's appender.
+var appenders sync.Map
 
 func openReader(t *testing.T, dsn string) *PG {
 	t.Helper()
@@ -451,25 +495,71 @@ func TestTheCommittedContractIsCurrent(t *testing.T) {
 	if !bytes.Equal(got, want) {
 		t.Fatalf("%s is stale: run go generate ./internal/api and commit it", ContractPath)
 	}
-	doc, _ := ContractDoc()
-	ops := map[string]bool{}
-	for _, o := range doc.Operations {
-		ops[o.OperationID] = true
+	doc, err := ContractDoc("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc["openapi"] != "3.1.0" {
+		t.Fatal(doc["openapi"])
+	}
+	paths := doc["paths"].(map[string]any)
+	ops := map[string]map[string]any{}
+	for _, item := range paths {
+		for _, op := range item.(map[string]any) {
+			o := op.(map[string]any)
+			ops[o["operationId"].(string)] = o
+		}
 	}
 	for _, id := range []string{"listEvidence", "getEvidence", "verifyEvidence", "countEvidence", "getPolicy",
 		"explainPolicy", "listReceipts", "listProvenance", "listClearances", "countClearances", "getClearance",
-		"getClearancePolicy", "listDefinitions", "getContract"} {
-		if !ops[id] {
+		"getClearancePolicy", "listDefinitions", "getKeys", "getGrantFeed", "listInstallations", "streamEvents",
+		"getContract"} {
+		if ops[id] == nil {
 			t.Errorf("the contract has no %s", id)
 		}
 	}
-	// Every route the mux serves is in the contract, and every one has a 200 schema.
+	// Every route the mux serves is in the contract with its roles, its query parameters and a 200 schema; every
+	// $ref resolves.
 	for _, rt := range Routes() {
-		if _, ok := doc.Responses[rt.OperationID]["200"]; !ok {
+		o := ops[rt.OperationID]
+		if o == nil {
+			t.Errorf("%s is not in the contract", rt.OperationID)
+			continue
+		}
+		if _, ok := o["responses"].(map[string]any)["200"]; !ok {
 			t.Errorf("%s has no 200 schema", rt.OperationID)
 		}
+		if !reflect.DeepEqual(o[XRoles], rt.Roles) {
+			t.Errorf("%s roles %v", rt.OperationID, o[XRoles])
+		}
+		var query []string
+		ps, _ := o["parameters"].([]any)
+		for _, p := range ps {
+			if m := p.(map[string]any); m["in"] == "query" {
+				query = append(query, m["name"].(string))
+			}
+		}
+		if len(query) != len(rt.Params) || (len(query) > 0 && !reflect.DeepEqual(query, rt.Params)) {
+			t.Errorf("%s query %v, the route takes %v", rt.OperationID, query, rt.Params)
+		}
+	}
+	schemas := doc["components"].(map[string]any)["schemas"].(map[string]any)
+	raw, _ := json.Marshal(doc)
+	refs := regexpRef.FindAllStringSubmatch(string(raw), -1)
+	if len(refs) < 10 {
+		t.Fatalf("only %d $refs found: the check would be vacuous", len(refs))
+	}
+	for _, m := range refs {
+		if _, ok := schemas[m[1]]; !ok {
+			t.Errorf("$ref %s does not resolve", m[1])
+		}
+	}
+	if ops["streamEvents"][XStream] != true {
+		t.Error("the stream is not marked")
 	}
 }
+
+var regexpRef = regexp.MustCompile(`"\$ref":"#/components/schemas/([A-Za-z0-9]+)"`)
 
 func TestViewers(t *testing.T) {
 	defs := NewDefinitions(loadAgents(t))
@@ -603,8 +693,8 @@ func TestHTTPRoles(t *testing.T) {
 		eqSeqs(t, "no verdicts for another repo", seqs(h.ok("/v1/provenance?repo=jfillman/flight_api", "audit")))
 		eqSeqs(t, "a verdict with no session is its principal's", seqs(h.ok("/v1/provenance?repo=jfillman/flight-api", "alice")))
 		c := h.ok("/v1/contract", "")
-		if c["gateway"] != "http://clearance.example" || c["api"] != "clearance-api" {
-			t.Errorf("contract: %v %v", c["gateway"], c["api"])
+		if c["x-clearance-gateway"] != "http://clearance.example" || c["info"].(map[string]any)["title"] != "clearance-api" {
+			t.Errorf("contract: %v %v", c["x-clearance-gateway"], c["info"])
 		}
 		if h.get("/healthz", "").status != 200 || h.get("/readyz", "").status != 200 {
 			t.Error("health")
@@ -1017,4 +1107,46 @@ func TestThePostgresReaderIsReadOnly(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "read-only") {
 		t.Fatalf("a delete through the reader: %v", err)
 	}
+}
+
+// G-TF-1: clearance-api lists a terraform-plan change, as the core stored it, with its subject (kind, workspace,
+// digests); a manifest change lists as kind manifest-tree.
+func TestTheAPIListsATerraformPlanChangeWithItsSubject(t *testing.T) {
+	sha := func(s string) string { return canon.SHA256Hex([]byte(s)) }
+	body := map[string]any{"app": "network", "env": "lab", "repo": "jfillman/hangar-infra", "pr": json.Number("12"),
+		"head": strings.Repeat("2", 40), "proposer": "user:dana", "owner": "group:default/team-gate",
+		"checks": map[string]any{"ci": "pass", "provenance": "not-agent"},
+		"subject": map[string]any{"kind": "terraform-plan", "planDigest": sha("plan"), "planJsonDigest": sha("plan json"),
+			"variableSetDigest": sha("vars"), "workspace": map[string]any{"backend": "s3", "key": "network/lab/terraform.tfstate", "name": "default"},
+			"versions":  map[string]any{"terraform": "1.9.8"},
+			"summary":   map[string]any{"create": json.Number("0"), "update": json.Number("0"), "replace": json.Number("0"), "destroy": json.Number("1"), "destroyedAddresses": []any{"aws_instance.bastion"}},
+			"resources": []any{map[string]any{"address": "aws_instance.bastion", "type": "aws_instance", "actions": []any{"delete"}}}}}
+	req, err := gate.ParseRequest(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl, err := gate.Classify(req, gate.DefaultPolicy(), review.Registry{}, nil)
+	if err != nil || cl.Tier != 3 {
+		t.Fatal(cl, err)
+	}
+	c := gate.Open(req, cl, time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC), "app-infra-cicd/pipeline-runner")
+	raw, _ := json.Marshal(c)
+	tf := store.Change{ID: c.ID, App: c.App, Env: c.Env, State: c.State, Repo: c.Repo, PR: int(c.PR), Head: c.Head,
+		ExpiresAt: c.ExpiresAt.Time, Record: raw}
+	each(t, world{changes: append(fixtureChanges(), tf)}, func(t *testing.T, h *harness) {
+		kinds := map[string]string{}
+		for _, it := range items(h.ok("/v1/clearances", "audit")) {
+			s, _ := it["subject"].(map[string]any)
+			kinds[it["id"].(string)], _ = s["kind"].(string)
+		}
+		if kinds[c.ID] != "terraform-plan" || len(kinds) != 3 {
+			t.Fatalf("%v", kinds)
+		}
+		one := h.ok("/v1/clearances/"+c.ID, "audit")
+		s := one["subject"].(map[string]any)
+		if s["workspace"].(map[string]any)["key"] != "network/lab/terraform.tfstate" || s["digests"].(map[string]any)["planJson"] != sha("plan json") ||
+			s["summary"].(map[string]any)["destroyedAddresses"].([]any)[0] != "aws_instance.bastion" || num(one["tier"]) != 3 {
+			t.Fatalf("%v", one)
+		}
+	})
 }

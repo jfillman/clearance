@@ -67,6 +67,63 @@ deployment that sets no signing key, except that records and views carry the new
   measurements prepared for the user.
 - `internal/authn`: a test that several service accounts of one foreign cluster authenticate as separate principals
   (`TestSeveralServiceAccountsOfOneForeignCluster`).
+- **C-10: clearance-api for the gates.**
+  - **The signed grant feed** (`token.Feed`, `internal/gate/feed.go`; [docs/gate.md](docs/gate.md#the-signed-grant-feed-c-10-built)):
+    per cluster, a DSSE envelope (`application/vnd.clearance.grant-feed.v1+json`, the token key) over every live
+    token with a per-cluster `seq`, `iat`/`exp` (5 minutes), the chain's `records_seq` and each token's payload
+    digest, so a grant-sync agent can tell a whole, fresh feed from a trimmed or replayed one (`token.VerifyFeed`,
+    `Feed.Match`, fuzzed). The core signs it in every transaction that writes the cluster's tokens and re-signs every
+    2 minutes; clearance-api serves it at `GET /v1/grant-feeds/{cluster}` (feed readers of the cluster, auditors).
+  - **The core's wait route** `GET /v1/clearances/{change_id}/wait?state=&timeout=` for every provider: long-polls
+    up to 60 s and answers the state and token as soon as the state changes, woken by an in-process notifier on the
+    gate's commit (no database polling); at most 512 waits; Go client `Wait`.
+  - **`GET /v1/stream`** (clearance-api): server-sent events of new records and gate state changes, `id` = record
+    seq, resumable with `Last-Event-ID`, scoped as the reads (a feed reader: its clusters' clearance events only);
+    one head poller per replica, 64 streams per replica and 8 per caller, a 10 s write deadline per event, 15 s
+    keep-alives, 10-minute streams.
+  - **`GET /v1/github/installations`** and **`installation=<id>`** on `/v1/evidence`, `/v1/evidence/counts`,
+    `/v1/provenance` and `/v1/receipts`, from the records the GitHub App writes (`app:<installation>`).
+  - Chart: `networkPolicy.kubeAPIServer.ciliumEntity` (default false) renders a CiliumNetworkPolicy to the
+    `kube-apiserver` entity for the core and the api (on Cilium an ipBlock never matches the API server).
+  - Store: table `clearance_feeds` and index `clearance_evidence_app`, created on start.
+
+### Changed
+- **`contract/clearance-api.json` is OpenAPI 3.1** (info.version 1.1.0), still generated from the route table: each
+  operation carries `x-clearance-roles`, its query parameters and its answers' schemas; `/v1/stream` is
+  `x-clearance-stream`. The pre-OpenAPI document (`api`, `version`, `notes`, `operations`) is gone, and
+  `GET /v1/contract` names the core and gateway as `x-clearance-core` and `x-clearance-gateway`. Breaking for a
+  reader of the old shape: the Backstage backend reads both.
+
+### Added (G-TF-1)
+- G-TF-1, the terraform-plan subject: `POST /v1/clearances` takes `subject: {kind: terraform-plan, planDigest,
+  planJsonDigest, workspace: {backend, key, name}, versions: {terraform, providers}, summary: {create, update,
+  replace, destroy, destroyedAddresses}, targeted, variableSetDigest, resources}` from a verifier or a GitHub Actions
+  workflow (DG-REPO still applies). The Terraform baseline: destroy or replace in a protected workspace is tier 3; a
+  change to an IAM, security-group, network-ACL, KMS or database type is tier 3; a tag-only or description-only
+  update is tier 1; `-target` or `-replace` is one tier up with a floor of 2; everything else is tier 2. Reasons name
+  the resource addresses, and the decision's result names the workspace and what set the tier. The summary must
+  match the resources. A placeholder plan digest is refused (`DG-UNBOUND`). No variable value is sent or stored: the
+  record carries the redacted plan JSON's digest and the variable set's hash (docs/gate.md).
+- `clearance.yaml` `workspaces:` (tighten-only): `protected` (globs on the state key or workspace name),
+  `tiers.3.types` and `tiers.2.types`. Anything looser is `DG-POLICY`.
+- Every change on record carries `subject` (`manifest-tree`, `definition` or `terraform-plan`, with its digests), and
+  every `deploy.*` record carries it as the evidence subject, so clearance-api lists `subject.kind`. A change stored
+  earlier reads back as `manifest-tree`. `GET /v1/clearance-policy` adds `terraform`.
+- `schemas/change-request.schema.json` (clearance.change-request/v1), the request's schema; a test holds it to the
+  parser. The contracts and the Go and Python clients are regenerated (`client.PlanSubject`, `client.ChangeSubject`).
+- `CLEARANCE_GATE_UNBOUND_TREE` (chart `gate.unboundTree`): `flag` (default) or `refuse` for a manifest change whose
+  `treeDigest` is a placeholder (64 copies of one digit, or sha256 of nothing). Flagged, it is registered with
+  reason `tree:unbound`, `subject.flags: ["unbound-tree"]` and a subject bound to the commit only; refused, it is
+  `DG-UNBOUND`. Flag is the default for this release for backward compatibility; refuse is planned to become it.
+
+### Changed (G-TF-1)
+- The manifest-tree digest is defined (docs/gate.md): sha256 over the sorted lines
+  `apiVersion/kind/namespace/name:<sha256 of the object's canonical JSON>`, joined with newlines. `clearance register`
+  now computes this, which is what Glidepath's `clearance-gate-` check already computed for the same render (it
+  hashed the canonical documents themselves before, so the two differed). Changes registered earlier keep their
+  digest.
+- `clearance register` refuses an `--after` that is not a directory or holds no manifests (exit 2) instead of
+  registering an empty tree; the README's example now renders into directories.
 
 ## [0.30.0] - 2026-11-03
 

@@ -430,7 +430,10 @@ func (c *Claims) Covers(apiVersion, kind, namespace, name, rendered string) erro
 
 // ParseEnvelope decodes a DSSE envelope strictly: size-capped, unknown fields refused, the clearance payloadType,
 // one to MaxSignatures signatures.
-func ParseEnvelope(raw []byte) (*Envelope, error) {
+func ParseEnvelope(raw []byte) (*Envelope, error) { return parseEnvelope(raw, PayloadType) }
+
+// parseEnvelope is ParseEnvelope for one payloadType (a token's, or a grant feed's).
+func parseEnvelope(raw []byte, payloadType string) (*Envelope, error) {
 	if len(raw) > MaxEnvelopeBytes {
 		return nil, fmt.Errorf("%w: over %d bytes", ErrMalformed, MaxEnvelopeBytes)
 	}
@@ -438,7 +441,7 @@ func ParseEnvelope(raw []byte) (*Envelope, error) {
 	if err := strictJSON(raw, &env); err != nil {
 		return nil, fmt.Errorf("%w: envelope: %v", ErrMalformed, err)
 	}
-	if env.PayloadType != PayloadType {
+	if env.PayloadType != payloadType {
 		return nil, fmt.Errorf("%w: payloadType is %q", ErrMalformed, env.PayloadType)
 	}
 	if len(env.Signatures) == 0 || len(env.Signatures) > MaxSignatures {
