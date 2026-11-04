@@ -217,6 +217,21 @@ For every change to a protected environment:
 8. **Honour break-glass.** `GET /v1/breakglass?cluster=` lists the windows open now; what a window permits is the
    provider's (G-ARGO-3's marker). Every exception you file inside one is tagged with it.
 
+## The federated role
+
+A federated source observes decisions another gateway's own PDP made. It posts each one as a
+`federated.decision` record through `POST /v1/records`. It has no hold and no outcome, only posture and
+correlation. Every field is claimed.
+
+- **Required fields:** `decision` (`allow` or `deny`), `result` and `coverage`.
+- **Coverage:** always `observed-not-attributed`. Another PDP decided, so the core refuses
+  `authorized-and-verified`. A `task_id` the source correlated is kept as a claim (the Hub adapter also sets
+  `source.correlated: true`).
+- **Refused:** the core refuses a Clearance `rule` or `tier`, an `effect`, `outcome` or `change`, and a `tool`.
+
+The first source is the [Traefik Hub adapter](federate-traefik-hub.md) (Unverified). Register it with
+`"kinds": ["federated.decision"]`.
+
 ## Not served yet
 
 | What | Route or piece | Why a provider needs it | Interim |
