@@ -103,7 +103,7 @@ filters (`task`, `session`, `agent`, `tool`, `principal`, `decision`, `rule`, `a
 every read. It sums the `model.call` outcome records that carry `usage` and the `run.finish` records that carry
 `cost` ([evidence.md](evidence.md#the-flight-recorder-fields-revision-3-ap-c1-ap-c2)); `outcomes` does not apply and
 is refused, and `per` is refused with any other `by`. The answer is the counts shape plus `per` and the summed
-`cost`; each item's `count` is its model calls and its `cost` is:
+`cost`; `total` (model calls) and `cost` are over every matching group, not only the page of items; each item's `count` is its model calls and its `cost` is:
 
 ```json
 {"by": "cost", "per": "task", "total": 4,

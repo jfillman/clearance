@@ -266,18 +266,13 @@ func (s *Server) countCost(w http.ResponseWriter, r *http.Request, v *Viewer, q 
 		aerr.write(w)
 		return
 	}
-	items, err := s.opt.Store.Costs(r.Context(), f, v, per)
+	items, sum, err := s.opt.Store.Costs(r.Context(), f, v, per)
 	if err != nil {
 		s.readFailed(w, r, err)
 		return
 	}
-	sum := &CostSum{}
-	for _, it := range items {
-		if it.Cost != nil {
-			sum.add(it.Cost)
-		}
-	}
-	writeJSON(w, 200, Counts{By: ByCost, Per: per, Items: items, Total: total(items), Cost: sum})
+	// total and cost are over every matching group, not the page of at most MaxLimit items.
+	writeJSON(w, 200, Counts{By: ByCost, Per: per, Items: items, Total: sum.ModelCalls, Cost: &sum})
 }
 
 // byPR is api.py receipts_or_verdicts: repo (owner/name, lower-cased) is required, pr is a number when given.

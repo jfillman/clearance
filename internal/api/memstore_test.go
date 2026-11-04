@@ -249,10 +249,11 @@ func intField(r Record, obj, k string) int64 {
 	return 0
 }
 
-func (m *memStore) Costs(_ context.Context, f EvidenceFilter, v *Viewer, per string) ([]Count, error) {
+func (m *memStore) Costs(_ context.Context, f EvidenceFilter, v *Viewer, per string) ([]Count, CostSum, error) {
+	var all CostSum
 	field, ok := costField[per]
 	if !ok {
-		return nil, fmt.Errorf("api: cost per %q", per)
+		return nil, all, fmt.Errorf("api: cost per %q", per)
 	}
 	f.Outcomes = OutcomesInclude
 	owners := m.owners()
@@ -298,6 +299,7 @@ func (m *memStore) Costs(_ context.Context, f EvidenceFilter, v *Viewer, per str
 	out := []Count{}
 	for _, id := range order {
 		out = append(out, *groups[id])
+		all.add(groups[id].Cost)
 	}
 	// charged desc, then key asc with null last (ORDER BY 3 DESC, 1)
 	sort.SliceStable(out, func(i, j int) bool {
@@ -312,7 +314,7 @@ func (m *memStore) Costs(_ context.Context, f EvidenceFilter, v *Viewer, per str
 	if len(out) > MaxLimit {
 		out = out[:MaxLimit]
 	}
-	return out, m.fail
+	return out, all, m.fail
 }
 
 func (m *memStore) ByPR(_ context.Context, tools []string, f PRFilter, v *Viewer) ([]Record, error) {

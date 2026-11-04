@@ -34,8 +34,10 @@ var PreflightResults = []string{"pass", "fail", "not-run"}
 // modelVersionRx is a model version as a provider names it: claude-sonnet-5-5-20261015, default/qwen3-8b.
 var modelVersionRx = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}\z`)
 
-// definitionRx is an agent definition's name.
-var definitionRx = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\z`)
+// definitionRx is an agent definition's name: the agent-definition schema's name pattern
+// (internal/profile/agent-definition.schema.json, ^[a-z][a-z0-9-]{1,40}$), so a Preflight result names only a name a
+// definition can have. A test holds the two together.
+var definitionRx = regexp.MustCompile(`^[a-z][a-z0-9-]{1,40}\z`)
 
 // ComputeClasses are the compute classes a definition may name (the agent-definition schema's profile.compute, and
 // decide's Limits.Compute): a run's cost names the one its session was granted.

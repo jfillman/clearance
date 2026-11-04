@@ -97,8 +97,9 @@ type Store interface {
 	Counts(ctx context.Context, f EvidenceFilter, v *Viewer, by string) ([]Count, error)
 	// Costs is the cost of the records the viewer may see matching f (f.Outcomes is ignored: the model.call outcome
 	// records that carry usage and the run.finish records that carry cost), grouped by the record field of per (one
-	// of CostPer), the most charged first, at most MaxLimit groups. Each group's count is its model calls.
-	Costs(ctx context.Context, f EvidenceFilter, v *Viewer, per string) ([]Count, error)
+	// of CostPer), the most charged first, at most MaxLimit groups, and the sums over every matching group (not the
+	// page). Each group's count is its model calls.
+	Costs(ctx context.Context, f EvidenceFilter, v *Viewer, per string) ([]Count, CostSum, error)
 	// ByPR is the records of one of tools that the viewer may see, whose effect names repo (and pr when not "") or
 	// whose target is repo#pr (repo#anything without pr), newest first, at most MaxLimit. f.Installation, when set,
 	// keeps the records of that App installation (Verdicts: recorded by app:<id>) or (receipts) the records on a

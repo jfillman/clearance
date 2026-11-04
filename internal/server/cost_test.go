@@ -1,7 +1,9 @@
 package server_test
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -177,5 +179,34 @@ func TestCostComputeClassesAreTheProfiles(t *testing.T) {
 	for _, c := range server.ComputeClasses {
 		f.do("POST", "/v1/records", gw, runRecord("run.finish", map[string]any{"cost": map[string]any{
 			"charged_tokens": 1, "compute": c}})).want(t, 200, "")
+	}
+}
+
+// preflight.definition takes exactly the names an agent definition may have (the agent-definition schema's name
+// pattern): the schema's pattern is read here, so a change to it fails this test until cost.go follows.
+func TestPreflightDefinitionIsADefinitionName(t *testing.T) {
+	raw, err := os.ReadFile("../profile/agent-definition.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s struct {
+		Properties struct {
+			Name struct {
+				Pattern string `json:"pattern"`
+			} `json:"name"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(raw, &s); err != nil || s.Properties.Name.Pattern != `^[a-z][a-z0-9-]{1,40}$` {
+		t.Fatalf("the schema's name pattern is %q (%v): update definitionRx", s.Properties.Name.Pattern, err)
+	}
+	f := memFixture(t)
+	pf := func(name string) map[string]any {
+		return runRecord("run.launch", map[string]any{"preflight": map[string]any{"result": "pass", "definition": name}})
+	}
+	for _, ok := range []string{"ab", "researcher", "a-", "x" + strings.Repeat("y", 40)} {
+		f.do("POST", "/v1/records", gw, pf(ok)).want(t, 200, "")
+	}
+	for _, bad := range []string{"a", "1abc", "-ab", "Ab", "x" + strings.Repeat("y", 41), "a_b"} {
+		f.do("POST", "/v1/records", gw, pf(bad)).want(t, 400, "preflight.definition")
 	}
 }

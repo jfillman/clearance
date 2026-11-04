@@ -127,3 +127,29 @@ func TestCostCountsUseTheIndex(t *testing.T) {
 		}
 	}
 }
+
+// TestCostTotalsAreOverEveryGroup: the answer's total and cost sum every matching group, not the page of MaxLimit.
+func TestCostTotalsAreOverEveryGroup(t *testing.T) {
+	var events []store.Event
+	n := MaxLimit + 5
+	want := 0
+	for i := 0; i < n; i++ {
+		c := i + 1
+		want += c
+		events = append(events, modelOutcome("t-many", fmt.Sprintf("s-%04d", i), "user:x", "researcher", c, c, 0, 0))
+	}
+	each(t, world{events: events}, func(t *testing.T, h *harness) {
+		got := h.ok("/v1/evidence/counts?by=cost&per=session", "audit")
+		if len(items(got)) != MaxLimit {
+			t.Fatalf("items: %d", len(items(got)))
+		}
+		cost := got["cost"].(map[string]any)
+		if num(got["total"]) != int64(n) || num(cost["charged_tokens"]) != int64(want) || num(cost["model_calls"]) != int64(n) {
+			t.Fatalf("total %v cost %v, want %d calls and %d charged", got["total"], cost, n, want)
+		}
+		// The page is the most charged sessions.
+		if first := items(got)[0]; first["key"] != fmt.Sprintf("s-%04d", n-1) {
+			t.Fatalf("first item %v", first["key"])
+		}
+	})
+}
