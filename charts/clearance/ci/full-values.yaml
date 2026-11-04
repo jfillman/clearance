@@ -45,6 +45,14 @@ gate:
   trustedRegistries: ["ghcr.io/riley-roooo/"]
 agents:
   configMap: clearance-agents
+signing:
+  existingSecret: clearance-signing-key
+  key: signing-key.pem
+  # Render only: the core refuses a KMS reference until the KMS signer is built.
+  kms: awskms:///arn:aws:kms:us-east-1:000000000000:key/00000000-0000-0000-0000-000000000000
+token:
+  ttl: 10m
+  issuer: clearance-hangar-dev
 oidc:
   issuer: https://dex.example.test
   audience: clearance
@@ -79,6 +87,8 @@ externalSecrets:
 api:
   auditors: ["user:auditor"]
   notifiers: ["tower/backstage"]
+  feedReaders:
+    - {principal: "hangar-prod/clearance-system/clearance-agent", cluster: hangar-prod}
   gatewayURL: http://autopilot-gateway.autopilot-system.svc:8080
 networkPolicy:
   core:

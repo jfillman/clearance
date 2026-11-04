@@ -420,6 +420,7 @@ type ChangeRequest struct {
 	PolicyCommit string            `json:"policyCommit,omitempty"`
 	Admission    *Admission        `json:"admission,omitempty"`
 	Agent        *string           `json:"agent,omitempty"`
+	TaskID       *string           `json:"taskId,omitempty"`
 	Definition   map[string]any    `json:"definition,omitempty"`
 }
 
@@ -459,6 +460,7 @@ type Change struct {
 	Proposer         string            `json:"proposer"`
 	ProposerKind     string            `json:"proposer_kind"`
 	Agent            *string           `json:"agent"`
+	TaskID           *string           `json:"task_id"`
 	Owner            string            `json:"owner"`
 	Protected        bool              `json:"protected"`
 	TreeDigest       string            `json:"tree_digest"`
@@ -511,6 +513,9 @@ type Approval struct {
 	Via    *string `json:"via"`
 	Role   string  `json:"role"`
 	At     string  `json:"at"`
+	// Sub and Iss name the person at their identity provider ("delegate:<delegate>" as Iss through a delegate).
+	Sub string `json:"sub,omitempty"`
+	Iss string `json:"iss,omitempty"`
 }
 
 // Deployment is a GitHub Actions deployment waiting on a change.
@@ -604,4 +609,64 @@ type errorBody struct {
 	Error string `json:"error"`
 	Rule  string `json:"rule"`
 	Hint  string `json:"hint"`
+}
+
+// -- GET /v1/clearances/{change_id}, GET /v1/keys --------------------------------------------------------------
+
+// ClearanceAnswer is a change's state and its live clearance token (gate.ClearanceAnswer).
+type ClearanceAnswer struct {
+	ID         string     `json:"id"`
+	State      string     `json:"state"`
+	App        string     `json:"app"`
+	Env        string     `json:"env"`
+	Cluster    string     `json:"cluster"`
+	Repo       string     `json:"repo"`
+	PR         int64      `json:"pr"`
+	Head       string     `json:"head"`
+	TreeDigest string     `json:"tree_digest"`
+	Tier       int        `json:"tier"`
+	ClearedBy  *string    `json:"cleared_by"`
+	TaskID     *string    `json:"task_id"`
+	ExpiresAt  string     `json:"expires_at"`
+	Token      *TokenView `json:"token"`
+}
+
+// TokenView is a clearance token: the DSSE envelope, its JWT projection, the nonce, the key and the validity
+// (gate.TokenView). Verify it with internal/token (or any DSSE / JWS ES256 verifier) against Keys.
+type TokenView struct {
+	Nonce     string   `json:"nonce"`
+	KeyID     string   `json:"key_id"`
+	IssuedAt  string   `json:"issued_at"`
+	ExpiresAt string   `json:"expires_at"`
+	DSSE      Envelope `json:"dsse"`
+	JWT       string   `json:"jwt"`
+}
+
+// Envelope is a DSSE envelope (token.Envelope).
+type Envelope struct {
+	PayloadType string      `json:"payloadType"`
+	Payload     string      `json:"payload"`
+	Signatures  []Signature `json:"signatures"`
+}
+
+// Signature is one DSSE signature.
+type Signature struct {
+	KeyID string `json:"keyid"`
+	Sig   string `json:"sig"`
+}
+
+// JWKS is the token verification keys (token.JWKS).
+type JWKS struct {
+	Keys []JWK `json:"keys"`
+}
+
+// JWK is one EC P-256 verification key.
+type JWK struct {
+	Kty string `json:"kty"`
+	Crv string `json:"crv"`
+	X   string `json:"x"`
+	Y   string `json:"y"`
+	Kid string `json:"kid"`
+	Alg string `json:"alg"`
+	Use string `json:"use"`
 }

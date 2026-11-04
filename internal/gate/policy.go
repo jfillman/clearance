@@ -40,6 +40,7 @@ var (
 	groupRx     = regexp.MustCompile(`^group:[a-z0-9-]+/[a-z0-9._-]+\z`)
 	principalRx = regexp.MustCompile(`^[A-Za-z0-9:/_.@\[\]-]{1,200}\z`)
 	treeRx      = regexp.MustCompile(`^(sha256:)?[0-9a-f]{64}\z`)
+	taskRx      = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}\z`)
 	imageField  = regexp.MustCompile(`^/spec/(template/spec/|jobTemplate/spec/template/spec/)?(init)?[cC]ontainers/\d+/image\z`)
 )
 

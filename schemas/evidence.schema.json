@@ -109,7 +109,7 @@
         },
         "conformance": {
           "type": "string",
-          "description": "Reserved: the conformance suite version the provider passed (R-1f)."
+          "description": "The conformance suite the provider passed and when (clearance-conformance/v1@YYYY-MM-DD), from its registration (CLEARANCE_PROVIDERS conformance)."
         }
       },
       "x-clearance-group": "identities",

@@ -52,6 +52,8 @@ type ChangeRequest struct {
 	PolicyCommit            string         // the commit that last changed that clearance.yaml ("" = not said)
 	Admission               *Admission     // the verifier's offline admission result (nil = none sent)
 	Agent                   *string
+	// TaskID is the run's task, when an agent's run proposed the change (Autopilot's task_id), for correlation.
+	TaskID *string
 	// Definition is an agent definition's release: {name, path, old, new}; old nil = a new agent, new nil = removed.
 	Definition map[string]any
 }
@@ -63,7 +65,7 @@ func (r ChangeRequest) ID() string {
 }
 
 var requestKeys = setOf("app", "env", "cluster", "repo", "pr", "head", "base", "proposer", "proposerKind", "owner",
-	"protected", "treeDigest", "paths", "linesChanged", "objects", "checks", "policy", "policyCommit", "admission", "agent", "definition")
+	"protected", "treeDigest", "paths", "linesChanged", "objects", "checks", "policy", "policyCommit", "admission", "agent", "taskId", "definition")
 var objectKeys = setOf("apiVersion", "kind", "namespace", "name", "op", "fields", "images", "digest")
 var definitionKeys = setOf("name", "path", "old", "new")
 
@@ -277,6 +279,13 @@ func ParseRequest(v any) (ChangeRequest, error) {
 			return r, bad("agent is an agent name")
 		}
 		r.Agent = &str
+	}
+	if v := d["taskId"]; v != nil {
+		str, isStr := v.(string)
+		if !isStr || !taskRx.MatchString(str) {
+			return r, bad("taskId is a task id (1 to 128 of A-Z a-z 0-9 . _ : -)")
+		}
+		r.TaskID = &str
 	}
 	if v := d["definition"]; v != nil {
 		m, isMap := v.(map[string]any)

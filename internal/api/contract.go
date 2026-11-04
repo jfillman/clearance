@@ -135,8 +135,8 @@ func (g *schemaGen) special(t reflect.Type) (map[string]any, bool) {
 	case tChanges:
 		// The items are the gate's stored records, served as stored.
 		return g.schema(reflect.TypeOf(struct {
-			Items []gate.Change `json:"items"`
-			Next  *string       `json:"next"`
+			Items []ListedChange `json:"items"`
+			Next  *string        `json:"next"`
 		}{})), true
 	}
 	return nil, false

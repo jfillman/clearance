@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/jfillman/clearance/internal/gate"
+	"github.com/jfillman/clearance/internal/token"
 )
 
 // Route is one operation of the route table: what the mux serves and what the contract says (api.py ROUTES, the
@@ -48,6 +49,18 @@ type Counts struct {
 type ChangePage struct {
 	Items []json.RawMessage `json:"items"`
 	Next  *string           `json:"next"`
+}
+
+// ClearanceView is one change with its live clearance token beside it (null when it has none).
+type ClearanceView struct {
+	gate.Change
+	Token *gate.TokenView `json:"token"`
+}
+
+// ListedChange is a list item: the stored change, and its token in the grant feed (cluster and state=cleared).
+type ListedChange struct {
+	gate.Change
+	Token *gate.TokenView `json:"token,omitempty"`
 }
 
 // ErrorBody is every refusal.
@@ -105,21 +118,23 @@ var routeTable = []Route{
 		Params:   []string{"repo", "pr"},
 		Summary:  "The agent-gate verdicts recorded for a PR (provenance.verify)",
 		Response: RecordList{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).listProvenance},
-	{OperationID: "listClearances", Method: "GET", Path: "/v1/clearances", Roles: PersonRoles,
-		Params: []string{"app", "env", "state", "repo", "pr", "tier", "since", "limit", "after"},
+	{OperationID: "listClearances", Method: "GET", Path: "/v1/clearances", Roles: FeedRoles,
+		Params: []string{"app", "env", "state", "repo", "pr", "tier", "since", "limit", "after", "cluster"},
 		Summary: "The deployment gate's changes, newest first: tier and why, state (holding, cleared, denied, " +
 			"expired, superseded), the requirement and the approvals so far, what the grant binds to. A person sees " +
-			"their apps' changes and the ones their groups may clear; the cursor is updated_at",
+			"their apps' changes and the ones their groups may clear; the cursor is updated_at. cluster=<c>&state=" +
+			"cleared is the grant feed: the cluster's cleared changes whose clearance token is live, each with its " +
+			"token; a feed reader (CLEARANCE_API_FEED_READERS) may read only that, for its own clusters",
 		Response: ChangePage{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).listClearances},
 	{OperationID: "countClearances", Method: "GET", Path: "/v1/clearances/counts", Roles: PersonRoles,
 		Params: []string{"app", "env", "state", "since", "by"},
 		Summary: "Changes counted by state, tier, app, env or cleared_by (the C1 stats: holding, cleared by policy " +
 			"and by people, denied)",
 		Response: Counts{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).countClearances},
-	{OperationID: "getClearance", Method: "GET", Path: "/v1/clearances/{id}", Roles: PersonRoles, Params: []string{},
+	{OperationID: "getClearance", Method: "GET", Path: "/v1/clearances/{id}", Roles: FeedRoles, Params: []string{},
 		Summary: "One change: the objects and paths it touches, every reason for its tier, the requirement, the " +
-			"approvals, the checks as last reported",
-		Response: gate.Change{}, Errors: []int{401, 403, 404, 503}, serve: (*Server).getClearance},
+			"approvals, the checks as last reported, and its live clearance token (null when it has none)",
+		Response: ClearanceView{}, Errors: []int{401, 403, 404, 503}, serve: (*Server).getClearance},
 	{OperationID: "getClearancePolicy", Method: "GET", Path: "/v1/clearance-policy", Roles: PersonRoles,
 		Params: []string{},
 		Summary: "The deployment gate's baseline policy: the tier table, the people each tier needs, the outside " +
@@ -130,6 +145,10 @@ var routeTable = []Route{
 		Summary: "The agent definitions Clearance decides with: the bundled set and the cluster pins the core " +
 			"stored, each with its source; rejected pins with the reason. full=1 (auditors) adds instructions",
 		Response: DefinitionList{}, Errors: []int{400, 401, 403}, serve: (*Server).listDefinitions},
+	{OperationID: "getKeys", Method: "GET", Path: "/v1/keys", Roles: []string{RoleAny}, Params: []string{},
+		Summary: "The clearance token verification keys, a JWKS (EC P-256, ES256, kid = the RFC 7638 thumbprint): " +
+			"the key the core signs with and keys retired within the last 24 hours. Public",
+		Response: token.JWKS{}, Errors: []int{503}, serve: (*Server).getKeys},
 	{OperationID: "getContract", Method: "GET", Path: "/v1/contract", Roles: []string{RoleAny}, Params: []string{},
 		Summary:  "This contract",
 		Response: map[string]any{}}, // served by getContract (New), which reads this table

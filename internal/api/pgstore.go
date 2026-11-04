@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jfillman/clearance/internal/canon"
 	"github.com/jfillman/clearance/internal/evidence"
@@ -206,6 +207,12 @@ func (b *q) changeScope(v *Viewer) {
 	if v.All() {
 		return
 	}
+	if v.Role == RoleFeed {
+		if !in(v.Clusters, "*") {
+			b.add("c.record->>'cluster' = ANY(" + b.arg(v.Clusters) + ")")
+		}
+		return
+	}
 	g := b.arg(v.Groups)
 	b.add("(c.app = ANY(" + b.arg(v.Apps) + ") OR c.record->>'owner' = ANY(" + g + ") " +
 		"OR EXISTS (SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(c.record->'requirement'->'outsideGroups') = 'array' " +
@@ -224,6 +231,15 @@ func (b *q) changeFilter(f ChangeFilter, list bool) {
 		}
 		if f.Tier != nil {
 			b.add("(c.record->>'tier')::int = " + b.arg(*f.Tier))
+		}
+		if f.Cluster != "" {
+			b.add("c.record->>'cluster' = " + b.arg(f.Cluster))
+		}
+		if f.LiveAt != nil {
+			// clearance_tokens_feed (cluster, expires_at) WHERE revoked_at IS NULL, by the token's primary key.
+			at := b.arg(*f.LiveAt)
+			b.add("EXISTS (SELECT 1 FROM clearance_tokens t WHERE t.change_id = c.id AND t.revoked_at IS NULL " +
+				"AND t.expires_at > " + at + ")")
 		}
 	}
 	if f.Since != "" {
@@ -286,6 +302,32 @@ func (s *PG) ChangeCounts(ctx context.Context, f ChangeFilter, v *Viewer, by str
 
 func (s *PG) Definitions(ctx context.Context) ([]store.Definition, error) {
 	return s.R.Definitions(ctx)
+}
+
+func (s *PG) Tokens(ctx context.Context, ids []string, now time.Time) (map[string]store.Token, error) {
+	out := map[string]store.Token{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, done, err := s.R.Query(ctx, "SELECT "+pg.TokenCols+" FROM clearance_tokens WHERE change_id = ANY($1) "+
+		"AND revoked_at IS NULL AND expires_at > $2", ids, now)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	defer rows.Close()
+	for rows.Next() {
+		tk, err := pg.ScanToken(rows)
+		if err != nil {
+			return nil, fmt.Errorf("pg: %w", err)
+		}
+		out[tk.ChangeID] = tk
+	}
+	return out, rows.Err()
+}
+
+func (s *PG) SigningKeys(ctx context.Context, since time.Time) ([]store.SigningKey, error) {
+	return s.R.SigningKeys(ctx, since)
 }
 
 func (s *PG) Ping(ctx context.Context) error {

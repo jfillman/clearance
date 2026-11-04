@@ -487,7 +487,7 @@ func TestWhoMayClearATier2Change(t *testing.T) {
 		t.Fatal(out, err)
 	}
 	via := tower
-	if !reflect.DeepEqual(out.Approvals, []gate.Approval{{"user:erin", &via, "owner", "2026-09-26T12:00:00Z"}}) {
+	if !reflect.DeepEqual(out.Approvals, []gate.Approval{{"user:erin", &via, "owner", "2026-09-26T12:00:00Z", "user:erin", "delegate:" + tower}}) {
 		t.Fatal(out.Approvals)
 	}
 	recs := f.records(t, "deploy.clear")
@@ -744,7 +744,7 @@ func TestTheViewHasPythonsKeysInOrder(t *testing.T) {
 	f := newGate(t)
 	out := f.register(t, "ci", change(map[string]any{"objects": replicas}))
 	raw, _ := json.Marshal(out)
-	keys := []string{"id", "app", "env", "cluster", "repo", "pr", "head", "base", "proposer", "proposer_kind", "agent", "owner",
+	keys := []string{"id", "app", "env", "cluster", "repo", "pr", "head", "base", "proposer", "proposer_kind", "agent", "task_id", "owner",
 		"protected", "tree_digest", "paths", "lines_changed", "objects", "checks", "policy_version", "repo_policy_digest", "policy_ref", "tier",
 		"reasons", "requirement", "state", "created_at", "updated_at", "expires_at", "registered_by", "approvals", "cleared_by",
 		"decided_at", "deny_reason", "denied_by", "superseded_by", "deployments", "target", "objects_count", "paths_count"}
@@ -1027,5 +1027,33 @@ func TestReRegistrationRefreshesThePolicyRef(t *testing.T) {
 	}
 	if got := policyOf(t, f.records(t, "deploy.clear")[0])["ref"]; got != "clearance.yaml@"+commit {
 		t.Fatal(got)
+	}
+}
+
+func TestThePolicyGroupSitsBesideTheC1FieldsOnEveryDeployRecord(t *testing.T) {
+	f := newGate(t)
+	f.register(t, "ci", change(map[string]any{"objects": imageBump, "admission": kyvernoPass,
+		"checks": map[string]any{"ci": "pass", "provenance": "not-agent", "render": "ok"}}))
+	out := f.register(t, "ci", change(map[string]any{"pr": 9, "head": strings.Repeat("4", 40), "objects": replicas}))
+	if _, err := f.svc.Clear(f.ctx, principals["erin"], out.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	recs := f.records(t, "")
+	if len(recs) < 4 {
+		t.Fatal(len(recs))
+	}
+	for _, r := range recs {
+		p := policyOf(t, r)
+		if p["ref"] == nil || p["engine"] == nil || p["verdict"] == nil {
+			t.Fatalf("%v: %v", r["tool"], p)
+		}
+		if _, ok := r["task_id"]; !ok {
+			t.Fatalf("%v has no task_id", r["tool"])
+		}
+		if r["tool"] == "deploy.clear" {
+			if _, ok := r["cleared_by"]; !ok {
+				t.Fatalf("deploy.clear lost cleared_by beside policy: %v", r)
+			}
+		}
 	}
 }

@@ -27,6 +27,8 @@ import (
 //	CLEARANCE_API_AUDITORS              principal globs, comma-separated: every read, the chain check, full=1
 //	CLEARANCE_API_NOTIFIERS             principal globs: the notifier role (no Clearance read is a notifier's)
 //	CLEARANCE_DELEGATES                 principal globs that may name a person in the on-behalf-of header (a portal)
+//	CLEARANCE_API_FEED_READERS          <principal glob>=<cluster> pairs, comma-separated: the grant-sync agents
+//	                                    that read a cluster's grant feed (cleared changes and their tokens)
 //	CLEARANCE_AGENTS_DIR                the bundled agent definitions (*.yaml); the cluster pins come from the
 //	                                    core's store (clearance_definitions), refreshed every
 //	CLEARANCE_API_DEFINITIONS_INTERVAL  seconds (default 30)
@@ -45,6 +47,7 @@ type Config struct {
 	DSN                            string
 	Listen                         string
 	Auditors, Notifiers, Delegates []string
+	FeedReaders                    []FeedReader
 	AgentsDir                      string
 	DefinitionsEvery               time.Duration
 	Pool                           int32
@@ -81,6 +84,10 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		BackstageURL: get("BACKSTAGE_URL", ""), BackstageTokenFile: get("BACKSTAGE_TOKEN_FILE", backstage.DefaultTokenFile)}
 	if cfg.DSN == "" {
 		return cfg, errors.New("CLEARANCE_API_DSN is required (the read-only role's DSN)")
+	}
+	var err error
+	if cfg.FeedReaders, err = ParseFeedReaders(get("CLEARANCE_API_FEED_READERS", "")); err != nil {
+		return cfg, err
 	}
 	cfg.Listen = get("CLEARANCE_LISTEN", "")
 	if cfg.Listen == "" {
@@ -164,7 +171,8 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 		// set, retry every interval, and stay unready (/readyz) until the database answers.
 		log.Warn("api: the stored definitions are not readable yet; retrying", "error", err.Error())
 	}
-	access := &Access{Delegates: cfg.Delegates, Notifiers: cfg.Notifiers, Auditors: cfg.Auditors, Owners: defs.Owners}
+	access := &Access{Delegates: cfg.Delegates, Notifiers: cfg.Notifiers, Auditors: cfg.Auditors,
+		FeedReaders: cfg.FeedReaders, Owners: defs.Owners}
 	if cfg.BackstageURL != "" {
 		cat := backstage.NewCatalog(cfg.BackstageURL, cfg.BackstageTokenFile, 0, log)
 		dir := backstage.NewDirectory(cat, 0, nil)
@@ -192,7 +200,7 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- hs.Serve(ln) }()
 	log.Info("clearance api serving", "addr", ln.Addr().String(), "agents", len(defs.Names()),
-		"auditors", cfg.Auditors, "notifiers", cfg.Notifiers, "delegates", cfg.Delegates,
+		"auditors", cfg.Auditors, "notifiers", cfg.Notifiers, "delegates", cfg.Delegates, "feed_readers", len(cfg.FeedReaders),
 		"catalog", cfg.BackstageURL != "", "policy", eng.Policy().Bundle)
 	if ready != nil {
 		ready(ln.Addr().String())
