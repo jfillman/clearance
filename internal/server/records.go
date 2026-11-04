@@ -37,12 +37,12 @@ const (
 )
 
 // FederatedKind is a decision a federated runtime source observed at another gateway (its own PDP decided; the
-// core decided nothing). Everything in it is claimed. Its coverage is CoverageObserved, or CoverageAttributed when
-// the source correlated the call to a task_id; it carries no Clearance rule, tier, effect, outcome or change.
+// core decided nothing). Everything in it is claimed, a correlated task_id included, so its coverage is always
+// CoverageObserved: another PDP authorized the call, not Clearance. It carries no Clearance rule, tier, effect,
+// outcome or change.
 const (
-	FederatedKind      = "federated.decision"
-	CoverageObserved   = "observed-not-attributed"
-	CoverageAttributed = "authorized-and-verified"
+	FederatedKind    = "federated.decision"
+	CoverageObserved = "observed-not-attributed"
 )
 
 // kindSpec is what each kind must carry, and its boundary.
@@ -220,16 +220,15 @@ func (s *Server) checkOutageRead(e *ProviderEvent) error {
 	return nil
 }
 
-// checkFederated holds a federated.decision to what an observer can say: another PDP's verdict, attributed to a task
-// only when the source correlated one, and nothing that would read as the core's decision (a rule or tier) or as
-// a write (an effect, an outcome, a change). A tool is refused before this, by event (only tool.call carries one).
+// checkFederated holds a federated.decision to what an observer can say: another PDP's verdict, always
+// observed-not-attributed (a task_id it correlated is a claim; authorized-and-verified would say Clearance knows the
+// call was authorized), and nothing that would read as the core's decision (a rule or tier) or as a write (an
+// effect, an outcome, a change). A tool is refused before this, by event (only tool.call carries one).
 func checkFederated(e *ProviderEvent) error {
 	switch {
-	case *e.Coverage != CoverageObserved && *e.Coverage != CoverageAttributed:
-		return fmt.Errorf("a %s record's coverage is %s or %s", FederatedKind, CoverageObserved, CoverageAttributed)
-	case *e.Coverage == CoverageAttributed && (e.TaskID == nil || *e.TaskID == ""):
-		return fmt.Errorf("a %s record is %s only with the task_id it was correlated to", FederatedKind,
-			CoverageAttributed)
+	case *e.Coverage != CoverageObserved:
+		return fmt.Errorf("a %s record's coverage is %s: another PDP decided, and its correlation is claimed",
+			FederatedKind, CoverageObserved)
 	case e.Rule != nil || e.Tier != nil:
 		return fmt.Errorf("a %s record carries no rule or tier: the core decided nothing", FederatedKind)
 	case e.Effect != nil || e.Outcome != nil || e.Change != nil:

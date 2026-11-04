@@ -9,7 +9,8 @@ import (
 )
 
 // FuzzIngest: no Hub log or access log line makes the adapter panic, and every record it builds is one the core
-// takes in shape (the kind, a decision of allow or deny, a coverage the core allows, a task with an attributed one).
+// takes in shape (the kind, a decision of allow or deny, coverage observed-not-attributed, source.correlated true
+// exactly when it carries a task_id).
 func FuzzIngest(f *testing.F) {
 	for _, pair := range [][2]string{{"published-hub.log", "published-access.log"}, {"lab-hub.log", "lab-access.log"}} {
 		h, err := os.ReadFile("testdata/" + pair[0])
@@ -34,17 +35,11 @@ func FuzzIngest(f *testing.F) {
 				e.Result == nil || *e.Result == "" || e.Coverage == nil || e.Rule != nil || e.Tier != nil {
 				t.Fatalf("%+v", r)
 			}
-			switch *e.Coverage {
-			case traefikhub.CoverageObserved:
-				if e.TaskID != nil {
-					t.Fatal("observed with a task")
-				}
-			case traefikhub.CoverageAttributed:
-				if e.TaskID == nil || *e.TaskID == "" {
-					t.Fatal("attributed without a task")
-				}
-			default:
+			if *e.Coverage != traefikhub.CoverageObserved {
 				t.Fatal(*e.Coverage)
+			}
+			if (e.TaskID != nil && *e.TaskID != "") != (e.Source["correlated"] == true) {
+				t.Fatalf("task %v correlated %v", e.TaskID, e.Source["correlated"])
 			}
 		}
 	})

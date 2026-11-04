@@ -60,18 +60,19 @@ provider's registration). Verified: `provider`, `ts`. Everything else is claimed
 | `decision` | Hub's `decision`. `bypass` (a policy with `strategy: bypass` that never asked the PDP) is recorded as `allow` with `result: "bypass: ..."`, and Hub's own word is kept in `source.hub_decision` |
 | `result` | Hub's `message` (`Request allowed`, `Request denied`), else the decision |
 | `reason` | Hub's `reason`, else `error: <error>` |
-| `task_id`, `coverage` | the correlation (next section) |
+| `task_id` | the correlation (next section), when there is one: a claim |
+| `coverage` | always `observed-not-attributed` (next section) |
 | `principal` | `ClientUsername` (when not `-`), else `--principal-header` |
 | `agent` | the kept `--agent-header` (default `X-Evidence-Agent`, the header in Traefik's example) |
 | `target` | `RequestHost` + `RequestPath` |
 | `subject` | `{kind: tool-call, name: <target or middleware>, digests: {decisionLine, accessLine}}`: the SHA-256 of each line exactly as read |
-| `source` | `system: traefik-hub`, `middleware`, `middleware_type`, `hub_decision`, `policy`, `trace_id`, `gateway_id`, `decision_log_id` and `access_log_id` (the two `transparency_log_id`s), `time`, `method`, `router`, `downstream_status` |
+| `source` | `system: traefik-hub`, `correlated` (true when the record carries a correlated `task_id`), `middleware`, `middleware_type`, `hub_decision`, `policy`, `trace_id`, `gateway_id`, `decision_log_id` and `access_log_id` (the two `transparency_log_id`s), `time`, `method`, `router`, `downstream_status` |
 
 The core refuses a `federated.decision` record in these cases (`checkFederated` in `internal/server/records.go`):
 
 - it carries a Clearance `rule` or `tier`, or an `effect`, `outcome`, `change` or `tool` (the core decided nothing);
-- its coverage is anything other than the two values below;
-- it is attributed without a `task_id`.
+- its coverage is anything other than `observed-not-attributed` (`authorized-and-verified` is refused, with or
+  without a `task_id`).
 
 ### Correlation and coverage
 
@@ -85,10 +86,12 @@ that names one names the same one. The Autopilot gateway, or any client, stamps 
 through Hub. `MapCorrelator` takes a trace-to-task table instead, from a gateway that recorded the `traceparent` it
 sent.
 
-| Coverage | When |
-| --- | --- |
-| `observed-not-attributed` | no task id correlates: Hub's PDP decided a call that cannot be tied to a task |
-| `authorized-and-verified` | the trace correlates to a `task_id`: Hub's PDP authorized or refused the call, and the call is attributed to a task. The attribution is a claim like every other field, and `verified` still names only `provider` and `ts` |
+Every federated record's coverage is `observed-not-attributed`, whether or not the trace correlates. Hub's PDP
+authorized or refused the call, not Clearance, and the correlation is the caller's claim, carried in a header
+Clearance never checked. `authorized-and-verified` would overstate what Clearance knows, so the core refuses it on
+a `federated.decision`. A correlated record keeps its `task_id` as a claimed field and sets
+`source.correlated: true`, so a reader can find a task's federated decisions without the coverage state saying
+more than is known.
 
 ### Re-runs
 

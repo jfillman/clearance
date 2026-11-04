@@ -209,8 +209,9 @@ A federated source observes decisions another gateway's own PDP made. It posts e
 correlation. Every field is claimed.
 
 - **Required fields:** `decision` (`allow` or `deny`), `result` and `coverage`.
-- **Coverage:** `observed-not-attributed`, or `authorized-and-verified` only with the `task_id` the source
-  correlated the call to.
+- **Coverage:** always `observed-not-attributed`. Another PDP decided, so the core refuses
+  `authorized-and-verified`. A `task_id` the source correlated is kept as a claim (the Hub adapter also sets
+  `source.correlated: true`).
 - **Refused:** the core refuses a Clearance `rule` or `tier`, an `effect`, `outcome` or `change`, and a `tool`.
 
 The first source is the [Traefik Hub adapter](federate-traefik-hub.md) (Unverified). Register it with

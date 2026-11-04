@@ -10,10 +10,9 @@ import (
 
 // The record this adapter writes.
 const (
-	ProviderName       = "traefik-hub"
-	Kind               = "federated.decision"
-	CoverageObserved   = "observed-not-attributed"
-	CoverageAttributed = "authorized-and-verified"
+	ProviderName     = "traefik-hub"
+	Kind             = "federated.decision"
+	CoverageObserved = "observed-not-attributed"
 
 	// DefaultTaskHeader is the request header the default Correlator reads from the access record
 	// (request_X-Clearance-Task-Id): the caller stamps it, Hub keeps it (accessLog.fields.headers.names).
@@ -153,9 +152,10 @@ func Join(ds []Decision, as []Access, opt Options, st Stats) ([]client.RecordReq
 
 // record is one decision as a federated.decision record: everything in it is Hub's claim.
 func record(d Decision, a *Access, task, agentHeader, principalHeader string) client.RecordRequest {
+	// Always observed: Hub's PDP decided, not Clearance, and a correlated task_id is a claim.
 	ev := client.ProviderEvent{Coverage: client.String(CoverageObserved)}
 	if task != "" {
-		ev.TaskID, ev.Coverage = client.String(task), client.String(CoverageAttributed)
+		ev.TaskID = client.String(task)
 	}
 	verdict, result := d.Decision, d.Message
 	if d.Decision == "bypass" {
@@ -176,7 +176,7 @@ func record(d Decision, a *Access, task, agentHeader, principalHeader string) cl
 		ev.Reason = client.String(clean("error: " + d.Error))
 	}
 	source := map[string]any{"system": "traefik-hub", "middleware": clean(d.MiddlewareName),
-		"middleware_type": d.MiddlewareType, "hub_decision": d.Decision}
+		"middleware_type": d.MiddlewareType, "hub_decision": d.Decision, "correlated": task != ""}
 	put := func(k, v string) {
 		if v = clean(v); v != "" {
 			source[k] = v

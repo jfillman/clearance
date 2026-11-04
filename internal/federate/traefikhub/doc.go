@@ -28,9 +28,9 @@
 //
 // Correlation to task_id: the default Correlator reads a header the caller sends and Hub keeps in the access record
 // (X-Clearance-Task-Id, kept with accessLog.fields.headers.names). The Autopilot gateway, or any client, sets it
-// on the calls it makes through Hub. It is a claim, like every field here; a correlated decision is coverage
-// authorized-and-verified (Hub's PDP authorized it and the call is attributed to a task), an uncorrelated one
-// observed-not-attributed.
+// on the calls it makes through Hub. It is a claim, like every field here: a correlated decision carries the
+// task_id and source.correlated true, and every record is coverage observed-not-attributed, because Hub's PDP
+// authorized the call, not Clearance.
 //
 // Parsing is bounded: each line is at most MaxLine bytes, a file at most MaxLines lines, and a line that is not a
 // JSON object is counted and skipped, never fatal. Decoding is lenient by design (Hub's lines carry many fields

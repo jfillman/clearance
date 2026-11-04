@@ -38,8 +38,7 @@ func str(p *string) string {
 }
 
 func TestTheKindMatchesTheCore(t *testing.T) {
-	if traefikhub.Kind != server.FederatedKind || traefikhub.CoverageObserved != server.CoverageObserved ||
-		traefikhub.CoverageAttributed != server.CoverageAttributed {
+	if traefikhub.Kind != server.FederatedKind || traefikhub.CoverageObserved != server.CoverageObserved {
 		t.Fatal("the adapter's kind and coverage values differ from the core's")
 	}
 	if !slices.Contains(client.RecordKinds, traefikhub.Kind) {
@@ -70,7 +69,7 @@ func TestPublishedExamples(t *testing.T) {
 		"middleware_type": "authzen-mcp", "hub_decision": "allow", "policy": "user-tool-call",
 		"trace_id": "5e5e8662ec810c75a0a215e2d8d7e56b", "gateway_id": "6ff586e3-9fe2-4e6a-af4c-437c58f56579",
 		"decision_log_id": "a5499d5c-7cd8-439b-88a8-47924b9db2ab", "time": "2026-10-06T05:21:10Z",
-		"access_log_id": "d5b33cf1-1386-4254-b597-6f6fd40dc9af", "downstream_status": 403}
+		"access_log_id": "d5b33cf1-1386-4254-b597-6f6fd40dc9af", "downstream_status": 403, "correlated": false}
 	for k, v := range want {
 		if src[k] != v {
 			t.Errorf("source.%s = %v, want %v", k, src[k], v)
@@ -108,7 +107,7 @@ func TestLabLines(t *testing.T) {
 	// Two decisions and two requests share the trace (chained calls forwarding traceparent): not paired, but both
 	// requests name task-42, so both decisions are correlated.
 	if str(deny.Decision) != "deny" || str(deny.Reason) != "amount 50 over limit 20" || str(deny.TaskID) != "task-42" ||
-		str(deny.Coverage) != "authorized-and-verified" || deny.Target != nil || deny.Agent != nil ||
+		str(deny.Coverage) != "observed-not-attributed" || deny.Source["correlated"] != true || deny.Target != nil || deny.Agent != nil ||
 		deny.Source["policy"] != "transfer-limit" {
 		t.Fatalf("deny %+v", deny)
 	}
@@ -118,13 +117,15 @@ func TestLabLines(t *testing.T) {
 	}
 	// A deny the mapping caused (error, no reason), paired through TraceId and a lower-case header field.
 	if str(refund.Decision) != "deny" || str(refund.Reason) != "error: no such key: X-Amount" ||
-		str(refund.TaskID) != "task-7" || str(refund.Principal) != "carol@example.com" ||
+		str(refund.TaskID) != "task-7" || str(refund.Coverage) != "observed-not-attributed" ||
+		refund.Source["correlated"] != true || str(refund.Principal) != "carol@example.com" ||
 		str(refund.Target) != "shop.example/refunds" || refund.Source["method"] != "POST" ||
 		refund.Source["router"] != "apps-refunds@kubernetescrd" {
 		t.Fatalf("refund %+v", refund)
 	}
 	// Tracing off: nothing to join, observed only.
-	if str(untraced.Coverage) != "observed-not-attributed" || untraced.TaskID != nil || untraced.Source["trace_id"] != nil {
+	if str(untraced.Coverage) != "observed-not-attributed" || untraced.TaskID != nil || untraced.Source["trace_id"] != nil ||
+		untraced.Source["correlated"] != false {
 		t.Fatalf("untraced %+v", untraced)
 	}
 }
@@ -224,7 +225,10 @@ func TestTheCoreHoldsFederatedRecordsToObservation(t *testing.T) {
 	}
 	tier := 2
 	for name, edit := range map[string]func(*client.ProviderEvent){
-		"attributed without a task": func(e *client.ProviderEvent) { e.Coverage = client.String("authorized-and-verified") },
+		"authorized-and-verified": func(e *client.ProviderEvent) { e.Coverage = client.String("authorized-and-verified") },
+		"authorized with a task": func(e *client.ProviderEvent) {
+			e.Coverage, e.TaskID = client.String("authorized-and-verified"), client.String("task-42")
+		},
 		"another coverage":          func(e *client.ProviderEvent) { e.Coverage = client.String("coverage-unavailable") },
 		"a rule":                    func(e *client.ProviderEvent) { e.Rule = client.String("R021") },
 		"a tier":                    func(e *client.ProviderEvent) { e.Tier = &tier },
