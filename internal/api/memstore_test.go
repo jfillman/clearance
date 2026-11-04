@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -226,6 +227,94 @@ func (m *memStore) Counts(_ context.Context, f EvidenceFilter, v *Viewer, by str
 		}
 	}
 	return group(keys), m.fail
+}
+
+// intField is an integer field of a record's object (0 when absent or not a number), as PG's sumOf reads it.
+func intField(r Record, obj, k string) int64 {
+	o, _ := r[obj].(map[string]any)
+	switch x := o[k].(type) {
+	case json.Number:
+		n, err := x.Int64()
+		if err != nil {
+			return 0
+		}
+		return n
+	case float64:
+		return int64(x)
+	case int64:
+		return x
+	case int:
+		return int64(x)
+	}
+	return 0
+}
+
+func (m *memStore) Costs(_ context.Context, f EvidenceFilter, v *Viewer, per string) ([]Count, CostSum, error) {
+	var all CostSum
+	field, ok := costField[per]
+	if !ok {
+		return nil, all, fmt.Errorf("api: cost per %q", per)
+	}
+	f.Outcomes = OutcomesInclude
+	owners := m.owners()
+	groups := map[string]*Count{}
+	var order []string
+	for _, r := range m.recs {
+		if !m.sees(r, v, owners) || !m.matches(r, f) {
+			continue
+		}
+		tool, _ := str(r["tool"])
+		_, isOutcome := r["outcome_of"]
+		_, hasUsage := r["usage"]
+		_, hasCost := r["cost"]
+		call := tool == "model.call" && isOutcome && hasUsage
+		run := tool == "run.finish" && hasCost
+		if !call && !run {
+			continue
+		}
+		k := keyOf(r[field])
+		id := "\x00null"
+		if k != nil {
+			id = *k
+		}
+		c := groups[id]
+		if c == nil {
+			c = &Count{Key: k, Cost: &CostSum{}}
+			groups[id] = c
+			order = append(order, id)
+		}
+		if call {
+			c.Count++
+			c.Cost.ModelCalls++
+			c.Cost.ChargedTokens += intField(r, "usage", "charged_tokens")
+			c.Cost.InputTokens += intField(r, "usage", "input_tokens")
+			c.Cost.OutputTokens += intField(r, "usage", "output_tokens")
+			c.Cost.CacheCreationInputTokens += intField(r, "usage", "cache_creation_input_tokens")
+			c.Cost.CacheReadInputTokens += intField(r, "usage", "cache_read_input_tokens")
+		} else {
+			c.Cost.Runs++
+			c.Cost.WallSeconds += intField(r, "cost", "wall_seconds")
+		}
+	}
+	out := []Count{}
+	for _, id := range order {
+		out = append(out, *groups[id])
+		all.add(groups[id].Cost)
+	}
+	// charged desc, then key asc with null last (ORDER BY 3 DESC, 1)
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Cost.ChargedTokens != out[j].Cost.ChargedTokens {
+			return out[i].Cost.ChargedTokens > out[j].Cost.ChargedTokens
+		}
+		if out[i].Key == nil || out[j].Key == nil {
+			return out[j].Key == nil && out[i].Key != nil
+		}
+		return *out[i].Key < *out[j].Key
+	})
+	if len(out) > MaxLimit {
+		out = out[:MaxLimit]
+	}
+	return out, all, m.fail
 }
 
 func (m *memStore) ByPR(_ context.Context, tools []string, f PRFilter, v *Viewer) ([]Record, error) {

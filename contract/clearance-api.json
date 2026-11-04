@@ -279,8 +279,57 @@
         ],
         "type": "object"
       },
+      "CostSum": {
+        "properties": {
+          "cache_creation_input_tokens": {
+            "type": "integer"
+          },
+          "cache_read_input_tokens": {
+            "type": "integer"
+          },
+          "charged_tokens": {
+            "type": "integer"
+          },
+          "input_tokens": {
+            "type": "integer"
+          },
+          "model_calls": {
+            "type": "integer"
+          },
+          "output_tokens": {
+            "type": "integer"
+          },
+          "runs": {
+            "type": "integer"
+          },
+          "wall_seconds": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cache_creation_input_tokens",
+          "cache_read_input_tokens",
+          "charged_tokens",
+          "input_tokens",
+          "model_calls",
+          "output_tokens",
+          "runs",
+          "wall_seconds"
+        ],
+        "type": "object"
+      },
       "Count": {
         "properties": {
+          "cost": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CostSum"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "count": {
             "type": "integer"
           },
@@ -302,6 +351,16 @@
           "by": {
             "type": "string"
           },
+          "cost": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CostSum"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "items": {
             "items": {
               "$ref": "#/components/schemas/Count"
@@ -309,6 +368,9 @@
             "type": "array"
           },
           "outcomes": {
+            "type": "string"
+          },
+          "per": {
             "type": "string"
           },
           "total": {
@@ -2810,6 +2872,14 @@
           },
           {
             "in": "query",
+            "name": "per",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "task",
             "required": false,
             "schema": {
@@ -2962,7 +3032,7 @@
             "bearer": []
           }
         ],
-        "summary": "Records you may see, counted by rule, tool, agent, app or decision (`by`), with the same filters as the list. outcomes=exclude (default) counts each decision once; include or only count the outcome records too",
+        "summary": "Records you may see, counted by rule, tool, agent, app or decision (`by`), with the same filters as the list. outcomes=exclude (default) counts each decision once; include or only count the outcome records too. by=cost sums what runs cost instead, per task (default: the task tree), session (one run), agent or principal (`per`): the model-call outcomes' usage (charged_tokens is what the model proxy charged the session budgets) and the run.finish records' runs and wall seconds; each item's count is its model calls",
         "x-clearance-roles": [
           "person",
           "delegate",

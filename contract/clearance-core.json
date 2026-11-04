@@ -22,6 +22,45 @@
         ],
         "type": "object"
       },
+      "Cost": {
+        "additionalProperties": false,
+        "properties": {
+          "cache_creation_input_tokens": {
+            "type": "integer"
+          },
+          "cache_read_input_tokens": {
+            "type": "integer"
+          },
+          "charged_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "compute": {
+            "type": "string"
+          },
+          "input_tokens": {
+            "type": "integer"
+          },
+          "model_calls": {
+            "type": "integer"
+          },
+          "output_tokens": {
+            "type": "integer"
+          },
+          "tool_calls": {
+            "type": "integer"
+          },
+          "wall_seconds": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "charged_tokens"
+        ],
+        "type": "object"
+      },
       "DecideAction": {
         "additionalProperties": false,
         "properties": {
@@ -1939,6 +1978,12 @@
               }
             ]
           },
+          "model_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "receipt": {
             "additionalProperties": {},
             "type": "object"
@@ -1955,6 +2000,16 @@
           },
           "result": {
             "type": "string"
+          },
+          "usage": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Usage"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -2022,6 +2077,27 @@
           "doc",
           "owner",
           "source"
+        ],
+        "type": "object"
+      },
+      "Preflight": {
+        "additionalProperties": false,
+        "properties": {
+          "cases": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "definition": {
+            "type": "string"
+          },
+          "result": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
         ],
         "type": "object"
       },
@@ -2166,6 +2242,16 @@
             "additionalProperties": {},
             "type": "object"
           },
+          "cost": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Cost"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "coverage": {
             "type": [
               "string",
@@ -2200,6 +2286,12 @@
               "null"
             ]
           },
+          "model_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "outage": {
             "additionalProperties": {},
             "type": "object"
@@ -2212,6 +2304,16 @@
             "type": [
               "string",
               "null"
+            ]
+          },
+          "preflight": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Preflight"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "principal": {
@@ -2533,6 +2635,33 @@
         "required": [
           "keyid",
           "sig"
+        ],
+        "type": "object"
+      },
+      "Usage": {
+        "additionalProperties": false,
+        "properties": {
+          "cache_creation_input_tokens": {
+            "type": "integer"
+          },
+          "cache_read_input_tokens": {
+            "type": "integer"
+          },
+          "charged_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "input_tokens": {
+            "type": "integer"
+          },
+          "output_tokens": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "charged_tokens"
         ],
         "type": "object"
       },

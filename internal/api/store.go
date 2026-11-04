@@ -48,6 +48,33 @@ type ChangeFilter struct {
 type Count struct {
 	Key   *string `json:"key"`
 	Count int64   `json:"count"`
+	// Cost is the group's cost (counts by=cost only); count is then its model calls.
+	Cost *CostSum `json:"cost,omitempty"`
+}
+
+// CostSum is what a group of records cost (AP-C2): the model-call outcomes' usage summed (charged_tokens is what
+// the gateway's model proxy charged the sessions' model_tokens budgets, the provider's four kinds of token beside
+// it) and the run.finish records' runs and wall-clock seconds (compute).
+type CostSum struct {
+	ChargedTokens            int64 `json:"charged_tokens"`
+	InputTokens              int64 `json:"input_tokens"`
+	OutputTokens             int64 `json:"output_tokens"`
+	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+	ModelCalls               int64 `json:"model_calls"`
+	Runs                     int64 `json:"runs"`
+	WallSeconds              int64 `json:"wall_seconds"`
+}
+
+func (c *CostSum) add(o *CostSum) {
+	c.ChargedTokens += o.ChargedTokens
+	c.InputTokens += o.InputTokens
+	c.OutputTokens += o.OutputTokens
+	c.CacheCreationInputTokens += o.CacheCreationInputTokens
+	c.CacheReadInputTokens += o.CacheReadInputTokens
+	c.ModelCalls += o.ModelCalls
+	c.Runs += o.Runs
+	c.WallSeconds += o.WallSeconds
 }
 
 // Verified is GET /v1/evidence/verify's answer (api.py verify_chain).
@@ -68,6 +95,11 @@ type Store interface {
 	// Counts is the records the viewer may see matching f, grouped by the record field by (one of CountBy), the
 	// largest first, at most MaxLimit groups.
 	Counts(ctx context.Context, f EvidenceFilter, v *Viewer, by string) ([]Count, error)
+	// Costs is the cost of the records the viewer may see matching f (f.Outcomes is ignored: the model.call outcome
+	// records that carry usage and the run.finish records that carry cost), grouped by the record field of per (one
+	// of CostPer), the most charged first, at most MaxLimit groups, and the sums over every matching group (not the
+	// page). Each group's count is its model calls.
+	Costs(ctx context.Context, f EvidenceFilter, v *Viewer, per string) ([]Count, CostSum, error)
 	// ByPR is the records of one of tools that the viewer may see, whose effect names repo (and pr when not "") or
 	// whose target is repo#pr (repo#anything without pr), newest first, at most MaxLimit. f.Installation, when set,
 	// keeps the records of that App installation (Verdicts: recorded by app:<id>) or (receipts) the records on a

@@ -178,6 +178,84 @@ func (s *PG) Counts(ctx context.Context, f EvidenceFilter, v *Viewer, by string)
 		" GROUP BY "+col+" ORDER BY count(*) DESC, 1 LIMIT "+b.arg(MaxLimit), b.args)
 }
 
+// CostRecords is the records counts by=cost sums: the model-call outcomes that carry usage and the run.finish
+// records that carry cost. The core's clearance_evidence_cost partial index (pg.Schema) covers exactly these.
+const costRecords = "((e.record->>'tool' = 'model.call' AND e.record ? 'outcome_of' AND e.record ? 'usage') OR " +
+	"(e.record->>'tool' = 'run.finish' AND e.record ? 'cost'))"
+
+// sumOf is the sum of an integer field of a record's object (a value that is not a number counts 0), as bigint.
+func sumOf(obj, k, filter string) string {
+	v := "e.record->'" + obj + "'->'" + k + "'"
+	return "coalesce(sum(CASE WHEN jsonb_typeof(" + v + ") = 'number' THEN (" + v + ")::text::numeric END) FILTER (WHERE " +
+		filter + "), 0)::bigint"
+}
+
+const (
+	isModelCall = "e.record->>'tool' = 'model.call'"
+	isRunFinish = "e.record->>'tool' = 'run.finish'"
+)
+
+// costSQL is Costs's statement and its arguments.
+func costSQL(f EvidenceFilter, v *Viewer, per string) (string, []any, error) {
+	field, ok := costField[per]
+	if !ok {
+		return "", nil, fmt.Errorf("api: cost per %q", per)
+	}
+	b := &q{}
+	with := b.evidenceScope(v)
+	f.Outcomes = OutcomesInclude
+	b.evidenceFilter(f)
+	b.add(costRecords)
+	col := "e.record->>'" + field + "'"
+	charged := sumOf("usage", "charged_tokens", isModelCall)
+	// g is every group; the page is the most charged MaxLimit of them, each row carrying the sums over all of g (a
+	// window over the groups, computed before the LIMIT), so the answer's totals are never the page's.
+	grouped := "SELECT " + col + " AS k, count(*) FILTER (WHERE " + isModelCall + ") AS calls, " + charged + " AS charged, " +
+		sumOf("usage", "input_tokens", isModelCall) + " AS input, " + sumOf("usage", "output_tokens", isModelCall) + " AS output, " +
+		sumOf("usage", "cache_creation_input_tokens", isModelCall) + " AS cwrite, " +
+		sumOf("usage", "cache_read_input_tokens", isModelCall) + " AS cread, count(*) FILTER (WHERE " + isRunFinish + ") AS runs, " +
+		sumOf("cost", "wall_seconds", isRunFinish) + " AS wall" +
+		" FROM clearance_evidence e WHERE " + b.sql() + " GROUP BY " + col
+	if with == "" {
+		with = "WITH "
+	} else {
+		with += ", "
+	}
+	tot := func(c string) string { return "coalesce(sum(" + c + ") OVER (), 0)::bigint" }
+	sql := with + "g AS (" + grouped + ") SELECT k, calls, charged, input, output, cwrite, cread, runs, wall, " +
+		tot("calls") + ", " + tot("charged") + ", " + tot("input") + ", " + tot("output") + ", " + tot("cwrite") + ", " +
+		tot("cread") + ", " + tot("runs") + ", " + tot("wall") + " FROM g ORDER BY charged DESC, k LIMIT " + b.arg(MaxLimit)
+	return sql, b.args, nil
+}
+
+func (s *PG) Costs(ctx context.Context, f EvidenceFilter, v *Viewer, per string) ([]Count, CostSum, error) {
+	var all CostSum
+	sql, args, err := costSQL(f, v, per)
+	if err != nil {
+		return nil, all, err
+	}
+	rows, done, err := s.R.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, all, err
+	}
+	defer done()
+	defer rows.Close()
+	out := []Count{}
+	for rows.Next() {
+		c := Count{Cost: &CostSum{}}
+		x := c.Cost
+		if err := rows.Scan(&c.Key, &x.ModelCalls, &x.ChargedTokens, &x.InputTokens, &x.OutputTokens,
+			&x.CacheCreationInputTokens, &x.CacheReadInputTokens, &x.Runs, &x.WallSeconds, &all.ModelCalls,
+			&all.ChargedTokens, &all.InputTokens, &all.OutputTokens, &all.CacheCreationInputTokens,
+			&all.CacheReadInputTokens, &all.Runs, &all.WallSeconds); err != nil {
+			return nil, all, fmt.Errorf("pg: %w", err)
+		}
+		c.Count = x.ModelCalls
+		out = append(out, c)
+	}
+	return out, all, rows.Err()
+}
+
 // likeEscape escapes LIKE's wildcards (api.py did not: a repo with "_" matched one character more).
 func likeEscape(s string) string {
 	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)

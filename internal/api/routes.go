@@ -46,6 +46,9 @@ type Counts struct {
 	Items    []Count `json:"items"`
 	Total    int64   `json:"total"`
 	Outcomes string  `json:"outcomes,omitempty"`
+	// Per is what by=cost grouped by (task, session, agent or principal); Cost is the groups' cost summed.
+	Per  string   `json:"per,omitempty"`
+	Cost *CostSum `json:"cost,omitempty"`
 }
 
 // ChangePage is a page of the gate's changes: next is the last item's updated_at when the page is full.
@@ -108,10 +111,13 @@ var routeTable = []Route{
 		Summary:  "The whole chain checked from genesis: ok, count, head, the first bad seq",
 		Response: Verified{}, Errors: []int{401, 403, 503}, serve: (*Server).verifyEvidence},
 	{OperationID: "countEvidence", Method: "GET", Path: "/v1/evidence/counts", Roles: PersonRoles,
-		Params: []string{"by", "task", "session", "agent", "tool", "principal", "decision", "rule", "app", "since",
+		Params: []string{"by", "per", "task", "session", "agent", "tool", "principal", "decision", "rule", "app", "since",
 			"until", "outcomes", "installation"},
 		Summary: "Records you may see, counted by rule, tool, agent, app or decision (`by`), with the same filters as " +
-			"the list. outcomes=exclude (default) counts each decision once; include or only count the outcome records too",
+			"the list. outcomes=exclude (default) counts each decision once; include or only count the outcome records too. " +
+			"by=cost sums what runs cost instead, per task (default: the task tree), session (one run), agent or " +
+			"principal (`per`): the model-call outcomes' usage (charged_tokens is what the model proxy charged the " +
+			"session budgets) and the run.finish records' runs and wall seconds; each item's count is its model calls",
 		Response: Counts{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).countEvidence},
 	{OperationID: "getPolicy", Method: "GET", Path: "/v1/policy", Roles: PersonRoles, Params: []string{},
 		Summary: "The policy in force: the deny rules in evaluation order (id, name, CEL expression, message, hint, " +

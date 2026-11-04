@@ -40,6 +40,11 @@ type OutcomeRequest struct {
 	// gateway's deny record carried them. The record keeps the decision's own decision and rule (verified) and adds
 	// refusal (claimed).
 	Refusal *Refusal `json:"refusal,omitempty"`
+	// ModelVersion is the model that answered a model call, as its provider named it in the answer (the route's
+	// upstream model when the answer names none): AP-C1's pinned model version, per call. model.call only.
+	ModelVersion *string `json:"model_version,omitempty"`
+	// Usage is what a model call used and what the model proxy charged the session for it (AP-C2). model.call only.
+	Usage *Usage `json:"usage,omitempty"`
 }
 
 // Refusal is a handler's refusal: its rule id and message.
@@ -89,6 +94,13 @@ func (s *Server) outcome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	effect, err := body.validate()
+	var usage map[string]any
+	if err == nil && body.Usage != nil {
+		usage, err = body.Usage.field()
+	}
+	if err == nil && body.ModelVersion != nil {
+		err = modelVersion(*body.ModelVersion)
+	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -125,8 +137,12 @@ func (s *Server) outcome(w http.ResponseWriter, r *http.Request) {
 			refusal = &httpError{http.StatusConflict, "decision " + id + " was a deny: there is no outcome to record"}
 			return errRefused
 		}
+		tool, _ := d["tool"].(string)
+		if (body.Usage != nil || body.ModelVersion != nil) && tool != ModelCallTool {
+			refusal = &httpError{http.StatusBadRequest, fmt.Sprintf("%s is not a model call: usage and model_version are not accepted", tool)}
+			return errRefused
+		}
 		if effect != nil {
-			tool, _ := d["tool"].(string)
 			spec := s.opt.Engine.Tool(tool)
 			if spec == nil || (len(spec.Receipt) == 0 && !spec.WritesFiles) {
 				refusal = &httpError{http.StatusBadRequest, fmt.Sprintf("%s has no receipt: effect is not accepted", tool)}
@@ -151,6 +167,12 @@ func (s *Server) outcome(w http.ResponseWriter, r *http.Request) {
 		}
 		if body.Refusal != nil {
 			ev["refusal"] = map[string]any{"rule": body.Refusal.Rule, "message": body.Refusal.Message}
+		}
+		if body.ModelVersion != nil {
+			ev["model_version"] = *body.ModelVersion
+		}
+		if usage != nil {
+			ev["usage"] = usage
 		}
 		ev["outcome_of"] = map[string]any{"seq": json.Number(id), "hash": d["hash"]}
 		ev["caller"] = callerField(prov, p)

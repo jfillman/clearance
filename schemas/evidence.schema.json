@@ -133,7 +133,8 @@
                 "tool-call",
                 "manifest-tree",
                 "terraform-plan",
-                "definition"
+                "definition",
+                "model-call"
               ]
             },
             "name": {
@@ -227,7 +228,7 @@
       "type": "string",
       "minLength": 1,
       "x-clearance-group": "identities",
-      "description": "Reserved for AP-C1 (A-4): the pinned model version of a run record."
+      "description": "Optional (revision 3, AP-C1): on a run's records (session.open, run.launch, run.finish, run.delete), the pinned model version the run runs on (its definition's model through the provider's route); on a model.call outcome, the model that answered, as its provider named it. Claimed."
     },
     "tool": {
       "type": "string",
@@ -442,7 +443,7 @@
         }
       },
       "x-clearance-group": "decision",
-      "description": "Reserved for AP-C1 (A-4, A-6): the Preflight result of the run's definition."
+      "description": "Optional (revision 3, AP-C1): on a run's records, the Preflight result of the run's definition: pass or fail once A-6 scores it, not-run until then. Claimed."
     },
     "result": {
       "type": [
@@ -473,6 +474,81 @@
       },
       "x-clearance-group": "outcome",
       "description": "Optional (revision 2): on an outcome, a refusal the provider's handler made after the core allowed the call (a rule the core cannot see), with its rule id and message. Claimed; the record's decision and rule stay the decision's."
+    },
+    "usage": {
+      "type": "object",
+      "required": [
+        "charged_tokens"
+      ],
+      "properties": {
+        "input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cache_creation_input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cache_read_input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "charged_tokens": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "x-clearance-group": "outcome",
+      "description": "Optional (revision 3, AP-C2): on a model.call outcome, the call's token usage as the provider's model proxy metered it (the provider's four kinds, every one present) and charged_tokens, the call's weighted charge (the session's model_tokens budget counts it up to its limit; a call that overruns it trips the breaker and the record keeps the whole charge). clearance-api's counts by=cost sums it per task, session, agent or principal. Claimed."
+    },
+    "cost": {
+      "type": "object",
+      "required": [
+        "charged_tokens"
+      ],
+      "properties": {
+        "charged_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cache_creation_input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cache_read_input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "model_calls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tool_calls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "wall_seconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "compute": {
+          "type": "string"
+        }
+      },
+      "x-clearance-group": "outcome",
+      "description": "Optional (revision 3, AP-C2): on run.finish, the run's own summary: its sessions' model usage summed, its model and tool calls, how long it ran and its compute class. The counts sum the model.call outcomes for tokens, never this, so a run is not counted twice. Claimed."
     },
     "outcome": {
       "type": "object",

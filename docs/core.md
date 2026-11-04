@@ -98,12 +98,16 @@ A JSON array (at most 64 KiB), strictly decoded. Without it no caller may evalua
   the call after the core allowed it (the gateway's launch R004 and R001, the inbox's HR-*, artifacts' ART-*) sends
   `refusal: {rule, message}`. The record keeps the decision's `decision` and `rule` (verified) and adds `refusal`
   (claimed), so the handler's rule is in the chain as the Python deny record had it. A refusal carries no effect.
+  A model call's outcome may carry `model_version` (the model that answered) and `usage` (the provider's token
+  counts and `charged_tokens`, the call's weighted charge; A-4), both claimed and refused on any other
+  tool's outcome ([evidence.md](evidence.md#the-flight-recorder-fields-revision-3-ap-c1-ap-c2)).
 - **Provider records.** Sealed with the provider's name and version. Only `provider` and `ts` are verified;
   everything else is claimed. Each kind has its required fields and its boundary (`internal/server/records.go`;
   [provider-protocol.md](provider-protocol.md#record-kinds) lists them). A `tool.call` record is the outage
   policy's replay of a T0 read the provider ran while the core was unreachable: its `tool` is the tool called (a T0
   tool the core knows), its coverage is `coverage-unavailable`, and it carries no rule, effect or outcome. Its
-  subject is the tool-call digest, claimed. It is never a decision.
+  subject is the tool-call digest, claimed. It is never a decision. A run's records (`session.open`, `run.launch`,
+  `run.finish`, `run.delete`) may carry `model_version` and `preflight`, and `run.finish` its `cost` (A-4).
 - **Published definitions.** `PUT /v1/definitions` takes the provider's Agent XR loader's pins (each with its
   document, source and XR owner) and rejections. The core decides every pin itself with its own schema
   (`definitions.FromPin`, `internal/profile`): the agent-definition schema, the name is the XR's, the owner is the

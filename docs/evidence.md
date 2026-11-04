@@ -21,7 +21,7 @@ other than `recorded-not-checkpointed` are later packages (C-series); this page 
 - **Who wrote it.** `provider` names the registered provider and its version. The writer sets it from its own
   registration; an event cannot.
 - **What it is about.** `subject` is the thing the record binds to, in in-toto style: a kind (`tool-call`,
-  `manifest-tree`, `terraform-plan`, `definition`) and digests keyed by algorithm (`sha256`, `gitCommit`).
+  `manifest-tree`, `terraform-plan`, `definition`, `model-call` from revision 3) and digests keyed by algorithm (`sha256`, `gitCommit`).
 - **Intent redacted by default.** Free text an agent or a change gives as its reason is stored only as a SHA-256;
   the text is kept only where the deployment opts in (`Writer.intent_capture = "full"`).
 - **One chain across versions.** The chain rule did not change, so the 612 v0-draft rows on hangar-dev and every v1
@@ -46,12 +46,12 @@ schema are allowed and are claimed unless the writer verified them.
 
 | Group | Fields | Notes |
 | --- | --- | --- |
-| Identities | `provider`, `principal`, `agent`, `session`, `parent`, `task_id`, `initiator`, `model_version` | `provider` {name, version[, conformance]} is required (`conformance` from the provider's registration, C-1); `initiator` {sub, iss} optional; `model_version` reserved for AP-C1 |
+| Identities | `provider`, `principal`, `agent`, `session`, `parent`, `task_id`, `initiator`, `model_version` | `provider` {name, version[, conformance]} is required (`conformance` from the provider's registration, C-1); `initiator` {sub, iss} optional; `model_version` optional (revision 3, AP-C1): a run's pinned model version on its records, the answering model on a `model.call` outcome |
 | Source | `subject`, `tool`, `args_sha256`, `change`, `source` | `subject` required (null when there is none); `tool` is the operation or event type; arguments are never stored, only their digest |
 | Target | `boundary`, `target`, `app`, `destination` | `boundary` is `runtime` or `deployment`; `destination` {cluster, environment, application} optional |
 | Provenance | `provenance` | optional {level, signals[{name, tag}]} |
-| Decision | `decision`, `tier`, `rule`, `rules`, `reason`, `policy`, `approvals`, `token`, `preflight` | verdict, tier, rule fired; `policy` {ref, engine, version}, filled by R-5 for runtime decisions (engine `cel-go`) and by C-8 for deployment decisions (plus `verdict` and `bundle`: the offline admission engine's result and rule set; [gate.md](gate.md) "The policy in the record"); `approvals` [{sub, iss, via, at}] (C-1: on `deploy.clear`, with `person` and `role`, and on the App's `deploy.request` and `deploy.answer` once cleared); `token` the clearance token's nonce (C-1: `deploy.clear`, `deploy.revoke`); `preflight` reserved for AP-C1 |
-| Outcome | `result`, `effect`, `refusal`, `outcome` | `result` keeps its v0 meaning (the result line, or a deny's reason); `effect` is the receipt of a write the writer made; `refusal` {rule, message} optional (revision 2): a handler's refusal on an outcome, after the core allowed; `outcome` {applied, observed_revision, digests, health, rollback} optional; `exception` {kind, objects, addresses, actor, expected, observed, state, detected_at, detail} on `deploy.exception` (revision 3, C-6) |
+| Decision | `decision`, `tier`, `rule`, `rules`, `reason`, `policy`, `approvals`, `token`, `preflight` | verdict, tier, rule fired; `policy` {ref, engine, version}, filled by R-5 for runtime decisions (engine `cel-go`) and by C-8 for deployment decisions (plus `verdict` and `bundle`: the offline admission engine's result and rule set; [gate.md](gate.md) "The policy in the record"); `approvals` [{sub, iss, via, at}] (C-1: on `deploy.clear`, with `person` and `role`, and on the App's `deploy.request` and `deploy.answer` once cleared); `token` the clearance token's nonce (C-1: `deploy.clear`, `deploy.revoke`); `preflight` {result: pass\|fail\|not-run, definition, cases} optional (revision 3, AP-C1): the Preflight result of a run's definition |
+| Outcome | `result`, `effect`, `refusal`, `outcome` | `result` keeps its v0 meaning (the result line, or a deny's reason); `effect` is the receipt of a write the writer made; `refusal` {rule, message} optional (revision 2): a handler's refusal on an outcome, after the core allowed; `outcome` {applied, observed_revision, digests, health, rollback} optional; `exception` {kind, objects, addresses, actor, expected, observed, state, detected_at, detail} on `deploy.exception` (revision 3, C-6); `usage` (revision 3, AP-C2) on a `model.call` outcome: {input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, charged_tokens}; `cost` (revision 3) on `run.finish`: the run's own summary |
 | Coverage state | `coverage`, `outage`, `outage_policy`, `breakglass`, `window`, `changes`, `reported`, `truncated`, `limitations` | `coverage`: `authorized-and-verified` (default), `observed-not-attributed`, `out-of-band-detected`, `coverage-unavailable`; the core sets it on `deploy.exception` from the kind. Revision 3 (C-6): `outage` {from, to} on `deploy.degraded` (claimed) and `outage_policy` {action, source, conforms} (verified, the core's); `breakglass` the window on `breakglass.open`/`.close`, or its id on an exception inside it (verified); `window`, `changes`, `reported`, `truncated`, `limitations` on `breakglass.close` (verified) ([gate.md](gate.md#protected-environments-the-outage-policy-states-exceptions-and-break-glass-c-6-built)) |
 | Assurance state | `assurance` | beside the record, never hashed: `checkpointed`, `recorded-not-checkpointed`, `not-recorded`; a reader adds it |
 | Intent | `intent` | {capture: redacted\|full, sha256[, text]}; only when the event has an intent |
@@ -71,8 +71,10 @@ Go's `TestPythonV1Identical` must reproduce it byte for byte:
   accepted any string).
 - `subject`, when the event does not give one, is derived: a gate record's `change` with a tree digest gives
   `manifest-tree` (`sha256` = the tree, `gitCommit` = the head, name `app/env`); a `definition.*` record gives
-  `definition` (the digest of the pin); any other runtime record gives `tool-call` (name = tool, `sha256` =
-  `args_sha256`); a deployment record with no tree has `null`. A derived subject is verified when the fields it came
+  `definition` (the digest of the pin); a `model.call` record with a `target` gives `model-call` (revision 3: name =
+  the target, the model alias asked for, `sha256` = `args_sha256`, derived from `tool`, `target` and `args_sha256`;
+  a v0-draft row is still projected as `tool-call`, so no served row changes); any other runtime record gives
+  `tool-call` (name = tool, `sha256` = `args_sha256`); a deployment record with no tree has `null`. A derived subject is verified when the fields it came
   from are; an event's own subject is claimed unless the writer verifies `subject`.
 - Since G-TF-1 the deployment gate gives every `deploy.*` record its subject itself, from the change's `subject`
   ([gate.md](gate.md#the-terraform-plan-subject-g-tf-1)): `manifest-tree` (name `app/env`, `sha256` = the
@@ -130,6 +132,29 @@ func Stored(r map[string]any) map[string]any
 The Python equivalents are `audit.Writer`, `audit.Provider`, `audit.seal`, `audit.derive_subject`,
 `audit.project` and `audit.stored`; the gateway's writer is `audit.gateway_writer()`
 (`autopilot-gateway` at the package version).
+
+## The flight recorder fields (revision 3: AP-C1, AP-C2)
+
+Built (A-4). What a run ran on, how its definition scored, and what it cost, in the chain itself. Every one is
+claimed: the core sees neither the model provider's answer nor the run's clock, only the provider that reported them
+(`internal/server/cost.go`).
+
+| Field | On | Set by the Autopilot gateway from |
+| --- | --- | --- |
+| `model_version` | `session.open`, `run.launch`, `run.finish`, `run.delete` (provider records) | the run's pinned model: its definition's first model through the deployment's model route (`MODEL_ROUTES` alias to upstream model) |
+| `model_version` | a `model.call` outcome | the model that answered, as the provider named it in its answer (`model` in the Messages API response), else the route's upstream model |
+| `preflight` | a run's records, as `model_version` | the definition's Preflight result: `pass` or `fail` once A-6 scores definitions, `not-run` until then, with `definition` (its name) and `cases` |
+| `usage` | a `model.call` outcome | the provider's usage block (input, output, cache write, cache read tokens, every one present, 0 when absent) and `charged_tokens`, the call's weighted charge: `ceil(input + output + 1.25 * cache_creation + 0.1 * cache_read)` (Autopilot `modelproxy.USAGE_WEIGHTS`). The session's `model_tokens` budget counts it up to its limit; a call that overruns the budget trips the session's breaker, and the record keeps the whole charge, so a run's sum equals its budget used unless it overran |
+| `cost` | `run.finish` | the session's usage summed over its calls, `model_calls`, `tool_calls`, `wall_seconds` (open to finish) and `compute` (the definition's compute class) |
+
+The core refuses `usage` and `model_version` on the outcome of anything but a model call, `model_version` and
+`preflight` on a record that is not a run's, `cost` on anything but `run.finish`, a negative or non-integer count,
+and any count over 2^40.
+
+`GET /v1/evidence/counts?by=cost` (clearance-api) sums these per task tree (`per=task`, the default), run
+(`per=session`), agent or principal: tokens from the `model.call` outcomes' `usage` only, runs and wall seconds from
+the `run.finish` records' `cost`, so a run is never counted twice. A partial index on the records that carry either
+field (`clearance_evidence_cost`) keeps it off a chain scan.
 
 ## Versioning rule
 

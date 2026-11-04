@@ -276,6 +276,40 @@ type OutcomeRequest struct {
 	Receipt map[string]any `json:"receipt,omitempty"`
 	// Refusal is a refusal the caller's handler made after the core allowed the call.
 	Refusal *Refusal `json:"refusal,omitempty"`
+	// ModelVersion is the model that answered a model call, as its provider named it (model.call only).
+	ModelVersion *string `json:"model_version,omitempty"`
+	// Usage is a model call's token usage and what the model proxy charged for it (model.call only).
+	Usage *Usage `json:"usage,omitempty"`
+}
+
+// Usage is one model call's token usage: the provider's four kinds of token and charged_tokens, what the model
+// proxy charged the session's budget for them.
+type Usage struct {
+	InputTokens              int64  `json:"input_tokens,omitempty"`
+	OutputTokens             int64  `json:"output_tokens,omitempty"`
+	CacheCreationInputTokens int64  `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int64  `json:"cache_read_input_tokens,omitempty"`
+	ChargedTokens            *int64 `json:"charged_tokens"`
+}
+
+// Preflight is the Preflight result of a run's definition: pass, fail or not-run.
+type Preflight struct {
+	Result     string `json:"result"`
+	Definition string `json:"definition,omitempty"`
+	Cases      *int64 `json:"cases,omitempty"`
+}
+
+// Cost is a run's usage summary when it ends (run.finish only).
+type Cost struct {
+	ChargedTokens            *int64 `json:"charged_tokens"`
+	InputTokens              int64  `json:"input_tokens,omitempty"`
+	OutputTokens             int64  `json:"output_tokens,omitempty"`
+	CacheCreationInputTokens int64  `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int64  `json:"cache_read_input_tokens,omitempty"`
+	ModelCalls               int64  `json:"model_calls,omitempty"`
+	ToolCalls                int64  `json:"tool_calls,omitempty"`
+	WallSeconds              int64  `json:"wall_seconds,omitempty"`
+	Compute                  string `json:"compute,omitempty"`
 }
 
 // Refusal is a handler's refusal: its rule id and message.
@@ -331,6 +365,10 @@ type ProviderEvent struct {
 	// detail}; Outage a deploy.degraded's {from, to} (docs/gate.md).
 	Exception map[string]any `json:"exception,omitempty"`
 	Outage    map[string]any `json:"outage,omitempty"`
+	// ModelVersion, Preflight: a run's records (session.open, run.launch, run.finish, run.delete). Cost: run.finish.
+	ModelVersion *string    `json:"model_version,omitempty"`
+	Preflight    *Preflight `json:"preflight,omitempty"`
+	Cost         *Cost      `json:"cost,omitempty"`
 }
 
 // String is a pointer to s, for ProviderEvent's optional fields.

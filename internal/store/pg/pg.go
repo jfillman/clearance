@@ -34,8 +34,10 @@ import (
 )
 
 // Schema is pg.py's SCHEMA for the core's tables, verbatim, plus the Go core's own (clearance_tokens and
-// clearance_signing_keys, C-1; clearance_feeds and the App installations' index, C-10;
-// clearance_breakglass and the exceptions index behind clearance-api's GET /v1/exceptions, C-6): CREATE ... IF NOT EXISTS only, so migrate never alters or drops what is there.
+// clearance_signing_keys, C-1; clearance_feeds and the App installations' index, C-10; clearance_breakglass and the
+// exceptions index behind clearance-api's GET /v1/exceptions, C-6; clearance_evidence_cost, A-4: the records
+// clearance-api's counts by=cost sums, model-call outcomes with usage and run.finish with cost): CREATE ... IF NOT
+// EXISTS only, so migrate never alters or drops what is there.
 const Schema = `
 CREATE TABLE IF NOT EXISTS clearance_evidence (
   seq        bigint PRIMARY KEY,
@@ -48,6 +50,8 @@ CREATE TABLE IF NOT EXISTS clearance_evidence (
 );
 CREATE INDEX IF NOT EXISTS clearance_evidence_receipt ON clearance_evidence
   ((record->'effect'->>'repo'), (record->'effect'->>'pr')) WHERE record ? 'effect';
+CREATE INDEX IF NOT EXISTS clearance_evidence_cost ON clearance_evidence (seq)
+  WHERE record ? 'usage' OR record ? 'cost';
 CREATE TABLE IF NOT EXISTS clearance_changes (
   id         text        PRIMARY KEY,
   app        text        NOT NULL,

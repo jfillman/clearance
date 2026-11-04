@@ -50,6 +50,23 @@ view `outage`, `ProviderEvent` `exception` and `outage`; take this release's cli
 - `provider.conformance`: a `CLEARANCE_PROVIDERS` entry's `conformance` (`clearance-conformance/v1@<date>`) is stamped
   on every record that provider writes.
 - Go client `Clearance`, `Keys`; Python client `get_clearance`, `keys` (models regenerated).
+- Flight recorder fields and cost accounting (A-4: AP-C1, AP-C2); evidence schema revision 3, additive. A model
+  call's outcome (`POST /v1/decisions/{id}/outcome`) takes `model_version` (the model that answered) and `usage`
+  (`input_tokens`, `output_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`, `charged_tokens`: what
+  the gateway's model proxy charged the session), refused on any other tool's outcome. A run's provider records
+  (`session.open`, `run.launch`, `run.finish`, `run.delete`) take `model_version` and `preflight` {result
+  pass|fail|not-run, definition, cases}, and `run.finish` takes `cost` (the run's summary: tokens, model and tool
+  calls, wall seconds, compute class). All claimed. The Go client and the Python client (`clearance-core-client`)
+  carry the new fields (`Usage`, `Preflight`, `Cost`).
+- clearance-api `GET /v1/evidence/counts?by=cost&per=task|session|agent|principal`: the model-call outcomes'
+  usage and the run.finish records' runs and wall seconds summed per task tree, run, agent or principal, with the
+  list's filters and scoping; each item carries `cost`, the answer `per` and the summed `cost`.
+- Subject kind `model-call` (evidence schema revision 3): a `model.call` record's derived subject is
+  `{kind: model-call, name: <target, the model alias>, digests: {sha256: args_sha256}}`, from `tool`, `target` and
+  `args_sha256`, for records written from now on (the decision and its outcome). A stored v0-draft row is still
+  projected with its `tool-call` subject.
+- Postgres: the partial index `clearance_evidence_cost` on the records that carry `usage` or `cost` (created by the
+  core's migration, `CREATE INDEX IF NOT EXISTS`).
 - C-9, the Traefik Hub adapter (**Unverified**: built against the published record format, no live Hub yet).
   `internal/federate/traefikhub` and `clearance federate traefik-hub` read Traefik Hub's Sovereign Trust Plane
   decision records (Hub log) and access records, and join them on `trace_id`. A `task_id` comes from a kept
