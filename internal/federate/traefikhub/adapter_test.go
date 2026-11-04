@@ -171,6 +171,24 @@ func TestLongAndHostileLines(t *testing.T) {
 	}
 }
 
+// TestLineCapAtEOF holds the MaxLine cap to the same byte count with and without a trailing newline.
+func TestLineCapAtEOF(t *testing.T) {
+	for _, c := range []struct {
+		in      string
+		tooLong int
+	}{
+		{strings.Repeat("x", traefikhub.MaxLine), 0},
+		{strings.Repeat("x", traefikhub.MaxLine) + "\n", 0},
+		{strings.Repeat("x", traefikhub.MaxLine+1), 1},
+		{strings.Repeat("x", traefikhub.MaxLine+1) + "\n", 1},
+	} {
+		_, st, err := traefikhub.ParseDecisions(strings.NewReader(c.in))
+		if err != nil || st.Lines != 1 || st.TooLong != c.tooLong {
+			t.Fatalf("len %d: %v %+v", len(c.in), err, st)
+		}
+	}
+}
+
 // TestRecordsThroughTheCore posts the recorded-format records through POST /v1/records on an in-memory core and
 // checks what the ledger holds: provider traefik-hub, only provider and ts verified, the chain intact.
 func TestRecordsThroughTheCore(t *testing.T) {

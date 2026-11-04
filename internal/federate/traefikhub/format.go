@@ -115,7 +115,11 @@ func readLine(br *bufio.Reader) (line []byte, tooLong bool, err error) {
 	for {
 		chunk, err := br.ReadSlice('\n')
 		if !tooLong {
-			if len(line)+len(chunk) > MaxLine+1 { // +1: the newline
+			limit := MaxLine
+			if bytes.HasSuffix(chunk, []byte("\n")) {
+				limit++ // the newline; a last line at EOF has none
+			}
+			if len(line)+len(chunk) > limit {
 				tooLong, line = true, nil
 			} else {
 				line = append(line, chunk...)
