@@ -81,6 +81,8 @@ type Change struct {
 	Checks           map[string]string `json:"checks"`
 	PolicyVersion    string            `json:"policy_version"`
 	RepoPolicyDigest *string           `json:"repo_policy_digest"`
+	PolicyRef        string            `json:"policy_ref,omitempty"`
+	Admission        *Admission        `json:"admission,omitempty"`
 	Tier             int               `json:"tier"`
 	Reasons          []Reason          `json:"reasons"`
 	Requirement      *Requirement      `json:"requirement"`
@@ -158,10 +160,19 @@ func Open(req ChangeRequest, cl Classification, now time.Time, registeredBy stri
 		Head: req.Head, Base: req.Base, Proposer: req.Proposer, ProposerKind: req.ProposerKind, Agent: req.Agent, TaskID: req.TaskID,
 		Owner: req.Owner, Protected: req.Protected, TreeDigest: req.TreeDigest, Paths: append([]string(nil), req.Paths...),
 		LinesChanged: req.LinesChanged, Objects: append([]ObjectChange(nil), req.Objects...), Checks: copyChecks(req.Checks),
-		PolicyVersion: cl.Policy.Version, RepoPolicyDigest: cl.Policy.RepoPolicyDigest, Tier: cl.Tier, Reasons: reasons,
+		PolicyVersion: cl.Policy.Version, RepoPolicyDigest: cl.Policy.RepoPolicyDigest, PolicyRef: policyRefOf(req),
+		Admission: copyAdmission(req.Admission), Tier: cl.Tier, Reasons: reasons,
 		Requirement: cl.Requirement, State: "holding", CreatedAt: PyTime{now}, UpdatedAt: PyTime{now},
 		ExpiresAt: PyTime{now.AddDate(0, 0, cl.Policy.TTLDays)}, RegisteredBy: registeredBy}
 	return c.View()
+}
+
+func copyAdmission(a *Admission) *Admission {
+	if a == nil {
+		return nil
+	}
+	out := *a
+	return &out
 }
 
 func copyChecks(m map[string]string) map[string]string {

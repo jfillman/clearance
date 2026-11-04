@@ -417,9 +417,22 @@ type ChangeRequest struct {
 	Objects      []ObjectChange    `json:"objects"`
 	Checks       map[string]string `json:"checks"`
 	Policy       map[string]any    `json:"policy,omitempty"`
+	PolicyCommit string            `json:"policyCommit,omitempty"`
+	Admission    *Admission        `json:"admission,omitempty"`
 	Agent        *string           `json:"agent,omitempty"`
 	TaskID       *string           `json:"taskId,omitempty"`
 	Definition   map[string]any    `json:"definition,omitempty"`
+}
+
+// Admission is a verifier's offline admission result for a change's rendered tree (docs/gate.md "The policy in
+// the record"): the engine and version (kyverno/1.19.0), the verdict (pass, warn, fail, skipped, error), the rule
+// set it ran (<repo>//<path>@<commit>) and the blocking and warning finding counts.
+type Admission struct {
+	Engine  string `json:"engine"`
+	Verdict string `json:"verdict"`
+	Bundle  string `json:"bundle,omitempty"`
+	Deny    int64  `json:"deny"`
+	Warn    int64  `json:"warn"`
 }
 
 // ObjectChange is one Kubernetes object a change touches.
@@ -457,6 +470,8 @@ type Change struct {
 	Checks           map[string]string `json:"checks"`
 	PolicyVersion    string            `json:"policy_version"`
 	RepoPolicyDigest *string           `json:"repo_policy_digest"`
+	PolicyRef        string            `json:"policy_ref,omitempty"`
+	Admission        *Admission        `json:"admission,omitempty"`
 	Tier             int               `json:"tier"`
 	Reasons          []Reason          `json:"reasons"`
 	Requirement      *Requirement      `json:"requirement"`
