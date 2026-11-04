@@ -503,7 +503,7 @@
         }
       },
       "x-clearance-group": "outcome",
-      "description": "Optional (revision 3, AP-C2): on a model.call outcome, the call's token usage as the provider's model proxy metered it (the provider's four kinds, every one present) and charged_tokens, what the proxy charged the session's model_tokens budget for them. clearance-api's counts by=cost sums it per task, session, agent or principal. Claimed."
+      "description": "Optional (revision 3, AP-C2): on a model.call outcome, the call's token usage as the provider's model proxy metered it (the provider's four kinds, every one present) and charged_tokens, the call's weighted charge (the session's model_tokens budget counts it up to its limit; a call that overruns it trips the breaker and the record keeps the whole charge). clearance-api's counts by=cost sums it per task, session, agent or principal. Claimed."
     },
     "cost": {
       "type": "object",

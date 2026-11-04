@@ -111,8 +111,9 @@ is refused, and `per` is refused with any other `by`. The answer is the counts s
  "items": [{"key": "t-0", "count": 3, "cost": {"charged_tokens": 175, "...": "..."}}, "..."]}
 ```
 
-`charged_tokens` is what the Autopilot gateway's model proxy charged the sessions' `model_tokens` budgets, so a
-task's sum is what its run tree spent of its budget. Items are ordered by `charged_tokens`, largest first, at most
+`charged_tokens` is each call's weighted charge as the Autopilot gateway's model proxy metered it, so a task's sum is
+what its run tree spent of its budget; a run that overran its budget (its breaker tripped) shows the whole cost,
+more than the budget let it count. Items are ordered by `charged_tokens`, largest first, at most
 200 (`MaxLimit`). `tool=model.call` leaves the runs out; `per=session&task=<id>` is one task tree's runs.
 
 ### The gates' reads (C-10, Built)

@@ -37,12 +37,15 @@ var modelVersionRx = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}\z
 // definitionRx is an agent definition's name.
 var definitionRx = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\z`)
 
-// computeRx is a definition's compute class (small, medium, large).
-var computeRx = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}\z`)
+// ComputeClasses are the compute classes a definition may name (the agent-definition schema's profile.compute, and
+// decide's Limits.Compute): a run's cost names the one its session was granted.
+var ComputeClasses = []string{"small", "medium", "large", "gpu"}
 
 // Usage is one model call's token usage as the provider's model proxy metered it: the provider's four kinds of
-// token (Anthropic's usage block) and charged_tokens, what the proxy charged the session's model_tokens budget for
-// them (the gateway's weights: a cache read costs a tenth of an input token). Only on a model.call outcome.
+// token (Anthropic's usage block) and charged_tokens, the call's weighted charge (the gateway's weights: a cache
+// read costs a tenth of an input token). The session's model_tokens budget counts that charge up to its limit, and a
+// call that overruns it trips the session's breaker: the record keeps what the call cost, the budget what it allowed.
+// Only on a model.call outcome.
 type Usage struct {
 	InputTokens              int64  `json:"input_tokens,omitempty"`
 	OutputTokens             int64  `json:"output_tokens,omitempty"`
@@ -139,8 +142,8 @@ func (c *Cost) field() (map[string]any, error) {
 		out[f.k] = jsonInt(f.v)
 	}
 	if c.Compute != "" {
-		if !computeRx.MatchString(c.Compute) {
-			return nil, errors.New("cost.compute is a compute class (small, medium, large)")
+		if !slices.Contains(ComputeClasses, c.Compute) {
+			return nil, fmt.Errorf("cost.compute is a compute class (one of %v)", ComputeClasses)
 		}
 		out["compute"] = c.Compute
 	}

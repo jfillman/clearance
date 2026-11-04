@@ -96,7 +96,7 @@ A JSON array (at most 64 KiB), strictly decoded. Without it no caller may evalua
   `refusal: {rule, message}`. The record keeps the decision's `decision` and `rule` (verified) and adds `refusal`
   (claimed), so the handler's rule is in the chain as the Python deny record had it. A refusal carries no effect.
   A model call's outcome may carry `model_version` (the model that answered) and `usage` (the provider's token
-  counts and `charged_tokens`, what the model proxy charged the session; A-4), both claimed and refused on any other
+  counts and `charged_tokens`, the call's weighted charge; A-4), both claimed and refused on any other
   tool's outcome ([evidence.md](evidence.md#the-flight-recorder-fields-revision-3-ap-c1-ap-c2)).
 - **Provider records.** Sealed with the provider's name and version. Only `provider` and `ts` are verified;
   everything else is claimed. Each kind has its required fields and its boundary (`internal/server/records.go`;

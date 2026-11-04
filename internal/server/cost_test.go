@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/jfillman/clearance/internal/evidence"
+	"github.com/jfillman/clearance/internal/profile"
+	"github.com/jfillman/clearance/internal/server"
 )
 
 // A-4 (AP-C1, AP-C2): a model call's outcome carries the model that answered and its usage; a run's records carry
@@ -149,11 +151,31 @@ func TestRunRecordFieldRefusals(t *testing.T) {
 		"wall_seconds": -5}})).want(t, 400, "cost.wall_seconds")
 	f.do("POST", "/v1/records", gw, runRecord("run.finish", map[string]any{"cost": map[string]any{"charged_tokens": 1,
 		"compute": "Huge!"}})).want(t, 400, "cost.compute")
+	// Only the compute classes a definition may name: a well-formed but unknown class is refused too.
+	f.do("POST", "/v1/records", gw, runRecord("run.finish", map[string]any{"cost": map[string]any{"charged_tokens": 1,
+		"compute": "tiny"}})).want(t, 400, "cost.compute")
 	f.do("POST", "/v1/records", gw, runRecord("run.finish", map[string]any{"cost": map[string]any{"charged_tokens": 1,
 		"dollars": 3}})).want(t, 400, "unknown field")
 	f.do("POST", "/v1/records", gw, runRecord("run.launch", map[string]any{"model_version": ""})).
 		want(t, 400, "model_version")
 	if n := len(f.records()); n != 0 {
 		t.Fatalf("a refused record was written: %d", n)
+	}
+}
+
+// The compute classes a cost may name are the ones a definition may (internal/profile), so the two cannot drift.
+func TestCostComputeClassesAreTheProfiles(t *testing.T) {
+	for _, c := range server.ComputeClasses {
+		if _, err := profile.ParseComputeClass(c); err != nil {
+			t.Errorf("%s: %v", c, err)
+		}
+	}
+	if _, err := profile.ParseComputeClass("tiny"); err == nil {
+		t.Fatal("profile takes a class the cost refuses")
+	}
+	f := memFixture(t)
+	for _, c := range server.ComputeClasses {
+		f.do("POST", "/v1/records", gw, runRecord("run.finish", map[string]any{"cost": map[string]any{
+			"charged_tokens": 1, "compute": c}})).want(t, 200, "")
 	}
 }
