@@ -45,7 +45,7 @@ var (
 	Boundaries    = []string{"runtime", "deployment"}
 	Coverage      = []string{"authorized-and-verified", "observed-not-attributed", "out-of-band-detected", "coverage-unavailable"}
 	Assurance     = []string{"checkpointed", "recorded-not-checkpointed", "not-recorded"}
-	SubjectKinds  = []string{"tool-call", "manifest-tree", "terraform-plan", "definition"}
+	SubjectKinds  = []string{"tool-call", "manifest-tree", "terraform-plan", "definition", "model-call"}
 	IntentCapture = []string{"redacted", "full"}
 )
 
@@ -184,7 +184,15 @@ func isHex(v any, re *regexp.Regexp) bool {
 // derive_subject): a gate record's change (its rendered tree, and the commit), an agent definition the gateway
 // loaded (the digest of its pin), or the call itself (the tool and the digest of its arguments). A deployment
 // record with no tree has none (nil). r holds Parse's value types.
+//
+// A model call (tool model.call, since revision 3) is a model-call subject named by its target, the model alias it
+// asked for, with the digest of its arguments. That is for records written from revision 3 on: Project derives a
+// v0-draft row's subject as it always did (deriveSubject with v0), so no served projection of a stored row changes.
 func DeriveSubject(r map[string]any) (subject map[string]any, sources []string) {
+	return deriveSubject(r, false)
+}
+
+func deriveSubject(r map[string]any, v0 bool) (subject map[string]any, sources []string) {
 	if ch, ok := r["change"].(map[string]any); ok && isHex(ch["tree"], hex64) && ch["tree"] != Genesis {
 		d := map[string]any{"sha256": ch["tree"]}
 		if isHex(ch["head"], hex40) {
@@ -213,6 +221,12 @@ func DeriveSubject(r map[string]any) (subject map[string]any, sources []string) 
 		}
 		return map[string]any{"kind": "definition", "name": name, "digests": map[string]any{"sha256": a}},
 			[]string{"tool", "target", "args_sha256"}
+	}
+	if tool == "model.call" && !v0 {
+		if t, ok := r["target"].(string); ok && t != "" {
+			return map[string]any{"kind": "model-call", "name": t, "digests": map[string]any{"sha256": a}},
+				[]string{"tool", "target", "args_sha256"}
+		}
 	}
 	return map[string]any{"kind": "tool-call", "name": tool, "digests": map[string]any{"sha256": a}},
 		[]string{"tool", "args_sha256"}
@@ -445,7 +459,7 @@ func Project(r map[string]any) map[string]any {
 			added = append(added, "provider")
 		}
 		if _, ok := out["subject"]; !ok {
-			s, _ := DeriveSubject(r)
+			s, _ := deriveSubject(r, true)
 			if s != nil {
 				out["subject"] = s
 			} else {

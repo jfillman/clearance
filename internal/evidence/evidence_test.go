@@ -8,6 +8,7 @@ import (
 	"flag"
 	"math"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -408,4 +409,32 @@ func must(b []byte, err error) []byte {
 		panic(err)
 	}
 	return b
+}
+
+// TestAModelCallIsAModelCallSubject: from revision 3 a model.call record's derived subject is model-call, named by
+// its target (the model alias) with the digest of its arguments; a v0-draft row projects as it always did.
+func TestAModelCallIsAModelCallSubject(t *testing.T) {
+	a := mustDigest(map[string]any{"model": "claude-sonnet-5-5", "est": 300})
+	ev := map[string]any{"tool": "model.call", "target": "claude-sonnet-5-5", "args_sha256": a}
+	s, src := DeriveSubject(ev)
+	if s["kind"] != "model-call" || s["name"] != "claude-sonnet-5-5" || s["digests"].(map[string]any)["sha256"] != a ||
+		len(src) != 3 || src[1] != "target" {
+		t.Fatalf("subject %v from %v", s, src)
+	}
+	env, err := Fields(ev, Writer{Provider: Provider{Name: "clearance", Version: "t"}, Verified: set("tool", "target", "args_sha256")})
+	if err != nil || env["subject"].(map[string]any)["kind"] != "model-call" || !slices.Contains(env["verified"].([]any), any("subject")) {
+		t.Fatalf("fields %v %v", env, err)
+	}
+	if err := checkSubject(s); err != nil {
+		t.Fatal(err)
+	}
+	// Without a target there is no model to name: the tool-call subject, as before.
+	if s, _ := DeriveSubject(map[string]any{"tool": "model.call", "args_sha256": a}); s["kind"] != "tool-call" {
+		t.Fatalf("no target: %v", s)
+	}
+	// A stored v0-draft row keeps its projected subject.
+	v0 := map[string]any{"schema": SchemaV0, "tool": "model.call", "target": "claude-sonnet-5", "args_sha256": a}
+	if p := Project(v0)["subject"].(map[string]any); p["kind"] != "tool-call" || p["name"] != "model.call" {
+		t.Fatalf("v0 projection changed: %v", p)
+	}
 }

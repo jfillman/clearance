@@ -21,7 +21,7 @@ other than `recorded-not-checkpointed` are later packages (C-series); this page 
 - **Who wrote it.** `provider` names the registered provider and its version. The writer sets it from its own
   registration; an event cannot.
 - **What it is about.** `subject` is the thing the record binds to, in in-toto style: a kind (`tool-call`,
-  `manifest-tree`, `terraform-plan`, `definition`) and digests keyed by algorithm (`sha256`, `gitCommit`).
+  `manifest-tree`, `terraform-plan`, `definition`, `model-call` from revision 3) and digests keyed by algorithm (`sha256`, `gitCommit`).
 - **Intent redacted by default.** Free text an agent or a change gives as its reason is stored only as a SHA-256;
   the text is kept only where the deployment opts in (`Writer.intent_capture = "full"`).
 - **One chain across versions.** The chain rule did not change, so the 612 v0-draft rows on hangar-dev and every v1
@@ -71,8 +71,10 @@ Go's `TestPythonV1Identical` must reproduce it byte for byte:
   accepted any string).
 - `subject`, when the event does not give one, is derived: a gate record's `change` with a tree digest gives
   `manifest-tree` (`sha256` = the tree, `gitCommit` = the head, name `app/env`); a `definition.*` record gives
-  `definition` (the digest of the pin); any other runtime record gives `tool-call` (name = tool, `sha256` =
-  `args_sha256`); a deployment record with no tree has `null`. A derived subject is verified when the fields it came
+  `definition` (the digest of the pin); a `model.call` record with a `target` gives `model-call` (revision 3: name =
+  the target, the model alias asked for, `sha256` = `args_sha256`, derived from `tool`, `target` and `args_sha256`;
+  a v0-draft row is still projected as `tool-call`, so no served row changes); any other runtime record gives
+  `tool-call` (name = tool, `sha256` = `args_sha256`); a deployment record with no tree has `null`. A derived subject is verified when the fields it came
   from are; an event's own subject is claimed unless the writer verifies `subject`.
 - `verified` and `claimed` together name every field outside the chain's own (`seq`, `schema`, `boundary`,
   `coverage`, `verified`, `claimed`, `prev_hash`, `hash`).

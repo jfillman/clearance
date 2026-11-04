@@ -133,7 +133,8 @@
                 "tool-call",
                 "manifest-tree",
                 "terraform-plan",
-                "definition"
+                "definition",
+                "model-call"
               ]
             },
             "name": {
