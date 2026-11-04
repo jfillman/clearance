@@ -233,9 +233,16 @@ func buildBody(a *registerArgs, env map[string]string) (*registerBody, error) {
 	if err != nil {
 		return nil, err
 	}
+	if st, err := os.Stat(a.after); err != nil || !st.IsDir() {
+		return nil, usagef("--after %s is not a directory of rendered manifests", a.after)
+	}
 	after, err := render.LoadDir(a.after)
 	if err != nil {
 		return nil, err
+	}
+	if len(after) == 0 {
+		// The tree digest of nothing binds the change to nothing (the core flags it tree:unbound).
+		return nil, usagef("--after %s holds no manifests (*.yaml, *.yml, *.json with apiVersion, kind and metadata.name): there is no tree to register", a.after)
 	}
 	var paths []string
 	if a.pathsFromGit && base != "" {

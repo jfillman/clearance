@@ -33,6 +33,7 @@ import (
 	"github.com/jfillman/clearance/internal/evidence"
 	"github.com/jfillman/clearance/internal/gate"
 	"github.com/jfillman/clearance/internal/profile"
+	"github.com/jfillman/clearance/internal/review"
 	"github.com/jfillman/clearance/internal/store"
 	"github.com/jfillman/clearance/internal/store/memory"
 	"github.com/jfillman/clearance/internal/store/pg"
@@ -1003,4 +1004,46 @@ func TestThePostgresReaderIsReadOnly(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "read-only") {
 		t.Fatalf("a delete through the reader: %v", err)
 	}
+}
+
+// G-TF-1: clearance-api lists a terraform-plan change, as the core stored it, with its subject (kind, workspace,
+// digests); a manifest change lists as kind manifest-tree.
+func TestTheAPIListsATerraformPlanChangeWithItsSubject(t *testing.T) {
+	sha := func(s string) string { return canon.SHA256Hex([]byte(s)) }
+	body := map[string]any{"app": "network", "env": "lab", "repo": "jfillman/hangar-infra", "pr": json.Number("12"),
+		"head": strings.Repeat("2", 40), "proposer": "user:dana", "owner": "group:default/team-gate",
+		"checks": map[string]any{"ci": "pass", "provenance": "not-agent"},
+		"subject": map[string]any{"kind": "terraform-plan", "planDigest": sha("plan"), "planJsonDigest": sha("plan json"),
+			"variableSetDigest": sha("vars"), "workspace": map[string]any{"backend": "s3", "key": "network/lab/terraform.tfstate", "name": "default"},
+			"versions":  map[string]any{"terraform": "1.9.8"},
+			"summary":   map[string]any{"create": json.Number("0"), "update": json.Number("0"), "replace": json.Number("0"), "destroy": json.Number("1"), "destroyedAddresses": []any{"aws_instance.bastion"}},
+			"resources": []any{map[string]any{"address": "aws_instance.bastion", "type": "aws_instance", "actions": []any{"delete"}}}}}
+	req, err := gate.ParseRequest(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl, err := gate.Classify(req, gate.DefaultPolicy(), review.Registry{}, nil)
+	if err != nil || cl.Tier != 3 {
+		t.Fatal(cl, err)
+	}
+	c := gate.Open(req, cl, time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC), "app-infra-cicd/pipeline-runner")
+	raw, _ := json.Marshal(c)
+	tf := store.Change{ID: c.ID, App: c.App, Env: c.Env, State: c.State, Repo: c.Repo, PR: int(c.PR), Head: c.Head,
+		ExpiresAt: c.ExpiresAt.Time, Record: raw}
+	each(t, world{changes: append(fixtureChanges(), tf)}, func(t *testing.T, h *harness) {
+		kinds := map[string]string{}
+		for _, it := range items(h.ok("/v1/clearances", "audit")) {
+			s, _ := it["subject"].(map[string]any)
+			kinds[it["id"].(string)], _ = s["kind"].(string)
+		}
+		if kinds[c.ID] != "terraform-plan" || len(kinds) != 3 {
+			t.Fatalf("%v", kinds)
+		}
+		one := h.ok("/v1/clearances/"+c.ID, "audit")
+		s := one["subject"].(map[string]any)
+		if s["workspace"].(map[string]any)["key"] != "network/lab/terraform.tfstate" || s["digests"].(map[string]any)["planJson"] != sha("plan json") ||
+			s["summary"].(map[string]any)["destroyedAddresses"].([]any)[0] != "aws_instance.bastion" || num(one["tier"]) != 3 {
+			t.Fatalf("%v", one)
+		}
+	})
 }

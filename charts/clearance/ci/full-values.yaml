@@ -43,6 +43,7 @@ gate:
   modelRoutes: ["sonnet=claude-sonnet-4-5"]
   runtimeImagesExtra: ["ghcr.io/jfillman/runtime-*"]
   trustedRegistries: ["ghcr.io/riley-roooo/"]
+  unboundTree: refuse
 agents:
   configMap: clearance-agents
 oidc:

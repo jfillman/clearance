@@ -155,9 +155,11 @@ var routeTable = []Route{
 		MaxBody: gate.MaxRegisterBody,
 		Summary: "The clearance-gate check registers (or re-evaluates) a change to a protected environment; the caller " +
 			"is a verifier (CLEARANCE_VERIFIERS).",
-		RequestNote: "gate.ChangeRequest (docs/gate.md): app, env, cluster, repo, pr, head, base, proposer, " +
-			"proposerKind, owner, protected, treeDigest, paths, linesChanged, objects, checks, policy, agent, " +
-			"definition; unknown fields are refused",
+		RequestNote: "gate.ChangeRequest, schemas/change-request.schema.json (docs/gate.md): app, env, cluster, " +
+			"repo, pr, head, base, proposer, proposerKind, owner, protected, treeDigest, paths, linesChanged, objects, " +
+			"checks, policy, agent, definition, subject (a saved Terraform plan: kind terraform-plan, planDigest, " +
+			"planJsonDigest, workspace, versions, summary, targeted, variableSetDigest, resources); unknown fields are " +
+			"refused",
 		Responses: append([]Response{{200, "the change as recorded", gate.Change{}}}, gateErrs...),
 	},
 	{

@@ -1,0 +1,548 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clearance.hangarplatform.dev/schemas/change-request/v1.json",
+  "title": "clearance.change-request/v1",
+  "description": "What a verifier registers with POST /v1/clearances (docs/gate.md): a change to a protected environment. Its subject is a rendered manifest tree (treeDigest and objects), an agent definition's release (definition) or a saved Terraform plan (subject). internal/gate ParseRequest decodes the same shape strictly (unknown fields refused) and checks what a schema cannot.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "app",
+    "env",
+    "repo",
+    "pr",
+    "head",
+    "proposer"
+  ],
+  "properties": {
+    "app": {
+      "type": "string",
+      "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+    },
+    "env": {
+      "type": "string",
+      "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+    },
+    "cluster": {
+      "description": "The cluster the environment runs on; required unless the subject is a Terraform plan.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "const": ""
+        },
+        {
+          "type": "string",
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+        }
+      ]
+    },
+    "repo": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+      "description": "owner/name, compared lowercased."
+    },
+    "pr": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The pull request, 0 for a pushed commit."
+    },
+    "head": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "base": {
+      "description": "The base commit.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "const": ""
+        },
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      ]
+    },
+    "proposer": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9:/_.@\\[\\]-]{1,200}$"
+    },
+    "proposerKind": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "const": ""
+        },
+        {
+          "enum": [
+            "person",
+            "agent",
+            "unknown"
+          ]
+        }
+      ]
+    },
+    "owner": {
+      "description": "The app's owner group; absent: the core looks it up.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "const": ""
+        },
+        {
+          "type": "string",
+          "pattern": "^group:[a-z0-9-]+/[a-z0-9._-]+$"
+        }
+      ]
+    },
+    "protected": {
+      "type": "boolean",
+      "description": "The environment (or workspace) is protected; default true."
+    },
+    "treeDigest": {
+      "description": "The manifest-tree digest (docs/gate.md); for a Terraform plan absent or the plan's digest. A placeholder (64 copies of one digit, or sha256 of nothing) is flagged tree:unbound, or refused DG-UNBOUND where the deployment says so.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "const": ""
+        },
+        {
+          "type": "string",
+          "pattern": "^(sha256:)?[0-9a-f]{64}$"
+        }
+      ]
+    },
+    "paths": {
+      "type": "array",
+      "maxItems": 4000,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "linesChanged": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "objects": {
+      "type": "array",
+      "maxItems": 2000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "kind",
+          "name"
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "op": {
+            "enum": [
+              "added",
+              "changed",
+              "removed"
+            ]
+          },
+          "fields": {
+            "type": "array",
+            "maxItems": 400,
+            "items": {
+              "type": "string",
+              "pattern": "^/"
+            }
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "digest": {
+            "type": "string",
+            "description": "sha256 of the object's canonical JSON."
+          }
+        }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "policy": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "description": "The repo's clearance.yaml at head, as JSON."
+        }
+      ]
+    },
+    "agent": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+        }
+      ]
+    },
+    "definition": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name"
+          ],
+          "anyOf": [
+            {
+              "required": [
+                "old"
+              ],
+              "properties": {
+                "old": {
+                  "type": "object"
+                }
+              }
+            },
+            {
+              "required": [
+                "new"
+              ],
+              "properties": {
+                "new": {
+                  "type": "object"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+            },
+            "path": {},
+            "old": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object"
+                }
+              ]
+            },
+            "new": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "subject": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "A saved Terraform plan (G-TF-1). Checked beyond this schema: summary is exactly what resources say (counts and destroyedAddresses), an address names its type and appears once, treeDigest (when sent) equals planDigest.",
+          "required": [
+            "kind",
+            "planDigest",
+            "planJsonDigest",
+            "workspace",
+            "versions",
+            "summary",
+            "variableSetDigest",
+            "resources"
+          ],
+          "properties": {
+            "kind": {
+              "const": "terraform-plan"
+            },
+            "planDigest": {
+              "type": "string",
+              "pattern": "^(sha256:)?[0-9a-f]{64}$",
+              "not": {
+                "pattern": "^(sha256:)?(0000000000000000000000000000000000000000000000000000000000000000|1111111111111111111111111111111111111111111111111111111111111111|2222222222222222222222222222222222222222222222222222222222222222|3333333333333333333333333333333333333333333333333333333333333333|4444444444444444444444444444444444444444444444444444444444444444|5555555555555555555555555555555555555555555555555555555555555555|6666666666666666666666666666666666666666666666666666666666666666|7777777777777777777777777777777777777777777777777777777777777777|8888888888888888888888888888888888888888888888888888888888888888|9999999999999999999999999999999999999999999999999999999999999999|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc|dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd|eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee|ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff|e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855)$"
+              },
+              "description": "sha256 of the saved plan file (terraform plan -out); the change's tree digest."
+            },
+            "planJsonDigest": {
+              "type": "string",
+              "pattern": "^(sha256:)?[0-9a-f]{64}$",
+              "not": {
+                "pattern": "^(sha256:)?(0000000000000000000000000000000000000000000000000000000000000000|1111111111111111111111111111111111111111111111111111111111111111|2222222222222222222222222222222222222222222222222222222222222222|3333333333333333333333333333333333333333333333333333333333333333|4444444444444444444444444444444444444444444444444444444444444444|5555555555555555555555555555555555555555555555555555555555555555|6666666666666666666666666666666666666666666666666666666666666666|7777777777777777777777777777777777777777777777777777777777777777|8888888888888888888888888888888888888888888888888888888888888888|9999999999999999999999999999999999999999999999999999999999999999|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc|dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd|eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee|ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff|e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855)$"
+              },
+              "description": "sha256 of the redacted plan JSON (terraform show -json, sensitive values replaced)."
+            },
+            "variableSetDigest": {
+              "type": "string",
+              "pattern": "^(sha256:)?[0-9a-f]{64}$",
+              "not": {
+                "pattern": "^(sha256:)?(0000000000000000000000000000000000000000000000000000000000000000|1111111111111111111111111111111111111111111111111111111111111111|2222222222222222222222222222222222222222222222222222222222222222|3333333333333333333333333333333333333333333333333333333333333333|4444444444444444444444444444444444444444444444444444444444444444|5555555555555555555555555555555555555555555555555555555555555555|6666666666666666666666666666666666666666666666666666666666666666|7777777777777777777777777777777777777777777777777777777777777777|8888888888888888888888888888888888888888888888888888888888888888|9999999999999999999999999999999999999999999999999999999999999999|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc|dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd|eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee|ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff|e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855)$"
+              },
+              "description": "sha256 of the variable set the plan was made with; the values themselves are never sent."
+            },
+            "workspace": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "backend",
+                "key",
+                "name"
+              ],
+              "properties": {
+                "backend": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_-]{0,39}$",
+                  "description": "The backend type: s3, gcs, azurerm, remote, cloud, ..."
+                },
+                "key": {
+                  "type": "string",
+                  "pattern": "^[^\u0000-\u001f\u007f-\u009f]+$",
+                  "maxLength": 1024,
+                  "description": "The state key (HCP Terraform: organization/workspace)."
+                },
+                "name": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,89}$",
+                  "description": "The workspace name (default)."
+                }
+              }
+            },
+            "versions": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "terraform"
+              ],
+              "properties": {
+                "terraform": {
+                  "type": "string",
+                  "pattern": "^v?[0-9]+(\\.[0-9]+){0,3}([-+][0-9A-Za-z.+-]{1,64})?$"
+                },
+                "providers": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "object",
+                      "maxProperties": 200,
+                      "propertyNames": {
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$"
+                      },
+                      "additionalProperties": {
+                        "type": "string",
+                        "pattern": "^v?[0-9]+(\\.[0-9]+){0,3}([-+][0-9A-Za-z.+-]{1,64})?$"
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "summary": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "create",
+                "update",
+                "replace",
+                "destroy"
+              ],
+              "properties": {
+                "create": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "update": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "replace": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "destroy": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "destroyedAddresses": {
+                  "type": "array",
+                  "maxItems": 2000,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[^\u0000-\u001f\u007f-\u009f]+$",
+                    "maxLength": 1024
+                  }
+                }
+              }
+            },
+            "targeted": {
+              "type": "boolean",
+              "description": "The plan was made with -target."
+            },
+            "resources": {
+              "type": "array",
+              "maxItems": 2000,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "address",
+                  "type",
+                  "actions"
+                ],
+                "properties": {
+                  "address": {
+                    "type": "string",
+                    "pattern": "^[^\u0000-\u001f\u007f-\u009f]+$",
+                    "maxLength": 1024,
+                    "description": "The resource address (aws_iam_role.ci, module.net.aws_security_group.web[\"a\"]); it names the type."
+                  },
+                  "type": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9_]{0,127}$",
+                    "description": "The resource type."
+                  },
+                  "actions": {
+                    "description": "Terraform's action list (resource_changes[].change.actions).",
+                    "enum": [
+                      [
+                        "no-op"
+                      ],
+                      [
+                        "create"
+                      ],
+                      [
+                        "read"
+                      ],
+                      [
+                        "update"
+                      ],
+                      [
+                        "delete"
+                      ],
+                      [
+                        "delete",
+                        "create"
+                      ],
+                      [
+                        "create",
+                        "delete"
+                      ]
+                    ]
+                  },
+                  "fields": {
+                    "type": "array",
+                    "maxItems": 400,
+                    "items": {
+                      "type": "string",
+                      "pattern": "^/[^\u0000-\u001f\u007f-\u009f]*$",
+                      "maxLength": 1024
+                    },
+                    "description": "JSON pointers of the attributes an update changes: names only, never values."
+                  },
+                  "actionReason": {
+                    "description": "Terraform's action_reason; replace_by_request is a -replace.",
+                    "oneOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "const": ""
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^[a-z_]{1,64}$"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "if": {
+    "required": [
+      "subject"
+    ],
+    "properties": {
+      "subject": {
+        "type": "object"
+      }
+    }
+  },
+  "then": {
+    "properties": {
+      "objects": {
+        "maxItems": 0
+      },
+      "definition": {
+        "type": "null"
+      }
+    }
+  },
+  "else": {
+    "required": [
+      "cluster",
+      "treeDigest"
+    ],
+    "properties": {
+      "cluster": {
+        "type": "string",
+        "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+      },
+      "treeDigest": {
+        "type": "string",
+        "pattern": "^(sha256:)?[0-9a-f]{64}$"
+      }
+    }
+  }
+}

@@ -93,6 +93,13 @@ type Policy struct {
 	Approvers         map[int]Approvers
 	RepoPolicyDigest  *string // set by Tightened: the clearance.yaml that shaped this policy
 	Tier2Paths        []string
+	// The Terraform baseline (G-TF-1): tier-3 resource types by category (clearance.yaml's workspaces.tiers.3.types
+	// are added as category "clearance.yaml"), the attributes of a tag-only update, the types clearance.yaml keeps
+	// out of tier 1, and the workspaces it protects (globs on the state key or the workspace name).
+	TFTier3Types        []TypeRule
+	TFTagFields         []string
+	TFTier2Types        []string
+	ProtectedWorkspaces []string
 }
 
 // DefaultPolicy is GatePolicy(): the baseline of 2026-10-31.
@@ -116,6 +123,8 @@ func DefaultPolicy() Policy {
 		OutsideGroups:   append([]string{}, vocab.Get().OutsideGroups...),
 		TTLDays:         DefaultTTLDays,
 		Approvers:       map[int]Approvers{2: {1, 0}, 3: {1, 1}},
+		TFTier3Types:    DefaultTerraformTier3(),
+		TFTagFields:     append([]string(nil), DefaultTagFields...),
 	}
 }
 
@@ -129,6 +138,16 @@ type PolicyView struct {
 	TTLDays           int                  `json:"ttlDays"`
 	Approvers         map[string]Approvers `json:"approvers"`
 	RepoPolicy        *string              `json:"repoPolicy"`
+	Terraform         PolicyTerraform      `json:"terraform"`
+}
+
+// PolicyTerraform is the view's Terraform baseline: tier-3 types by category, the tag-only attributes, and what a
+// clearance.yaml added (tier-2 types, protected workspaces).
+type PolicyTerraform struct {
+	Tier3Types          map[string][]string `json:"tier3Types"`
+	TagOnlyFields       []string            `json:"tagOnlyFields"`
+	Tier2Types          []string            `json:"tier2Types"`
+	ProtectedWorkspaces []string            `json:"protectedWorkspaces"`
 }
 
 // PolicyTiers is the view's tier table: "3" then "0", as gate.py writes it.
@@ -157,10 +176,16 @@ func (p Policy) View() PolicyView {
 	var tiers PolicyTiers
 	tiers.T3.Kinds, tiers.T3.Fields, tiers.T3.Paths = kinds, nonNil(p.Tier3Fields), nonNil(p.Tier3Paths)
 	tiers.T0.Paths = nonNil(p.NonruntimePaths)
+	tf := PolicyTerraform{Tier3Types: map[string][]string{}, TagOnlyFields: nonNil(p.TFTagFields),
+		Tier2Types: nonNil(p.TFTier2Types), ProtectedWorkspaces: nonNil(p.ProtectedWorkspaces)}
+	for _, r := range p.TFTier3Types {
+		tf.Tier3Types[r.Category] = append(tf.Tier3Types[r.Category], r.Types...)
+	}
 	return PolicyView{
 		Version: p.Version, Tiers: tiers,
 		TrustedRegistries: nonNil(p.TrustedRegistries), MaxLinesTier1: p.MaxLinesTier1,
 		OutsideGroups: nonNil(p.OutsideGroups), TTLDays: p.TTLDays, Approvers: appr, RepoPolicy: p.RepoPolicyDigest,
+		Terraform: tf,
 	}
 }
 
@@ -172,8 +197,9 @@ func nonNil(s []string) []string {
 }
 
 // Tightened applies a repo's clearance.yaml. Allowed: tiers.3.{kinds,paths,fields} (add), tiers.2.{kinds,paths}
-// (add), approvers.{2,3}.{owner,outside} (raise), ttlDays (shorten). Anything that loosens, or an unknown key, is
-// refused (DG-POLICY).
+// (add), approvers.{2,3}.{owner,outside} (raise), ttlDays (shorten), and for Terraform workspaces.protected (add
+// protected workspaces) and workspaces.tiers.{2,3}.types (add resource types). Anything that loosens, or an unknown
+// key, is refused (DG-POLICY).
 func (p Policy) Tightened(repoPolicy any) (Policy, error) {
 	if repoPolicy == nil {
 		return p, nil
@@ -191,14 +217,14 @@ func (p Policy) Tightened(repoPolicy any) (Policy, error) {
 	digest := hex.EncodeToString(sum[:])
 	var unknown []string
 	for k := range rp {
-		if k != "tiers" && k != "approvers" && k != "ttlDays" {
+		if k != "tiers" && k != "approvers" && k != "ttlDays" && k != "workspaces" {
 			unknown = append(unknown, k)
 		}
 	}
 	if len(unknown) > 0 {
 		sort.Strings(unknown)
 		return p, gerr("DG-POLICY", fmt.Sprintf("clearance.yaml: unknown key %s", pycompat.Repr(unknown[0])),
-			"Allowed: tiers.{2,3}.{kinds,paths,fields}, approvers.{2,3}.{owner,outside}, ttlDays.", 400)
+			"Allowed: tiers.{2,3}.{kinds,paths,fields}, approvers.{2,3}.{owner,outside}, ttlDays, workspaces.{protected,tiers}.", 400)
 	}
 	t3k := map[string]bool{}
 	for k := range p.Tier3Kinds {
@@ -307,9 +333,86 @@ func (p Policy) Tightened(repoPolicy any) (Policy, error) {
 		}
 		ttl = n
 	}
-	out := p
+	ws, err := p.tightenWorkspaces(rp["workspaces"])
+	if err != nil {
+		return p, err
+	}
+	out := ws
 	out.Tier3Kinds, out.Tier3Fields, out.Tier3Paths = t3k, t3f, t3p
 	out.TTLDays, out.Approvers, out.RepoPolicyDigest, out.Tier2Paths = int(ttl), appr, &digest, t2p
+	return out, nil
+}
+
+// tightenWorkspaces applies clearance.yaml's workspaces block, tighten-only like the gitops tiers: protected names
+// more workspaces protected (globs on the state key or the workspace name; there is no way to unprotect one),
+// tiers.3.types adds tier-3 resource types, tiers.2.types keeps types out of tier 1. Tiers 0 and 1 cannot be named.
+func (p Policy) tightenWorkspaces(v any) (Policy, error) {
+	out := p
+	out.TFTier3Types = append([]TypeRule(nil), p.TFTier3Types...)
+	out.TFTier2Types = append([]string(nil), p.TFTier2Types...)
+	out.ProtectedWorkspaces = append([]string(nil), p.ProtectedWorkspaces...)
+	if !pycompat.Truthy(v) {
+		return out, nil
+	}
+	m, ok := v.(map[string]any)
+	if !ok {
+		return p, gerr("DG-POLICY", "clearance.yaml: workspaces takes protected and tiers", "", 400)
+	}
+	for _, k := range sortedKeys(m) {
+		if k != "protected" && k != "tiers" {
+			return p, gerr("DG-POLICY", fmt.Sprintf("clearance.yaml: workspaces takes protected and tiers, not %s", pycompat.Repr(k)),
+				"A workspace can be protected, never unprotected; resource types can be raised, never lowered.", 400)
+		}
+	}
+	strList := func(v any, what string) ([]string, error) {
+		l, ok := v.([]any)
+		if !ok {
+			return nil, gerr("DG-POLICY", fmt.Sprintf("clearance.yaml: %s is a list of strings", what), "", 400)
+		}
+		var out []string
+		for _, x := range l {
+			s, ok := x.(string)
+			if !ok || s == "" {
+				return nil, gerr("DG-POLICY", fmt.Sprintf("clearance.yaml: %s is a list of strings", what), "", 400)
+			}
+			out = append(out, s)
+		}
+		return out, nil
+	}
+	if v, present := m["protected"]; present {
+		l, err := strList(v, "workspaces.protected")
+		if err != nil {
+			return p, err
+		}
+		out.ProtectedWorkspaces = append(out.ProtectedWorkspaces, l...)
+	}
+	if v := m["tiers"]; pycompat.Truthy(v) {
+		tiers, ok := v.(map[string]any)
+		if !ok {
+			return p, gerr("DG-POLICY", "clearance.yaml: workspaces.tiers names 2 and 3 only (tiers 0 and 1 cannot be widened)", "", 400)
+		}
+		for _, t := range sortedKeys(tiers) {
+			if t != "2" && t != "3" {
+				return p, gerr("DG-POLICY", "clearance.yaml: workspaces.tiers names 2 and 3 only (tiers 0 and 1 cannot be widened)", "", 400)
+			}
+			spec, ok := tiers[t].(map[string]any)
+			if !ok || unknownKey(spec, setOf("types")) != "" {
+				return p, gerr("DG-POLICY", fmt.Sprintf("clearance.yaml: workspaces.tiers.%s takes types", t), "", 400)
+			}
+			if _, present := spec["types"]; !present {
+				continue
+			}
+			l, err := strList(spec["types"], "workspaces.tiers."+t+".types")
+			if err != nil {
+				return p, err
+			}
+			if t == "3" {
+				out.TFTier3Types = append(out.TFTier3Types, TypeRule{"clearance.yaml", l})
+			} else {
+				out.TFTier2Types = append(out.TFTier2Types, l...)
+			}
+		}
+	}
 	return out, nil
 }
 

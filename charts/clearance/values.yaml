@@ -96,6 +96,10 @@ gate:
   # CLEARANCE_TRUSTED_REGISTRIES: image prefixes, each ending in "/", a tier-1 image bump may come from; a bump from
   # anywhere else is tier 2 (image:not-trusted-registry). Empty: any registry (the product default).
   trustedRegistries: []
+  # CLEARANCE_GATE_UNBOUND_TREE: flag | refuse. A manifest-tree registration whose treeDigest is a placeholder (64
+  # copies of one digit, or sha256 of nothing) is flagged tree:unbound and binds to its commit only, or refused
+  # (DG-UNBOUND). Empty: flag (the core's default for one release; refuse is planned to become it).
+  unboundTree: ""
 
 # Bundled agent definitions (*.yaml) from a ConfigMap you manage, mounted at /etc/clearance/agents and named in
 # CLEARANCE_AGENTS_DIR for the core and the api. Empty: none.

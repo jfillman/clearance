@@ -9,6 +9,37 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Added
+- G-TF-1, the terraform-plan subject: `POST /v1/clearances` takes `subject: {kind: terraform-plan, planDigest,
+  planJsonDigest, workspace: {backend, key, name}, versions: {terraform, providers}, summary: {create, update,
+  replace, destroy, destroyedAddresses}, targeted, variableSetDigest, resources}` from a verifier or a GitHub Actions
+  workflow (DG-REPO still applies). The Terraform baseline: destroy or replace in a protected workspace is tier 3; a
+  change to an IAM, security-group, network-ACL, KMS or database type is tier 3; a tag-only or description-only
+  update is tier 1; `-target` or `-replace` is one tier up with a floor of 2; everything else is tier 2. Reasons name
+  the resource addresses, and the decision's result names the workspace and what set the tier. The summary must
+  match the resources. A placeholder plan digest is refused (`DG-UNBOUND`). No variable value is sent or stored: the
+  record carries the redacted plan JSON's digest and the variable set's hash (docs/gate.md).
+- `clearance.yaml` `workspaces:` (tighten-only): `protected` (globs on the state key or workspace name),
+  `tiers.3.types` and `tiers.2.types`. Anything looser is `DG-POLICY`.
+- Every change on record carries `subject` (`manifest-tree`, `definition` or `terraform-plan`, with its digests), and
+  every `deploy.*` record carries it as the evidence subject, so clearance-api lists `subject.kind`. A change stored
+  earlier reads back as `manifest-tree`. `GET /v1/clearance-policy` adds `terraform`.
+- `schemas/change-request.schema.json` (clearance.change-request/v1), the request's schema; a test holds it to the
+  parser. The contracts and the Go and Python clients are regenerated (`client.PlanSubject`, `client.ChangeSubject`).
+- `CLEARANCE_GATE_UNBOUND_TREE` (chart `gate.unboundTree`): `flag` (default) or `refuse` for a manifest change whose
+  `treeDigest` is a placeholder (64 copies of one digit, or sha256 of nothing). Flagged, it is registered with
+  reason `tree:unbound`, `subject.flags: ["unbound-tree"]` and a subject bound to the commit only; refused, it is
+  `DG-UNBOUND`. Flag is the default for this release for backward compatibility; refuse is planned to become it.
+
+### Changed
+- The manifest-tree digest is defined (docs/gate.md): sha256 over the sorted lines
+  `apiVersion/kind/namespace/name:<sha256 of the object's canonical JSON>`, joined with newlines. `clearance register`
+  now computes this, which is what Glidepath's `clearance-gate-` check already computed for the same render (it
+  hashed the canonical documents themselves before, so the two differed). Changes registered earlier keep their
+  digest.
+- `clearance register` refuses an `--after` that is not a directory or holds no manifests (exit 2) instead of
+  registering an empty tree; the README's example now renders into directories.
+
 ## [0.30.0] - 2026-11-03
 
 R-3: the Python package is gone. Breaking for anyone who installs `clearance` from this repository with pip (or

@@ -52,6 +52,20 @@ type ChangeRequest struct {
 	Agent                   *string
 	// Definition is an agent definition's release: {name, path, old, new}; old nil = a new agent, new nil = removed.
 	Definition map[string]any
+	// Subject is a saved Terraform plan (kind terraform-plan); nil for a manifest tree or a definition release,
+	// which treeDigest and objects (or definition) describe.
+	Subject *Subject
+}
+
+// Kind is the subject's kind: terraform-plan, definition or manifest-tree.
+func (r ChangeRequest) Kind() string {
+	switch {
+	case r.Subject != nil:
+		return r.Subject.Kind
+	case r.Definition != nil:
+		return KindDefinition
+	}
+	return KindManifestTree
 }
 
 // ID is "ch-" + the first 16 hex of sha256("repo#pr@head").
@@ -61,7 +75,7 @@ func (r ChangeRequest) ID() string {
 }
 
 var requestKeys = setOf("app", "env", "cluster", "repo", "pr", "head", "base", "proposer", "proposerKind", "owner",
-	"protected", "treeDigest", "paths", "linesChanged", "objects", "checks", "policy", "agent", "definition")
+	"protected", "treeDigest", "paths", "linesChanged", "objects", "checks", "policy", "agent", "definition", "subject")
 var objectKeys = setOf("apiVersion", "kind", "namespace", "name", "op", "fields", "images", "digest")
 var definitionKeys = setOf("name", "path", "old", "new")
 
@@ -88,7 +102,9 @@ func unknownKey(m map[string]any, allowed map[string]bool) string {
 }
 
 // ParseRequest is ChangeRequest.from_dict, with one deliberate tightening: an unknown field is refused (strict
-// decoding), where gate.py ignored it.
+// decoding), where gate.py ignored it. A terraform-plan subject (G-TF-1) needs no cluster and no treeDigest (the
+// change's tree digest is the plan's digest; a treeDigest that is not it is refused), and has no objects or
+// definition. schemas/change-request.schema.json is the same shape.
 func ParseRequest(v any) (ChangeRequest, error) {
 	d, ok := v.(map[string]any)
 	if !ok {
@@ -96,6 +112,14 @@ func ParseRequest(v any) (ChangeRequest, error) {
 	}
 	if k := unknownKey(d, requestKeys); k != "" {
 		return ChangeRequest{}, bad("unknown field %s", pycompat.Repr(k))
+	}
+	var plan *Subject
+	if v := d["subject"]; v != nil {
+		p, err := parsePlanSubject(v)
+		if err != nil {
+			return ChangeRequest{}, err
+		}
+		plan = p
 	}
 	var err error
 	s := func(k string, rx interface{ MatchString(string) bool }, required bool, def string) string {
@@ -116,8 +140,8 @@ func ParseRequest(v any) (ChangeRequest, error) {
 		}
 		return str
 	}
-	r := ChangeRequest{}
-	r.App, r.Env, r.Cluster = s("app", nameRx, true, ""), s("env", nameRx, true, ""), s("cluster", nameRx, true, "")
+	r := ChangeRequest{Subject: plan}
+	r.App, r.Env, r.Cluster = s("app", nameRx, true, ""), s("env", nameRx, true, ""), s("cluster", nameRx, plan == nil, "")
 	r.Repo, r.Head = strings.ToLower(s("repo", repoRx, true, "")), s("head", shaRx, true, "")
 	r.Base = s("base", shaRx, false, "")
 	if err != nil {
@@ -148,9 +172,15 @@ func ParseRequest(v any) (ChangeRequest, error) {
 		}
 		r.Protected = b
 	}
-	r.TreeDigest = s("treeDigest", nil, true, "")
+	r.TreeDigest = s("treeDigest", nil, plan == nil, "")
 	if err != nil {
 		return r, err
+	}
+	if plan != nil {
+		if r.TreeDigest != "" && bareHex(r.TreeDigest) != plan.PlanDigest {
+			return r, bad("treeDigest is the plan's digest (subject.planDigest) or absent")
+		}
+		r.TreeDigest = plan.PlanDigest
 	}
 	if !treeRx.MatchString(r.TreeDigest) {
 		return r, bad("treeDigest is a sha256")
@@ -274,6 +304,9 @@ func ParseRequest(v any) (ChangeRequest, error) {
 			return r, bad("definition needs old or new")
 		}
 		r.Definition = m
+	}
+	if plan != nil && (len(r.Objects) > 0 || r.Definition != nil) {
+		return r, bad("a terraform-plan change lists its resources in subject.resources, not objects or definition")
 	}
 	return r, nil
 }

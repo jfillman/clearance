@@ -122,7 +122,8 @@ func maxTier(rs []Reason) int {
 func strp(s string) *string { return &s }
 
 // Classify is gate.classify: cleared by policy, held for people, or denied. A clearance.yaml that loosens the
-// baseline is an *Error (DG-POLICY). An agent definition's release is tiered by review.Classify over the two
+// baseline is an *Error (DG-POLICY). A terraform-plan subject is tiered by classifyPlan (terraform.go), its reasons
+// naming the resource addresses that set the tier. An agent definition's release is tiered by review.Classify over the two
 // documents; problems (review.Validate's, for the new document) deny it (DG-DEFINITION).
 func Classify(req ChangeRequest, baseline Policy, tools review.Registry, problems []review.Problem) (Classification, error) {
 	pol, err := baseline.Tightened(anyOrNil(req.Policy))
@@ -130,13 +131,11 @@ func Classify(req ChangeRequest, baseline Policy, tools review.Registry, problem
 		return Classification{}, err
 	}
 	var reasons []Reason
-	hold := func(tier int) Classification {
-		a, ok := pol.Approvers[tier]
-		if !ok {
-			a = Approvers{1, 1}
-		}
-		q := &Requirement{a.Owner, a.Outside, req.Owner, nonNil(pol.OutsideGroups)}
-		return Classification{tier, reasons, "hold", nil, fmt.Sprintf("tier %d: holding for %s", tier, q.Words()), q, pol}
+	hold := func(tier int) Classification { return holdFor(req, pol, tier, reasons) }
+	if req.Kind() != KindTerraformPlan && Unbound(req.TreeDigest) {
+		// Flagged, not refused, for one release (CLEARANCE_GATE_UNBOUND_TREE=refuse refuses it): the change binds to
+		// its commit only.
+		reasons = append(reasons, Reason{"the tree", "tree:unbound", 0})
 	}
 	if req.Definition != nil {
 		name, _ := req.Definition["name"].(string)
@@ -183,6 +182,9 @@ func Classify(req ChangeRequest, baseline Policy, tools review.Registry, problem
 			reasons = append(reasons, Reason{p, "non-runtime", 0})
 		}
 	}
+	if req.Kind() == KindTerraformPlan {
+		return classifyPlan(req, pol, reasons), nil
+	}
 	for _, ch := range req.Objects {
 		reasons = append(reasons, objectTier(ch, pol))
 	}
@@ -216,6 +218,16 @@ func Classify(req ChangeRequest, baseline Policy, tools review.Registry, problem
 		return Classification{tier, reasons, "clear", nil, fmt.Sprintf("tier %d: cleared by policy", tier), nil, pol}, nil
 	}
 	return hold(tier), nil
+}
+
+// holdFor is a change held for people at tier: the approvers the policy asks for, from the owner and outside groups.
+func holdFor(req ChangeRequest, pol Policy, tier int, reasons []Reason) Classification {
+	a, ok := pol.Approvers[tier]
+	if !ok {
+		a = Approvers{1, 1}
+	}
+	q := &Requirement{a.Owner, a.Outside, req.Owner, nonNil(pol.OutsideGroups)}
+	return Classification{tier, reasons, "hold", nil, fmt.Sprintf("tier %d: holding for %s", tier, q.Words()), q, pol}
 }
 
 func anyOrNil(m map[string]any) any {

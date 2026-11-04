@@ -143,6 +143,10 @@ app.kubernetes.io/component: {{ .component }}
 - name: CLEARANCE_TRUSTED_REGISTRIES
   value: {{ include "clearance.csv" . | quote }}
 {{- end }}
+{{- with .Values.gate.unboundTree }}
+- name: CLEARANCE_GATE_UNBOUND_TREE
+  value: {{ . | quote }}
+{{- end }}
 {{- if .Values.agents.configMap }}
 - name: CLEARANCE_AGENTS_DIR
   value: /etc/clearance/agents

@@ -18,7 +18,7 @@ CONTRACT_VERSION = "1.0.0"
 
 RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "run.finish", "human.answer", "session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome", "deploy.exception")
 
-__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Budgets", "BundleRef", "Context", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateApproval", "GateChange", "GateChangeWithAuditSeq", "GateDeployment", "GateErrorBody", "GateObjectChange", "GateReason", "GateRequirement", "Grant", "Health", "Hold", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Problem", "ProvenanceCheck", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "WebhookAnswer"]
+__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Budgets", "BundleRef", "Context", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateApproval", "GateChange", "GateChangeWithAuditSeq", "GateDeployment", "GateErrorBody", "GateObjectChange", "GatePlanSummary", "GateReason", "GateRequirement", "GateResource", "GateSubject", "GateVersions", "GateWorkspace", "Grant", "Health", "Hold", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Problem", "ProvenanceCheck", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "WebhookAnswer"]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -382,6 +382,7 @@ class GateChange(Model):
         Field("repo_policy_digest", "repo_policy_digest", ("nullable", ("str",)), True),
         Field("requirement", "requirement", ("nullable", ("ref", "GateRequirement")), True),
         Field("state", "state", ("str",), True),
+        Field("subject", "subject", ("nullable", ("ref", "GateSubject")), True),
         Field("superseded_by", "superseded_by", ("nullable", ("str",)), True),
         Field("target", "target", ("str",), True),
         Field("tier", "tier", ("int",), True),
@@ -422,6 +423,7 @@ class GateChange(Model):
     repo_policy_digest: str | None
     requirement: GateRequirement | None
     state: str
+    subject: GateSubject | None
     superseded_by: str | None
     target: str
     tier: int
@@ -469,6 +471,7 @@ class GateChangeWithAuditSeq(Model):
         Field("repo_policy_digest", "repo_policy_digest", ("nullable", ("str",)), True),
         Field("requirement", "requirement", ("nullable", ("ref", "GateRequirement")), True),
         Field("state", "state", ("str",), True),
+        Field("subject", "subject", ("nullable", ("ref", "GateSubject")), True),
         Field("superseded_by", "superseded_by", ("nullable", ("str",)), True),
         Field("target", "target", ("str",), True),
         Field("tier", "tier", ("int",), True),
@@ -510,6 +513,7 @@ class GateChangeWithAuditSeq(Model):
     repo_policy_digest: str | None
     requirement: GateRequirement | None
     state: str
+    subject: GateSubject | None
     superseded_by: str | None
     target: str
     tier: int
@@ -588,6 +592,26 @@ class GateObjectChange(Model):
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
+class GatePlanSummary(Model):
+    """Contract schema GatePlanSummary."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("create", "create", ("int",), True),
+        Field("destroy", "destroy", ("int",), True),
+        Field("destroyedAddresses", "destroyedAddresses", ("list", ("str",)), True),
+        Field("replace", "replace", ("int",), True),
+        Field("update", "update", ("int",), True),
+    )
+
+    create: int
+    destroy: int
+    destroyedAddresses: list[str]
+    replace: int
+    update: int
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
 class GateReason(Model):
     """Contract schema GateReason."""
 
@@ -619,6 +643,90 @@ class GateRequirement(Model):
     outsideGroups: list[str]
     owner: int
     ownerGroup: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class GateResource(Model):
+    """Contract schema GateResource."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("actionReason", "actionReason", ("str",), False),
+        Field("actions", "actions", ("list", ("str",)), True),
+        Field("address", "address", ("str",), True),
+        Field("fields", "fields", ("list", ("str",)), True),
+        Field("type", "type", ("str",), True),
+    )
+
+    actionReason: str | None = None
+    actions: list[str]
+    address: str
+    fields: list[str]
+    type: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class GateSubject(Model):
+    """Contract schema GateSubject."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("digests", "digests", ("map", ("str",)), True),
+        Field("flags", "flags", ("list", ("str",)), False),
+        Field("kind", "kind", ("str",), True),
+        Field("name", "name", ("str",), False),
+        Field("planDigest", "planDigest", ("str",), False),
+        Field("planJsonDigest", "planJsonDigest", ("str",), False),
+        Field("resources", "resources", ("list", ("ref", "GateResource")), False),
+        Field("summary", "summary", ("nullable", ("ref", "GatePlanSummary")), False),
+        Field("targeted", "targeted", ("nullable", ("bool",)), False),
+        Field("variableSetDigest", "variableSetDigest", ("str",), False),
+        Field("versions", "versions", ("nullable", ("ref", "GateVersions")), False),
+        Field("workspace", "workspace", ("nullable", ("ref", "GateWorkspace")), False),
+    )
+
+    digests: dict[str, str]
+    flags: list[str] | None = None
+    kind: str
+    name: str | None = None
+    planDigest: str | None = None
+    planJsonDigest: str | None = None
+    resources: list[GateResource] | None = None
+    summary: GatePlanSummary | None = None
+    targeted: bool | None = None
+    variableSetDigest: str | None = None
+    versions: GateVersions | None = None
+    workspace: GateWorkspace | None = None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class GateVersions(Model):
+    """Contract schema GateVersions."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("providers", "providers", ("map", ("str",)), True),
+        Field("terraform", "terraform", ("str",), True),
+    )
+
+    providers: dict[str, str]
+    terraform: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class GateWorkspace(Model):
+    """Contract schema GateWorkspace."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("backend", "backend", ("str",), True),
+        Field("key", "key", ("str",), True),
+        Field("name", "name", ("str",), True),
+    )
+
+    backend: str
+    key: str
+    name: str
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -1279,8 +1387,13 @@ MODELS: dict[str, type[Model]] = {
     "GateDeployment": GateDeployment,
     "GateErrorBody": GateErrorBody,
     "GateObjectChange": GateObjectChange,
+    "GatePlanSummary": GatePlanSummary,
     "GateReason": GateReason,
     "GateRequirement": GateRequirement,
+    "GateResource": GateResource,
+    "GateSubject": GateSubject,
+    "GateVersions": GateVersions,
+    "GateWorkspace": GateWorkspace,
     "Grant": Grant,
     "Health": Health,
     "Hold": Hold,

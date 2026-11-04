@@ -1029,6 +1029,16 @@
           "state": {
             "type": "string"
           },
+          "subject": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateSubject"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "superseded_by": {
             "type": [
               "string",
@@ -1083,6 +1093,7 @@
           "repo_policy_digest",
           "requirement",
           "state",
+          "subject",
           "superseded_by",
           "target",
           "tier",
@@ -1207,6 +1218,36 @@
         ],
         "type": "object"
       },
+      "GatePlanSummary": {
+        "properties": {
+          "create": {
+            "type": "integer"
+          },
+          "destroy": {
+            "type": "integer"
+          },
+          "destroyedAddresses": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "replace": {
+            "type": "integer"
+          },
+          "update": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "create",
+          "destroy",
+          "destroyedAddresses",
+          "replace",
+          "update"
+        ],
+        "type": "object"
+      },
       "GateReason": {
         "properties": {
           "rule": {
@@ -1249,6 +1290,153 @@
           "outsideGroups",
           "owner",
           "ownerGroup"
+        ],
+        "type": "object"
+      },
+      "GateResource": {
+        "properties": {
+          "actionReason": {
+            "type": "string"
+          },
+          "actions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "address": {
+            "type": "string"
+          },
+          "fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "actions",
+          "address",
+          "fields",
+          "type"
+        ],
+        "type": "object"
+      },
+      "GateSubject": {
+        "properties": {
+          "digests": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "flags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "planDigest": {
+            "type": "string"
+          },
+          "planJsonDigest": {
+            "type": "string"
+          },
+          "resources": {
+            "items": {
+              "$ref": "#/components/schemas/GateResource"
+            },
+            "type": "array"
+          },
+          "summary": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GatePlanSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "targeted": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "variableSetDigest": {
+            "type": "string"
+          },
+          "versions": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateVersions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "workspace": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateWorkspace"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "digests",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "GateVersions": {
+        "properties": {
+          "providers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "terraform": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "providers",
+          "terraform"
+        ],
+        "type": "object"
+      },
+      "GateWorkspace": {
+        "properties": {
+          "backend": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "backend",
+          "key",
+          "name"
         ],
         "type": "object"
       },
@@ -1949,7 +2137,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "description": "gate.ChangeRequest (docs/gate.md): app, env, cluster, repo, pr, head, base, proposer, proposerKind, owner, protected, treeDigest, paths, linesChanged, objects, checks, policy, agent, definition; unknown fields are refused",
+                "description": "gate.ChangeRequest, schemas/change-request.schema.json (docs/gate.md): app, env, cluster, repo, pr, head, base, proposer, proposerKind, owner, protected, treeDigest, paths, linesChanged, objects, checks, policy, agent, definition, subject (a saved Terraform plan: kind terraform-plan, planDigest, planJsonDigest, workspace, versions, summary, targeted, variableSetDigest, resources); unknown fields are refused",
                 "type": "object"
               }
             }

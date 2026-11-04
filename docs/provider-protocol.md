@@ -171,8 +171,11 @@ For every change to a protected environment:
 
 1. **Register the change with its subject.** `POST /v1/clearances` with the change (`gate.ChangeRequest`,
    [docs/gate.md](gate.md)): app, env, cluster, repo, pr, head, proposer, owner, objects, paths, checks, and
-   `treeDigest`, the sha256 of the canonical rendered tree (for Terraform, the saved plan's digest, G-TF-1). That
-   digest is the subject the clearance binds to. Registration is idempotent by repo, PR and head; a new head on the
+   `treeDigest`, the manifest-tree digest of the rendered tree ([gate.md](gate.md#the-manifest-tree-digest-built)); for
+   Terraform, a `subject` of kind `terraform-plan` instead, whose `planDigest` (the saved plan file's sha256) becomes
+   the change's `tree_digest` ([gate.md](gate.md#the-terraform-plan-subject-g-tf-1)). That digest is the subject the
+   clearance binds to; a placeholder (64 copies of one digit, or sha256 of nothing) binds to nothing and is flagged
+   or refused. Registration is idempotent by repo, PR and head; a new head on the
    same PR supersedes the old one. The answer is the change as recorded: `id`, `tier`, `reasons`, `requirement`,
    `state`, `tree_digest`, `target`, `expires_at`.
 2. **Hold while `state` is `holding`.** Tiers 0 and 1 clear by policy at once; tier 2 waits for one person from the

@@ -35,7 +35,17 @@ type Config struct {
 	Models []string `json:"models"`
 	// ImageAllow are the runtime-image globs a definition release's runtime.image must match.
 	ImageAllow []string `json:"imageAllow"`
+	// UnboundTree is what a manifest-tree registration with a placeholder treeDigest gets (CLEARANCE_GATE_UNBOUND_TREE):
+	// "flag" (the default for one release, then planned to be refuse: registered, flagged tree:unbound, bound to its commit only) or "refuse"
+	// (DG-UNBOUND, 400).
+	UnboundTree string `json:"unboundTree"`
 }
+
+// Unbound-tree modes (Config.UnboundTree).
+const (
+	UnboundFlag   = "flag"
+	UnboundRefuse = "refuse"
+)
 
 // Owners says who owns an app (a group ref) when the check does not: on Hangar, the Backstage Component's
 // spec.owner. "" when unknown.
@@ -152,7 +162,7 @@ func (w *writer) record(principal string, via *string, tool string, c *Change, d
 		"ts": pycompat.ISO(w.now), "task_id": nil, "session": nil, "parent": nil, "principal": principal,
 		"agent": strOrNil(c.Agent), "tool": tool, "tier": nil, "decision": decision, "rule": strOrNil(rule),
 		"target": c.TargetOf(), "args_sha256": pycompat.ArgsDigest(args), "result": result, "app": c.App,
-		"boundary": "deployment", "change": c.Summary(),
+		"boundary": "deployment", "change": c.Summary(), "subject": c.recordSubject(),
 	})
 }
 
@@ -221,6 +231,10 @@ func (s *Service) Register(ctx context.Context, p authn.Principal, body any) (*C
 	req, err := ParseRequest(body)
 	if err != nil {
 		return nil, err
+	}
+	if s.Config.UnboundTree == UnboundRefuse && req.Kind() != KindTerraformPlan && Unbound(req.TreeDigest) {
+		return nil, gerr("DG-UNBOUND", "treeDigest is a placeholder, not the digest of the rendered tree",
+			"Send the manifest-tree digest of what will be applied (`clearance register` computes it; docs/gate.md, The manifest-tree digest).", 400)
 	}
 	if bound, ok := p.Claims["repository"].(string); ok {
 		// A workflow's OIDC token registers changes for its own repository only (`clearance register`).
