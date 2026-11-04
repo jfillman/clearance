@@ -91,7 +91,7 @@ is refused, and `per` is refused with any other `by`. The answer is the counts s
 
 `charged_tokens` is what the Autopilot gateway's model proxy charged the sessions' `model_tokens` budgets, so a
 task's sum is what its run tree spent of its budget. Items are ordered by `charged_tokens`, largest first, at most
-500. `tool=model.call` leaves the runs out; `per=session&task=<id>` is one task tree's runs.
+200 (`MaxLimit`). `tool=model.call` leaves the runs out; `per=session&task=<id>` is one task tree's runs.
 
 ### Differences from api.py on the ported routes
 
