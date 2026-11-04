@@ -35,6 +35,7 @@ type Store struct {
 	tokens  map[string]store.Token
 	keys    map[string]store.SigningKey
 	feeds   map[string]store.Feed
+	glass   map[string]store.Breakglass
 	closed  bool
 }
 
@@ -49,7 +50,7 @@ var ErrTxDone = errors.New("memory: transaction is finished")
 // New returns an empty store.
 func New() *Store {
 	return &Store{head: evidence.Start, changes: map[string]store.Change{}, tokens: map[string]store.Token{},
-		keys: map[string]store.SigningKey{}, feeds: map[string]store.Feed{}}
+		keys: map[string]store.SigningKey{}, feeds: map[string]store.Feed{}, glass: map[string]store.Breakglass{}}
 }
 
 // Load returns a store holding an existing chain, verified from genesis like store/pg's Open.
@@ -91,7 +92,7 @@ func (s *Store) Atomic(ctx context.Context, fn func(tx store.Tx) error) (err err
 		return ErrClosed
 	}
 	t := &tx{s: s, head: head, changes: map[string]store.Change{}, tokens: map[string]store.Token{},
-		feeds: map[string]store.Feed{}}
+		feeds: map[string]store.Feed{}, glass: map[string]store.Breakglass{}}
 	defer func() {
 		t.mu.Lock()
 		t.done = true
@@ -119,6 +120,9 @@ func (s *Store) Atomic(ctx context.Context, fn func(tx store.Tx) error) (err err
 	for c, f := range t.feeds {
 		s.feeds[c] = f
 	}
+	for id, b := range t.glass {
+		s.glass[id] = b
+	}
 	if t.keys != nil {
 		s.keys = t.keys
 	}
@@ -137,6 +141,7 @@ type tx struct {
 	tokens  map[string]store.Token
 	feeds   map[string]store.Feed
 	keys    map[string]store.SigningKey // nil: unchanged
+	glass   map[string]store.Breakglass
 }
 
 func (t *tx) lock() error {
@@ -252,6 +257,19 @@ func (t *tx) UseSigningKey(ctx context.Context, k store.SigningKey, now time.Tim
 	return nil
 }
 
+func (t *tx) PutBreakglass(ctx context.Context, b store.Breakglass) error {
+	if err := t.lock(); err != nil {
+		return err
+	}
+	defer t.mu.Unlock()
+	if b.ID == "" || !json.Valid(b.Record) {
+		return errors.New("memory: a break-glass window needs an id and a JSON record")
+	}
+	b.Record = bytes.Clone(b.Record)
+	t.glass[b.ID] = b
+	return nil
+}
+
 func (t *tx) PutFeed(ctx context.Context, f store.Feed) error {
 	if err := t.lock(); err != nil {
 		return err
@@ -298,6 +316,7 @@ type view struct {
 	tokens  map[string]store.Token
 	keys    map[string]store.SigningKey
 	feeds   map[string]store.Feed
+	glass   map[string]store.Breakglass
 }
 
 func (s *Store) view() (view, error) {
@@ -310,12 +329,16 @@ func (s *Store) view() (view, error) {
 	for k, v := range s.tokens {
 		tokens[k] = v
 	}
+	glass := make(map[string]store.Breakglass, len(s.glass))
+	for k, v := range s.glass {
+		glass[k] = v
+	}
 	feeds := make(map[string]store.Feed, len(s.feeds))
 	for k, v := range s.feeds {
 		feeds[k] = v
 	}
 	return view{head: s.head, records: s.records[:len(s.records):len(s.records)], changes: maps(s.changes), defs: s.defs,
-		tokens: tokens, keys: s.keys, feeds: feeds}, nil
+		tokens: tokens, keys: s.keys, feeds: feeds, glass: glass}, nil
 }
 
 func maps(m map[string]store.Change) map[string]store.Change {
@@ -348,6 +371,9 @@ func (t *tx) view() (view, error) {
 	}
 	for c, f := range t.feeds {
 		v.feeds[c] = f
+	}
+	for id, b := range t.glass {
+		v.glass[id] = b
 	}
 	if t.keys != nil {
 		v.keys = t.keys
@@ -804,5 +830,63 @@ func (v view) feedClusters() []string {
 		add(c)
 	}
 	sort.Strings(out)
+	return out
+}
+
+func (s *Store) Breakglass(ctx context.Context, id string) (store.Breakglass, error) {
+	v, err := s.view()
+	if err != nil {
+		return store.Breakglass{}, err
+	}
+	return v.breakglass(id)
+}
+
+func (t *tx) Breakglass(ctx context.Context, id string) (store.Breakglass, error) {
+	v, err := t.view()
+	if err != nil {
+		return store.Breakglass{}, err
+	}
+	return v.breakglass(id)
+}
+
+func (v view) breakglass(id string) (store.Breakglass, error) {
+	b, ok := v.glass[id]
+	if !ok {
+		return store.Breakglass{}, store.ErrNotFound
+	}
+	b.Record = bytes.Clone(b.Record)
+	return b, nil
+}
+
+func (s *Store) BreakglassOpen(ctx context.Context) ([]store.Breakglass, error) {
+	v, err := s.view()
+	if err != nil {
+		return nil, err
+	}
+	return v.breakglassOpen(), nil
+}
+
+func (t *tx) BreakglassOpen(ctx context.Context) ([]store.Breakglass, error) {
+	v, err := t.view()
+	if err != nil {
+		return nil, err
+	}
+	return v.breakglassOpen(), nil
+}
+
+func (v view) breakglassOpen() []store.Breakglass {
+	out := []store.Breakglass{}
+	for _, b := range v.glass {
+		if b.State == "open" {
+			b.Record = bytes.Clone(b.Record)
+			out = append(out, b)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].ExpiresAt.Equal(out[j].ExpiresAt) {
+			return out[i].ExpiresAt.Before(out[j].ExpiresAt)
+		}
+		return out[i].ID < out[j].ID
+	})
 	return out
 }

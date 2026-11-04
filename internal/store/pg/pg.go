@@ -34,9 +34,10 @@ import (
 )
 
 // Schema is pg.py's SCHEMA for the core's tables, verbatim, plus the Go core's own (clearance_tokens and
-// clearance_signing_keys, C-1; clearance_feeds and the App installations' index, C-10; clearance_evidence_cost, A-4:
-// the records clearance-api's counts by=cost sums, model-call outcomes with usage and run.finish with cost):
-// CREATE ... IF NOT EXISTS only, so migrate never alters or drops what is there.
+// clearance_signing_keys, C-1; clearance_feeds and the App installations' index, C-10; clearance_breakglass and the
+// exceptions index behind clearance-api's GET /v1/exceptions, C-6; clearance_evidence_cost, A-4: the records
+// clearance-api's counts by=cost sums, model-call outcomes with usage and run.finish with cost): CREATE ... IF NOT
+// EXISTS only, so migrate never alters or drops what is there.
 const Schema = `
 CREATE TABLE IF NOT EXISTS clearance_evidence (
   seq        bigint PRIMARY KEY,
@@ -103,6 +104,19 @@ CREATE TABLE IF NOT EXISTS clearance_feeds (
 );
 CREATE INDEX IF NOT EXISTS clearance_evidence_app ON clearance_evidence ((record->>'principal'), seq)
   WHERE record->>'principal' LIKE 'app:%';
+CREATE TABLE IF NOT EXISTS clearance_breakglass (
+  id         text        PRIMARY KEY,
+  cluster    text        NOT NULL,
+  env        text        NOT NULL,
+  state      text        NOT NULL CHECK (state IN ('open', 'closed')),
+  expires_at timestamptz NOT NULL,
+  record     jsonb       NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS clearance_breakglass_open ON clearance_breakglass (expires_at) WHERE state = 'open';
+CREATE INDEX IF NOT EXISTS clearance_evidence_exceptions ON clearance_evidence (seq)
+  WHERE record->>'tool' IN ('deploy.exception', 'deploy.degraded', 'breakglass.open', 'breakglass.close')
+     OR record->>'coverage' = 'coverage-unavailable';
 `
 
 // Options tune a store; the zero value is the defaults.
@@ -539,6 +553,23 @@ func (t *tx) PutToken(ctx context.Context, tk store.Token) error {
 		tk.ChangeID, tk.Cluster, tk.Nonce, tk.KeyID, tk.IssuedAt, tk.ExpiresAt, tk.RevokedAt, string(tk.Envelope), tk.JWT)
 	if err != nil {
 		return fmt.Errorf("pg: put token: %w", err)
+	}
+	return nil
+}
+
+func (t *tx) PutBreakglass(ctx context.Context, b store.Breakglass) error {
+	if err := t.lock(); err != nil {
+		return err
+	}
+	defer t.mu.Unlock()
+	ctx, cancel := deadline(ctx, t.s.opt)
+	defer cancel()
+	_, err := t.tx.Exec(ctx, "INSERT INTO clearance_breakglass (id, cluster, env, state, expires_at, record) "+
+		"VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, "+
+		"expires_at = EXCLUDED.expires_at, record = EXCLUDED.record, updated_at = now()",
+		b.ID, b.Cluster, b.Env, b.State, b.ExpiresAt, string(b.Record))
+	if err != nil {
+		return fmt.Errorf("pg: put break-glass window: %w", err)
 	}
 	return nil
 }
@@ -1088,4 +1119,66 @@ func definitions(ctx context.Context, q querier, opt Options) ([]store.Definitio
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+// BreakglassCols are clearance_breakglass's columns, in Breakglass's order.
+const BreakglassCols = "id, cluster, env, state, expires_at, record::text"
+
+func breakglassRows(ctx context.Context, q querier, opt Options, where string, args ...any) ([]store.Breakglass, error) {
+	ctx, cancel := deadline(ctx, opt)
+	defer cancel()
+	rows, err := q.Query(ctx, "SELECT "+BreakglassCols+" FROM clearance_breakglass WHERE "+where+
+		` ORDER BY expires_at, id COLLATE "C"`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("pg: %w", err)
+	}
+	defer rows.Close()
+	out := []store.Breakglass{}
+	for rows.Next() {
+		var b store.Breakglass
+		var rec string
+		if err := rows.Scan(&b.ID, &b.Cluster, &b.Env, &b.State, &b.ExpiresAt, &rec); err != nil {
+			return nil, fmt.Errorf("pg: %w", err)
+		}
+		b.ExpiresAt, b.Record = b.ExpiresAt.UTC(), []byte(rec)
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+func breakglassOne(ctx context.Context, q querier, opt Options, id string) (store.Breakglass, error) {
+	bs, err := breakglassRows(ctx, q, opt, "id = $1", id)
+	if err != nil {
+		return store.Breakglass{}, err
+	}
+	if len(bs) == 0 {
+		return store.Breakglass{}, store.ErrNotFound
+	}
+	return bs[0], nil
+}
+
+func (r *Reader) Breakglass(ctx context.Context, id string) (store.Breakglass, error) {
+	return breakglassOne(ctx, r.pool, r.opt, id)
+}
+
+func (r *Reader) BreakglassOpen(ctx context.Context) ([]store.Breakglass, error) {
+	return breakglassRows(ctx, r.pool, r.opt, "state = 'open'")
+}
+
+func (t *tx) Breakglass(ctx context.Context, id string) (store.Breakglass, error) {
+	q, done, err := t.q()
+	if err != nil {
+		return store.Breakglass{}, err
+	}
+	defer done()
+	return breakglassOne(ctx, q, t.s.opt, id)
+}
+
+func (t *tx) BreakglassOpen(ctx context.Context) ([]store.Breakglass, error) {
+	q, done, err := t.q()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	return breakglassRows(ctx, q, t.s.opt, "state = 'open'")
 }

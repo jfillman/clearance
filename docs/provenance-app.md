@@ -167,7 +167,7 @@ receipts reads, and `GET /v1/github/installations` for an operator page ([cleara
 - **The match**: the deployment gate's change for the deploying repository, the deployed commit and the environment
   (the GitHub environment's name, lowercased, equals the change's `env`). A change may now have `pr: 0` (a pushed
   commit, no pull request).
-- **The answer**: cleared, **approved**; denied, expired or superseded, **rejected**; no change at all, **rejected**
+- **The answer**: cleared, **approved**; denied, expired, superseded, degraded or exception, **rejected**; no change at all, **rejected**
   (`DG-UNREGISTERED`), so a protected environment never deploys an unregistered commit; holding, the deployment
   **waits**, with a status report on the run naming who must clear it, and is answered the moment people clear or deny
   it, or it expires (`Gateway.deployment_listeners` pokes the App's worker).

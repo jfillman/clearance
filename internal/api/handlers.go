@@ -22,7 +22,7 @@ import (
 var (
 	CountBy       = []string{"rule", "tool", "agent", "app", "decision"}
 	ChangeCountBy = []string{"state", "tier", "app", "env", "cleared_by"}
-	ChangeStates  = []string{"holding", "cleared", "denied", "expired", "superseded"}
+	ChangeStates  = gate.States
 	outcomeModes  = []string{OutcomesInclude, OutcomesExclude, OutcomesOnly}
 	// CostPer are what counts by=cost groups by; costField the record field of each.
 	CostPer   = []string{"task", "session", "agent", "principal"}
@@ -98,12 +98,47 @@ func evidenceFilter(q map[string]string, outcomesDefault string) (EvidenceFilter
 
 func (s *Server) listEvidence(w http.ResponseWriter, r *http.Request, v *Viewer) {
 	q := query(r)
-	limit, aerr := limitOf(q)
+	f, aerr := evidenceFilter(q, OutcomesInclude)
 	if aerr != nil {
 		aerr.write(w)
 		return
 	}
-	f, aerr := evidenceFilter(q, OutcomesInclude)
+	s.evidencePage(w, r, v, q, f)
+}
+
+// ExceptionTools are the records GET /v1/exceptions lists beside every coverage-unavailable record
+// (gate.ExceptionTools; the pg predicate and its index name the same four).
+var ExceptionTools = gate.ExceptionTools()
+
+// listExceptions is GET /v1/exceptions: what the packet's exceptions section lists (C-4, C-5 read it): every
+// deploy.exception (out-of-band, drift, untraced-apply, digest-mismatch), every provider's degraded-mode report
+// (deploy.degraded), every break-glass window opened and closed, and every runtime read allowed while the core was
+// unreachable (tool.call, coverage-unavailable). Newest first, the cursor is seq, scoped like the evidence list.
+func (s *Server) listExceptions(w http.ResponseWriter, r *http.Request, v *Viewer) {
+	q := query(r)
+	f, aerr := evidenceFilter(map[string]string{"app": q["app"], "tool": q["tool"], "since": q["since"],
+		"until": q["until"]}, OutcomesInclude)
+	if aerr != nil {
+		aerr.write(w)
+		return
+	}
+	if f.Tool != "" && !in(ExceptionTools, f.Tool) && f.Tool != "tool.call" {
+		writeError(w, 400, "tool is one of "+strings.Join(append(append([]string{}, ExceptionTools...), "tool.call"), ", "))
+		return
+	}
+	if k := q["kind"]; k != "" {
+		if !in(gate.ExceptionKinds, k) {
+			writeError(w, 400, "kind is one of "+strings.Join(gate.ExceptionKinds, ", "))
+			return
+		}
+		f.Kind = k
+	}
+	f.Exceptions = true
+	s.evidencePage(w, r, v, q, f)
+}
+
+func (s *Server) evidencePage(w http.ResponseWriter, r *http.Request, v *Viewer, q map[string]string, f EvidenceFilter) {
+	limit, aerr := limitOf(q)
 	if aerr != nil {
 		aerr.write(w)
 		return

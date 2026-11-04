@@ -35,6 +35,12 @@ type Config struct {
 	Models []string `json:"models"`
 	// ImageAllow are the runtime-image globs a definition release's runtime.image must match.
 	ImageAllow []string `json:"imageAllow"`
+	// Protected are the environments the gate protects, "<cluster glob>/<env glob>" (CLEARANCE_PROTECTED_ENVIRONMENTS,
+	// ParseProtected). Empty: every environment is protected (fail closed). A change elsewhere is cleared at tier 0,
+	// reason unprotected.
+	Protected []string `json:"protected"`
+	// BreakglassMaxTTL caps a break-glass window (CLEARANCE_BREAKGLASS_MAX_TTL; 0 is MaxBreakglassTTL, never more).
+	BreakglassMaxTTL time.Duration `json:"breakglassMaxTTL"`
 	// UnboundTree is what a manifest-tree registration with a placeholder treeDigest gets (CLEARANCE_GATE_UNBOUND_TREE):
 	// "flag" (the default for one release, then planned to be refuse: registered, flagged tree:unbound, bound to its commit only) or "refuse"
 	// (DG-UNBOUND, 400).
@@ -250,6 +256,12 @@ func (s *Service) Register(ctx context.Context, p authn.Principal, body any) (*C
 	if err != nil {
 		return nil, err
 	}
+	if !req.Protected {
+		// Clearance decides protection from its own list (Config.Protected); a caller cannot opt a change out.
+		return nil, gerr("DG-PROTECTED", "protected: false is refused: Clearance decides which environments it protects",
+			"Drop the field; a change to an environment the deployment does not protect is cleared at tier 0 (unprotected).", 400)
+	}
+	req.Protected = s.Protects(req.Cluster, req.Env)
 	if s.Config.UnboundTree == UnboundRefuse && req.Kind() != KindTerraformPlan && Unbound(req.TreeDigest) {
 		return nil, gerr("DG-UNBOUND", "treeDigest is a placeholder, not the digest of the rendered tree",
 			"Send the manifest-tree digest of what will be applied (`clearance register` computes it; docs/gate.md, The manifest-tree digest).", 400)
@@ -276,24 +288,34 @@ func (s *Service) Register(ctx context.Context, p authn.Principal, body any) (*C
 		if err != nil {
 			return err
 		}
-		if existing != nil && existing.State != "holding" {
+		if existing != nil && existing.State != StateHolding {
 			out = existing
 			return nil
 		}
-		var problems []review.Problem
-		if req.Definition != nil {
-			problems = s.definitionProblems(req)
+		var c Classification
+		var cerr error
+		if !req.Protected {
+			c = unprotected(req, s.Policy)
+		} else {
+			var problems []review.Problem
+			if req.Definition != nil {
+				problems = s.definitionProblems(req)
+			}
+			c, cerr = Classify(req, s.Policy, s.Tools, problems)
 		}
-		c, cerr := Classify(req, s.Policy, s.Tools, problems)
 		var ge *Error
 		if errors.As(cerr, &ge) {
 			// A clearance.yaml that loosens the baseline: the change is denied, not the file ignored.
 			ch := existing
 			if ch == nil {
 				ch = Open(req, Classification{3, []Reason{{"clearance.yaml", "policy:loosens", 3}}, "deny", &ge.Rule, ge.Message, nil, s.Policy}, w.now, p.ID)
+				ch.State = ""
+				w.opened(ch, StateDenied)
+			} else {
+				w.move(ch, StateDenied, "", nil)
 			}
 			now := PyTime{w.now}
-			ch.State, ch.DenyReason, ch.DeniedBy, ch.DecidedAt, ch.UpdatedAt = "denied", strp(ge.Message), strp("policy"), &now, now
+			ch.DenyReason, ch.DeniedBy, ch.DecidedAt, ch.UpdatedAt = strp(ge.Message), strp("policy"), &now, now
 			w.put(ch)
 			if existing == nil {
 				w.record(p.ID, nil, "deploy.request", ch, "allow", nil, fmt.Sprintf("tier %d: denied (%s)", ch.Tier, ge.Rule), body)
@@ -305,6 +327,7 @@ func (s *Service) Register(ctx context.Context, p authn.Principal, body any) (*C
 			return cerr
 		}
 		now := PyTime{w.now}
+		to := map[string]string{"deny": StateDenied, "clear": StateCleared, "hold": StateHolding}[c.Decision]
 		var ch *Change
 		if existing == nil {
 			olds, err := loadAll(tx.ChangesForPR(ctx, req.Repo, int(req.PR)))
@@ -312,34 +335,41 @@ func (s *Service) Register(ctx context.Context, p authn.Principal, body any) (*C
 				return err
 			}
 			for _, old := range olds {
-				if old.State == "holding" && old.Head != req.Head {
-					old.State, old.SupersededBy, old.DecidedAt, old.UpdatedAt = "superseded", strp(req.Head), &now, now
-					w.settle(old)
-					w.put(old)
-					w.record("policy", nil, "deploy.expire", old, "allow", nil, "superseded by "+pycompat.Truncate(req.Head, 7), map[string]any{"by": req.Head})
+				// A new head supersedes the heads still holding, and takes the clearance (and the token) of a
+				// cleared older head: on the same pull request, or, for a pushed commit (pr 0), for the same app,
+				// environment and cluster.
+				if old.Head == req.Head || !(req.PR != 0 || (old.App == req.App && old.Env == req.Env && old.Cluster == req.Cluster)) {
+					continue
 				}
-				// A new head invalidates the token of a cleared older head: on the same pull request, or, for a
-				// pushed commit (pr 0), for the same app, environment and cluster.
-				if old.State == "cleared" && old.Head != req.Head &&
-					(req.PR != 0 || (old.App == req.App && old.Env == req.Env && old.Cluster == req.Cluster)) {
-					w.revoke(old, req.Head)
+				if old.State != StateHolding && old.State != StateCleared {
+					continue
 				}
+				w.move(old, StateSuperseded, "superseded by "+pycompat.Truncate(req.Head, 7), map[string]any{"by": req.Head})
+				old.SupersededBy, old.DecidedAt, old.UpdatedAt = strp(req.Head), &now, now
+				w.settle(old)
+				w.put(old)
+				w.record("policy", nil, "deploy.expire", old, "allow", nil, "superseded by "+pycompat.Truncate(req.Head, 7), map[string]any{"by": req.Head})
 			}
 			ch = Open(req, c, w.now, p.ID)
+			ch.State = ""
+			w.opened(ch, to)
 			w.record(p.ID, nil, "deploy.request", ch, "allow", nil, c.Why, body)
 		} else {
 			ch = existing
 			ch.Checks, ch.Tier, ch.Reasons, ch.UpdatedAt = copyChecks(req.Checks), c.Tier, append([]Reason(nil), c.Reasons...), now
-			ch.Requirement = c.Requirement
+			ch.Requirement, ch.Protected, ch.Outage = c.Requirement, req.Protected, c.Policy.OutageFor(c.Tier)
 			ch.Admission = copyAdmission(req.Admission)
 			ch.PolicyRef, ch.PolicyVersion, ch.RepoPolicyDigest = policyRefOf(req), c.Policy.Version, c.Policy.RepoPolicyDigest
+			if to != StateHolding {
+				w.move(ch, to, "", nil)
+			}
 		}
 		switch c.Decision {
 		case "deny":
-			ch.State, ch.DenyReason, ch.DeniedBy, ch.DecidedAt = "denied", strp(c.Why), strp("policy"), &now
+			ch.DenyReason, ch.DeniedBy, ch.DecidedAt = strp(c.Why), strp("policy"), &now
 			w.record("policy", nil, "deploy.deny", ch, "deny", c.Rule, c.Why, map[string]any{"rule": strOrNil(c.Rule)})
 		case "clear":
-			ch.State, ch.ClearedBy, ch.DecidedAt = "cleared", strp("policy"), &now
+			ch.ClearedBy, ch.DecidedAt = strp("policy"), &now
 			nonce, err := w.issue(ch, "")
 			if err != nil {
 				return err
@@ -452,7 +482,7 @@ func (s *Service) Clear(ctx context.Context, p authn.Principal, changeID, onBeha
 		if err != nil {
 			return err
 		}
-		if c.State == "holding" && !w.now.Before(c.ExpiresAt.Time) {
+		if c.State == StateHolding && !w.now.Before(c.ExpiresAt.Time) {
 			s.expire(w, c)
 			return gerr("DG-STATE", "this change has expired; a new push registers it again", "", 409)
 		}
@@ -467,7 +497,8 @@ func (s *Service) Clear(ctx context.Context, p authn.Principal, changeID, onBeha
 		done := req != nil && req.Satisfied(c.Approvals)
 		nonce := ""
 		if done {
-			c.State, c.ClearedBy, c.DecidedAt = "cleared", strp("people"), &now
+			w.move(c, StateCleared, "", nil)
+			c.ClearedBy, c.DecidedAt = strp("people"), &now
 			w.settle(c)
 			if nonce, err = w.issue(c, ""); err != nil {
 				return err
@@ -509,7 +540,7 @@ func (s *Service) Deny(ctx context.Context, p authn.Principal, changeID string, 
 		if err != nil {
 			return err
 		}
-		if c.State != "holding" {
+		if c.State != StateHolding {
 			return gerr("DG-STATE", "this change is "+c.State, "", 409)
 		}
 		req := c.RequirementObj()
@@ -524,7 +555,8 @@ func (s *Service) Deny(ctx context.Context, p authn.Principal, changeID string, 
 			return gerr("DG-FORBIDDEN", person+" may not decide this change", "Only the owner group, the outside group or a platform admin may.", 403)
 		}
 		now := PyTime{w.now}
-		c.State, c.DenyReason, c.DeniedBy, c.DecidedAt, c.UpdatedAt = "denied", &text, &person, &now, now
+		w.move(c, StateDenied, "", nil)
+		c.DenyReason, c.DeniedBy, c.DecidedAt, c.UpdatedAt = &text, &person, &now, now
 		w.settle(c)
 		w.put(c)
 		rec := w.record(person, via, "deploy.deny", c, "deny", strp("DG-DENIED"), text, map[string]any{"reason": text})
@@ -536,7 +568,8 @@ func (s *Service) Deny(ctx context.Context, p authn.Principal, changeID string, 
 
 func (s *Service) expire(w *writer, c *Change) {
 	now := PyTime{w.now}
-	c.State, c.DecidedAt, c.UpdatedAt = "expired", &now, now
+	w.move(c, StateExpired, "", nil)
+	c.DecidedAt, c.UpdatedAt = &now, now
 	w.settle(c)
 	w.put(c)
 	w.record("policy", nil, "deploy.expire", c, "allow", nil, fmt.Sprintf("not cleared within %d days", s.Policy.TTLDays),
@@ -556,7 +589,7 @@ func (s *Service) Expire(ctx context.Context) ([]string, error) {
 			return err
 		}
 		for _, c := range hold {
-			if c.State == "holding" && !w.now.Before(c.ExpiresAt.Time) {
+			if c.State == StateHolding && !w.now.Before(c.ExpiresAt.Time) {
 				s.expire(w, c)
 				done = append(done, c.ID)
 			}

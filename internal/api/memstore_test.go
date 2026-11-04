@@ -122,6 +122,19 @@ func (m *memStore) matches(r Record, f EvidenceFilter) bool {
 	if f.Until != "" && ts >= f.Until {
 		return false
 	}
+	if f.Exceptions {
+		tool, _ := str(r["tool"])
+		cov, _ := str(r["coverage"])
+		if !in(ExceptionTools, tool) && cov != "coverage-unavailable" {
+			return false
+		}
+	}
+	if f.Kind != "" {
+		x, _ := r["exception"].(map[string]any)
+		if k, _ := x["kind"].(string); k != f.Kind {
+			return false
+		}
+	}
 	_, isOutcome := r["outcome_of"]
 	switch f.Outcomes {
 	case OutcomesExclude:

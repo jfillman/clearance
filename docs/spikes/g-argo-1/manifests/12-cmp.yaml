@@ -1,0 +1,13 @@
+# The spike plugin's config, mounted into the repo-server's sidecar.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: clearance-spike-cmp, namespace: clearance-spike-argo}
+data:
+  plugin.yaml: |
+    apiVersion: argoproj.io/v1alpha1
+    kind: ConfigManagementPlugin
+    metadata:
+      name: clearance-spike
+    spec:
+      generate:
+        command: [/cmp-bin/clearance-cmp-spike]

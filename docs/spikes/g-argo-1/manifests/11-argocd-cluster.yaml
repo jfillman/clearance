@@ -1,0 +1,50 @@
+# The scratch Argo CD's one destination: the in-cluster API, limited to the two spike namespaces. It carries no
+# credential (the controller uses its own service account), so it is a registration, not a secret value.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: spike-in-cluster
+  namespace: clearance-spike-argo
+  labels: {argocd.argoproj.io/secret-type: cluster}
+stringData:
+  name: in-cluster
+  server: https://kubernetes.default.svc
+  namespaces: clearance-spike-argo,clearance-spike-prot
+---
+# The controller may manage the protected scratch namespace (and nothing else outside its own).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: spike-argocd-controller, namespace: clearance-spike-prot}
+rules:
+  - {apiGroups: ["*"], resources: ["*"], verbs: ["*"]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: spike-argocd-controller, namespace: clearance-spike-prot}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: spike-argocd-controller}
+subjects:
+  - {kind: ServiceAccount, name: argocd-application-controller, namespace: clearance-spike-argo}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata: {name: spike, namespace: clearance-spike-argo}
+spec:
+  sourceRepos: ["https://github.com/jfillman/airframe.git", "https://github.com/jfillman/clearance.git"]
+  destinations:
+    - {server: https://kubernetes.default.svc, namespace: clearance-spike-prot}
+    - {server: https://kubernetes.default.svc, namespace: clearance-spike-argo}
+  namespaceResourceWhitelist: [{group: "*", kind: "*"}]
+---
+# ...and the kinds it caches in its own namespace (the upstream namespaced Role covers only a few).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: spike-argocd-controller-own, namespace: clearance-spike-argo}
+rules:
+  - {apiGroups: ["", "apps", "batch", "networking.k8s.io"], resources: [configmaps, serviceaccounts, services, deployments, replicasets, pods, jobs, networkpolicies], verbs: ["*"]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: spike-argocd-controller-own, namespace: clearance-spike-argo}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: spike-argocd-controller-own}
+subjects:
+  - {kind: ServiceAccount, name: argocd-application-controller, namespace: clearance-spike-argo}
