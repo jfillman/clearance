@@ -48,6 +48,7 @@ func Run(t *testing.T, open Opener) {
 		{"Tokens", testTokens},
 		{"SigningKeys", testSigningKeys},
 		{"Feeds", testFeeds},
+		{"Breakglass", testBreakglass},
 		{"Concurrent", testConcurrent},
 		{"CancelledContext", testCancelled},
 		{"PythonChainExtended", testPythonChainExtended},
@@ -762,5 +763,68 @@ func testFeeds(t *testing.T, open Opener) {
 	cs, err := s.FeedClusters(bg)
 	if err != nil || strings.Join(cs, ",") != "prod-1,prod-2,prod-3" {
 		t.Fatalf("FeedClusters = %v, %v", cs, err)
+	}
+}
+
+func testBreakglass(t *testing.T, open Opener) {
+	s := open(t, nil)
+	t0 := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	win := func(id, state string, exp time.Duration) store.Breakglass {
+		return store.Breakglass{ID: id, Cluster: "prod-1", Env: "prod", State: state, ExpiresAt: t0.Add(exp),
+			Record: json.RawMessage(`{"id":"` + id + `"}`)}
+	}
+	put := func(bs ...store.Breakglass) {
+		t.Helper()
+		if err := s.Atomic(bg, func(tx store.Tx) error {
+			for _, b := range bs {
+				if err := tx.PutBreakglass(bg, b); err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	names := func(bs []store.Breakglass, err error) string {
+		if err != nil {
+			return err.Error()
+		}
+		out := ""
+		for _, b := range bs {
+			out += b.ID + " "
+		}
+		return out
+	}
+	put(win("bg-2", "open", 2*time.Hour), win("bg-1", "open", time.Hour), win("bg-0", "closed", 0))
+	if got := names(s.BreakglassOpen(bg)); got != "bg-1 bg-2 " {
+		t.Fatalf("open = %q", got)
+	}
+	got, err := s.Breakglass(bg, "bg-0")
+	if err != nil || got.State != "closed" || got.Cluster != "prod-1" || !got.ExpiresAt.Equal(t0) || !json.Valid(got.Record) {
+		t.Fatalf("Breakglass = %+v %v", got, err)
+	}
+	if _, err := s.Breakglass(bg, "nope"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal(err)
+	}
+	// closing is an upsert; a rolled-back close leaves the window open
+	boom := errors.New("boom")
+	if err := s.Atomic(bg, func(tx store.Tx) error {
+		if err := tx.PutBreakglass(bg, win("bg-1", "closed", time.Hour)); err != nil {
+			return err
+		}
+		if in := names(tx.BreakglassOpen(bg)); in != "bg-2 " {
+			t.Errorf("a transaction does not see its own close: %q", in)
+		}
+		return boom
+	}); !errors.Is(err, boom) {
+		t.Fatal(err)
+	}
+	if got := names(s.BreakglassOpen(bg)); got != "bg-1 bg-2 " {
+		t.Fatalf("rollback: %q", got)
+	}
+	put(win("bg-1", "closed", time.Hour))
+	if got := names(s.BreakglassOpen(bg)); got != "bg-2 " {
+		t.Fatalf("after close: %q", got)
 	}
 }

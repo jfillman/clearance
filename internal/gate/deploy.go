@@ -90,7 +90,7 @@ func (s *Service) DeploymentRequested(ctx context.Context, installation, repo, h
 // approverFields are who cleared c, on a record the GitHub App writes as itself (app:<installation>): the people,
 // or cleared_by "policy". Nothing for a change that is not cleared.
 func approverFields(c *Change) map[string]any {
-	if c.State != "cleared" {
+	if c.State != StateCleared {
 		return nil
 	}
 	return clearedFields(c, "")
@@ -117,6 +117,14 @@ func (s *Service) deploymentComment(c *Change, answer *string) string {
 				sup = *c.SupersededBy
 			}
 			why = fmt.Sprintf("a newer commit (%s) replaced it", pycompat.Truncate(sup, 7))
+		case StateDegraded:
+			why = "it landed while Clearance was unreachable, before it was cleared"
+		case StateException:
+			kind := "an exception"
+			if c.Ended != nil && c.Ended.Kind != "" {
+				kind = "an exception (" + c.Ended.Kind + ")"
+			}
+			why = kind + " was recorded against it"
 		default:
 			why = c.State
 		}

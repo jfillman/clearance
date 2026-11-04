@@ -328,6 +328,37 @@ func TestReceiptsUseTheIndex(t *testing.T) {
 	}
 }
 
+// TestExceptionsUseTheIndex: clearance-api's GET /v1/exceptions (api.PG.Evidence with Exceptions) reads the
+// clearance_evidence_exceptions partial index, whose predicate it repeats word for word.
+func TestExceptionsUseTheIndex(t *testing.T) {
+	dsn := newDB(t)
+	s := open(t, dsn)
+	appendN(t, s, 1)
+	conn, err := pgx.Connect(bg, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(bg)
+	if _, err := conn.Exec(bg, "SET enable_seqscan = off"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := conn.Query(bg, "EXPLAIN SELECT e.record::text FROM clearance_evidence e WHERE "+
+		"(e.record->>'tool' IN ('deploy.exception', 'deploy.degraded', 'breakglass.open', 'breakglass.close') "+
+		"OR e.record->>'coverage' = 'coverage-unavailable') AND e.seq < $1 ORDER BY e.seq DESC LIMIT $2", 100, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plan strings.Builder
+	for rows.Next() {
+		var l string
+		_ = rows.Scan(&l)
+		plan.WriteString(l + "\n")
+	}
+	if !strings.Contains(plan.String(), "clearance_evidence_exceptions") {
+		t.Fatalf("the exceptions list does not use the index:\n%s", plan.String())
+	}
+}
+
 func BenchmarkAppend(b *testing.B) {
 	admin := os.Getenv("CLEARANCE_TEST_DSN")
 	if admin == "" {

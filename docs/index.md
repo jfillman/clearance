@@ -29,7 +29,8 @@ Clearance is one Go module and one binary, `clearance` ([core.md](core.md)); han
 - **Evidence** (`internal/evidence`, `internal/store`): one hash-chained record per decision in the
   clearance.evidence/v1 shape ([evidence.md](evidence.md)); Postgres with one writer.
 - **The deployment gate** (`internal/gate`, `clearance register`): changes to protected environments, tiered and
-  cleared; definition releases reviewed through the same gate.
+  cleared; definition releases reviewed through the same gate; protected environments, the outage policy, the
+  state machine, exceptions and break-glass (C-6).
 - **The GitHub App** (`internal/githubapp`, `internal/provenance`): check runs on PRs and the deployment protection rule.
 - **The read API** (`clearance api`, `internal/api`, `contract/clearance-api.json`): clearance-api, a separate
   read-only process: evidence, counts, PR receipts and verdicts, clearances, the policy and its explainer,

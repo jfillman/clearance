@@ -573,6 +573,186 @@ Not yet: admission on the grant (G-ARGO-2), the CMP that registers the whole ren
 marked (G-ARGO-4; today `objects` lists the objects the change touches, each `changed: true`), the PreSync wait
 (G-ARGO-5), and the Terraform plan subject (G-TF-1, which adds `subjects.plan_digest`).
 
+## Protected environments, the outage policy, states, exceptions and break-glass (C-6, Built)
+
+C-6 makes the gate's edges explicit: which environments it protects, what a provider does when it cannot reach the
+core, every state a change can be in, the records a provider files when something lands outside a clearance, and a
+recorded break-glass path. Everything here is in the core (`internal/gate`: `protected.go`, `outage.go`,
+`states.go`, `exception.go`, `breakglass.go`) and clearance-api; the providers that act on it are G-ARGO and G-TF.
+
+### What you get
+
+- **Protection is Clearance's decision.** The deployment lists the environments it protects; a caller cannot opt a
+  change out (`protected: false` is refused, `DG-PROTECTED`). A change elsewhere is cleared at tier 0 with the reason
+  `unprotected`, and recorded like any other.
+- **Fail closed when unconfigured.** An empty list protects every environment.
+- **An outage policy per tier**, tighten-only per repo: tiers 0 and 1 allow-and-record, 2 and 3 hold.
+- **One state machine** with every edge listed and tested; a token is live only while its change is cleared, and
+  every edge out of cleared revokes it in the same transaction.
+- **Exceptions as first-class records** (`deploy.exception`, four kinds) and **degraded-mode reports**
+  (`deploy.degraded`), both acting on the change they name, and both in the packet's exceptions
+  (clearance-api `GET /v1/exceptions`).
+- **Break-glass for admins only**, bounded (at most 4h), recorded before any effect, reconciled when it ends.
+
+### Protected environments
+
+`CLEARANCE_PROTECTED_ENVIRONMENTS` (chart `gate.protectedEnvironments`) is a comma-separated list of
+`<cluster glob>/<env glob>` entries (fnmatch: `prod-*/*`, `*/prod`, `hangar-prod/*`).
+
+| Configured | A change to `cluster/env` |
+| --- | --- |
+| **Empty (the default)** | **Every environment is protected.** A deployment that has not said which environments it protects fails closed: everything is tiered and held as before. |
+| Listed and matching | Protected: tiered by the baseline and the repo's `clearance.yaml`, held or cleared as before. `protected: true` in the view. |
+| Listed, not matching | **Cleared at tier 0**, one reason `{subject: "<cluster>/<env>", rule: "unprotected", tier: 0}`, `cleared_by: policy`, `protected: false`, a token issued, and recorded (`deploy.request`, `deploy.clear` "tier 0: cleared (<cluster>/<env> is not a protected environment)"). |
+
+The caller's `protected` field: `true` (what Glidepath's clearance-gate task sends) or absent is accepted and decides
+nothing; `false` is refused 400 `DG-PROTECTED`, so a caller cannot unprotect a change and nobody reads a stored
+`protected: false` as the caller's say-so. The user's decision of 2026-11-03 left ignore-or-refuse to this
+package; refusing was chosen because no caller sends `false` today (Glidepath sends `true`), so it breaks nothing and
+makes a caller that tries visible.
+
+### The outage policy
+
+What a deployment-gate provider does with a change while it cannot reach the core:
+
+| Tier | Platform baseline | `clearance.yaml` `outage:` may set |
+| --- | --- | --- |
+| 0 | `allow-and-record` | `hold` |
+| 1 | `allow-and-record` | `hold` |
+| 2 | `hold` | `hold` only |
+| 3 | `hold` | `hold` only |
+
+`allow-and-record`: the provider lets the change through and keeps what it did; once the core answers it posts a
+`deploy.degraded` record (below). `hold`: nothing lands until the core is back. A tier the provider cannot know (it
+never reached the core to classify the change) is held. The block is tighten-only like the rest of `clearance.yaml`:
+`outage: {"1": "hold"}` is accepted, `outage: {"2": "allow-and-record"}` is `DG-POLICY`. The baseline is in
+`GET /v1/clearance-policy` (`outage`), and each change carries its own action (`outage`, its tier under its
+effective policy) so a provider that cached the change knows what to do with it.
+
+This is the deployment boundary's outage policy. The runtime gateway's (R-3: fail closed, T0 reads only with
+`GATEWAY_OUTAGE_ALLOW_READS`, replayed as `tool.call` `coverage-unavailable`) is unchanged.
+
+### The state machine
+
+| From | To | What moves it | Token |
+| --- | --- | --- | --- |
+| (new) | `holding` | register: tier 2 or 3, or tier 1 waiting on its checks | none |
+| (new) | `cleared` | register: tier 0 or 1 cleared by policy, or an unprotected environment | issued |
+| (new) | `denied` | register: denied by policy (`DG-PROVENANCE`, `DG-POLICY`, `DG-DEFINITION`) | none |
+| `holding` | `cleared` | the requirement is met by people, or a re-registration clears by policy | issued |
+| `holding` | `denied` | a person or an admin denies it, or a re-registration denies by policy | none |
+| `holding` | `expired` | its TTL passes | none |
+| `holding` | `superseded` | a new head registers (same PR; for a push, same app, env and cluster) | none |
+| `holding` | `degraded` | a provider reports it let the change land during an outage (`deploy.degraded`, `allow`) | none |
+| `holding` | `exception` | a `deploy.exception` names it | none |
+| `cleared` | `superseded` | a new head registers | **revoked** (`deploy.revoke`) |
+| `cleared` | `exception` | a `deploy.exception` names it (drift, a digest mismatch, out of band) | **revoked** (`deploy.revoke` "token revoked: exception: <kind>") |
+
+`denied`, `expired`, `superseded`, `degraded` and `exception` are final: nothing moves a change out of them, and a new
+head registers a new change. "Held" in the card is the state `holding`; a provider that held a change during an
+outage (`deploy.degraded`, `deny`) leaves its state as it was. A cleared change a provider let through during an
+outage stays cleared. `gate.Transitions` is the table; any other move is a bug the gate refuses to write (the
+operation fails and nothing commits). The GitHub App's deployment answer for `degraded` and `exception` is
+`rejected`, with the reason in the comment.
+
+Two behaviour changes from C-1, both to keep the token consistent with the state: a new head now moves a **cleared**
+older head to `superseded` (it stayed `cleared` with a revoked token), so a GitHub deployment of the old head is
+rejected `DG-UNREGISTERED`; and a pushed commit (`pr` 0) supersedes only the holding and cleared changes of the same
+app, environment and cluster (it superseded every holding pushed commit of the repository).
+
+### Exceptions: `deploy.exception`
+
+A registered provider posts it through `POST /v1/records` (kind `deploy.exception`; principal, target, result,
+`exception` and `destination` {cluster, environment} required). The `exception` object:
+
+| `exception.kind` | Must carry | Coverage the core sets | Written by |
+| --- | --- | --- | --- |
+| `out-of-band` | `objects` [{apiVersion, kind, namespace, name, rendered?, grant?}] (at least one) | `out-of-band-detected` | the Argo agent (G-ARGO-3): objects with no grant, or a hash no grant lists |
+| `drift` | `addresses` or `objects` (at least one) | `observed-not-attributed` | G-TF-3's scheduled plan; live drift |
+| `untraced-apply` | `actor` (the principal behind the write) | `out-of-band-detected` | G-TF-3's state-backend watch (CloudTrail) |
+| `digest-mismatch` | `expected`, `observed` and `change.id` | `out-of-band-detected` | G-TF-2's outcome route; the CMP's applied-tree check |
+
+Optional on every kind: `state` {backend, key, version}, `detected_at` (RFC 3339), `detail`. Unknown fields are
+refused. A provider's `coverage` must be absent or the kind's. The core adds `breakglass` (verified) when an open
+break-glass window covers the destination. When `change.id` names a holding or cleared change, the change moves to
+`exception` (its `ended` names the record's seq, tool and kind), and a cleared change's token is revoked, in the same
+transaction as the record.
+
+```json
+{"provider": "argo-gate", "kind": "deploy.exception", "record": {
+  "principal": "kubernetes-admin", "target": "apps/v1/Deployment/app-gate-api-prod/gate-api",
+  "result": "applied without a grant", "app": "gate-api",
+  "destination": {"cluster": "hangar-prod", "environment": "prod"},
+  "exception": {"kind": "out-of-band", "objects": [{"apiVersion": "apps/v1", "kind": "Deployment",
+    "namespace": "app-gate-api-prod", "name": "gate-api"}]}}}
+```
+
+### Degraded-mode reports: `deploy.degraded`
+
+When a provider could not reach the core and acted on the outage policy, it posts what it did once the core answers:
+`POST /v1/records`, kind `deploy.degraded`, with principal, target, app, result, `decision` (`allow`: it let the
+change land; `deny`: it held it), `coverage: coverage-unavailable`, `outage` {from, to} (RFC 3339, `to` not in the
+future) and `destination`; optionally `tier` (what it believed), `change.id`, `subject`. No `rule`: the core decided
+nothing. The core adds `outage_policy` (verified): `action` (the named change's `outage`, else the baseline for the
+claimed tier, else `hold` for an unknown tier), `source` (`change`, `baseline`, `unknown-tier`) and `conforms`
+(`decision` was `deny`, or the action was `allow-and-record`). A non-conforming report is still recorded; it is a
+finding. An `allow` naming a holding change moves it to `degraded`.
+
+### Break-glass
+
+| Route | Who | What |
+| --- | --- | --- |
+| `POST /v1/breakglass` `{reason, ttl, cluster, env, app?}` | a person matching `CLEARANCE_ADMINS`, or a delegate (`CLEARANCE_DELEGATES`) naming one in the on-behalf-of header | Opens a window on one protected environment. `ttl` is a Go duration, 1m to `CLEARANCE_BREAKGLASS_MAX_TTL` (default and ceiling 4h). The named user is the authenticated admin (or the one the delegate names): never a free-text field (an unknown field is refused). The answer comes after `breakglass.open` and the window's row commit together, so the record precedes every change it covers. |
+| `POST /v1/breakglass/{id}/close` | an admin (or a delegate naming one) | Closes the window early and reconciles it at once. |
+| `GET /v1/breakglass[?cluster=]` | a registered provider, or an admin | The windows open now: what a provider that honours break-glass (the Argo agent's marker, G-ARGO-3) reads. |
+
+Break-glass clears nothing and applies nothing: Clearance holds no write credential to a protected environment. A
+change made in the window is still an exception when a provider sees it, and each `deploy.exception` and
+`deploy.degraded` inside the window carries the window's id (`breakglass`) (a window that names an app tags only that app's reports; one
+window per environment either way). When the TTL ends, the expiry loop
+(`CLEARANCE_EXPIRE_SECONDS`) closes the window with a `breakglass.close` record: `window` {from, to}, `changes` (the
+deployment records the store holds about that cluster and environment, and app when the window names one, written
+while it was open: `deploy.exception`, `deploy.degraded`, `deploy.outcome`, `deploy.clear`; at most 200 listed),
+`reported` (the full count), `truncated`, and `limitations`, the statement of what the store cannot know:
+
+> Lists only what a provider reported to Clearance in the window. A change made directly (kubectl, a cloud console,
+> a script) appears only if an exception detector watches this environment and reported it; a report that arrived
+> after the window closed is not listed.
+
+Refusals: `DG-BREAKGLASS` (403, not an admin), `DG-BREAKGLASS-TTL` (400), `DG-BREAKGLASS-SCOPE` (400: not names, or
+an environment Clearance does not protect: there is no glass to break), `DG-BREAKGLASS-OPEN` (409, a window is
+already open there), `DG-REASON`, `DG-DELEGATE`, `DG-PERSON`, `DG-UNKNOWN` and `DG-STATE` (close). A refused request
+records nothing. Windows are kept in `clearance_breakglass`.
+
+### The packet's exceptions
+
+clearance-api `GET /v1/exceptions` is the list the packet's Exceptions section (C-4, C-5) reads: every
+`deploy.exception`, `deploy.degraded`, `breakglass.open` and `breakglass.close`, and every record whose coverage is
+`coverage-unavailable` (the runtime's outage reads too), newest first, scoped by viewer like the evidence list, on the
+partial index `clearance_evidence_exceptions`. Filters: `tool`, `kind` (an exception kind), `app`, `since`, `until`,
+`limit`, `after` ([clearance-api.md](clearance-api.md)).
+
+### Rule ids and reasons added
+
+| Id | Where | Meaning |
+| --- | --- | --- |
+| `DG-PROTECTED` | `POST /v1/clearances`, 400 | `protected: false` is refused: Clearance decides protection |
+| `unprotected` | a change's reason (tier 0) | the environment is not on `CLEARANCE_PROTECTED_ENVIRONMENTS` |
+| `DG-POLICY` (outage) | `clearance.yaml` | an `outage:` entry that loosens the baseline, or not a tier 0 to 3 |
+| `DG-BREAKGLASS` | `POST /v1/breakglass`, `/close`, 403 | not an admin |
+| `DG-BREAKGLASS-TTL` | `POST /v1/breakglass`, 400 | the TTL is not a Go duration from 1m to the deployment's maximum (at most 4h) |
+| `DG-BREAKGLASS-SCOPE` | `POST /v1/breakglass`, 400 | cluster, env or app are not names, or the environment is not protected |
+| `DG-BREAKGLASS-OPEN` | `POST /v1/breakglass`, 409 | a window is already open on that environment |
+
+### Not yet
+
+- The providers that file these records: the Argo agent's exceptions and break-glass marker (G-ARGO-3), Terraform
+  drift and untraced-apply detection (G-TF-3), the change-bound outcome route that writes `digest-mismatch` itself
+  (G-TF-2: the record shape is defined here; `gate.Service.Report` with kind `digest-mismatch` and `change.id` is
+  what it calls).
+- The packet itself (C-4, C-5) and its coverage statement (counts by coverage and degraded windows).
+- A report that arrives after its break-glass window closed is not tagged with it.
+
 ## The signed grant feed (C-10, Built)
 
 What the grant-sync agent (G-ARGO-3) reads, every 30 s, from clearance-api as a feed reader:

@@ -72,6 +72,14 @@ type SigningKey struct {
 	RetiredAt *time.Time
 }
 
+// Breakglass is one row of clearance_breakglass (C-6): a break-glass window an admin opened. Record is the gate's
+// view of it (gate.Breakglass) as jsonb; the other fields are its indexed columns. State is open or closed.
+type Breakglass struct {
+	ID, Cluster, Env, State string
+	ExpiresAt               time.Time
+	Record                  json.RawMessage
+}
+
 // Feed is one row of clearance_feeds: a cluster's signed grant feed (C-10), the latest only. Envelope is the DSSE
 // envelope of a token.Feed; Tokens are the tokens it lists as clearance-api serves them beside it (a JSON array),
 // kept in the same row so a reader never pairs a feed with tokens re-issued after it was signed.
@@ -107,6 +115,8 @@ type Tx interface {
 	PutFeed(ctx context.Context, f Feed) error
 	// UseSigningKey records k as the key in use (inserted, or un-retired) and retires every other key at now.
 	UseSigningKey(ctx context.Context, k SigningKey, now time.Time) error
+	// PutBreakglass writes a break-glass window (an upsert by id).
+	PutBreakglass(ctx context.Context, b Breakglass) error
 }
 
 // Reader is what both a Tx and the store outside a transaction can read.
@@ -138,6 +148,10 @@ type Reader interface {
 	LiveTokens(ctx context.Context, cluster string, now time.Time, limit int) ([]Token, error)
 	// Feed is the cluster's signed grant feed (ErrNotFound when none was signed).
 	Feed(ctx context.Context, cluster string) (Feed, error)
+	// Breakglass is one break-glass window (ErrNotFound when there is none).
+	Breakglass(ctx context.Context, id string) (Breakglass, error)
+	// BreakglassOpen are the windows still open (not yet reconciled), soonest expiry first.
+	BreakglassOpen(ctx context.Context) ([]Breakglass, error)
 	// FeedClusters are the clusters with a token (live or revoked) or a feed: the ones whose feed the core signs.
 	FeedClusters(ctx context.Context) ([]string, error)
 }

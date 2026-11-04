@@ -11,20 +11,23 @@ import (
 	"unicode/utf8"
 
 	"github.com/jfillman/clearance/internal/evidence"
+	"github.com/jfillman/clearance/internal/gate"
 	"github.com/jfillman/clearance/internal/store"
 )
 
 // RecordKinds are the records a registered provider writes itself (POST /v1/records): the runtime's session and
 // run lifecycle and people's answers and controls (the Autopilot gateway), a T0 read the gateway allowed while the
 // core was unreachable (tool.call, coverage-unavailable: the outage policy's outbox replay), and the deployment
-// boundary's outcome and exceptions (a deployment-gate provider such as the Argo sync).
+// boundary's outcome, exceptions and outage reports (a deployment-gate provider such as the Argo sync).
+// deploy.exception and deploy.degraded are the gate's to check and act on (gate.Service.Report, C-6): their shape
+// is in internal/gate/exception.go and docs/gate.md.
 //
 // definition.load, definition.unload and definition.reject are not among them: the core writes those itself when a
 // provider publishes its pinned definitions (PUT /v1/definitions, definitions.Service.Apply), so there is one
 // writer of each.
 var RecordKinds = []string{"session.open", "run.launch", "run.delete", "run.finish", "human.answer",
 	"session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome",
-	"deploy.exception"}
+	"deploy.exception", "deploy.degraded"}
 
 // OutageKind is the record of a T0 read the provider allowed while the core was unreachable. Its tool is the tool
 // that was called (record.tool), its coverage is CoverageUnavailable, and everything in it is claimed: the core
@@ -53,7 +56,9 @@ var recordKinds = map[string]kindSpec{
 	OutageKind: {[]string{"session", "task_id", "principal", "agent", "tool", "tier", "args_sha256", "result",
 		"coverage"}, "runtime"},
 	"deploy.outcome":   {[]string{"app", "target", "outcome"}, "deployment"},
-	"deploy.exception": {[]string{"principal", "target", "result"}, "deployment"},
+	"deploy.exception": {[]string{"principal", "target", "result", "exception", "destination"}, "deployment"},
+	"deploy.degraded": {[]string{"principal", "target", "app", "result", "decision", "coverage", "outage",
+		"destination"}, "deployment"},
 }
 
 // RecordRequest is POST /v1/records's body. provider must be the provider the caller authenticates as; kind is the
@@ -95,6 +100,11 @@ type ProviderEvent struct {
 	Change      map[string]any `json:"change,omitempty"`
 	Effect      map[string]any `json:"effect,omitempty"`
 	Outcome     map[string]any `json:"outcome,omitempty"`
+	// Exception is a deploy.exception's {kind, objects, addresses, actor, expected, observed, state, detected_at,
+	// detail} (gate.ExceptionKinds; docs/gate.md, Exceptions).
+	Exception map[string]any `json:"exception,omitempty"`
+	// Outage is a deploy.degraded's {from, to}: when the provider could not reach the core.
+	Outage map[string]any `json:"outage,omitempty"`
 }
 
 var hexDigest = regexp.MustCompile(`^[0-9a-f]{64}\z`)
@@ -162,7 +172,8 @@ func (e *ProviderEvent) event(kind string, spec kindSpec, ts string) (store.Even
 		k string
 		v map[string]any
 	}{{"subject", e.Subject}, {"initiator", e.Initiator}, {"source", e.Source}, {"destination", e.Destination},
-		{"change", e.Change}, {"effect", e.Effect}, {"outcome", e.Outcome}} {
+		{"change", e.Change}, {"effect", e.Effect}, {"outcome", e.Outcome}, {"exception", e.Exception},
+		{"outage", e.Outage}} {
 		if f.v != nil {
 			ev[f.k] = f.v
 		}
@@ -176,6 +187,9 @@ func (e *ProviderEvent) event(kind string, spec kindSpec, ts string) (store.Even
 				return nil, fmt.Errorf("a %s record carries %s", kind, k)
 			}
 		}
+	}
+	if (e.Exception != nil && kind != gate.KindException) || (e.Outage != nil && kind != gate.KindDegraded) {
+		return nil, fmt.Errorf("exception is a %s field and outage a %s field", gate.KindException, gate.KindDegraded)
 	}
 	return ev, nil
 }
@@ -255,12 +269,30 @@ func (s *Server) records(w http.ResponseWriter, r *http.Request) {
 	wr := prov.Writer()
 	wr.Verified = recordVerified
 	var rec store.Record
-	err = s.opt.Store.Atomic(r.Context(), func(tx store.Tx) error {
-		var err error
-		rec, err = tx.Append(r.Context(), ev, wr)
-		return err
-	})
+	if gate.IsReport(body.Kind) {
+		// An exception or an outage report: the gate checks it, records it and acts on the change it names in one
+		// transaction (gate.Service.Report). A core without the gate still checks its shape.
+		if s.opt.Gate != nil {
+			rec, err = s.opt.Gate.Report(r.Context(), ev, wr)
+		} else if err = gate.CheckReport(ev, s.opt.Clock()); err == nil {
+			err = s.opt.Store.Atomic(r.Context(), func(tx store.Tx) error {
+				var err error
+				rec, err = tx.Append(r.Context(), ev, wr)
+				return err
+			})
+		}
+	} else {
+		err = s.opt.Store.Atomic(r.Context(), func(tx store.Tx) error {
+			var err error
+			rec, err = tx.Append(r.Context(), ev, wr)
+			return err
+		})
+	}
+	var br *gate.BadReport
 	switch {
+	case errors.As(err, &br):
+		writeError(w, http.StatusBadRequest, br.Message)
+		return
 	case errors.Is(err, evidence.ErrInvalid), errors.Is(err, evidence.ErrNotStorable), errors.Is(err, evidence.ErrEnvelopeField):
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

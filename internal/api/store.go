@@ -27,6 +27,11 @@ type EvidenceFilter struct {
 	Installation string
 	Since, Until string // compared with the record's ts as text, as api.py does
 	Outcomes     string // OutcomesInclude (""), OutcomesExclude, OutcomesOnly
+	// Exceptions keeps only the records the packet's exceptions section lists (GET /v1/exceptions): the tools of
+	// ExceptionTools, and any record whose coverage is coverage-unavailable. Kind narrows a deploy.exception to
+	// its exception.kind.
+	Exceptions bool
+	Kind       string
 }
 
 // ChangeFilter is the deployment gate's list and counts filters; "" and nil are unset.
