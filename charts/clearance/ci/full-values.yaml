@@ -101,6 +101,7 @@ networkPolicy:
       - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: backstage}}
   kubeAPIServer:
     cidrs: ["10.96.0.1/32", "172.18.0.2/32"]
+    ciliumEntity: true
   extraEgress:
     - to: [{ipBlock: {cidr: 0.0.0.0/0}}]
       ports: [{protocol: TCP, port: 443}]

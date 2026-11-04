@@ -487,9 +487,14 @@ func (c *Core) Loops(ctx context.Context) {
 	}
 	t := time.NewTicker(every)
 	defer t.Stop()
+	// The grant feeds are re-signed on their own beat, whatever CLEARANCE_EXPIRE_SECONDS is.
+	feeds := time.NewTicker(gate.FeedResign / 2)
+	defer feeds.Stop()
 	c.refresh(ctx) // a restart with a new key re-signs the live tokens at once
 	for {
 		select {
+		case <-feeds.C:
+			c.refreshFeeds(ctx)
 		case <-ctx.Done():
 			if c.App != nil {
 				<-done
@@ -507,7 +512,8 @@ func (c *Core) Loops(ctx context.Context) {
 	}
 }
 
-// refresh re-issues the clearance tokens due and revokes the lapsed (gate.Service.Refresh).
+// refresh re-issues the clearance tokens due and revokes the lapsed (gate.Service.Refresh), then re-signs the grant
+// feeds due (gate.Service.RefreshFeeds).
 func (c *Core) refresh(ctx context.Context) {
 	n, revoked, err := c.Gate.Refresh(ctx)
 	switch {
@@ -515,6 +521,18 @@ func (c *Core) refresh(ctx context.Context) {
 		c.log.ErrorContext(ctx, "gate: refreshing clearance tokens failed", "error", err.Error())
 	case n > 0 || revoked > 0:
 		c.log.InfoContext(ctx, "gate: clearance tokens refreshed", "reissued", n, "revoked", revoked)
+	}
+	c.refreshFeeds(ctx)
+}
+
+// refreshFeeds keeps every cluster's signed grant feed fresh (gate.FeedResign) when none of its tokens changed.
+func (c *Core) refreshFeeds(ctx context.Context) {
+	signed, err := c.Gate.RefreshFeeds(ctx)
+	switch {
+	case err != nil && ctx.Err() == nil:
+		c.log.ErrorContext(ctx, "gate: re-signing grant feeds failed", "error", err.Error(), "signed", signed)
+	case signed > 0:
+		c.log.DebugContext(ctx, "gate: grant feeds re-signed", "clusters", signed)
 	}
 }
 

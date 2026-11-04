@@ -283,14 +283,75 @@ format, the claims, the key and the replay rules. In short:
 - A new head on the same pull request revokes the older head's token (`deploy.revoke`); a token whose nonce is not
   the clearance's live one is a replay.
 - The grant feed is clearance-api's `GET /v1/clearances?cluster=<c>&state=cleared`: the cluster's cleared changes
-  whose token is live, each with it. The grant-sync agent (G-ARGO-3) reads it as a feed reader
-  (`CLEARANCE_API_FEED_READERS`), verifies each token against `GET /v1/keys`, and writes the ClearanceGrants.
+  whose token is live, each with it. Since C-10 the grant-sync agent (G-ARGO-3) reads the **signed** feed instead,
+  `GET /v1/grant-feeds/{cluster}` ([below](#the-signed-grant-feed-c-10-built)), as a feed reader
+  (`CLEARANCE_API_FEED_READERS`), verifies it whole and each token against `GET /v1/keys`, and writes the
+  ClearanceGrants.
 - `registerChange` takes an optional `taskId` (the run that proposed the change), kept on the change as `task_id`,
   carried in the token and on every `deploy.*` record's `task_id`.
 
 Not yet: admission on the grant (G-ARGO-2), the CMP that registers the whole rendered tree with unchanged objects
 marked (G-ARGO-4; today `objects` lists the objects the change touches, each `changed: true`), the PreSync wait
 (G-ARGO-5), and the Terraform plan subject (G-TF-1, which adds `subjects.plan_digest`).
+
+## The signed grant feed (C-10, Built)
+
+What the grant-sync agent (G-ARGO-3) reads, every 30 s, from clearance-api as a feed reader:
+`GET /v1/grant-feeds/{cluster}`. The C-1 list (`GET /v1/clearances?cluster=<c>&state=cleared`) stays, but it is a
+page of tokens, each good on its own: a reader cannot tell it the whole set from a page someone trimmed, nor today's
+from last hour's replayed. A grant-sync that removes grants for what is missing needs both, so the core signs the
+set.
+
+**The document** (`internal/token/feed.go`, `token.Feed`): a DSSE envelope, payloadType
+`application/vnd.clearance.grant-feed.v1+json`, signed with the token key (the same Signer, keyid and `GET /v1/keys`),
+over
+
+```json
+{"_type": "clearance.grant-feed/v1", "iss": "clearance", "cluster": "hangar-prod",
+ "seq": 41, "iat": 1762200000, "exp": 1762200300, "records_seq": 1093,
+ "entries": [{"change_id": "ch-...", "nonce": "...", "exp": 1762200800, "payload_sha256": "<hex>"}]}
+```
+
+- `seq`: the cluster's feed number, one more than the feed it replaces, never reused.
+- `iat`, `exp`: NumericDate; `exp` is `iat` + 5 minutes (`gate.FeedTTL`; a feed may claim at most 15).
+- `records_seq`: the evidence chain's last seq when it was signed; every `deploy.*` record at or below it is reflected.
+- `entries`: every token live on the cluster at `iat`, by `change_id` ascending (at most 2000). `payload_sha256` is the
+  SHA-256 of that token's DSSE payload (the claims bytes as signed), so it names one issuance: a refreshed or altered
+  token does not match.
+
+**When the core signs it.** In the same transaction as any write to one of the cluster's tokens (a clear issues one,
+a refresh re-issues, a new head or the horizon revokes), so the stored feed always matches the stored tokens; and
+at least every 2 minutes otherwise (`gate.FeedResign`, the core's own minute ticker, whatever
+`CLEARANCE_EXPIRE_SECONDS` is), so a feed past its `exp` means the core, or the path to it, is down. A cluster gets
+its first feed with its first token, and an empty feed (no entries) once its last token is revoked: that is how its
+grants get removed. A cluster with more than 2000 live tokens is not re-signed (its feed goes stale and grant-sync
+stops: fail closed), and the core logs it every minute. The row (`clearance_feeds`, one per cluster) keeps the
+envelope and the tokens it lists side by side; clearance-api serves it as it is and holds no key.
+
+**What grant-sync does with it** (in this order; any failure means: change nothing, keep the grants it has, and
+let them expire on their own `exp`):
+
+1. Keys: `GET /v1/keys` (cache it up to its `max-age`; refetch on an unknown keyid).
+2. `token.VerifyFeed(feed, keys, {Issuer, Cluster: <its own>, MinSeq: <the highest seq it accepted>})`: the
+   signature, strict decoding, the issuer, this cluster (`ErrFeedCluster`), `seq` not below the last accepted
+   (`ErrFeedReplay`; the same seq is the same feed read again), and fresh (`exp`, with 30 s leeway).
+3. `feed.Match(tokens)`: the tokens beside it are exactly the entries, each the issuance named
+   (`ErrFeedIncomplete` otherwise).
+4. Each token: `token.Verify` with `Expect{Cluster}` (signature, expiry, binding). No nonce check is needed: the
+   feed is the revocation list.
+5. Then create or update a ClearanceGrant per entry, delete the grants no entry names, and remember `seq`.
+
+A reader that persists its `MinSeq` survives restarts; one that does not accepts any fresh feed after a restart,
+which is still bounded by `exp`. A restored or rebuilt core database starts `seq` again at 1: grant-sync then refuses
+every feed until an operator resets its remembered seq (by design: a rolled-back database is exactly a replay).
+
+**Faster than 30 s.** `GET /v1/stream` gives a feed reader the clearance events of its clusters as they are
+recorded; it is a cue to re-read the feed, never a substitute for it.
+
+**For the gate providers that wait** (the Terraform run task, G-TF-2; the PreSync hook, G-ARGO-5): the core's
+`GET /v1/clearances/{change_id}/wait?state=&timeout=` ([core.md](core.md#the-api)) holds the call until the change
+leaves the state the caller knows, or up to 60 s, and answers the state and the token. It is the same for every
+subject kind.
 
 ## The Go core (R-1c, Built, deployed on hangar-dev 2026-11-03)
 

@@ -174,6 +174,7 @@ pack and definition variables above.
 | `networkPolicy.core.from`, `networkPolicy.api.from` | NetworkPolicyPeers allowed to call each on 8080: providers, verifiers, your Gateway's namespace (for the webhook), a portal. |
 | `networkPolicy.dns.{namespace,podSelector}` | `kube-system`, `k8s-app: kube-dns`. |
 | `networkPolicy.kubeAPIServer.{cidrs,ports}` | The API server for TokenReview. Default `0.0.0.0/0` on 443 and 6443: narrow it to `kubectl get endpoints kubernetes`. |
+| `networkPolicy.kubeAPIServer.ciliumEntity` | Default false. **On Cilium set it true**: an ipBlock never matches the API server there (it is the `kube-apiserver` entity unless the agent runs with `policy-cidr-match-mode: nodes`), so TokenReview times out and every caller answers 401. true also renders a `CiliumNetworkPolicy` (`<fullname>-kube-apiserver`, cilium.io/v2) letting the core and the api reach `toEntities: [kube-apiserver]`, nothing else. Leave it false on any other CNI (the CRD would not exist). |
 | `networkPolicy.postgres.{to,port}` | Your Postgres; the chart's CNPG instances are added automatically. With `cnpg.enabled`, a policy on the instances admits only the core, the api, the test pod, each other and the operator. |
 | `networkPolicy.extraEgress` | NetworkPolicyEgressRules: the OIDC JWKS, Backstage, the GitHub API. |
 

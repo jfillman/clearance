@@ -19,8 +19,10 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -214,6 +216,7 @@ type world struct {
 	defs    []store.Definition
 	tokens  []store.Token
 	keys    []store.SigningKey
+	feeds   []store.Feed
 	raw     []map[string]any // stored rows written as they are (v0 fixtures), instead of events
 }
 
@@ -238,7 +241,22 @@ var backends = []backend{
 			}
 			m.recs = append(m.recs, c)
 		}
-		m.changes, m.defs, m.tokens, m.keys = w.changes, w.defs, w.tokens, w.keys
+		m.changes, m.defs, m.tokens, m.keys, m.feeds = w.changes, w.defs, w.tokens, w.keys, w.feeds
+		appenders.Store(Store(m), appender(func(t *testing.T, evs []store.Event, cs []store.Change) {
+			seed(t, st, evs)
+			n := int64(len(m.recs))
+			recs, err := st.Records(bg, n, 1000)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, r := range recs {
+				r["assurance"] = "recorded-not-checkpointed"
+				m.appendRec(r)
+			}
+			m.mu.Lock()
+			m.changes = append(m.changes, cs...)
+			m.mu.Unlock()
+		}))
 		return m, ""
 	}},
 	{"postgres", func(t *testing.T, w world) (Store, string) {
@@ -271,6 +289,11 @@ var backends = []backend{
 					return err
 				}
 			}
+			for _, f := range w.feeds {
+				if err := tx.PutFeed(bg, f); err != nil {
+					return err
+				}
+			}
 			if w.defs != nil {
 				return tx.ReplaceDefinitions(bg, w.defs)
 			}
@@ -279,9 +302,29 @@ var backends = []backend{
 		if err != nil {
 			t.Fatal(err)
 		}
-		return openReader(t, dsn), dsn
+		rd := openReader(t, dsn)
+		appenders.Store(Store(rd), appender(func(t *testing.T, evs []store.Event, cs []store.Change) {
+			seed(t, st, evs)
+			if err := st.Atomic(bg, func(tx store.Tx) error {
+				for _, c := range cs {
+					if err := tx.PutChange(bg, c); err != nil {
+						return err
+					}
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}))
+		return rd, dsn
 	}},
 }
+
+// appender writes more records (and change rows) to a backend's store after it was built: the stream tests'.
+type appender func(t *testing.T, evs []store.Event, cs []store.Change)
+
+// appenders are each built Store's appender.
+var appenders sync.Map
 
 func openReader(t *testing.T, dsn string) *PG {
 	t.Helper()
@@ -452,25 +495,71 @@ func TestTheCommittedContractIsCurrent(t *testing.T) {
 	if !bytes.Equal(got, want) {
 		t.Fatalf("%s is stale: run go generate ./internal/api and commit it", ContractPath)
 	}
-	doc, _ := ContractDoc()
-	ops := map[string]bool{}
-	for _, o := range doc.Operations {
-		ops[o.OperationID] = true
+	doc, err := ContractDoc("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc["openapi"] != "3.1.0" {
+		t.Fatal(doc["openapi"])
+	}
+	paths := doc["paths"].(map[string]any)
+	ops := map[string]map[string]any{}
+	for _, item := range paths {
+		for _, op := range item.(map[string]any) {
+			o := op.(map[string]any)
+			ops[o["operationId"].(string)] = o
+		}
 	}
 	for _, id := range []string{"listEvidence", "getEvidence", "verifyEvidence", "countEvidence", "getPolicy",
 		"explainPolicy", "listReceipts", "listProvenance", "listClearances", "countClearances", "getClearance",
-		"getClearancePolicy", "listDefinitions", "getContract"} {
-		if !ops[id] {
+		"getClearancePolicy", "listDefinitions", "getKeys", "getGrantFeed", "listInstallations", "streamEvents",
+		"getContract"} {
+		if ops[id] == nil {
 			t.Errorf("the contract has no %s", id)
 		}
 	}
-	// Every route the mux serves is in the contract, and every one has a 200 schema.
+	// Every route the mux serves is in the contract with its roles, its query parameters and a 200 schema; every
+	// $ref resolves.
 	for _, rt := range Routes() {
-		if _, ok := doc.Responses[rt.OperationID]["200"]; !ok {
+		o := ops[rt.OperationID]
+		if o == nil {
+			t.Errorf("%s is not in the contract", rt.OperationID)
+			continue
+		}
+		if _, ok := o["responses"].(map[string]any)["200"]; !ok {
 			t.Errorf("%s has no 200 schema", rt.OperationID)
 		}
+		if !reflect.DeepEqual(o[XRoles], rt.Roles) {
+			t.Errorf("%s roles %v", rt.OperationID, o[XRoles])
+		}
+		var query []string
+		ps, _ := o["parameters"].([]any)
+		for _, p := range ps {
+			if m := p.(map[string]any); m["in"] == "query" {
+				query = append(query, m["name"].(string))
+			}
+		}
+		if len(query) != len(rt.Params) || (len(query) > 0 && !reflect.DeepEqual(query, rt.Params)) {
+			t.Errorf("%s query %v, the route takes %v", rt.OperationID, query, rt.Params)
+		}
+	}
+	schemas := doc["components"].(map[string]any)["schemas"].(map[string]any)
+	raw, _ := json.Marshal(doc)
+	refs := regexpRef.FindAllStringSubmatch(string(raw), -1)
+	if len(refs) < 10 {
+		t.Fatalf("only %d $refs found: the check would be vacuous", len(refs))
+	}
+	for _, m := range refs {
+		if _, ok := schemas[m[1]]; !ok {
+			t.Errorf("$ref %s does not resolve", m[1])
+		}
+	}
+	if ops["streamEvents"][XStream] != true {
+		t.Error("the stream is not marked")
 	}
 }
+
+var regexpRef = regexp.MustCompile(`"\$ref":"#/components/schemas/([A-Za-z0-9]+)"`)
 
 func TestViewers(t *testing.T) {
 	defs := NewDefinitions(loadAgents(t))
@@ -604,8 +693,8 @@ func TestHTTPRoles(t *testing.T) {
 		eqSeqs(t, "no verdicts for another repo", seqs(h.ok("/v1/provenance?repo=jfillman/flight_api", "audit")))
 		eqSeqs(t, "a verdict with no session is its principal's", seqs(h.ok("/v1/provenance?repo=jfillman/flight-api", "alice")))
 		c := h.ok("/v1/contract", "")
-		if c["gateway"] != "http://clearance.example" || c["api"] != "clearance-api" {
-			t.Errorf("contract: %v %v", c["gateway"], c["api"])
+		if c["x-clearance-gateway"] != "http://clearance.example" || c["info"].(map[string]any)["title"] != "clearance-api" {
+			t.Errorf("contract: %v %v", c["x-clearance-gateway"], c["info"])
 		}
 		if h.get("/healthz", "").status != 200 || h.get("/readyz", "").status != 200 {
 			t.Error("health")

@@ -36,6 +36,7 @@ func TestWireTypesMirrorTheCore(t *testing.T) {
 		{client.Verdict{}, provenance.Verdict{}},
 		{client.Health{}, server.Health{}},
 		{client.ClearanceAnswer{}, gate.ClearanceAnswer{}},
+		{client.WaitAnswer{}, server.WaitAnswer{}},
 		{client.JWKS{}, token.JWKS{}},
 		{client.Ready{}, server.Ready{}},
 	}

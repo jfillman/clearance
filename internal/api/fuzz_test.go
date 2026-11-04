@@ -15,8 +15,11 @@ func FuzzQuery(f *testing.F) {
 	h := newHarness(&testing.T{}, backends[0], world{events: fixtureEvents(), changes: fixtureChanges()})
 	f.Fuzz(func(t *testing.T, q string) {
 		for _, rt := range Routes() {
+			if rt.Stream {
+				continue // a recorder cannot hold a stream; TestTheStream covers its query
+			}
 			path := rt.Path
-			for _, p := range []string{"{seq}", "{id}"} {
+			for _, p := range []string{"{seq}", "{id}", "{cluster}"} {
 				path = strings.ReplaceAll(path, p, "1")
 			}
 			req := httptest.NewRequest("GET", "/", nil)

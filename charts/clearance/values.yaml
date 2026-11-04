@@ -324,6 +324,11 @@ networkPolicy:
   kubeAPIServer:
     cidrs: ["0.0.0.0/0"]
     ports: [443, 6443]
+    # On Cilium a NetworkPolicy ipBlock never matches the API server (it is the kube-apiserver entity, not a
+    # CIDR, unless the agent runs with policy-cidr-match-mode: nodes), so TokenReview times out and every caller
+    # answers 401. true also renders a CiliumNetworkPolicy that lets the core and the api reach the
+    # kube-apiserver entity, and nothing else (needs the cilium.io/v2 CRDs). Other CNIs: leave it false.
+    ciliumEntity: false
   # Postgres: NetworkPolicyPeers and the port. With cnpg.enabled the chart's own instances are added.
   postgres:
     to: []

@@ -81,8 +81,12 @@ type Service struct {
 	// Tokens issues the clearance token on deploy.clear (C-1); nil: no tokens (a deployment without a signing key).
 	Tokens *Tokens
 
-	mu sync.Mutex
+	mu     sync.Mutex
+	notify Notifier
 }
+
+// Watch is the gate's Notifier.Watch: a channel closed when change id is next written.
+func (s *Service) Watch(id string) (<-chan struct{}, func(), error) { return s.notify.Watch(id) }
 
 // NewService is a Service with the baseline policy (and the configured trusted registries).
 func NewService(cfg Config, st store.Store, clock func() time.Time) *Service {
@@ -100,18 +104,21 @@ func (s *Service) op(ctx context.Context, fn func(tx store.Tx, w *writer) error)
 	defer s.mu.Unlock()
 	var result error
 	var answered int
+	var touched map[string]string
 	err := s.Store.Atomic(ctx, func(tx store.Tx) error {
 		w := &writer{ctx: ctx, tx: tx, now: s.now(), wr: s.Writer.OrCore(), svc: s}
 		result = fn(tx, w)
+		w.signFeeds() // the touched clusters' grant feeds, in this transaction
 		if w.err != nil {
 			return w.err
 		}
-		answered = w.answered
+		answered, touched = w.answered, w.touched
 		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("gate: %w", err)
 	}
+	s.notify.notify(touched)
 	if answered > 0 {
 		for _, poke := range s.OnAnswered {
 			poke()
@@ -129,6 +136,7 @@ type writer struct {
 	answered int
 	wr       evidence.Writer
 	svc      *Service
+	touched  map[string]string // change id -> cluster, of every change or token written
 }
 
 func (w *writer) put(c *Change) {
@@ -141,6 +149,7 @@ func (w *writer) put(c *Change) {
 		w.err = err
 		return
 	}
+	w.touch(c.ID, c.Cluster)
 	w.err = w.tx.PutChange(w.ctx, store.Change{ID: c.ID, App: c.App, Env: c.Env, State: c.State, Repo: c.Repo,
 		Head: c.Head, PR: int(c.PR), ExpiresAt: c.ExpiresAt.Time, Record: raw})
 }
