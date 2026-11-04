@@ -37,6 +37,9 @@ func (s *Service) Protects(cluster, env string) bool {
 
 // unprotected is the classification of a change to an environment Clearance does not protect.
 func unprotected(req ChangeRequest, pol Policy) Classification {
+	if req.Kind() == KindTerraformPlan {
+		pol.TTLDays = pol.planTTLDays() // a plan's 24 hours bound its token's horizon here too (G-TF-2)
+	}
 	where := req.Cluster + "/" + req.Env
 	return Classification{0, []Reason{{where, "unprotected", 0}}, "clear", nil,
 		fmt.Sprintf("tier 0: cleared (%s is not a protected environment)", where), nil, pol}

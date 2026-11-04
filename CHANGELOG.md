@@ -214,7 +214,8 @@ view `outage`, `ProviderEvent` `exception` and `outage`; take this release's cli
 ### Changed (G-TF-2)
 - A terraform-plan change holds **24 hours** (`DefaultPlanTTLDays = 1`), not the gitops 7 days, then expires with
   `deploy.expire` ("not cleared within 24 hours"); a `clearance.yaml` `ttlDays` still only shortens it. Gitops
-  changes keep 7 days.
+  changes keep 7 days. This holds on every path: a plan to an environment the deployment does not protect, cleared
+  at tier 0, keeps the 24 hours too, so its token's horizon is a day, not a week.
 - A terraform-plan change's id is derived from (repo, workspace backend, key and name, plan digest) instead of
   (repo, pr, head): registering the same plan again returns the same change, and two workspaces planned at one
   commit are two changes (they shared an id before). (G-TF-1 is unreleased, so no stored plan change carries the old id.) A
