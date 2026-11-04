@@ -349,7 +349,7 @@ offline over the rendered tree before it registers the change. Every `deploy.*` 
 A decision with no change on record (a GitHub deployment of an unregistered commit, `DG-UNREGISTERED`) records
 `{ref: baseline, version: <baseline>, engine: none, verdict: not-evaluated}`. The group is **claimed**: the verifier
 reports the commit and the verdict; the core fills `version` from what it applied. The runtime boundary's records keep
-their own `policy` group (`clearance-core+<bundle>@<version>`, the bundle digest, `engine: cel-go`), unchanged.
+their own `policy` group (`clearance-core+<bundle>@<version>`, the bundle digest, `engine: cel-go`), unchanged. The clearance token signed on `deploy.clear` carries the same group as its `policy` claim, field for field ([core.md](core.md) "The clearance token"): the token attests what the record says.
 
 **The request.** `POST /v1/clearances` takes two optional fields beside `policy` (all strictly decoded, unknown keys
 refused):

@@ -25,8 +25,6 @@ type Tokens struct {
 	Signer token.Signer
 	Issuer string
 	TTL    time.Duration
-	// EngineVersion is the core's version, named in the claims' policy.engine_version.
-	EngineVersion string
 }
 
 // Defaults for Tokens.
@@ -123,21 +121,15 @@ func (t *Tokens) Claims(c *Change, nonce string, now, exp time.Time) token.Claim
 	for _, a := range c.Approvals {
 		approvals = append(approvals, a.claim())
 	}
-	clearedBy, verdict := "policy", "clear"
+	clearedBy := "policy"
 	if c.ClearedBy != nil && *c.ClearedBy != "" {
 		clearedBy = *c.ClearedBy
-	}
-	if clearedBy != "policy" {
-		verdict = "hold"
 	}
 	decided := ""
 	if c.DecidedAt != nil {
 		decided = pycompat.Isoformat(c.DecidedAt.Time)
 	}
-	pol := token.Policy{Ref: c.PolicyVersion, Engine: "clearance-gate", EngineVersion: t.EngineVersion, Verdict: verdict}
-	if c.RepoPolicyDigest != nil {
-		pol.RepoPolicyDigest = *c.RepoPolicyDigest
-	}
+	pol := c.PolicyClaim() // the deploy.* record's policy group, so the token attests what the record says
 	prov := token.Provenance{Level: ProvenanceLevel(c), Check: c.Checks["provenance"], Proposer: c.Proposer,
 		ProposerKind: c.ProposerKind}
 	if c.Agent != nil {

@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/jfillman/clearance/internal/pycompat"
+	"github.com/jfillman/clearance/internal/token"
 )
 
 // The policy-engine verdict a deployment decision records (C-8, docs/gate.md "The policy in the record").
@@ -116,7 +117,18 @@ func policyRefOf(req ChangeRequest) string {
 }
 
 // PolicyGroup is the `policy` group of a deploy.* record about this change (the evidence schema's Decision group).
+// It is PolicyClaim as a record field: a token and its record carry the same policy.
 func (c *Change) PolicyGroup() map[string]any {
+	p := c.PolicyClaim()
+	g := map[string]any{"ref": p.Ref, "version": p.Version, "engine": p.Engine, "verdict": p.Verdict}
+	if p.Bundle != "" {
+		g["bundle"] = p.Bundle
+	}
+	return g
+}
+
+// PolicyClaim is the policy this change was decided under, as the clearance token's `policy` claim carries it.
+func (c *Change) PolicyClaim() token.Policy {
 	ref := c.PolicyRef
 	if ref == "" { // a change registered before C-8
 		ref = BaselineRef
@@ -128,14 +140,11 @@ func (c *Change) PolicyGroup() map[string]any {
 	if c.RepoPolicyDigest != nil {
 		version += "+sha256:" + *c.RepoPolicyDigest
 	}
-	g := map[string]any{"ref": ref, "version": version, "engine": NoEngine, "verdict": NotEvaluated}
+	p := token.Policy{Ref: ref, Version: version, Engine: NoEngine, Verdict: NotEvaluated}
 	if a := c.Admission; a != nil {
-		g["engine"], g["verdict"] = a.Engine, a.Verdict
-		if a.Bundle != "" {
-			g["bundle"] = a.Bundle
-		}
+		p.Engine, p.Verdict, p.Bundle = a.Engine, a.Verdict, a.Bundle
 	}
-	return g
+	return p
 }
 
 // baselineGroup is the policy group of a deployment decision with no change on record (DG-UNREGISTERED).
