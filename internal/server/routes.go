@@ -204,6 +204,22 @@ var routeTable = []Route{
 		serve: func(s *Server) http.HandlerFunc { return s.waitClearance },
 	},
 	{
+		Method: "POST", Path: "/v1/clearances/{change_id}/outcome", OperationID: "recordChangeOutcome", Auth: AuthBearer,
+		MaxBody: gate.MaxOutcomeBody,
+		Summary: "The outcome of a cleared terraform-plan change's apply, once, from the principal that registered " +
+			"the change: whether it ran, the sha256 of the plan file applied, the resources from the apply's JSON log, " +
+			"when it started and finished, and its error. Recorded as deploy.outcome with matched (verified: the " +
+			"applied digest is the cleared one); a mismatch is also a deploy.exception of kind digest-mismatch. A " +
+			"second outcome is DG-STATE.",
+		Request: gate.OutcomeRequest{},
+		Responses: []Response{{200, "the change with its outcome, and the records' seqs", gate.OutcomeResult{}},
+			{400, "a malformed body, or a change that is not a terraform-plan (DG-SUBJECT)", gate.ErrorBody{}},
+			errs(401)[0], {403, "the caller did not register this change", gate.ErrorBody{}},
+			{404, "no such change, or a Clearance that keeps no changes (DG-OFF)", gate.ErrorBody{}},
+			{409, "the change is not cleared, or its outcome is already recorded (DG-STATE)", gate.ErrorBody{}},
+			errs(413)[0]},
+	},
+	{
 		Method: "POST", Path: "/v1/clearances/{change_id}/clear", OperationID: "clearChange", Auth: AuthBearer,
 		MaxBody:   gate.MaxPersonBody,
 		Summary:   "A person (or a delegate naming one in the on-behalf-of header) approves a holding change.",

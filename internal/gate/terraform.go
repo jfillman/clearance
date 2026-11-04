@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 )
 
 // TypeRule is one category of Terraform resource types the baseline makes tier 3, by fnmatch glob.
@@ -32,6 +33,10 @@ func DefaultTerraformTier3() []TypeRule {
 			"azurerm_*sql*", "azurerm_cosmosdb_*", "azurerm_redis_*"}},
 	}
 }
+
+// DefaultPlanTTLDays is how long a saved Terraform plan holds before it expires: one day, 24 hours (G-TF-2), because a
+// plan goes stale as the state moves. A gitops change keeps DefaultTTLDays.
+const DefaultPlanTTLDays = 1
 
 // DefaultTagFields are the attributes a tag-only or description-only update touches (tier 1): the JSON pointer is
 // one of these or under one.
@@ -109,6 +114,7 @@ var checksPlanOK = checksOK[:2]
 // changes nothing at tier 1, then -target or -replace one tier up with a floor of 2, then provenance and the checks.
 func classifyPlan(req ChangeRequest, pol Policy, reasons []Reason) Classification {
 	s := req.Subject
+	pol.TTLDays = pol.planTTLDays() // a plan goes stale: it holds 24 hours, not the gitops week (G-TF-2)
 	protected := pol.WorkspaceProtected(*s.Workspace, req.Protected)
 	changed := 0
 	var replaced []string
@@ -165,4 +171,13 @@ func classifyPlan(req ChangeRequest, pol Policy, reasons []Reason) Classificatio
 	c := holdFor(req, pol, tier, reasons)
 	c.Why += fmt.Sprintf(" (%s; set by %s)", where, setBy(reasons, tier))
 	return c
+}
+
+// ttlWords is how long c could hold, for its deploy.expire: a plan's own TTL in hours ("24 hours"), the baseline's
+// days otherwise.
+func (s *Service) ttlWords(c *Change) string {
+	if c.Subject != nil && c.Subject.Kind == KindTerraformPlan {
+		return fmt.Sprintf("%d hours", int(c.ExpiresAt.Sub(c.CreatedAt.Time)/time.Hour))
+	}
+	return fmt.Sprintf("%d days", s.Policy.TTLDays)
 }

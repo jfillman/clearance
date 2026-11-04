@@ -241,6 +241,14 @@ class CoreClient:
         return self._call("denyChange", {"reason": reason}, params={"change_id": change_id},
                           on_behalf_of=on_behalf_of, retry=_RETRY_UNSENT)
 
+    def record_change_outcome(
+        self, change_id: str, outcome: m.GateOutcomeRequest | Mapping[str, Any]
+    ) -> m.GateOutcomeResult:
+        """Report what the apply of a cleared terraform-plan change did, once; the caller is the principal that
+        registered the change. The answer says whether the applied plan digest matched the cleared one (a mismatch
+        is also a deploy.exception); a second outcome is refused (CoreRequestError 409, DG-STATE)."""
+        return self._call("recordChangeOutcome", outcome, params={"change_id": change_id}, retry=_RETRY_UNSENT)
+
     def get_clearance(self, change_id: str) -> m.GateClearanceAnswer:
         """A change's state and its live clearance token (None when it has none); the caller is a registered
         provider or the verifier that registered the change."""

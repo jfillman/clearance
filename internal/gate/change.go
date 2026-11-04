@@ -100,6 +100,7 @@ type Change struct {
 	DeniedBy         *string           `json:"denied_by"`
 	SupersededBy     *string           `json:"superseded_by"`
 	Deployments      []Deployment      `json:"deployments"`
+	Outcome          *Outcome          `json:"outcome,omitempty"` // the apply's outcome, once (G-TF-2)
 	Target           string            `json:"target"`
 	ObjectsCount     int               `json:"objects_count"`
 	PathsCount       int               `json:"paths_count"`

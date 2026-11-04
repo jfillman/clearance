@@ -117,6 +117,16 @@
           "outage": {
             "type": "string"
           },
+          "outcome": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "owner": {
             "type": "string"
           },
@@ -1060,6 +1070,39 @@
         ],
         "type": "object"
       },
+      "GateOutcome": {
+        "properties": {
+          "applied": {
+            "type": "boolean"
+          },
+          "at": {
+            "type": "string"
+          },
+          "exception": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "matched": {
+            "type": "boolean"
+          },
+          "plan_digest": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "applied",
+          "at",
+          "matched",
+          "plan_digest",
+          "seq"
+        ],
+        "type": "object"
+      },
       "GatePlanSummary": {
         "properties": {
           "create": {
@@ -1117,13 +1160,17 @@
               "type": "array"
             },
             "type": "object"
+          },
+          "ttlHours": {
+            "type": "integer"
           }
         },
         "required": [
           "protectedWorkspaces",
           "tagOnlyFields",
           "tier2Types",
-          "tier3Types"
+          "tier3Types",
+          "ttlHours"
         ],
         "type": "object"
       },
@@ -1692,6 +1739,16 @@
           },
           "outage": {
             "type": "string"
+          },
+          "outcome": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "owner": {
             "type": "string"

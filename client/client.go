@@ -222,6 +222,19 @@ func (c *Client) Deny(ctx context.Context, changeID, reason, onBehalfOf string) 
 	return &out, nil
 }
 
+// ChangeOutcome reports what the apply of a cleared terraform-plan change did, once; the caller is the principal
+// that registered the change. The core records deploy.outcome with matched (the applied plan digest is the cleared
+// one) and, on a mismatch, deploy.exception (digest-mismatch). A second outcome is refused (409, DG-STATE), so it is
+// retried only when it was not sent.
+func (c *Client) ChangeOutcome(ctx context.Context, changeID string, req *ChangeOutcomeRequest) (*ChangeOutcomeResult, error) {
+	var out ChangeOutcomeResult
+	if err := c.call(ctx, call{op: "recordChangeOutcome", method: "POST",
+		path: "/v1/clearances/" + url.PathEscape(changeID) + "/outcome", body: req, retry: retryUnsent}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // Provenance asks for a pull request's agent-identity and agent-scope verdicts; the caller is a verifier.
 func (c *Client) Provenance(ctx context.Context, req *ProvenanceRequest) (*Verdict, error) {
 	var out Verdict

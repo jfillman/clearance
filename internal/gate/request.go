@@ -3,6 +3,7 @@ package gate
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"sort"
@@ -72,9 +73,16 @@ func (r ChangeRequest) Kind() string {
 	return KindManifestTree
 }
 
-// ID is "ch-" + the first 16 hex of sha256("repo#pr@head").
+// ID is "ch-" + the first 16 hex of sha256("repo#pr@head"). A saved Terraform plan is registered once per repository,
+// workspace and plan (G-TF-2): its id is of sha256 over the JSON array ["terraform-plan", repo, backend, key, name,
+// planDigest], so the same plan registered again (from another job, PR or commit) is the same change, and two
+// workspaces planned at one commit are two changes.
 func (r ChangeRequest) ID() string {
-	h := sha256.Sum256([]byte(fmt.Sprintf("%s#%d@%s", r.Repo, r.PR, r.Head)))
+	key := []byte(fmt.Sprintf("%s#%d@%s", r.Repo, r.PR, r.Head))
+	if s := r.Subject; s != nil && s.Kind == KindTerraformPlan && s.Workspace != nil {
+		key, _ = json.Marshal([]string{KindTerraformPlan, r.Repo, s.Workspace.Backend, s.Workspace.Key, s.Workspace.Name, s.PlanDigest})
+	}
+	h := sha256.Sum256(key)
 	return "ch-" + hex.EncodeToString(h[:])[:16]
 }
 

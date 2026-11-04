@@ -597,6 +597,7 @@ type Change struct {
 	DeniedBy         *string           `json:"denied_by"`
 	SupersededBy     *string           `json:"superseded_by"`
 	Deployments      []Deployment      `json:"deployments"`
+	Outcome          *ChangeOutcome    `json:"outcome,omitempty"`
 	Target           string            `json:"target"`
 	ObjectsCount     int               `json:"objects_count"`
 	PathsCount       int               `json:"paths_count"`
@@ -656,6 +657,47 @@ type Deployment struct {
 type Decided struct {
 	Change
 	AuditSeq int64 `json:"audit_seq"`
+}
+
+// -- POST /v1/clearances/{change_id}/outcome ----------------------------------------------------------------------
+
+// AppliedChange is one resource a Terraform apply acted on, from its JSON log (gate.AppliedChange): the address, the
+// action (gate.ApplyActions) and, when the log says, complete or errored.
+type AppliedChange struct {
+	Address string `json:"address"`
+	Action  string `json:"action"`
+	Status  string `json:"status,omitempty"`
+}
+
+// ChangeOutcomeRequest is what a terraform-plan change's apply did (gate.OutcomeRequest): whether it ran, the sha256
+// of the saved plan file applied, the resources from the apply's JSON log, when it started and finished (RFC 3339),
+// and its error.
+type ChangeOutcomeRequest struct {
+	Applied    *bool           `json:"applied"`
+	PlanDigest string          `json:"planDigest"`
+	Changes    []AppliedChange `json:"changes"`
+	StartedAt  string          `json:"startedAt"`
+	FinishedAt string          `json:"finishedAt"`
+	Error      string          `json:"error,omitempty"`
+}
+
+// ChangeOutcome is a change's recorded outcome (gate.Outcome): the deploy.outcome's seq, whether the apply ran and
+// matched the cleared plan, the digest reported, when it was recorded, and on a mismatch the deploy.exception's seq.
+type ChangeOutcome struct {
+	Seq        int64  `json:"seq"`
+	Applied    bool   `json:"applied"`
+	Matched    bool   `json:"matched"`
+	PlanDigest string `json:"plan_digest"`
+	At         string `json:"at"`
+	Exception  *int64 `json:"exception,omitempty"`
+}
+
+// ChangeOutcomeResult is the outcome route's answer (gate.OutcomeResult).
+type ChangeOutcomeResult struct {
+	Change       *Change `json:"change"`
+	Matched      bool    `json:"matched"`
+	AuditSeq     int64   `json:"audit_seq"`
+	ExceptionSeq *int64  `json:"exception_seq"`
 }
 
 // -- POST /v1/provenance -------------------------------------------------------------------------------------------
