@@ -176,6 +176,31 @@ view `outage`, `ProviderEvent` `exception` and `outage`; take this release's cli
 - `clearance register` refuses an `--after` that is not a directory or holds no manifests (exit 2) instead of
   registering an empty tree; the README's example now renders into directories.
 
+### Added (G-TF-2)
+- G-TF-2, hold, release and outcome for a plan
+  ([docs/gate.md](docs/gate.md#hold-release-and-outcome-for-a-plan-g-tf-2-built)):
+  `POST /v1/clearances/{change_id}/outcome` takes a cleared terraform-plan change's apply result, once, from the
+  principal that registered it: `{applied, planDigest, changes, startedAt, finishedAt, error}` (`changes` from
+  `terraform apply -json`; strictly decoded, 4 MiB cap). The core records `deploy.outcome` with `matched` (verified:
+  the applied plan digest is the cleared one) and, on a mismatch, a `deploy.exception` of kind `digest-mismatch`
+  (C-6's shape: `expected`, `observed`, `coverage: out-of-band-detected`), and keeps `outcome {seq, applied,
+  matched, plan_digest, at, exception}` on the change. A mismatch moves the change from `cleared` to `exception`
+  (C-6's state machine; `ended` names the exception) and revokes its token (`deploy.revoke`) in the same transaction. A second outcome, or one for a change that is not cleared, is
+  `DG-STATE` (409); another caller is `DG-FORBIDDEN`; a manifest change is `DG-SUBJECT`. Go client `ChangeOutcome`,
+  Python client `record_change_outcome`; contracts and models regenerated; a fuzz target for the route.
+- A plan waits on C-10's `GET /v1/clearances/{id}/wait` like any change, and wakes cleared with a token bound to
+  its plan digest (tested end to end on the core).
+- `GET /v1/clearance-policy` adds `terraform.ttlHours`.
+
+### Changed (G-TF-2)
+- A terraform-plan change holds **24 hours** (`DefaultPlanTTLDays = 1`), not the gitops 7 days, then expires with
+  `deploy.expire` ("not cleared within 24 hours"); a `clearance.yaml` `ttlDays` still only shortens it. Gitops
+  changes keep 7 days.
+- A terraform-plan change's id is derived from (repo, workspace backend, key and name, plan digest) instead of
+  (repo, pr, head): registering the same plan again returns the same change, and two workspaces planned at one
+  commit are two changes (they shared an id before). (G-TF-1 is unreleased, so no stored plan change carries the old id.) A
+  strict Go or Python client of an earlier release refuses the new `outcome` field on a change; take this release's.
+
 ## [0.30.0] - 2026-11-03
 
 R-3: the Python package is gone. Breaking for anyone who installs `clearance` from this repository with pip (or

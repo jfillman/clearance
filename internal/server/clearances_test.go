@@ -352,3 +352,71 @@ func TestTheCoreSignsTheGrantFeedAndClearanceAPIServesIt(t *testing.T) {
 		t.Fatalf("%+v %v", fd2, err)
 	}
 }
+
+// G-TF-2 on the whole core: a terraform-plan change waits on C-10's wait route like any other, wakes cleared with
+// a token bound to the plan digest, and takes one outcome from its registrant.
+func TestAPlanWaitsClearsAndReportsItsOutcome(t *testing.T) {
+	f, _ := tokenFixture(t)
+	digest := strings.Repeat("e6", 32)
+	planChange := func(ciCheck string) map[string]any {
+		return map[string]any{"app": "network", "env": "lab", "repo": "jfillman/hangar-infra", "pr": 0, "head": headSHA,
+			"proposer": "user:dana", "owner": owner, "paths": []string{"network/lab/main.tf"},
+			"checks": map[string]any{"ci": ciCheck, "provenance": "not-agent"},
+			"subject": map[string]any{"kind": "terraform-plan", "planDigest": digest, "planJsonDigest": strings.Repeat("4f", 32),
+				"variableSetDigest": strings.Repeat("1c", 32),
+				"workspace":         map[string]any{"backend": "s3", "key": "network/lab/terraform.tfstate", "name": "default"},
+				"versions":          map[string]any{"terraform": "1.9.8", "providers": map[string]any{}},
+				"summary":           map[string]any{"create": 0, "update": 1, "replace": 0, "destroy": 0, "destroyedAddresses": []any{}},
+				"resources": []any{map[string]any{"address": "aws_vpc.lab", "type": "aws_vpc", "actions": []any{"update"},
+					"fields": []any{"/tags/Owner"}}}}}
+	}
+	reg := f.do("POST", "/v1/clearances", ci, planChange("pending")).want(t, 200, "")
+	id := reg.body["id"].(string)
+	if reg.body["state"] != "holding" {
+		t.Fatal(reg.body)
+	}
+	if exp, _ := time.Parse(time.RFC3339, reg.body["expires_at"].(string)); exp.Sub(time.Now()) > 24*time.Hour {
+		t.Fatalf("a plan holds until %v", exp)
+	}
+	ch := f.waitCall("/v1/clearances/"+id+"/wait?state=holding&timeout=30", ci)
+	deadline := time.Now().Add(5 * time.Second)
+	for f.core.Gate.Waiting() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	// The same plan registered again, its checks green now: the same change, cleared by policy.
+	if again := f.do("POST", "/v1/clearances", ci, planChange("pass")).want(t, 200, ""); again.body["id"] != id {
+		t.Fatal(again.body["id"], id)
+	}
+	var a answer
+	select {
+	case a = <-ch:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the waiter did not wake")
+	}
+	if a.status != 200 || a.body["state"] != "cleared" || a.body["changed"] != true || a.body["token"] == nil {
+		t.Fatal(a.status, a.body)
+	}
+	tok := a.body["token"].(map[string]any)
+	env, _ := json.Marshal(tok["dsse"])
+	o := token.Options{Issuer: "clearance", Expect: token.Expect{ClearanceID: id, PlanDigest: digest}}
+	claims, err := token.Verify(context.Background(), env, f.keySet(t), o)
+	if err != nil || claims.Subjects.Kind != "terraform-plan" || claims.Subjects.PlanDigest != digest {
+		t.Fatal(claims, err)
+	}
+	o.Expect.PlanDigest = strings.Repeat("0a", 32)
+	if _, err := token.Verify(context.Background(), env, f.keySet(t), o); err == nil {
+		t.Fatal("the token verified for another plan")
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	out := map[string]any{"applied": true, "planDigest": "sha256:" + digest, "startedAt": now, "finishedAt": now,
+		"changes": []any{map[string]any{"address": "aws_vpc.lab", "action": "update", "status": "complete"}}}
+	f.do("POST", "/v1/clearances/"+id+"/outcome", argo, out).want(t, 403, "did not register")
+	got := f.do("POST", "/v1/clearances/"+id+"/outcome", ci, out).want(t, 200, "")
+	if got.body["matched"] != true || got.body["exception_seq"] != nil {
+		t.Fatal(got.body)
+	}
+	f.do("POST", "/v1/clearances/"+id+"/outcome", ci, out).want(t, 409, "already recorded")
+	if ok, bad := evidence.Verify(f.records()); !ok {
+		t.Fatalf("the chain breaks at %d", bad)
+	}
+}

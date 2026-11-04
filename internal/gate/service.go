@@ -572,7 +572,7 @@ func (s *Service) expire(w *writer, c *Change) {
 	c.DecidedAt, c.UpdatedAt = &now, now
 	w.settle(c)
 	w.put(c)
-	w.record("policy", nil, "deploy.expire", c, "allow", nil, fmt.Sprintf("not cleared within %d days", s.Policy.TTLDays),
+	w.record("policy", nil, "deploy.expire", c, "allow", nil, "not cleared within "+s.ttlWords(c),
 		map[string]any{"expires_at": pycompat.ISO(c.ExpiresAt.Time)})
 }
 

@@ -104,6 +104,9 @@ type Policy struct {
 	TFTagFields         []string
 	TFTier2Types        []string
 	ProtectedWorkspaces []string
+	// PlanTTLDays is the hold TTL of a terraform-plan change: the shorter of it and TTLDays (a clearance.yaml
+	// ttlDays still shortens it).
+	PlanTTLDays int
 }
 
 // DefaultPolicy is GatePolicy(): the baseline of 2026-10-31.
@@ -130,6 +133,7 @@ func DefaultPolicy() Policy {
 		Outage:          DefaultOutage,
 		TFTier3Types:    DefaultTerraformTier3(),
 		TFTagFields:     append([]string(nil), DefaultTagFields...),
+		PlanTTLDays:     DefaultPlanTTLDays,
 	}
 }
 
@@ -155,6 +159,9 @@ type PolicyTerraform struct {
 	TagOnlyFields       []string            `json:"tagOnlyFields"`
 	Tier2Types          []string            `json:"tier2Types"`
 	ProtectedWorkspaces []string            `json:"protectedWorkspaces"`
+	// TTLHours is how long a plan holds before it expires (deploy.expire): 24 hours unless clearance.yaml's ttlDays
+	// is shorter still.
+	TTLHours int `json:"ttlHours"`
 }
 
 // PolicyTiers is the view's tier table: "3" then "0", as gate.py writes it.
@@ -184,7 +191,7 @@ func (p Policy) View() PolicyView {
 	tiers.T3.Kinds, tiers.T3.Fields, tiers.T3.Paths = kinds, nonNil(p.Tier3Fields), nonNil(p.Tier3Paths)
 	tiers.T0.Paths = nonNil(p.NonruntimePaths)
 	tf := PolicyTerraform{Tier3Types: map[string][]string{}, TagOnlyFields: nonNil(p.TFTagFields),
-		Tier2Types: nonNil(p.TFTier2Types), ProtectedWorkspaces: nonNil(p.ProtectedWorkspaces)}
+		Tier2Types: nonNil(p.TFTier2Types), ProtectedWorkspaces: nonNil(p.ProtectedWorkspaces), TTLHours: 24 * p.planTTLDays()}
 	for _, r := range p.TFTier3Types {
 		tf.Tier3Types[r.Category] = append(tf.Tier3Types[r.Category], r.Types...)
 	}
@@ -458,4 +465,13 @@ func globs(path string, gs []string) bool {
 		}
 	}
 	return false
+}
+
+// planTTLDays is a terraform-plan change's hold TTL in days: PlanTTLDays, never longer than TTLDays.
+func (p Policy) planTTLDays() int {
+	d := p.TTLDays
+	if p.PlanTTLDays > 0 && p.PlanTTLDays < d {
+		d = p.PlanTTLDays
+	}
+	return d
 }

@@ -18,7 +18,7 @@ CONTRACT_VERSION = "1.0.0"
 
 RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "run.finish", "human.answer", "session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome", "deploy.exception", "deploy.degraded", "federated.decision")
 
-__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "BreakglassList", "Budgets", "BundleRef", "Context", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateObjectChange", "GatePlanSummary", "GateReason", "GateRequirement", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "Health", "Hold", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Problem", "ProvenanceCheck", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenSignature", "WaitAnswer", "WebhookAnswer"]
+__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "BreakglassList", "Budgets", "BundleRef", "Context", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateReason", "GateRequirement", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "Health", "Hold", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Problem", "ProvenanceCheck", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenSignature", "WaitAnswer", "WebhookAnswer"]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -358,6 +358,22 @@ class GateAdmission(Model):
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
+class GateAppliedChange(Model):
+    """Contract schema GateAppliedChange (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("action", "action", ("str",), True),
+        Field("address", "address", ("str",), True),
+        Field("status", "status", ("str",), False),
+    )
+
+    action: str
+    address: str
+    status: str | None = None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
 class GateApproval(Model):
     """Contract schema GateApproval."""
 
@@ -473,6 +489,7 @@ class GateChange(Model):
         Field("objects", "objects", ("list", ("ref", "GateObjectChange")), True),
         Field("objects_count", "objects_count", ("int",), True),
         Field("outage", "outage", ("str",), False),
+        Field("outcome", "outcome", ("nullable", ("ref", "GateOutcome")), False),
         Field("owner", "owner", ("str",), True),
         Field("paths", "paths", ("list", ("str",)), True),
         Field("paths_count", "paths_count", ("int",), True),
@@ -519,6 +536,7 @@ class GateChange(Model):
     objects: list[GateObjectChange]
     objects_count: int
     outage: str | None = None
+    outcome: GateOutcome | None = None
     owner: str
     paths: list[str]
     paths_count: int
@@ -572,6 +590,7 @@ class GateChangeWithAuditSeq(Model):
         Field("objects", "objects", ("list", ("ref", "GateObjectChange")), True),
         Field("objects_count", "objects_count", ("int",), True),
         Field("outage", "outage", ("str",), False),
+        Field("outcome", "outcome", ("nullable", ("ref", "GateOutcome")), False),
         Field("owner", "owner", ("str",), True),
         Field("paths", "paths", ("list", ("str",)), True),
         Field("paths_count", "paths_count", ("int",), True),
@@ -619,6 +638,7 @@ class GateChangeWithAuditSeq(Model):
     objects: list[GateObjectChange]
     objects_count: int
     outage: str | None = None
+    outcome: GateOutcome | None = None
     owner: str
     paths: list[str]
     paths_count: int
@@ -765,6 +785,68 @@ class GateObjectChange(Model):
     name: str
     namespace: str
     op: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class GateOutcome(Model):
+    """Contract schema GateOutcome."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("applied", "applied", ("bool",), True),
+        Field("at", "at", ("str",), True),
+        Field("exception", "exception", ("nullable", ("int",)), False),
+        Field("matched", "matched", ("bool",), True),
+        Field("plan_digest", "plan_digest", ("str",), True),
+        Field("seq", "seq", ("int",), True),
+    )
+
+    applied: bool
+    at: str
+    exception: int | None = None
+    matched: bool
+    plan_digest: str
+    seq: int
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class GateOutcomeRequest(Model):
+    """Contract schema GateOutcomeRequest (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("applied", "applied", ("nullable", ("bool",)), True),
+        Field("changes", "changes", ("list", ("ref", "GateAppliedChange")), False),
+        Field("error", "error", ("str",), False),
+        Field("finishedAt", "finishedAt", ("str",), True),
+        Field("planDigest", "planDigest", ("str",), True),
+        Field("startedAt", "startedAt", ("str",), True),
+    )
+
+    applied: bool | None
+    changes: list[GateAppliedChange] | None = None
+    error: str | None = None
+    finishedAt: str
+    planDigest: str
+    startedAt: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class GateOutcomeResult(Model):
+    """Contract schema GateOutcomeResult."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("audit_seq", "audit_seq", ("int",), True),
+        Field("change", "change", ("nullable", ("ref", "GateChange")), True),
+        Field("exception_seq", "exception_seq", ("nullable", ("int",)), True),
+        Field("matched", "matched", ("bool",), True),
+    )
+
+    audit_seq: int
+    change: GateChange | None
+    exception_seq: int | None
+    matched: bool
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -1691,6 +1773,7 @@ MODELS: dict[str, type[Model]] = {
     "EvaluationRequest": EvaluationRequest,
     "EvaluationResult": EvaluationResult,
     "GateAdmission": GateAdmission,
+    "GateAppliedChange": GateAppliedChange,
     "GateApproval": GateApproval,
     "GateBreakglass": GateBreakglass,
     "GateBreakglassRequest": GateBreakglassRequest,
@@ -1701,6 +1784,9 @@ MODELS: dict[str, type[Model]] = {
     "GateEnded": GateEnded,
     "GateErrorBody": GateErrorBody,
     "GateObjectChange": GateObjectChange,
+    "GateOutcome": GateOutcome,
+    "GateOutcomeRequest": GateOutcomeRequest,
+    "GateOutcomeResult": GateOutcomeResult,
     "GatePlanSummary": GatePlanSummary,
     "GateReason": GateReason,
     "GateRequirement": GateRequirement,
@@ -1759,6 +1845,7 @@ OPERATIONS: dict[str, Operation] = {
     "getClearance": Operation("GET", "/v1/clearances/{change_id}", "bearer", 65536, None, GateClearanceAnswer),
     "clearChange": Operation("POST", "/v1/clearances/{change_id}/clear", "bearer", 65536, None, GateChangeWithAuditSeq),
     "denyChange": Operation("POST", "/v1/clearances/{change_id}/deny", "bearer", 65536, None, GateChangeWithAuditSeq),
+    "recordChangeOutcome": Operation("POST", "/v1/clearances/{change_id}/outcome", "bearer", 4194304, GateOutcomeRequest, GateOutcomeResult),
     "waitClearance": Operation("GET", "/v1/clearances/{change_id}/wait", "bearer", 65536, None, WaitAnswer),
     "recordOutcome": Operation("POST", "/v1/decisions/{id}/outcome", "provider", 65536, OutcomeRequest, RecordRef),
     "publishDefinitions": Operation("PUT", "/v1/definitions", "provider", 4194304, DefinitionsRequest, DefinitionsResult),
