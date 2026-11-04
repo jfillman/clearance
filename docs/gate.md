@@ -460,4 +460,5 @@ plan subject plus `digests` (`sha256` = the plan, `planJson`, `variableSet`, `gi
 plan). A manifest change's subject is `{kind: manifest-tree, digests: {sha256, gitCommit}}`, a definition release's
 `{kind: definition, name: <agent>, digests}`; a change stored before G-TF-1 reads back as `manifest-tree` from its
 `tree_digest`. clearance-api returns the stored change as it is, so the list shows `subject.kind` for every change
-registered from this release on (and for older ones once they are written again).
+registered from this release on (and for older ones once they are written again). A cleared plan's clearance token
+(C-1) has `subjects.kind: terraform-plan` and binds the plan's digest as `subjects.plan_digest` (no `tree_root`).

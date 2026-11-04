@@ -451,12 +451,12 @@ func TestTheChangeRequestSchemaMatchesTheParser(t *testing.T) {
 	}
 }
 
-// A cleared plan's clearance token names its subject kind and binds the plan's digest as the tree root.
+// A cleared plan's clearance token names its subject kind and binds the plan's digest (plan_digest, no tree_root).
 func TestAPlanTokenIsATerraformPlanSubject(t *testing.T) {
 	f := newGate(t)
 	c := f.register(t, "ci", tfChange(plan(nil, res("aws_vpc.lab", "aws_vpc", update, "/tags/Owner")), nil))
 	cl := (&gate.Tokens{}).Claims(c, "n", T0, T0.Add(time.Minute))
-	if cl.Subjects.Kind != gate.KindTerraformPlan || cl.Subjects.TreeRoot != planDigest {
+	if cl.Subjects.Kind != gate.KindTerraformPlan || cl.Subjects.PlanDigest != planDigest || cl.Subjects.TreeRoot != "" {
 		t.Fatalf("%+v", cl.Subjects)
 	}
 	m := f.register(t, "ci", change(map[string]any{"objects": imageBump}))
