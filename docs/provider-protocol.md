@@ -37,7 +37,7 @@ Status: **Built** (R-1f) for everything the core serves today: the two roles, th
 | Provider | Role | Status |
 | --- | --- | --- |
 | Autopilot gateway (`autopilot-gateway`) | runtime | Built in Python; it calls the Go core from R-3b (autopilot#71) and is tested then, and again as the Go port (A-9) |
-| Argo CD gate: CMP, grant-sync agent, PreSync wait (G-ARGO-3, -4, -5) | deployment | Proposal; G-ARGO-9 requires conformance |
+| Argo CD gate: CMP, grant-sync agent, PreSync wait (G-ARGO-3, -4, -5) | deployment | Proposal; shapes chosen in [gate.md, phase 2](gate.md#phase-2-design-pass-g-argo-1-2026-11-03) (CMP principal `hangar-prod/argocd-apps/argocd-apps-repo-server`, a verifier; the agent its own); G-ARGO-9 requires conformance |
 | Terraform gate: `clearance hold`, `release`, `report` (G-TF-3) | deployment | Proposal |
 | Clearance GitHub App, deployment protection rule | deployment | Built inside the core (`internal/githubapp`); it answers GitHub's callback rather than applying, so it is not driven by this suite |
 | `clearance register` (a workflow registering its change) | deployment, register step only | Built (`cmd/clearance/register.go`) |
@@ -171,8 +171,11 @@ For every change to a protected environment:
 
 1. **Register the change with its subject.** `POST /v1/clearances` with the change (`gate.ChangeRequest`,
    [docs/gate.md](gate.md)): app, env, cluster, repo, pr, head, proposer, owner, objects, paths, checks, and
-   `treeDigest`, the sha256 of the canonical rendered tree (for Terraform, the saved plan's digest, G-TF-1). That
-   digest is the subject the clearance binds to. Registration is idempotent by repo, PR and head; a new head on the
+   `treeDigest`, the manifest-tree digest of the rendered tree ([gate.md](gate.md#the-manifest-tree-digest-built)); for
+   Terraform, a `subject` of kind `terraform-plan` instead, whose `planDigest` (the saved plan file's sha256) becomes
+   the change's `tree_digest` ([gate.md](gate.md#the-terraform-plan-subject-g-tf-1)). That digest is the subject the
+   clearance binds to; a placeholder (64 copies of one digit, or sha256 of nothing) binds to nothing and is flagged
+   or refused. Registration is idempotent by repo, PR and head; a new head on the
    same PR supersedes the old one. The answer is the change as recorded: `id`, `tier`, `reasons`, `requirement`,
    `state`, `tree_digest`, `target`, `expires_at`.
 2. **Hold while `state` is `holding`.** Tiers 0 and 1 clear by policy at once; tier 2 waits for one person from the

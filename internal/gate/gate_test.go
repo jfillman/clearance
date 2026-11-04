@@ -34,7 +34,8 @@ const (
 	owner = "group:default/team-gate"
 )
 
-var tree = strings.Repeat("c", 64)
+// tree is a rendered tree's digest (a real sha256: 64 copies of one digit is a placeholder, flagged tree:unbound).
+var tree = canon.SHA256Hex([]byte("the rendered tree"))
 
 // T0 is conftest's clock start.
 var T0 = time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)
@@ -745,7 +746,7 @@ func TestTheViewHasPythonsKeysInOrder(t *testing.T) {
 	out := f.register(t, "ci", change(map[string]any{"objects": replicas}))
 	raw, _ := json.Marshal(out)
 	keys := []string{"id", "app", "env", "cluster", "repo", "pr", "head", "base", "proposer", "proposer_kind", "agent", "task_id", "owner",
-		"protected", "tree_digest", "paths", "lines_changed", "objects", "checks", "policy_version", "repo_policy_digest", "policy_ref", "tier",
+		"protected", "tree_digest", "subject", "paths", "lines_changed", "objects", "checks", "policy_version", "repo_policy_digest", "policy_ref", "tier",
 		"reasons", "requirement", "state", "created_at", "updated_at", "expires_at", "registered_by", "approvals", "cleared_by",
 		"decided_at", "deny_reason", "denied_by", "superseded_by", "deployments", "target", "objects_count", "paths_count", "outage"}
 	dec := json.NewDecoder(strings.NewReader(string(raw)))
@@ -786,7 +787,7 @@ func defDoc(t *testing.T) map[string]any {
 
 func release(old, new any, over map[string]any) map[string]any {
 	b := map[string]any{"app": "gate-api", "env": "agents", "cluster": "hangar-dev", "repo": "jfillman/gitops-hangar-dev-tenants", "pr": 40,
-		"head": strings.Repeat("e", 40), "proposer": "user:dana", "owner": "group:default/team-gate", "treeDigest": strings.Repeat("f", 64),
+		"head": strings.Repeat("e", 40), "proposer": "user:dana", "owner": "group:default/team-gate", "treeDigest": canon.SHA256Hex([]byte("gate-triage")),
 		"paths": strs([]string{"tenants/gate-api/xr-requests/gate-triage.yaml"}), "checks": map[string]any{"ci": "pass"},
 		"definition": map[string]any{"name": "gate-triage", "path": "agents/gate-triage.yaml", "old": old, "new": new}}
 	for k, v := range over {

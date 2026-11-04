@@ -1,10 +1,15 @@
 # The deployment gate (Clearances): design pass, 2026-10-31
 
-Status (v0.26.1): **phase 1a built** (the gate's core, v0.19.0), fed by Glidepath's `clearance-gate-` check
-(advisory on Hangar) and `clearance register` (v0.23.0), and answered to GitHub Actions deployments by the App's
-protection rule (v0.22.0; [provenance-app.md](provenance-app.md)). **Not built**: phase 2 admission (the pulled grant
-and the Kyverno policy), `deploy.exception` and outcome records. The design below is as reviewed; the Built sections
-at the end say what exists.
+Status (v0.30.0): **phase 1a built** (the gate's core, v0.19.0; in Go since R-1c), fed by Glidepath's
+`clearance-gate-` check (advisory on Hangar) and `clearance register` (v0.23.0), and answered to GitHub Actions
+deployments by the App's protection rule (v0.22.0; [provenance-app.md](provenance-app.md)). **Not built**: phase 2
+admission (the pulled grant and the admission policy), `deploy.exception` and outcome records. **Phase 2's shapes are
+chosen** ([Phase 2 design pass](#phase-2-design-pass-g-argo-1-2026-11-03), Draft, spiked on hangar-dev 2026-11-03):
+the admission policy is a native ValidatingAdmissionPolicy, not the Kyverno policy the first draft below names. The
+design below is as reviewed; the Built sections at the end say what exists.
+G-TF-1 adds a second subject beside the manifest tree, a saved Terraform plan, with its
+own tier table ([The terraform-plan subject](#the-terraform-plan-subject-g-tf-1)), and defines the digest a manifest
+change binds to ([The manifest-tree digest](#the-manifest-tree-digest-built)).
 
 Clearance has two boundaries. The **runtime boundary** is built: every tool call an agent makes goes through the
 gateway, is decided by policy and recorded as evidence. The **deployment boundary** is this document: may a change
@@ -223,6 +228,282 @@ weakest: it moves the trust to whoever can push the protected branch, and Cleara
 A middle path worth considering: ship **B first as phase 2a** (weeks, not months: Applications of protected
 environments go manual, the gateway syncs on `deploy.clear`), and **A as phase 2b** once the normaliser exists,
 keeping B's manual sync policy as defence in depth. The record is the same either way.
+
+## Phase 2 design pass (G-ARGO-1, 2026-11-03)
+
+Status: **Draft.** The shapes below are chosen; none of them is built. Each was spiked on hangar-dev (Argo CD 3.5.0,
+Kubernetes 1.36.5, Kyverno 1.19.0) in scratch namespaces created and deleted for the purpose, in Warn mode only. The
+two measurements that only mean something on hangar-prod (Kyverno's failure modes under prod load, the cross-cluster
+path) are prepared for the user in [spikes/g-argo-1/prod-plan.md](spikes/g-argo-1/prod-plan.md) and are
+**Unverified** until the user runs them. The spike code and manifests are in [spikes/g-argo-1/](spikes/g-argo-1/).
+The hangar decisions D25 to D29 record the choices.
+
+### The chosen shapes
+
+| Question | Chosen | Why, in one line |
+| --- | --- | --- |
+| (a) Where the CMP sits in a tenant Application | **The plugin replaces the Helm source.** The plugin source is the gitops (values) repo; the CMP fetches the airframe chart at the pinned tag and renders it with those values. The Application keeps no other generating source | A plugin source is handed only its own repository: `$appsrc` never reaches it (a1), and objects from any other source are not stamped |
+| (b) What a grant matches | **The `clearance.hangar.io/rendered` annotation the CMP stamps**, keyed by group/kind/name, never the live spec | The stamp survived Argo's tracking annotation, a mutating policy and API-server defaulting byte for byte; the live object's canonical hash differed from the render for every object |
+| (c) The admission engine | **A native ValidatingAdmissionPolicy**, `paramKind: ClearanceGrant`, one binding, `paramRef` by selector with **exactly one active grant per protected namespace**, objects as a map | In-process (about 1 ms, no webhook to time out); Kyverno's webhook refused Argo's writes in Audit/Warn mode while its controller was down on hangar-dev |
+| (d) The outcome source | **The agent watches Application status** | The watch saw every operation within a second, including one Notifications lost for good when its receiver was down for 30 s |
+| (e) How prod reaches the core | **Two more hangar-prod foreign workloads** on the existing path (prod issuer, Traefik route, hostAlias): the CMP as `argocd-apps/argocd-apps-repo-server`, the agent as its own service account | The core's foreign authenticator already takes a list of service accounts; three config lists and one route change, no code |
+
+### (a) The Config Management Plugin on a multi-source Application
+
+Hangar's tenant Applications are multi-source: on hangar-prod the airframe chart (a Helm source whose value files
+are `$appsrc/hangar-prod/...`) and the `gitops-<app>` repo as `ref: appsrc`; on hangar-dev a third source,
+`charts/glidepath-env`. The spike ran three shapes on a namespaced Argo CD 3.5.0 with a spike plugin
+([spikes/g-argo-1/cmp](spikes/g-argo-1/cmp/main.go)), against the real airframe chart at v0.3.168 and a values file in
+this repository standing in for the gitops repo:
+
+| Shape | Result |
+| --- | --- |
+| control: today's Helm source with `$appsrc` value files | renders the values (4 objects) |
+| a1: the plugin source **is** the chart; its parameters name `$appsrc/...` value files | the plugin gets the chart directory only (22 files), no `ref` variable in its environment and no `$appsrc` path anywhere; it rendered the chart's **defaults** (2 objects, empty names) **without any error**. A plugin cannot read a ref source |
+| a2: the plugin **replaces** the Helm source: it sits on the values repo and clones the chart at the pinned tag (`v0.3.168`, peeled to commit `c7e846a`) | renders the values (4 objects plus a ConfigMap from a plain directory source beside it); the stamps on the 4 chart objects matched a render of the same inputs on a laptop, so the render is deterministic across machines |
+| deny: the plugin exits 1 | `ComparisonError: ... CMP processing failed ... tier 3 change denied by policy (spike): DG-POLICY; nothing syncs`, as G-ARGO-4 wants |
+
+What follows for G-ARGO-4 and the ApplicationSet template:
+
+- The protected Application has **one generating source**, the plugin on `gitops-<app>`; the chart's repo, tag and
+  path are plugin parameters set by the tenant-onboarding template (`#@if clearance.gate.enabled`). The `ref: appsrc`
+  source can stay for the template's other environments but means nothing to the plugin. Any other generating source
+  (hangar-dev's `glidepath-env`) must be rendered by the CMP too or left out of protected apps: an object from a
+  non-plugin source carries no stamp and admission refuses it (seen in a2: the directory source's ConfigMap was the
+  one object the policy flagged as unstamped).
+- The CMP fetches the chart itself. On Hangar the airframe repo is public, so a shallow clone at the tag works; the
+  CMP records the **peeled commit**, not the tag, in the change subject. A customer's private chart means an OCI
+  chart pulled by digest with a registry credential mounted into the sidecar only. The gitops repo stays Argo's to
+  fetch with its own repository credentials, which the CMP never sees.
+- The render is `helm template <Application name> <chart> --namespace <destination>`: the release name and the
+  namespace are part of what is hashed (the chart stamps `app.kubernetes.io/instance`), so the Tekton
+  `clearance-gate` render must use the same two values for the parity test (G-ARGO-8).
+- The CMP computes the tree root as [The manifest-tree digest](#the-manifest-tree-digest-built) defines it (G-TF-1);
+  the spike plugin's own line format predates that definition and is not the one to build.
+- The CMP must set `metadata.namespace` to the destination on every namespaced object **before** hashing. Argo adds
+  it to objects that lack it (the chart's `extraManifests` do), and without it the agent cannot reproduce the stamp
+  (see b).
+- **The merge commit is not the PR head.** The clearance-gate check registers the PR head; Argo syncs the merge
+  commit on `main`. The rendered tree is the same, the commit is not, so the CMP must find the cleared change by
+  **tree digest** (app, env, tree), not by repo, PR and head. G-ARGO-4 and C-10 gain that lookup: a registration
+  without `pr` answers the cleared change for the same app, environment and tree, and otherwise registers a new one.
+- The CMP renders tenant input while holding a verifier token. Helm templates cannot execute code and the CMP runs no
+  Kustomize exec plugins, but a CMP compromise would be a gate bypass (it chooses what it registers and stamps), so
+  the sidecar is its own minimal image, mounts the clearance token in its container only, and the G-ARGO-8 parity
+  render on the control plane is the second opinion.
+
+### (b) Grant matching on the stamped annotation
+
+The question was whether the `clearance.hangar.io/rendered` annotation survives to admission and the live object,
+and whether normalised spec equality is workable instead. a2 was synced into a protected scratch namespace with a
+`MutatingAdmissionPolicy` that adds a label and an annotation to Deployments, under the spike's admission policy in
+Warn.
+
+- **The stamp survived** on every object, unchanged and equal to the CMP's hash: Argo added
+  `argocd.argoproj.io/tracking-id` and `kubectl.kubernetes.io/last-applied-configuration`, the mutating policy
+  added its label and annotation, and the API server defaulted the Deployment (`strategy`, `revisionHistoryLimit`,
+  `progressDeadlineSeconds`, `imagePullPolicy`, `terminationMessagePath`, `dnsPolicy`).
+- **Spec equality fails without a normaliser that knows every defaulter.** The canonical hash of the live object
+  differed from the stamp for all four objects, the plain ConfigMap included (Argo's own annotations are enough).
+- **The agent can still check content.** Argo applies client-side, and its `last-applied-configuration` is the
+  rendered object plus the tracking id: hashing it with the tracking id removed reproduced the stamp for the
+  ConfigMap, the ServiceAccount and the NetworkPolicy, and for the Deployment once the CMP's missing namespace was
+  accounted for. That is the exception scan G-ARGO-3 needs ("a hash no grant lists"), without a normaliser. A sync
+  with `ServerSideApply=true` has no last-applied annotation; protected apps stay on client-side apply until the
+  agent reads Argo's managed fields instead.
+- What the stamp does not do: admission cannot hash content (Kubernetes CEL has no digest function). A writer that
+  copies a valid stamp onto other content is admitted, which is why the policy matches only Argo's controller (any
+  other writer is the agent's exception, by construction), the CMP alone computes stamps, and the agent's scan
+  compares the stamp with the last-applied content.
+
+### (c) The native ValidatingAdmissionPolicy against a Kyverno ValidatingPolicy
+
+Both policies were written for the same rule ([30-vap.yaml](spikes/g-argo-1/manifests/30-vap.yaml),
+[31-kyverno.yaml](spikes/g-argo-1/manifests/31-kyverno.yaml)): match only Argo's application-controller, only
+CREATE and UPDATE of main resources (`!has(request.subResource) || request.subResource == ''`), only namespaces
+labelled `clearance.hangar.io/protected=true`; admit when the stamped object is listed in a valid grant at that hash.
+Each case below was a server-side dry run impersonating the controller ([run-c.sh](spikes/g-argo-1/run-c.sh)):
+
+| Case | Native VAP (Warn) | Kyverno ValidatingPolicy (Audit, Warn) |
+| --- | --- | --- |
+| listed, stamped hash | admitted | admitted (when Kyverno was up) |
+| stamp changed | warned: does not list ... at sha256:00 | warned |
+| unlisted object | warned | warned |
+| no stamp | warned | warned |
+| another writer (cluster admin) | not matched | not matched |
+| the `scale` subresource as the controller | not matched | not matched |
+| grant marked invalid (`status.valid: false`) | warned | not checked: Kyverno has a clock, so it checks `expiresAt` instead (warned: expired) |
+| grant named by the stamp does not exist | n/a (selector) | warned: not found |
+| two active grants, the object in one | **warned by the other**: `paramRef` by selector evaluates every matching grant and each must pass | admitted (the stamp names the grant, `resource.Get` reads that one) |
+| no grant at all, `parameterNotFoundAction: Deny` | **refused, in Warn**: a missing param is a binding error, not a validation result, so `validationActions: [Warn]` does not soften it. Argo's whole sync failed on it | n/a |
+| no grant at all, `parameterNotFoundAction: Allow` | admitted silently (no warning, even with a bad stamp) | n/a |
+| Kyverno's admission controller down (234 to 237 restarts on hangar-dev during the spike) | unaffected | **refused**: `failed calling webhook ... connection refused` or `context deadline exceeded` (10 s timeout), in Audit/Warn, because the policy is `failurePolicy: Fail`. Argo failed to sync the Deployment four times in a row; 16 of 30 webhook calls were rejected with 503 |
+| the policy deleted while Kyverno is down | gone at once | its webhook stayed about 4 minutes, until the controller came back to reconcile it |
+
+Cost and latency:
+
+- **CEL cost**, measured with the API server's own admission CEL compiler and evaluator (k8s.io/apiserver v0.36.3,
+  [celcost](spikes/g-argo-1/celcost/cost_test.go)): with the grant's objects as a **list** and `exists()`, a
+  200-object grant costs 4,647 units (2,000 objects: 46,047); with a **map** keyed by group/kind/name, 52 units
+  whatever the size. The budget is 10,000,000 per binding and 1,000,000 per expression, so neither shape is close,
+  but the map is constant and is the one chosen. The API server type-checked the policy against the CRD's schema
+  with no warnings.
+- **Latency** (API server metrics on hangar-dev): the VAP's checks took 21 ms for 20 evaluations, about 1 ms each;
+  the Kyverno webhook averaged 0.5 to 1.2 s per call when it answered.
+- Kyverno's 1.19 webhook is fine-grained: it carried the policy's namespace selector and match condition, so its blast
+  radius was the policy's scope. Inside that scope, though, its availability is the gate's.
+
+What follows for G-ARGO-2:
+
+- **Native VAP.** One policy, one binding, `paramRef` by selector `clearance.hangar.io/active=true` with no
+  namespace (the grant is read from the admitted object's own namespace).
+- **Exactly one active grant per protected namespace.** Because every selected grant must pass, the agent labels only
+  the newest cleared grant active and that grant lists **every** object of its tree (with `changed` marking the diff),
+  so unchanged objects stay admitted. Older grants stay for the record, unlabelled.
+- **Expiry is the agent's.** Kubernetes CEL in admission has no clock; the agent sets `status.valid` (status
+  subresource, written only by the agent) and removes the active label on expiry, and the policy checks
+  `status.valid`.
+- **The Warn to Deny toggle flips two fields**, `validationActions` and `parameterNotFoundAction` (Allow in Warn,
+  Deny in Deny), and Warn has a gap the agent covers: with no grant, nothing warns.
+- `auditAnnotations` must be typed: `string(params.metadata.name)` (an untyped `params.metadata.name` is refused at
+  create).
+- Kyverno is not used for the gate. It stays Hangar's Flight-registry policy engine; a Kyverno outage must not decide
+  whether a protected sync can land.
+
+### (d) The outcome source
+
+The same Application was synced with Argo CD Notifications sending a webhook on every finished operation
+([50-notifications.yaml](spikes/g-argo-1/manifests/50-notifications.yaml)) and a watch on the Application beside it
+([run-d.sh](spikes/g-argo-1/run-d.sh)):
+
+| | Watch on Application status | Notifications webhook |
+| --- | --- | --- |
+| receiver or agent up | saw `Running` and then `Succeeded` within a second of `finishedAt` | delivered once, about 3 s after `finishedAt` |
+| receiver down for one sync (30 s) | saw it (a watch relists on reconnect, so a restarted agent catches up from state) | 4 attempts in 8 s, then `giving up`, and the trigger was marked sent: **the outcome was lost for good** |
+| first start | the current state | it back-filled two operations that had finished 9 and 22 minutes earlier |
+| multi-source | `status.sync.revisions` and `status.operationState.syncResult.revisions` (plural) | the template's `.app.status.sync.revision` was empty (`<no value>`) |
+| credential | the agent's own read of Applications on its cluster | the notifications controller would hold a token for the core on the protected cluster |
+
+Glidepath's relay already lives with this (its doc: Rollouts and Argo notifications are at-most-once and fail
+silently; the 15-minute heartbeat is the retry). An outcome record cannot wait for a heartbeat: it is what C-2
+signs. **The agent watches.** It keys each outcome by the operation's `finishedAt` and the Application's UID, posts
+it once (`deploy.outcome` through `POST /v1/records`, or the change-bound route when C-10 has it), and on restart
+reposts the last operation, which the core must answer idempotently.
+
+### (e) How the CMP on hangar-prod reaches the core on hangar-dev
+
+The path exists: hangar-prod Backstage (service account `app-backstage-prod/backstage-ingestor`) holds a projected
+token with audience `clearance`, reaches `clearance.hangar-dev.local` and `clearance-api.hangar-dev.local` through a
+hostAlias to hangar-dev's ingress (192.168.1.72) and Traefik, and the core verifies the token against hangar-prod's
+public issuer `https://hangarplatform.dev/oidc/hangar-prod` (`CLEARANCE_FOREIGN_*`, principal
+`hangar-prod/<namespace>/<sa>`).
+
+- **More than one service account: supported.** `CLEARANCE_FOREIGN_SERVICE_ACCOUNTS` is a comma-separated list of
+  `<namespace>/<sa>` globs (`internal/authn`, `ForeignWorkloadAuthenticator.Allowed`). A new test,
+  `TestSeveralServiceAccountsOfOneForeignCluster`, proves three prod accounts authenticate as three principals and a
+  sibling account in the same namespace is refused. **Limit:** one foreign cluster per core (one issuer); a second
+  protected cluster needs a list of issuers, a code change for later.
+- **The CMP's identity** is the repo-server pod's service account, `argocd-apps/argocd-apps-repo-server`, with the
+  projected `clearance` token mounted into the CMP sidecar only. **The agent** gets its own,
+  `clearance-system/clearance-argocd-agent` (name to be fixed by G-ARGO-3).
+- **Config changes, all apron values for hangar-dev, no code:**
+
+  | Where | Change |
+  | --- | --- |
+  | `clearance-core` `CLEARANCE_FOREIGN_SERVICE_ACCOUNTS` | add `argocd-apps/argocd-apps-repo-server` and the agent's account |
+  | `clearance-api` `CLEARANCE_FOREIGN_SERVICE_ACCOUNTS` (its own copy) | add the agent's account (the grant feed is read there) |
+  | `CLEARANCE_VERIFIERS` | add `hangar-prod/argocd-apps/argocd-apps-repo-server` (the CMP registers changes) |
+  | `CLEARANCE_PROVIDERS` | `argocd-cmp` for the repo-server principal; `argocd-agent` for the agent's, `kinds: [deploy.outcome, deploy.exception]` |
+  | clearance-api roles | a grant-feed reader role for the agent's principal (today only auditors, notifiers, delegates and owners exist): C-10's work |
+  | HTTPRoute `clearance-github-webhook` | add `Exact /v1/records` (probed from the laptop: `/v1/clearances` reaches the core, 401 without a token; `/v1/records` is a Traefik 404 today) |
+  | hangar-prod, argocd-apps Helm values and the agent's chart | the hostAlias and an egress NetworkPolicy to 192.168.1.72:80 for the repo-server and the agent |
+- **The route is plain HTTP across the LAN**, as Tower's is today (https on `*.hangar-dev.local` is a Traefik 404). A
+  verifier token on that hop is a lab limitation the decision records; a real deployment terminates TLS at the route.
+- **The grant feed's seq is not enough on its own.** C-10 (clearance#58) signs a grant feed per cluster whose seq
+  restarts at 1 if the core's database is rebuilt. G-ARGO-3's grant sync must therefore keep a feed epoch beside the
+  seq it last applied (the chain's genesis hash or a per-database id that the feed carries), so it can tell a rebuilt
+  core (new epoch: start again at 1) from a replay (same epoch, lower seq: refuse) without an operator resetting its
+  stored seq.
+
+### Release records and the Clearance record (decided 2026-11-03)
+
+The owner's decision (hangar D25): **Clearance's signed record is the authority for what was cleared and what
+deployed; Glidepath's release record cross-references it by `releaseId` and the change id.** The release record is
+a pointer, never evidence; when the two disagree, the signed record wins and the disagreement is a finding.
+
+What each carries today:
+
+| Record | Where, who writes | Carries |
+| --- | --- | --- |
+| `release.yaml` `releaseTracking` | the gitops repo, inside the rendered tree; `open-release-pr` | `releaseId` (`<chainId>:<cluster>/<env>`), `cluster`, `appNamespace`; the airframe chart renders `releaseId` onto the Rollout as `hangar.io/release-id` |
+| `release-tracking-<chainId>` ConfigMap, served by glidepath-api `GET /v1/apps/{app}/releases/{chainId}` | hangar-dev; `open-release-pr`, `mark-release-merged`, the relay, the ITSM tasks | PR, image, state machine, facts, drift, the change request |
+| the release log, `releases/<app>@<tag>.yaml` | the gitops repo, outside the tree; Tower, once final | guardrails (every check's result), change request, test evidence, promotion attestation (Rekor `logIndex`), release mode and sign-off, outcome |
+| Clearance's change and `deploy.*` records | the core's chain | the change (repo, PR, head, tree digest, objects, tier and why, approvals), outcome, and from C-2 the signed attestation |
+
+The overlap is the decision about the change (Tower's sign-off block, the guardrail list) and the outcome; the
+release log already holds a promotion attestation by Rekor index, which is the pattern to follow.
+
+**The fields.**
+
+| Record | New fields | Written by, when |
+| --- | --- | --- |
+| Clearance change row and its `deploy.request` | `release: {id}`, the `releaseId` | the registering provider. The CMP reads it from the rendered Rollout's `hangar.io/release-id` (or the values file's `releaseTracking.releaseId` when the app has no Rollout); because it is inside the tree, it is bound by the tree digest, not only claimed. The clearance-gate check sends the same value from `release.yaml` |
+| `deploy.outcome` | `release: {id}` beside `change: {id, tree}` | the agent, from the live Rollout's `hangar.io/release-id` and the object's `clearance.hangar.io/grant` |
+| the attestation predicate (C-2) | `release: {id}` | the core's signer, copied from the change |
+| `release-tracking-<chainId>` ConfigMap | `clearanceId`, `clearanceTree`, `clearanceRequestSeq`, `clearanceRequestHash` | the `clearance-gate` task, right after `POST /v1/clearances` answers (the answer gains the `deploy.request` record's `seq` and `hash`) |
+| glidepath-api `GET /v1/apps/{app}/releases/{chainId}` | `clearance: {id, tree, request: {seq, hash}}` | glidepath-api, from the ConfigMap |
+| the release log `releases/<app>@<tag>.yaml` | `clearance: {id, tree, state, request: {seq, hash}, outcome: {seq, hash}, attestation: {digest, rekorLogIndex}}` | Tower, when it writes the final outcome, read from clearance-api `GET /v1/clearances/{id}` |
+| `release.yaml` `releaseTracking` | **nothing new** | it is inside the rendered tree: a change id written there would change the tree it names, so it carries only `releaseId`, as today |
+
+**Following the link.**
+
+- *From Clearance to the release.* A `deploy.request` or `deploy.outcome` names `release.id`. The verifier splits it
+  into the chain id and `<cluster>/<env>`, reads the release (glidepath-api `GET /v1/apps/{app}/releases/{chainId}`,
+  or the release log file after the sweep), and checks that its `clearance.id` is this change and its `clearance.tree`
+  is this tree digest.
+- *From the release to Clearance.* The release log's `clearance.request.seq` and `hash` name a record: the verifier
+  reads it (`GET /v1/evidence/{seq}` on clearance-api, or the packet offline), checks the hash, checks that the chain
+  verifies through it, and checks that the record's `release.id` and tree are this release's. The attestation is
+  checked with `cosign verify-attestation` against the tree digest and the Rekor index the log names.
+- A pointer that does not round-trip is a finding (`deploy.exception`-style, raised by `clearance verify` and shown by
+  Tower), never a reason to trust the release record over the chain.
+
+**What changes where.**
+
+- **G-ARGO-4 (CMP):** read `releaseId` from the rendered tree and send `release.id` with the registration.
+- **G-ARGO-3 (agent):** put `release.id` and `change.id` on every `deploy.outcome`.
+- **C-10 / G-ARGO-6 (core):** store `release_id` on the change; `GET /v1/clearances?release=<releaseId>`; return the
+  `deploy.request` record's `seq` and `hash` in the registration answer and in `GET /v1/clearances/{id}`; the signer
+  copies `release.id` into the predicate.
+- **Glidepath `open-release-pr`:** nothing new in `release.yaml`, deliberately. It keeps writing
+  `releaseTracking.releaseId` into the tree (that is how the CMP learns the release), and the release-tracking
+  ConfigMap it creates gains the four `clearance*` keys, empty until the gate task fills them.
+- **Glidepath `clearance-gate` task and glidepath-api:** the task sends `release.id` and writes the four keys; the API
+  returns them (G-ARGO-6 already names `clearanceId` and `treeDigest`).
+- **Tower:** writes the `clearance:` block into the release log with the final outcome; Hand-flown's `signoff` block
+  retires with the sign-off status (decision 2 above), replaced by the clearance block.
+- Clearance stays installable without Glidepath: `release` is an optional, opaque identifier on the change, and the
+  annotation it is read from is deployment vocabulary (Hangar's `hangar.io/release-id`), not product code.
+
+### Card changes this pass recommends
+
+| Card | Change |
+| --- | --- |
+| G-ARGO-2 | objects as a map keyed `<group>/<kind>/<name>` (a list may stay for display); exactly one active grant per namespace; `status.valid` set by the agent; the Warn toggle also flips `parameterNotFoundAction`; typed `auditAnnotations` |
+| G-ARGO-3 | the grant sync keeps a feed epoch with its seq (C-10's feed seq restarts on a rebuilt database); the outcome source is the watch, keyed by operation; expiry and the active label are the agent's; the exception scan hashes Argo's `last-applied-configuration` |
+| G-ARGO-4 | the plugin replaces the Helm source; one generating source per protected app; chart fetched by tag and recorded by peeled commit; namespace set before hashing; lookup by tree digest for the merge commit; `release.id` from the tree |
+| G-ARGO-6 | the release-record fields above, in both directions |
+| C-10 | registration without `pr` (by app, env and tree); the grant-feed reader role on clearance-api; `release` on the change; record `seq`/`hash` in answers |
+| G-ARGO-7 | the route's `Exact /v1/records`, the hostAlias and egress on hangar-prod, the three foreign-list entries |
+
+### Reproducing the spikes (hangar-dev only)
+
+`spikes/g-argo-1/up.sh` installs a namespaced Argo CD 3.5.0 with the spike plugin in `clearance-spike-argo`
+(deploying into `clearance-spike-prot`), `kubectl apply -f manifests/40-apps.yaml` creates the four Applications,
+`manifests/20-grant-crd.yaml`, `30-vap.yaml`, `31-kyverno.yaml` and `32-mutating.yaml` the CRD and policies (Warn),
+`run-c.sh` and `run-d.sh` run spikes c and d, `celcost` (`go test -v ./...` in that directory) measures the CEL cost,
+and `down.sh` removes everything. The scripts refuse any context but hangar-dev. The spike plugin is not G-ARGO-4:
+it registers nothing and keeps no cache.
 
 ## Built, phase 1a (v0.19.0): the gate's core
 
@@ -616,3 +897,147 @@ Kyverno CLI against the target cluster's policy bundle, exactly as the `policy-v
 `docs/admin/policy-validation.md`; the two tasks share the evaluation), and sends `admission` and `policyCommit`.
 Argo CD's config management plugin (G-ARGO) sends the same `admission` object from its own offline evaluation of the
 tree it rendered; `clearance register` sends none today (`not-evaluated`).
+
+## The manifest-tree digest (Built)
+
+A change binds to what will be applied through one digest, the **manifest-tree digest** of the rendered "after"
+tree. `clearance register` computes it from `--after`, Glidepath's `clearance-gate-` check computes the same value
+for the same render (it always has), and the Argo CD plugin (G-ARGO) is to stamp the same value; the core keeps it as
+the change's `tree_digest` and `subject.digests.sha256`, and the provider protocol's outcome compares against it.
+
+1. **Objects.** Every document in the directory's `*.yaml`, `*.yml` and `*.json` files (recursively, in path order)
+   that has `apiVersion`, `kind` and `metadata.name`; a `*List`'s `items` count one by one. YAML is read as PyYAML's
+   SafeLoader reads it (YAML 1.1 scalars; `internal/gate/render`). An object's identity is
+   `(apiVersion, kind, metadata.namespace or "", metadata.name)`; a later document with the same identity replaces an
+   earlier one.
+2. **Object hash.** The lowercase hex sha256 of the object's canonical JSON: keys sorted by code point, separators
+   `,` and `:` (no spaces), every character outside space to `~` escaped as `\uXXXX` (Python's
+   `json.dumps(obj, sort_keys=True, separators=(",", ":"))`). This is also each object's `digest` in `objects`.
+3. **Lines.** One per object: `apiVersion/kind/namespace/name:` followed by the object hash (an empty namespace
+   leaves `//`, as in `rbac.authorization.k8s.io/v1/ClusterRole//shop-reader:2f89...`).
+4. **Root.** The lines sorted byte-wise, joined with `\n` (no trailing newline), and the lowercase hex sha256 of
+   that. It is sent as 64 hex digits (a `sha256:` prefix is accepted and dropped).
+
+`internal/gate/render/testdata/parity` pins the definition: its three objects' hashes and the root
+`27cbba8e2f2c...1238` were computed with Glidepath's own Python over the same file, and
+`TestTreeDigestIsGlidepaths` holds the Go to them. Before G-TF-1, `clearance register` hashed the canonical
+documents themselves (sha256 over each object's canonical JSON and a newline, in identity order), so its digest for a
+render differed from Glidepath's; a change registered by a v0.30.0 or earlier `clearance register` keeps the digest it
+was registered with.
+
+**Placeholders.** A `treeDigest` of 64 copies of one hex digit, or sha256 of nothing (the tree of an empty render),
+is a placeholder: it binds the change to no tree, only to its commit. (hangar-dev's records 402 to 405, on
+2026-11-01, carry an all-zero tree; they were a hand-made registration by `app-gate-api-cicd/pipeline-runner`, not
+`clearance register`, whose registrations there, 468 to 474 and 641, carry a real tree.) What the core does with one
+is `CLEARANCE_GATE_UNBOUND_TREE` (chart `gate.unboundTree`):
+
+- `flag`, the default for this release, for backward compatibility: the change is registered and tiered as before,
+  with one more reason, `{"the tree", "tree:unbound", 0}`, `subject.flags: ["unbound-tree"]` and no
+  `subject.digests.sha256`; its records' subject carries `gitCommit` only.
+- `refuse`: `DG-UNBOUND` (400), nothing recorded. The plan is to make this the default one release later, once every
+  registrar sends a real tree.
+
+`clearance register` itself refuses an `--after` that holds no manifests (exit 2) rather than send the empty tree.
+
+## The terraform-plan subject (G-TF-1)
+
+Status: **Built** in the core (classification, the request and the record); **not built**: anything that produces a
+plan subject. The plan parser and CI step that post it (G-TF-2), the hold between plan and apply, and detection of
+applies that went around the gate come next; nothing in Glidepath or the lab's `jfillman/hangar-infra` posts one yet.
+
+A change's **subject** is what it binds to. Beside the Kubernetes object diff (kind `manifest-tree`, described by
+`treeDigest` and `objects`) and an agent definition's release (kind `definition`), a change can now be a saved
+Terraform plan. The verifier sends it as the request's `subject` (`schemas/change-request.schema.json`, the whole
+request's schema; `POST /v1/clearances` from a verifier, `CLEARANCE_VERIFIERS`, or from a GitHub Actions workflow's
+OIDC token, which registers for its own repository only, `DG-REPO`):
+
+```json
+"subject": {
+  "kind": "terraform-plan",
+  "planDigest": "<sha256 of the saved plan file, terraform plan -out>",
+  "planJsonDigest": "<sha256 of the redacted plan JSON, terraform show -json with sensitive values replaced>",
+  "workspace": {"backend": "s3", "key": "network/lab/terraform.tfstate", "name": "default"},
+  "versions": {"terraform": "1.9.8", "providers": {"registry.terraform.io/hashicorp/aws": "5.70.0"}},
+  "summary": {"create": 0, "update": 1, "replace": 0, "destroy": 1, "destroyedAddresses": ["aws_instance.bastion"]},
+  "targeted": false,
+  "variableSetDigest": "<sha256 of the variable set>",
+  "resources": [
+    {"address": "aws_vpc.lab", "type": "aws_vpc", "actions": ["update"], "fields": ["/tags/Owner"]},
+    {"address": "aws_instance.bastion", "type": "aws_instance", "actions": ["delete"]}
+  ]
+}
+```
+
+- `resources` is one entry per `resource_changes[]` of the plan JSON: the address, the type (the address must name
+  it), Terraform's action list (`no-op`, `create`, `read`, `update`, `delete`, `delete`+`create`,
+  `create`+`delete`), the JSON pointers of the attributes an update changes, and Terraform's `action_reason`
+  (`actionReason`; `replace_by_request` is a `-replace`). The card's shape names only the summary; the resources were
+  added because the tier table needs each resource's type and attributes, and the classifier names their addresses.
+- `summary` must be exactly what `resources` says (the counts, and `destroyedAddresses` = the addresses with
+  `["delete"]`), or the request is refused; a verifier cannot show a destroy in one and hide it from the other.
+- `targeted` says the plan was made with `-target`.
+- With a plan subject, `cluster` and `treeDigest` may be omitted (a `treeDigest` that is not the plan's digest is
+  refused), `objects` must be empty and `definition` absent. The change's `tree_digest` is `planDigest`, so the
+  provider protocol's outcome check reads the same field for both kinds.
+- Every digest is sha256 (bare hex or `sha256:`); a placeholder plan, plan-JSON or variable-set digest is refused
+  `DG-UNBOUND`. **Secret variable values are never sent or stored:** the record carries the redacted plan JSON's
+  digest and the variable set's hash; `fields` are attribute names, never values.
+
+**The Terraform baseline** (`GatePolicy`: `TFTier3Types`, `TFTagFields`), the maximum over the plan's resource
+changes (no-op and read entries are skipped) and its paths (the path rules apply: a `clearance.yaml` in the infra
+repo is tier 3):
+
+| Rule | Tier | Reason (subject, rule) |
+|---|---|---|
+| destroy (`["delete"]`) in a protected workspace | 3 | the address, `tf:destroy` |
+| replace (`delete`+`create`, either order) in a protected workspace | 3 | the address, `tf:replace` |
+| any change to an IAM, security-group, network-ACL, KMS or database type, a tag included | 3 | the address, `tf-type:iam` / `security-group` / `network-acl` / `kms` / `database` |
+| an update whose every changed attribute is under `/tags`, `/tags_all`, `/labels` or `/description` | 1 | the address, `tf:tag-only` |
+| everything else (create, other updates, destroy or replace in an unprotected workspace, an update naming no attributes) | 2 | the address, `tf:create` / `tf:update` / `tf:destroy` / `tf:replace` |
+| a plan that changes nothing | 1 | `the plan`, `tf:no-change` |
+| `-target` (`targeted`) or a `-replace` (`actionReason: replace_by_request`): one tier up, at least 2, at most 3 | +1, floor 2 | `the plan`, `tf:targeted`; the address, `tf:replace-requested` |
+
+Then, as for manifests: an unknown proposer is denied (`DG-PROVENANCE`); a tier-1 plan clears by policy only with
+`ci: pass` and `provenance` confirmed or not-agent (there is no `render` check for a plan), else it is tier 2
+(`checks:...`); tier 2 holds for one owner, tier 3 for one owner and one outside person. Tier 3 is never cleared by
+policy, so **a destroy in a protected workspace never clears by policy**. The decision's `result` names the
+workspace and what set the tier: `tier 3: holding for 1 from group:... and 1 from outside (...) (s3:network/lab/
+terraform.tfstate#default, protected; set by aws_instance.bastion)`.
+
+The type globs (fnmatch on the resource type), by category: **iam** `aws_iam_*`, `aws_ssoadmin_*`,
+`aws_organizations_policy*`, `aws_lambda_permission`, the S3, SQS, SNS, ECR and Secrets Manager resource policies,
+`google_*_iam_*`, `google_service_account*`, `google_organization_policy`, `azurerm_role_assignment`,
+`azurerm_role_definition`, `azurerm_user_assigned_identity`, `azuread_*`, `kubernetes_*role*`,
+`kubernetes_service_account*`; **security-group** `aws_security_group`, `aws_security_group_rule`,
+`aws_default_security_group`, `aws_vpc_security_group_*`, `google_compute_firewall*`,
+`azurerm_network_security_group`, `azurerm_network_security_rule`; **network-acl** `aws_network_acl`,
+`aws_network_acl_*`, `aws_default_network_acl`; **kms** `aws_kms_*`, `google_kms_*`, `azurerm_key_vault*`;
+**database** `aws_db_*`, `aws_rds_*`, `aws_dynamodb_*`, `aws_docdb_*`, `aws_neptune_*`, `aws_redshift_*`,
+`aws_elasticache_*`, `aws_memorydb_*`, `aws_dax_*`, `aws_keyspaces_*`, `aws_timestreamwrite_*`, `google_sql_*`,
+`google_spanner_*`, `google_bigtable_*`, `google_firestore_*`, `google_alloydb_*`, `azurerm_*sql*`,
+`azurerm_cosmosdb_*`, `azurerm_redis_*`. `GET /v1/clearance-policy` serves them under `terraform`.
+
+**Protected workspaces.** A workspace is protected when the request says `protected` (the default, as for an
+environment) or the repo's `clearance.yaml` names it. `clearance.yaml` gains a `workspaces:` block, tighten-only
+like the gitops tiers:
+
+```yaml
+workspaces:
+  protected: ["network/*", "prod"]        # globs on the state key or the workspace name: protect more, never fewer
+  tiers:
+    "3": {types: ["aws_route53_*"]}       # more tier-3 types (reason tf-type:clearance.yaml)
+    "2": {types: ["aws_vpc"]}             # types whose tag-only update is still tier 2 (tf-type:tier2)
+```
+
+Anything else in the block (an `unprotected` list, `tiers` 0 or 1, a key other than `types`, a value that is not a
+list of strings) is `DG-POLICY`, and, as for the gitops block, the change is denied by policy rather than the file
+ignored. Approvers and the TTL are the file's top-level `approvers` and `ttlDays`, shared by both kinds.
+
+**The record.** The change on record (`GET /v1/clearances`, `/v1/clearances/{id}`) carries `subject`: the request's
+plan subject plus `digests` (`sha256` = the plan, `planJson`, `variableSet`, `gitCommit` = the head). Each
+`deploy.*` record's subject is `{kind: terraform-plan, name: app/env, digests}` (claimed: the verifier described the
+plan). A manifest change's subject is `{kind: manifest-tree, digests: {sha256, gitCommit}}`, a definition release's
+`{kind: definition, name: <agent>, digests}`; a change stored before G-TF-1 reads back as `manifest-tree` from its
+`tree_digest`. clearance-api returns the stored change as it is, so the list shows `subject.kind` for every change
+registered from this release on (and for older ones once they are written again). A cleared plan's clearance token
+(C-1) has `subjects.kind: terraform-plan` and binds the plan's digest as `subjects.plan_digest` (no `tree_root`).

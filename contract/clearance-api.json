@@ -178,6 +178,16 @@
           "state": {
             "type": "string"
           },
+          "subject": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateSubject"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "superseded_by": {
             "type": [
               "string",
@@ -248,6 +258,7 @@
           "repo_policy_digest",
           "requirement",
           "state",
+          "subject",
           "superseded_by",
           "target",
           "task_id",
@@ -987,6 +998,73 @@
         ],
         "type": "object"
       },
+      "GatePlanSummary": {
+        "properties": {
+          "create": {
+            "type": "integer"
+          },
+          "destroy": {
+            "type": "integer"
+          },
+          "destroyedAddresses": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "replace": {
+            "type": "integer"
+          },
+          "update": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "create",
+          "destroy",
+          "replace",
+          "update"
+        ],
+        "type": "object"
+      },
+      "GatePolicyTerraform": {
+        "properties": {
+          "protectedWorkspaces": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "tagOnlyFields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "tier2Types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "tier3Types": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "protectedWorkspaces",
+          "tagOnlyFields",
+          "tier2Types",
+          "tier3Types"
+        ],
+        "type": "object"
+      },
       "GatePolicyTiers": {
         "properties": {
           "0": {
@@ -1067,6 +1145,9 @@
               "null"
             ]
           },
+          "terraform": {
+            "$ref": "#/components/schemas/GatePolicyTerraform"
+          },
           "tiers": {
             "$ref": "#/components/schemas/GatePolicyTiers"
           },
@@ -1089,6 +1170,7 @@
           "outage",
           "outsideGroups",
           "repoPolicy",
+          "terraform",
           "tiers",
           "trustedRegistries",
           "ttlDays",
@@ -1141,6 +1223,115 @@
         ],
         "type": "object"
       },
+      "GateResource": {
+        "properties": {
+          "actionReason": {
+            "type": "string"
+          },
+          "actions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "address": {
+            "type": "string"
+          },
+          "fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "actions",
+          "address",
+          "type"
+        ],
+        "type": "object"
+      },
+      "GateSubject": {
+        "properties": {
+          "digests": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "flags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "planDigest": {
+            "type": "string"
+          },
+          "planJsonDigest": {
+            "type": "string"
+          },
+          "resources": {
+            "items": {
+              "$ref": "#/components/schemas/GateResource"
+            },
+            "type": "array"
+          },
+          "summary": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GatePlanSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "targeted": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "variableSetDigest": {
+            "type": "string"
+          },
+          "versions": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateVersions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "workspace": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateWorkspace"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "digests",
+          "kind"
+        ],
+        "type": "object"
+      },
       "GateTokenView": {
         "properties": {
           "dsse": {
@@ -1169,6 +1360,43 @@
           "jwt",
           "key_id",
           "nonce"
+        ],
+        "type": "object"
+      },
+      "GateVersions": {
+        "properties": {
+          "providers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "terraform": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "providers",
+          "terraform"
+        ],
+        "type": "object"
+      },
+      "GateWorkspace": {
+        "properties": {
+          "backend": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "backend",
+          "key",
+          "name"
         ],
         "type": "object"
       },
@@ -1464,6 +1692,16 @@
           "state": {
             "type": "string"
           },
+          "subject": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateSubject"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "superseded_by": {
             "type": [
               "string",
@@ -1534,6 +1772,7 @@
           "repo_policy_digest",
           "requirement",
           "state",
+          "subject",
           "superseded_by",
           "target",
           "task_id",

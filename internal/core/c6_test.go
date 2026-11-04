@@ -54,7 +54,7 @@ func TestTheTrustedRegistryRuleFiresFromTheEnvironment(t *testing.T) {
 	body := func(image, head string) any {
 		var v any
 		raw := `{"app":"gate-api","env":"prod","cluster":"prod-1","repo":"o/gitops-gate-api","pr":1,"head":"` + head +
-			`","proposer":"user:dana","owner":"group:default/team","treeDigest":"` + strings.Repeat("c", 64) +
+			`","proposer":"user:dana","owner":"group:default/team","treeDigest":"` + strings.Repeat("ab", 32) +
 			`","objects":[{"apiVersion":"apps/v1","kind":"Deployment","namespace":"ns","name":"gate-api","op":"changed",` +
 			`"fields":["/spec/template/spec/containers/0/image"],"images":["` + image + `"]}],` +
 			`"checks":{"ci":"pass","provenance":"not-agent","render":"ok"}}`
@@ -67,7 +67,7 @@ func TestTheTrustedRegistryRuleFiresFromTheEnvironment(t *testing.T) {
 	}
 	ci := authn.Principal{ID: "ci/runner", Kind: authn.KindServiceAccount}
 	out, err := c.Gate.Register(context.Background(), ci, body("docker.io/library/gate-api:1", strings.Repeat("1", 40)))
-	if err != nil || out.Tier != 2 || out.Reasons[0].Rule != "image:not-trusted-registry" || out.State != gate.StateHolding {
+	if err != nil || out.Tier != 2 || out.Reasons[len(out.Reasons)-1].Rule != "image:not-trusted-registry" || out.State != gate.StateHolding {
 		t.Fatal(out, err)
 	}
 	out, err = c.Gate.Register(context.Background(), ci, body("ghcr.io/riley-roooo/gate-api@sha256:"+strings.Repeat("e", 64), strings.Repeat("2", 40)))

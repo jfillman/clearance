@@ -41,7 +41,17 @@ type Config struct {
 	Protected []string `json:"protected"`
 	// BreakglassMaxTTL caps a break-glass window (CLEARANCE_BREAKGLASS_MAX_TTL; 0 is MaxBreakglassTTL, never more).
 	BreakglassMaxTTL time.Duration `json:"breakglassMaxTTL"`
+	// UnboundTree is what a manifest-tree registration with a placeholder treeDigest gets (CLEARANCE_GATE_UNBOUND_TREE):
+	// "flag" (the default for one release, then planned to be refuse: registered, flagged tree:unbound, bound to its commit only) or "refuse"
+	// (DG-UNBOUND, 400).
+	UnboundTree string `json:"unboundTree"`
 }
+
+// Unbound-tree modes (Config.UnboundTree).
+const (
+	UnboundFlag   = "flag"
+	UnboundRefuse = "refuse"
+)
 
 // Owners says who owns an app (a group ref) when the check does not: on Hangar, the Backstage Component's
 // spec.owner. "" when unknown.
@@ -170,7 +180,7 @@ func (w *writer) record(principal string, via *string, tool string, c *Change, d
 		"ts": pycompat.ISO(w.now), "task_id": strOrNil(c.TaskID), "session": nil, "parent": nil, "principal": principal,
 		"agent": strOrNil(c.Agent), "tool": tool, "tier": nil, "decision": decision, "rule": strOrNil(rule),
 		"target": c.TargetOf(), "args_sha256": pycompat.ArgsDigest(args), "result": result, "app": c.App,
-		"boundary": "deployment", "change": c.Summary(), "policy": c.PolicyGroup(),
+		"boundary": "deployment", "change": c.Summary(), "subject": c.recordSubject(), "policy": c.PolicyGroup(),
 	}
 	for _, x := range extra {
 		for k, v := range x {
@@ -252,6 +262,10 @@ func (s *Service) Register(ctx context.Context, p authn.Principal, body any) (*C
 			"Drop the field; a change to an environment the deployment does not protect is cleared at tier 0 (unprotected).", 400)
 	}
 	req.Protected = s.Protects(req.Cluster, req.Env)
+	if s.Config.UnboundTree == UnboundRefuse && req.Kind() != KindTerraformPlan && Unbound(req.TreeDigest) {
+		return nil, gerr("DG-UNBOUND", "treeDigest is a placeholder, not the digest of the rendered tree",
+			"Send the manifest-tree digest of what will be applied (`clearance register` computes it; docs/gate.md, The manifest-tree digest).", 400)
+	}
 	if bound, ok := p.Claims["repository"].(string); ok {
 		// A workflow's OIDC token registers changes for its own repository only (`clearance register`).
 		if req.Repo != lower(bound) {

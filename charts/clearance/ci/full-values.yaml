@@ -45,6 +45,7 @@ gate:
   trustedRegistries: ["ghcr.io/riley-roooo/"]
   protectedEnvironments: ["hangar-prod/*"]
   breakglassMaxTTL: 2h
+  unboundTree: refuse
 agents:
   configMap: clearance-agents
 signing:

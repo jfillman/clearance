@@ -103,6 +103,10 @@ gate:
   # CLEARANCE_BREAKGLASS_MAX_TTL: the longest break-glass window an admin may open, a Go duration (1m to 4h; empty:
   # 4h, the product's ceiling).
   breakglassMaxTTL: ""
+  # CLEARANCE_GATE_UNBOUND_TREE: flag | refuse. A manifest-tree registration whose treeDigest is a placeholder (64
+  # copies of one digit, or sha256 of nothing) is flagged tree:unbound and binds to its commit only, or refused
+  # (DG-UNBOUND). Empty: flag (the core's default for one release; refuse is planned to become it).
+  unboundTree: ""
 
 # -- The clearance token (C-1; docs/core.md, The clearance token) ------------------------------------------------
 # The core signs a short-lived token for every cleared change with an ECDSA P-256 key. The key is never in this

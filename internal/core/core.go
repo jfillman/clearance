@@ -29,6 +29,9 @@
 //	RUNTIME_IMAGES_EXTRA          globs a definition's runtime.image may match
 //	CLEARANCE_TRUSTED_REGISTRIES  comma-separated image prefixes, each ending in "/", a tier-1 image bump may come from;
 //	                              an image from anywhere else is tier 2 (image:not-trusted-registry). Unset: any registry
+//	CLEARANCE_GATE_UNBOUND_TREE   flag (default) | refuse: a manifest-tree registration whose treeDigest is a placeholder
+//	                              (64 copies of one digit, or sha256 of nothing) is flagged tree:unbound, or refused
+//	                              DG-UNBOUND (docs/gate.md, The manifest-tree digest)
 //	CLEARANCE_GITHUB_APP_ID, CLEARANCE_GITHUB_APP_KEY_FILE, CLEARANCE_GITHUB_APP_WEBHOOK_SECRET_FILE
 //	                              the Clearance GitHub App: all three or none
 //	CLEARANCE_GITHUB_APP_COMMENTS off | agent-failures
@@ -164,6 +167,11 @@ func FromEnv(getenv func(string) string) (Config, error) {
 				gate.MinBreakglassTTL, gate.MaxBreakglassTTL)
 		}
 		cfg.Gate.BreakglassMaxTTL = d
+	}
+	switch cfg.Gate.UnboundTree = get("CLEARANCE_GATE_UNBOUND_TREE", gate.UnboundFlag); cfg.Gate.UnboundTree {
+	case gate.UnboundFlag, gate.UnboundRefuse:
+	default:
+		return cfg, fmt.Errorf("CLEARANCE_GATE_UNBOUND_TREE is flag or refuse, not %q", cfg.Gate.UnboundTree)
 	}
 	for _, r := range cfg.Gate.TrustedRegistries {
 		// The check is a plain prefix test, so a prefix without its trailing slash would also admit a look-alike

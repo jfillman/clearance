@@ -138,12 +138,18 @@ func (t *Tokens) Claims(c *Change, nonce string, now, exp time.Time) token.Claim
 	if c.TaskID != nil {
 		prov.TaskID = *c.TaskID
 	}
+	// The token binds what the change binds: a saved plan by its digest (kind terraform-plan, plan_digest), else
+	// the tree root (manifest-tree; a definition release binds to its tree digest the same way).
+	subj := token.Subjects{Kind: KindManifestTree, Repo: c.Repo, PR: c.PR, Commit: c.Head, Base: c.Base,
+		TreeRoot: c.TreeDigest, Images: images}
+	if c.Subject != nil && c.Subject.Kind == KindTerraformPlan {
+		subj.Kind, subj.TreeRoot, subj.PlanDigest = KindTerraformPlan, "", c.Subject.PlanDigest
+	}
 	return token.Claims{
 		Type: token.Type, Issuer: t.issuer(), Subject: c.ID, IssuedAt: now.Unix(), Expires: exp.Unix(), Nonce: nonce,
 		Clearance: token.Clearance{ID: c.ID, ClearedBy: clearedBy, DecidedAt: decided},
-		Subjects: token.Subjects{Kind: "manifest-tree", Repo: c.Repo, PR: c.PR, Commit: c.Head, Base: c.Base,
-			TreeRoot: c.TreeDigest, Images: images},
-		Objects: objects, Target: token.Target{Cluster: c.Cluster, Env: c.Env, App: c.App}, Tier: c.Tier,
+		Subjects:  subj,
+		Objects:   objects, Target: token.Target{Cluster: c.Cluster, Env: c.Env, App: c.App}, Tier: c.Tier,
 		Policy: pol, Provenance: prov, Approvals: approvals,
 	}
 }
