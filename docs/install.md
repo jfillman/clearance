@@ -103,6 +103,7 @@ unset, so the core's default applies. Lists are joined with commas.
 | `gate.modelRoutes` | `MODEL_ROUTES` | `alias=upstream` pairs a definition release may name. |
 | `gate.runtimeImagesExtra` | `RUNTIME_IMAGES_EXTRA` | Globs a definition's `runtime.image` may match. |
 | `gate.trustedRegistries` | `CLEARANCE_TRUSTED_REGISTRIES` | Image prefixes, each ending in `/`, a tier-1 image bump may come from; others are tier 2. Empty: any registry (the product default; Hangar sets its own in Apron). |
+| `gate.unboundTree` | `CLEARANCE_GATE_UNBOUND_TREE` | `flag` or `refuse`: a manifest-tree registration whose `treeDigest` is a placeholder (64 copies of one digit, or sha256 of nothing) is flagged `tree:unbound` and binds to its commit only, or refused `DG-UNBOUND`. Empty: `flag` (the default for one release, then `refuse` is planned; [gate.md](gate.md#the-manifest-tree-digest-built)). |
 | `agents.configMap` | `CLEARANCE_AGENTS_DIR` | A ConfigMap of bundled agent definitions, mounted at `/etc/clearance/agents`. |
 
 ### People and other identities

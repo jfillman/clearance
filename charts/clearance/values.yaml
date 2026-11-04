@@ -96,6 +96,10 @@ gate:
   # CLEARANCE_TRUSTED_REGISTRIES: image prefixes, each ending in "/", a tier-1 image bump may come from; a bump from
   # anywhere else is tier 2 (image:not-trusted-registry). Empty: any registry (the product default).
   trustedRegistries: []
+  # CLEARANCE_GATE_UNBOUND_TREE: flag | refuse. A manifest-tree registration whose treeDigest is a placeholder (64
+  # copies of one digit, or sha256 of nothing) is flagged tree:unbound and binds to its commit only, or refused
+  # (DG-UNBOUND). Empty: flag (the core's default for one release; refuse is planned to become it).
+  unboundTree: ""
 
 # -- The clearance token (C-1; docs/core.md, The clearance token) ------------------------------------------------
 # The core signs a short-lived token for every cleared change with an ECDSA P-256 key. The key is never in this

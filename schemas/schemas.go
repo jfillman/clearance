@@ -8,3 +8,9 @@ import _ "embed"
 //
 //go:embed evidence.schema.json
 var EvidenceV1 []byte
+
+// ChangeRequestV1 is schemas/change-request.schema.json: what a verifier registers (POST /v1/clearances), the
+// shape internal/gate ParseRequest decodes.
+//
+//go:embed change-request.schema.json
+var ChangeRequestV1 []byte
