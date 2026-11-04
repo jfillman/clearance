@@ -1,6 +1,6 @@
 # Spike stand-in for G-ARGO-2's ClearanceGrant, in a spike group so it never collides with the real CRD.
 # objects is a list (the card's shape) AND a map keyed "<group>/<kind>/<name>" (the lookup shape), so spike c can
-# measure both.
+# measure both. No status subresource in the spike: the real CRD (G-ARGO-2) has one, written by the agent only.
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
@@ -49,3 +49,7 @@ spec:
                   type: object
                   maxProperties: 2000
                   additionalProperties: {type: string, maxLength: 80}
+            status:
+              type: object
+              properties:
+                valid: {type: boolean}

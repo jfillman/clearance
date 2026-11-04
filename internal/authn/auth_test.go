@@ -689,3 +689,28 @@ func TestJWKSSkipsUnusableKeysAndFailsClosed(t *testing.T) {
 	_, err = garbage.Key(bg, "k1")
 	mustRefuse(t, err, "unavailable")
 }
+
+// G-ARGO-1 (e): one foreign cluster, several workloads. The Argo CD gate's identities on hangar-prod (the CMP in the
+// repo-server, the grant agent) join Tower's backend in CLEARANCE_FOREIGN_SERVICE_ACCOUNTS; each is its own
+// principal, and a sibling service account of the same namespace stays out.
+func TestSeveralServiceAccountsOfOneForeignCluster(t *testing.T) {
+	k, _ := keys(t)
+	prod := "https://hangarplatform.dev/oidc/hangar-prod"
+	allowed := splitList("app-backstage-prod/backstage-ingestor, argocd-apps/argocd-apps-repo-server,clearance-system/clearance-argocd-agent")
+	a := NewForeignWorkloadAuthenticator("hangar-prod", prod, "clearance", staticJWKS(nil, jwksDoc(jwkOf(&k.PublicKey, "k1"))), allowed)
+	tok := func(sub string) string {
+		return idToken(t, k, "k1", map[string]any{"iss": prod, "sub": sub, "email": nil, "email_verified": nil})
+	}
+	for sub, want := range map[string]string{
+		"system:serviceaccount:app-backstage-prod:backstage-ingestor":   "hangar-prod/app-backstage-prod/backstage-ingestor",
+		"system:serviceaccount:argocd-apps:argocd-apps-repo-server":     "hangar-prod/argocd-apps/argocd-apps-repo-server",
+		"system:serviceaccount:clearance-system:clearance-argocd-agent": "hangar-prod/clearance-system/clearance-argocd-agent",
+	} {
+		p, err := a.Authenticate(bg, tok(sub))
+		if err != nil || p.ID != want || p.Kind != KindForeignWorkload {
+			t.Fatalf("%s: got %+v %v", sub, p, err)
+		}
+	}
+	_, err := a.Authenticate(bg, tok("system:serviceaccount:argocd-apps:argocd-application-controller"))
+	mustRefuse(t, err, "may not call")
+}

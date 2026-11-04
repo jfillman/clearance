@@ -1,0 +1,34 @@
+# Spike b: a mutating admission step in the protected namespace (stands in for any mutating webhook), plus the API
+# server's own defaulting. It adds a label and an annotation to Deployments the scratch Argo CD applies.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+metadata:
+  name: spike-mutate-deployments
+  labels: {hangar.io/spike: g-argo-1}
+spec:
+  failurePolicy: Fail
+  reinvocationPolicy: Never
+  matchConstraints:
+    namespaceSelector:
+      matchLabels: {clearance.hangar.io/protected: "true"}
+    resourceRules:
+      - {apiGroups: [apps], apiVersions: [v1], operations: [CREATE, UPDATE], resources: [deployments]}
+  matchConditions:
+    - name: argo-controller-main-resource
+      expression: >-
+        has(request.userInfo.username) &&
+        request.userInfo.username == 'system:serviceaccount:clearance-spike-argo:argocd-application-controller' &&
+        (!has(request.subResource) || request.subResource == '')
+  mutations:
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >-
+          Object{metadata: Object.metadata{labels: {"spike.hangar.io/mutated": "true"}, annotations: {"spike.hangar.io/mutated-by": "map"}}}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicyBinding
+metadata:
+  name: spike-mutate-deployments
+  labels: {hangar.io/spike: g-argo-1}
+spec:
+  policyName: spike-mutate-deployments

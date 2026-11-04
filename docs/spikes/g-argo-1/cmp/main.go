@@ -12,6 +12,8 @@
 //	             parameter at "chartRevision" (a tag), path "chartPath"
 //	deny         exit 1 with a message, the way G-ARGO-4 refuses a tier-3 denial or an outage hold
 //
+// "clearance-cmp-spike hash" hashes live objects from stdin the same way, for spike b.
+//
 // Every object is canonicalised (JSON with sorted keys, server-populated fields dropped), hashed, and stamped with
 // clearance.hangar.io/rendered and clearance.hangar.io/grant; the tree root is the sha256 of the sorted
 // "<apiVersion>/<kind>/<namespace>/<name> <hash>" lines. A ConfigMap carries what the plugin
@@ -45,6 +47,14 @@ const (
 func param(name string) string { return os.Getenv("PARAM_" + strings.ToUpper(name)) }
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "hash" {
+		// Spike b: the same canonical hash over live objects (kubectl get -o json, one object or a List) on stdin.
+		if err := hashStdin(os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "clearance-cmp-spike:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "clearance-cmp-spike:", err)
 		os.Exit(1)
@@ -323,4 +333,31 @@ func objectHash(o map[string]any) (string, error) {
 	}
 	sum := sha256.Sum256(cb)
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
+func hashStdin(in io.Reader, out io.Writer) error {
+	var v map[string]any
+	if err := json.NewDecoder(in).Decode(&v); err != nil {
+		return err
+	}
+	items := []map[string]any{v}
+	if l, ok := v["items"].([]any); ok {
+		items = items[:0]
+		for _, it := range l {
+			if m, ok := it.(map[string]any); ok {
+				items = append(items, m)
+			}
+		}
+	}
+	for _, o := range items {
+		h, err := objectHash(o)
+		if err != nil {
+			return err
+		}
+		md, _ := o["metadata"].(map[string]any)
+		ann, _ := md["annotations"].(map[string]any)
+		stamped, _ := ann[annRendered].(string)
+		fmt.Fprintf(out, "%s live=%s stamped=%s equal=%v\n", objectKey(o), h, stamped, h == stamped)
+	}
+	return nil
 }

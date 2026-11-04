@@ -32,5 +32,7 @@ done
 $K -n clearance-spike-argo apply -f "$HERE/manifests/12-cmp.yaml"
 $K -n clearance-spike-argo apply --server-side -f "$WORK/base.yaml"
 $K apply -f "$HERE/manifests/11-argocd-cluster.yaml"
+$K -n clearance-spike-argo patch configmap argocd-cm --type merge --patch-file "$HERE/manifests/13-argocd-cm-patch.yaml"
+$K -n clearance-spike-argo rollout restart sts/argocd-application-controller
 $K -n clearance-spike-argo rollout status deploy/argocd-repo-server --timeout=300s
 $K -n clearance-spike-argo rollout status sts/argocd-application-controller --timeout=300s

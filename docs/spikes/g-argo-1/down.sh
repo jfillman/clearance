@@ -14,3 +14,4 @@ $K delete mutatingadmissionpolicy -l hangar.io/spike=g-argo-1 --ignore-not-found
 $K delete validatingpolicies.policies.kyverno.io -l hangar.io/spike=g-argo-1 --ignore-not-found
 $K delete namespace clearance-spike-prot clearance-spike-argo --ignore-not-found
 $K delete crd clearancegrants.spike.clearance.hangar.io --ignore-not-found
+$K delete clusterrole -l hangar.io/spike=g-argo-1 --ignore-not-found
