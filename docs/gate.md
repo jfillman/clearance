@@ -70,7 +70,8 @@ agent's but has no receipt (`unknown → agent`) is **denied** outright, as the 
 ## Who clears, and how
 
 - **By policy**: tiers 0 and 1, when the checks hold: CI green on the PR, provenance confirmed (agent or human, per
-  ADR-0027 and the agent gates), the tree renders, admission policies pass offline (ADR-0028). Recorded as
+  ADR-0027 and the agent gates; `unattested`, AI-co-authored work outside Clearance, counts as `not-agent`: a warning,
+  never a tier, [provenance-app.md](provenance-app.md#ai-co-author-trailers-agent-unattested-built)), the tree renders, admission policies pass offline (ADR-0028). Recorded as
   `deploy.clear` with `principal: policy`.
 - **By people**: the delegate model, as every person write in Clearance (decision 2026-10-31): the person clears
   from Tower, Backstage's backend calls the gateway as itself naming them, Clearance checks the person against the
@@ -1000,7 +1001,7 @@ repo is tier 3):
 | `-target` (`targeted`) or a `-replace` (`actionReason: replace_by_request`): one tier up, at least 2, at most 3 | +1, floor 2 | `the plan`, `tf:targeted`; the address, `tf:replace-requested` |
 
 Then, as for manifests: an unknown proposer is denied (`DG-PROVENANCE`); a tier-1 plan clears by policy only with
-`ci: pass` and `provenance` confirmed or not-agent (there is no `render` check for a plan), else it is tier 2
+`ci: pass` and `provenance` confirmed, not-agent or unattested (there is no `render` check for a plan), else it is tier 2
 (`checks:...`); tier 2 holds for one owner, tier 3 for one owner and one outside person. Tier 3 is never cleared by
 policy, so **a destroy in a protected workspace never clears by policy**. The decision's `result` names the
 workspace and what set the tier: `tier 3: holding for 1 from group:... and 1 from outside (...) (s3:network/lab/

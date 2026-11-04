@@ -50,11 +50,13 @@ var (
 	ProposerKinds = []string{"person", "agent", "unknown"}
 	ops           = []string{"added", "changed", "removed"}
 	metadataOnly  = []string{"/metadata/labels", "/metadata/annotations"}
-	// checksOK is what each check must say for policy to clear a tier-1 change, in gate.py's order.
+	// checksOK is what each check must say for policy to clear a tier-1 change, in gate.py's order. provenance
+	// "unattested" (agent work outside Clearance, provenance.Unattested) clears as not-agent does: the verdict is a
+	// warning and changes no tier (user decision 2026-11-04, docs/provenance-app.md).
 	checksOK = []struct {
 		name string
 		ok   []string
-	}{{"ci", []string{"pass"}}, {"provenance", []string{"confirmed", "not-agent"}}, {"render", []string{"ok"}}}
+	}{{"ci", []string{"pass"}}, {"provenance", []string{"confirmed", "not-agent", "unattested"}}, {"render", []string{"ok"}}}
 )
 
 // Error is gate.GateError: a refusal with a DG-* rule, a message, a hint and the HTTP status.

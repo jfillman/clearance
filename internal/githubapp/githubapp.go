@@ -596,7 +596,8 @@ func (a *App) token(ctx context.Context, installation int64, repo string, perms 
 }
 
 // Gather is what provenance.Verify needs, from GitHub: the head, the author, every changed path (and a rename's old
-// name), the head commit's trailers.
+// name), the head commit's trailers and its co-author trailers (Co-Authored-By, Assisted-by, Generated-by), which
+// provenance matches against the AI co-author matchers. Only the head commit is read, as for the trailers.
 func (a *App) Gather(ctx context.Context, token, repo string, pr int64) (provenance.Request, error) {
 	status, doc, err := a.gh.call(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d", repo, pr), "token", token, nil)
 	if err != nil {
@@ -651,10 +652,16 @@ func (a *App) Gather(ctx context.Context, token, repo string, pr int64) (provena
 	commit, _ := c["commit"].(map[string]any)
 	msg, _ := commit["message"].(string)
 	trailers := map[string]any{}
+	coauthors := []any{}
 	trailerRx := regexp.MustCompile(`^` + regexp.QuoteMeta(vocab.Get().TrailerPrefix) + `(Task|Session|Run|Agent): *([^ ]+) *\z`)
 	for _, line := range strings.Split(strings.ReplaceAll(msg, "\r\n", "\n"), "\n") {
-		if m := trailerRx.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+		line = strings.TrimSpace(line)
+		if m := trailerRx.FindStringSubmatch(line); m != nil {
 			trailers[strings.ToLower(m[1])] = m[2]
+		}
+		if key, _, ok := strings.Cut(line, ":"); ok && vocab.IsCoauthorKey(key) && len(line) <= provenance.MaxTrailer &&
+			len(coauthors) < provenance.MaxCoauthors {
+			coauthors = append(coauthors, map[string]any{"commit": head, "trailer": line})
 		}
 	}
 	if len(paths) > provenance.MaxPaths {
@@ -664,7 +671,7 @@ func (a *App) Gather(ctx context.Context, token, repo string, pr int64) (provena
 		paths = []any{}
 	}
 	req, err := provenance.ParseRequest(map[string]any{"repo": repo, "pr": pr, "head": head, "author": author,
-		"paths": paths, "trailers": trailers})
+		"paths": paths, "trailers": trailers, "coauthors": coauthors})
 	if err != nil {
 		return provenance.Request{}, err
 	}
@@ -672,8 +679,13 @@ func (a *App) Gather(ctx context.Context, token, repo string, pr int64) (provena
 }
 
 func (a *App) postCheck(ctx context.Context, token, repo, head, name string, result provenance.Check, violations []provenance.Violation, v provenance.Verdict) (CheckRun, error) {
+	// An unattested verdict (agent work outside Clearance) is a warning: neutral, never failure (2026-11-04).
+	warn := result.OK && result.Status == provenance.Unattested
 	word := "Failed"
-	if result.OK {
+	switch {
+	case warn:
+		word = "Warning"
+	case result.OK:
 		word = "Passed"
 	}
 	title := word + ": " + result.Status
@@ -683,6 +695,16 @@ func (a *App) postCheck(ctx context.Context, token, repo, head, name string, res
 	summary := result.Message
 	if !result.OK && result.Hint != "" {
 		summary += "\n\n**Fix:** " + result.Hint
+	}
+	if warn {
+		summary = "This PR was co-authored by an AI agent outside Clearance, so it carries no Clearance attestation."
+		if c := result.Coauthor; c != nil {
+			summary += fmt.Sprintf("\n\nCommit `%s` carries the trailer `%s`.", truncate(c.Commit, 12), strings.ReplaceAll(c.Trailer, "`", "'"))
+		}
+		summary += "\n\n" + result.Message
+		if result.Hint != "" {
+			summary += "\n\n**Note:** " + result.Hint + " This check is a warning only: it never fails."
+		}
 	}
 	if v.Record != nil {
 		summary += fmt.Sprintf("\n\nClearance opened this PR for agent `%s` (task `%s`).", pyStr(v.Record.Agent), pyStr(v.Record.TaskID))
@@ -700,7 +722,10 @@ func (a *App) postCheck(ctx context.Context, token, repo, head, name string, res
 			"annotation_level": "failure", "title": x.Rule, "message": x.Message})
 	}
 	conclusion := "failure"
-	if result.OK {
+	switch {
+	case warn:
+		conclusion = "neutral"
+	case result.OK:
 		conclusion = "success"
 	}
 	external := ""

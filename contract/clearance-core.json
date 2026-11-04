@@ -2103,6 +2103,16 @@
       },
       "ProvenanceCheck": {
         "properties": {
+          "coauthor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ProvenanceCoauthorTrailer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "hint": {
             "type": "string"
           },
@@ -2141,6 +2151,21 @@
           "ok",
           "rule",
           "status"
+        ],
+        "type": "object"
+      },
+      "ProvenanceCoauthorTrailer": {
+        "properties": {
+          "commit": {
+            "type": "string"
+          },
+          "trailer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "commit",
+          "trailer"
         ],
         "type": "object"
       },
@@ -4169,7 +4194,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "description": "provenance.Request: {repo, pr, head, paths, author?, trailers?}",
+                "description": "provenance.Request: {repo, pr, head, paths, author?, trailers?, coauthors?: [{commit, trailer}]}",
                 "type": "object"
               }
             }

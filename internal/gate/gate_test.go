@@ -153,6 +153,28 @@ func TestAnImageBumpWithGreenChecksIsTier1(t *testing.T) {
 	}
 }
 
+// An unattested provenance verdict (agent work outside Clearance) is a warning: the tier and the decision are the
+// ones not-agent gets, for a manifest change and a plan alike (user decision 2026-11-04).
+func TestAnUnattestedProvenanceChangesNoTier(t *testing.T) {
+	for _, objects := range [][]any{imageBump, {}} {
+		for _, paths := range [][]string{{"hangar-prod/prod/release.yaml"}, {"docs/runbook.md"}} {
+			checks := func(p string) map[string]any {
+				return map[string]any{"ci": "pass", "provenance": p, "render": "ok", "admission": "pass"}
+			}
+			want := mustClassify(t, change(map[string]any{"objects": objects, "paths": strs(paths), "checks": checks("not-agent")}), baseline)
+			got := mustClassify(t, change(map[string]any{"objects": objects, "paths": strs(paths), "checks": checks("unattested")}), baseline)
+			if got.Tier != want.Tier || got.Decision != want.Decision || !reflect.DeepEqual(ruleList(got), ruleList(want)) {
+				t.Fatalf("unattested %d %s %v, not-agent %d %s %v", got.Tier, got.Decision, ruleList(got), want.Tier, want.Decision, ruleList(want))
+			}
+		}
+	}
+	// an unrecognised verdict still holds a tier-1 change: the gate accepts unattested by name, not anything
+	c := mustClassify(t, change(map[string]any{"objects": imageBump, "checks": map[string]any{"ci": "pass", "provenance": "unknown", "render": "ok"}}), baseline)
+	if c.Tier != 2 || !has(ruleList(c), "checks:provenance") {
+		t.Fatal(c)
+	}
+}
+
 func TestAnImageBumpWaitsForCIAndBecomesTier2(t *testing.T) {
 	c := mustClassify(t, change(map[string]any{"objects": imageBump, "checks": map[string]any{"ci": "pending", "provenance": "not-agent", "render": "ok"}}), baseline)
 	if c.Tier != 2 || c.Decision != "hold" || !has(ruleList(c), "checks:ci") {

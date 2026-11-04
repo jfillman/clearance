@@ -79,6 +79,12 @@ vocabulary:
   gateOwnerFallback: ""
   # CLEARANCE_V0_PROVIDER: name/version for rows written before providers were recorded (default unrecorded/unrecorded)
   v0Provider: ""
+  # CLEARANCE_AI_COAUTHORS: matchers on the Co-Authored-By, Assisted-by and Generated-by trailers an AI coding agent
+  # outside Clearance leaves, "<email>" or "Name <email>" (case-insensitive). A PR Clearance has no record of whose
+  # head commit carries one is agent-unattested: a warning, a neutral check, never a failure (docs/provenance-app.md).
+  # Unset (null): the core's default (Claude Code, OpenAI Codex, Copilot CLI, Cursor, aider). An empty list ([])
+  # turns the check off. Unlike the other vocabulary values, [] is not "the default".
+  aiCoauthors: null
 # CLEARANCE_AUDIENCE: the audience callers' projected service-account tokens carry (TokenReview), and the audience
 # of a foreign cluster's tokens.
 audience: clearance

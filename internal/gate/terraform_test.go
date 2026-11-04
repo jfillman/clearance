@@ -125,6 +125,7 @@ func TestTheTerraformTierTable(t *testing.T) {
 		{"a database", plan(nil, res("aws_db_instance.main", "aws_db_instance", update, "/instance_class")), nil, 3, "hold", "aws_db_instance.main", "tf-type:database"},
 		{"a Google firewall", plan(nil, res("google_compute_firewall.ssh", "google_compute_firewall", update, "/source_ranges")), nil, 3, "hold", "google_compute_firewall.ssh", "tf-type:security-group"},
 		{"tag-only", plan(nil, res("aws_vpc.lab", "aws_vpc", update, "/tags/Owner", "/tags_all/Owner")), nil, 1, "clear", "aws_vpc.lab", "tf:tag-only"},
+		{"tag-only on an unattested PR clears as not-agent does", plan(nil, res("aws_vpc.lab", "aws_vpc", update, "/tags/Owner")), map[string]any{"checks": map[string]any{"ci": "pass", "provenance": "unattested"}}, 1, "clear", "aws_vpc.lab", "tf:tag-only"},
 		{"description-only", plan(nil, res("aws_ec2_managed_prefix_list.office", "aws_ec2_managed_prefix_list", update, "/description")), nil, 1, "clear", "aws_ec2_managed_prefix_list.office", "tf:tag-only"},
 		{"an update beyond tags", plan(nil, res("aws_vpc.lab", "aws_vpc", update, "/tags/Owner", "/enable_dns_hostnames")), nil, 2, "hold", "aws_vpc.lab", "tf:update"},
 		{"a create", plan(nil, res("aws_subnet.c", "aws_subnet", create)), nil, 2, "hold", "aws_subnet.c", "tf:create"},

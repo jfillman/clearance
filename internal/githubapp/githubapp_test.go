@@ -67,6 +67,7 @@ type fakeGitHub struct {
 	head      string
 	message   string
 	tokens    []map[string]any
+	checkRuns []map[string]any
 	reviews   []review
 	failRev   bool
 	srv       *httptest.Server
@@ -130,6 +131,7 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 	case strings.Contains(path, "/commits/"+f.head):
 		reply(200, map[string]any{"commit": map[string]any{"message": f.message}})
 	case strings.HasSuffix(path, "/check-runs"):
+		f.checkRuns = append(f.checkRuns, body)
 		reply(201, map[string]any{"id": len(f.calls)})
 	case strings.Contains(path, "/issues/1/comments"):
 		if r.Method == "GET" {
@@ -349,6 +351,51 @@ func TestAnAgentsLoginWithoutAReceiptFailsIdentityAndCommentsOnlyWhenOn(t *testi
 	}
 	if !found || on.tokens[0]["permissions"].(map[string]any)["issues"] != "write" {
 		t.Fatal(on.calls, on.tokens)
+	}
+}
+
+// A PR whose head commit carries an AI co-author trailer, and nothing Clearance knows, gets two neutral checks that
+// say so: a warning, never a failure (user decision 2026-11-04). The comment stays off, as for any passing PR.
+func TestAnAICoauthoredPrGetsTwoNeutralChecks(t *testing.T) {
+	e := newEnv(t)
+	e.prov.Config.AgentLogins = []string{bot}
+	f := newFake(t, "jfillman", nil, head)
+	f.message = "fix the thing\n\nCo-authored-by: Dana <dana@example.com>\r\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n"
+	runs, err := e.app(t, f, "agent-failures").Handle(context.Background(), "pull_request", decode(t, prEvent("opened")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(checks(runs), [][2]string{{githubapp.IdentityCheck, "neutral"}, {githubapp.ScopeCheck, "neutral"}}) {
+		t.Fatal(runs)
+	}
+	for i, cr := range f.checkRuns {
+		out := cr["output"].(map[string]any)
+		summary := out["summary"].(string)
+		if cr["conclusion"] != "neutral" || out["title"] != "Warning: unattested" ||
+			!strings.HasPrefix(summary, "This PR was co-authored by an AI agent outside Clearance, so it carries no Clearance attestation.") ||
+			!strings.Contains(summary, "Commit `"+head[:12]+"` carries the trailer `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.") ||
+			!strings.Contains(summary, "never fails") || strings.Contains(summary, "**Fix:**") {
+			t.Fatalf("check %d: %v", i, cr)
+		}
+	}
+	rec := e.records(t, "provenance.verify")[0]
+	if rec["result"] != "identity:unattested scope:unattested" || rec["rule"] != nil || rec["principal"] != "app:9" {
+		t.Fatal(rec)
+	}
+	for _, c := range f.calls {
+		if strings.Contains(c.path, "/comments") {
+			t.Fatal("commented on a warning", c)
+		}
+	}
+	// a forged Hangar-* trailer beside the AI trailer is still a failure (AI001)
+	forged := newFake(t, "jfillman", map[string]string{"Task": "t-9"}, head)
+	forged.message += "\nCo-Authored-By: Claude <noreply@anthropic.com>"
+	runs, err = e.app(t, forged, "off").Handle(context.Background(), "pull_request", decode(t, prEvent("opened")))
+	if err != nil || !reflect.DeepEqual(checks(runs), [][2]string{{githubapp.IdentityCheck, "failure"}, {githubapp.ScopeCheck, "failure"}}) {
+		t.Fatal(runs, err)
+	}
+	if title := forged.checkRuns[0]["output"].(map[string]any)["title"]; title != "Failed: unrecorded (AI001)" {
+		t.Fatal(title)
 	}
 }
 

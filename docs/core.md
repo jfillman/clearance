@@ -188,6 +188,7 @@ product-neutral default (`internal/vocab`).
 | `CLEARANCE_GATE_OUTSIDE_GROUPS` | The gate baseline's outside groups (group refs). | none |
 | `CLEARANCE_GATE_OWNER_FALLBACK` | The owner group of a change nobody names an owner for, when there is no outside group. | none |
 | `CLEARANCE_V0_PROVIDER` | `name/version` that rows written before providers were recorded are projected with. | `unrecorded/unrecorded` |
+| `CLEARANCE_AI_COAUTHORS` | Comma-separated matchers, `<email>` or `Name <email>` (case-insensitive), on the `Co-Authored-By`, `Assisted-by` and `Generated-by` trailers an AI coding agent outside Clearance leaves. A PR with no record and no other agent signal whose head commit carries one is `unattested`, a warning that never fails a check ([provenance-app.md](provenance-app.md#ai-co-author-trailers-agent-unattested-built)). `none` turns it off. | Claude Code, OpenAI Codex, Copilot CLI, Cursor, aider (by email) |
 
 The source of truth is the package documentation of `internal/core`, `internal/bundles`, `internal/vocab` and
 `authn.EnvVars`. `clearance register`

@@ -47,8 +47,9 @@ write permission on contents is what makes "Clearance confirmed this" mean somet
 3. It calls the same `provenance.verify` with the receipts from its own evidence chain, and records the verdict
    (`provenance.verify`, principal `app:<installation id>`, target `repo#pr`).
 4. It creates or updates two check runs on the head commit:
-   - `Clearance / agent-identity`: success for `confirmed` or `not-agent`, failure with the AI rule, its message and
-     its fix hint in the check's output;
+   - `Clearance / agent-identity`: success for `confirmed` or `not-agent`, **neutral** for `unattested` (agent work
+     outside Clearance, [below](#ai-co-author-trailers-agent-unattested-built)), failure with the AI rule, its
+     message and its fix hint in the check's output;
    - `Clearance / agent-scope`: the same for AS rules, each violation as a check annotation on the path.
    A person's PR passes both in seconds as not-agent, so both can be made required in branch protection without
    blocking anyone.
@@ -218,6 +219,55 @@ The customer's own CI registers what it is about to deploy, so the protection ru
 4. ~~PR comments~~ Decided: off by default, "failures on agent PRs" as an option. Was: off by default, check runs only (recommended), or on for agent PRs like `agent-gates-`?
 5. ~~Name~~ Decided: as proposed. Was: `clearance-provenance` for the App and `Clearance / agent-identity`, `Clearance / agent-scope` for the
    checks, or another name the product site uses.
+
+## AI co-author trailers: agent-unattested (Built)
+
+**Why.** `Clearance / agent-identity` and `agent-scope` said `not-agent` on PRs AI coding agents wrote: Claude Code
+sessions that push with the person's own GitHub credentials, each commit carrying `Co-Authored-By: Claude ...
+<noreply@anthropic.com>`. Before this, a PR was an agent's only when Clearance held a record of it, its head commit had
+the `<prefix>*` trailers (`CLEARANCE_TRAILER_PREFIX`, `Hangar-` on Hangar), or an agents' login (`AGENT_LOGINS`)
+authored it. The user's decision of 2026-11-04 ("option 1, warn-only"): recognise AI co-author trailers as agent work
+Clearance has no record of, report it, and never fail a check on it.
+
+**The verdict.** When none of those signals is present but the head commit carries a `Co-Authored-By`, `Assisted-by`
+or `Generated-by` trailer that an AI co-author matcher matches, both verdicts are `unattested`:
+
+- `ok: true`, no rule, `agent_pr: true`, and `coauthor: {commit, trailer}` naming the first trailer that matched. The
+  message says the PR was co-authored by an AI agent outside Clearance and so carries no Clearance attestation.
+- The App's two checks conclude **neutral**, never failure, titled `Warning: unattested`; the summary names the
+  trailer and the commit. No PR comment (comments are for failures).
+- `provenance.verify` records it as every verdict (`result: identity:unattested scope:unattested`, `decision: allow`,
+  `rule: null`), so an auditor counts these PRs from the chain or clearance-api's verdict reads.
+- **Not a deny rule.** No tier rule reads it, and the deployment gate takes `provenance: unattested` as it takes
+  `not-agent`: a tier-1 change or plan still clears by policy (`internal/gate` tests). A person's change whose
+  verifier reports `unattested` gets the token provenance level `unknown`, not `confirmed-human`.
+
+**Forged trailers win.** A `<prefix>Task`/`Session` trailer without a record is still AI001, an agents' login without
+one AI002, and a PR Clearance does hold a record of is decided by the record (confirmed, AI003, AI004). The AI
+co-author trailer is only read when nothing else says "agent".
+
+**Which commits.** The head commit only, as for the `<prefix>*` trailers: Gather already reads it, and a Claude Code
+session puts the trailer on every commit it makes. A PR whose last commit is a person's (a merge from main, say) is
+therefore `not-agent` again. `POST /v1/provenance` takes `coauthors: [{commit, trailer}]` (at most 200, each one line
+of at most 1,024 characters whose key is one of the three) so a caller that scans every commit may send them all;
+Glidepath's `agent-gates-` sends none yet, so its verdicts are unchanged.
+
+**The matchers** are vocabulary, `CLEARANCE_AI_COAUTHORS` (chart `vocabulary.aiCoauthors`): comma-separated `<email>`
+(any name) or `Name <email>`, compared case-insensitively with whitespace collapsed. Unset: the default below. `none`
+(chart: an empty list `[]`) turns the check off. The default matches by email alone, because the name usually carries
+the model:
+
+| Email | Agent | Trailer it writes | Source (checked 2026-11-03) |
+|---|---|---|---|
+| `noreply@anthropic.com` | Claude Code | `Co-Authored-By: <model> <noreply@anthropic.com>` | [Claude Code settings, `attribution.commit`](https://code.claude.com/docs/en/settings-reference) |
+| `noreply@openai.com` | OpenAI Codex | `Co-authored-by: Codex <noreply@openai.com>` | [openai/codex#11617](https://github.com/openai/codex/pull/11617) (merged 2026-02-17) |
+| `223556219+copilot@users.noreply.github.com` | GitHub Copilot CLI | `Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>` | [community discussion 203517](https://github.com/orgs/community/discussions/203517) (a user report, not GitHub's docs) |
+| `cursoragent@cursor.com` | Cursor's agent | `Co-authored-by: Cursor <cursoragent@cursor.com>` | [Cursor forum 150096](https://forum.cursor.com/t/co-author-added-without-consent-and-cant-be-turned-off/150096), [block/aittributor#15](https://github.com/block/aittributor/pull/15) |
+| `aider@aider.chat` | aider | `Co-authored-by: aider (<model>) <aider@aider.chat>` | [aider `aider/repo.py`](https://github.com/Aider-AI/aider/blob/main/aider/repo.py) |
+
+Not covered: the **Copilot coding agent** (the cloud agent) authors its commits as Copilot and names the person as the
+co-author, so its PRs are known by their author, not a trailer; Cursor's own docs describe a `Made with Cursor`
+trailer, which is not a co-author trailer and is not matched. A deployment adds either by its own matchers.
 
 ## The Go core (R-1c, Built, deployed on hangar-dev 2026-11-03)
 

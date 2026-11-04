@@ -22,6 +22,7 @@ import (
 	"github.com/jfillman/clearance/internal/pycompat"
 	"github.com/jfillman/clearance/internal/store"
 	"github.com/jfillman/clearance/internal/store/memory"
+	"github.com/jfillman/clearance/internal/vocab"
 )
 
 const (
@@ -262,5 +263,111 @@ func TestTheAppInstallationRecord(t *testing.T) {
 	rec, err := f.svc.RecordInstallation(f.ctx, "9", "created", "jfillman", []string{"jfillman/flight-api", "jfillman/gate-api"})
 	if err != nil || rec["tool"] != "app.installation" || rec["principal"] != "app:9" || rec["target"] != "jfillman" || rec["result"] != "created: 2 repositories" {
 		t.Fatal(rec, err)
+	}
+}
+
+// -- AI co-author trailers: agent work outside Clearance (warn-only, user decision 2026-11-04) ----------------------
+
+const claude = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+
+func coauthors(lines ...string) []any {
+	out := []any{}
+	for _, l := range lines {
+		out = append(out, map[string]any{"commit": commit, "trailer": l})
+	}
+	return out
+}
+
+func TestAPrWithOnlyAClaudeTrailerIsUnattested(t *testing.T) {
+	f := newFixture(t)
+	v := f.ask(t, map[string]any{"author": "jfillman", "pr": 7, "coauthors": coauthors("Co-authored-by: Dana <dana@example.com>", claude)})
+	if !v.AgentPR || v.Identity.Status != provenance.Unattested || !v.Identity.OK || v.Identity.Rule != nil || v.Record != nil {
+		t.Fatal(v)
+	}
+	if v.Scope.Status != provenance.Unattested || !v.Scope.OK || v.Scope.Rule != nil || v.Scope.Violations != nil {
+		t.Fatal(v.Scope)
+	}
+	if c := v.Identity.Coauthor; c == nil || c.Commit != commit || c.Trailer != claude || v.Scope.Coauthor == nil {
+		t.Fatal(v.Identity.Coauthor)
+	}
+	if !strings.Contains(v.Identity.Message, "co-authored by an AI agent outside Clearance") || !strings.Contains(v.Identity.Message, "noreply@anthropic.com") ||
+		!strings.Contains(v.Identity.Message, "no Clearance attestation") {
+		t.Fatal(v.Identity.Message)
+	}
+	// the evidence record carries the verdict, so auditors can count unattested PRs; it is no rule and no deny
+	last := f.last(t)
+	if last["tool"] != "provenance.verify" || last["result"] != "identity:unattested scope:unattested" || last["rule"] != nil || last["decision"] != "allow" {
+		t.Fatal(last)
+	}
+	raw, _ := json.Marshal(v)
+	var out map[string]any
+	_ = json.Unmarshal(raw, &out)
+	if id := out["identity"].(map[string]any); id["status"] != "unattested" || id["coauthor"].(map[string]any)["trailer"] != claude {
+		t.Fatal(string(raw))
+	}
+}
+
+func TestAPrWithNoAICoauthorIsStillNotAnAgentPr(t *testing.T) {
+	f := newFixture(t)
+	for _, cs := range [][]any{nil, coauthors(), coauthors("Co-authored-by: Dana <dana@example.com>")} {
+		over := map[string]any{"author": "jfillman", "pr": 7}
+		if cs != nil {
+			over["coauthors"] = cs
+		}
+		v := f.ask(t, over)
+		if v.AgentPR || v.Identity.Status != "not-agent" || v.Scope.Status != "not-agent" || v.Identity.Coauthor != nil {
+			t.Fatal(v)
+		}
+		raw, _ := json.Marshal(v.Identity)
+		if strings.Contains(string(raw), "coauthor") {
+			t.Fatal("a not-agent verdict carries no coauthor key", string(raw))
+		}
+	}
+	// an empty matcher list turns the check off
+	prev := vocab.Get()
+	off := prev
+	off.AICoauthors = nil
+	vocab.Set(off)
+	t.Cleanup(func() { vocab.Set(prev) })
+	if v := f.ask(t, map[string]any{"author": "jfillman", "pr": 7, "coauthors": coauthors(claude)}); v.Identity.Status != "not-agent" {
+		t.Fatal(v)
+	}
+}
+
+func TestTheExistingAgentSignalsWinOverAnAICoauthor(t *testing.T) {
+	f := newFixture(t)
+	// a Hangar-* trailer without a record is still forged (AI001)
+	v := f.ask(t, map[string]any{"pr": 2, "author": "jfillman", "trailers": map[string]any{"task": "t-0123456789ab"}, "coauthors": coauthors(claude)})
+	if rule(v.Identity) != "AI001" || v.Identity.OK || rule(v.Scope) != "AI001" || v.Identity.Coauthor != nil {
+		t.Fatal(v)
+	}
+	// the agents' login without a record is still AI002
+	if v := f.ask(t, map[string]any{"pr": 9, "coauthors": coauthors(claude)}); rule(v.Identity) != "AI002" || v.Identity.OK {
+		t.Fatal(v)
+	}
+	// with a record, the record decides: confirmed, and a later commit is still AI003
+	tr := f.opened(t)
+	v = f.ask(t, map[string]any{"trailers": map[string]any{"task": tr["task"], "session": tr["session"]}, "coauthors": coauthors(claude)})
+	if v.Identity.Status != "confirmed" || v.Scope.Status != "in-scope" || v.Identity.Coauthor != nil {
+		t.Fatal(v)
+	}
+	if v := f.ask(t, map[string]any{"head": strings.Repeat("f", 40), "coauthors": coauthors(claude)}); rule(v.Identity) != "AI003" {
+		t.Fatal(v)
+	}
+}
+
+func TestBadCoauthorsAreRefused(t *testing.T) {
+	f := newFixture(t)
+	for _, cs := range []any{"x", []any{"x"}, []any{map[string]any{"commit": "abc", "trailer": claude}},
+		[]any{map[string]any{"commit": commit}}, []any{map[string]any{"commit": commit, "trailer": "Signed-off-by: Dana <d@e.f>"}},
+		[]any{map[string]any{"commit": commit, "trailer": "no colon"}}, []any{map[string]any{"commit": commit, "trailer": claude, "x": 1}},
+		[]any{map[string]any{"commit": commit, "trailer": claude + "\nCo-Authored-By: x <y@z>"}},
+		[]any{map[string]any{"commit": commit, "trailer": "Co-Authored-By: " + strings.Repeat("a", provenance.MaxTrailer)}},
+		coauthors(make([]string, provenance.MaxCoauthors+1)...)} {
+		_, err := f.svc.Provenance(f.ctx, gate, body(map[string]any{"coauthors": cs}))
+		var br *provenance.BadRequest
+		if !errors.As(err, &br) {
+			t.Errorf("%v: %v", cs, err)
+		}
 	}
 }

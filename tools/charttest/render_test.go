@@ -278,6 +278,9 @@ func TestFullCoversEveryCoreVariable(t *testing.T) {
 	if e["CLEARANCE_ON_BEHALF_OF_HEADER"] != "X-Hangar-On-Behalf-Of" || e["CLEARANCE_ENV_LOWER_PREFIXES"] != "pr-,agent-" {
 		t.Errorf("vocabulary %q, environments %q", e["CLEARANCE_ON_BEHALF_OF_HEADER"], e["CLEARANCE_ENV_LOWER_PREFIXES"])
 	}
+	if e["CLEARANCE_AI_COAUTHORS"] != "<noreply@anthropic.com>,Acme Agent <agent@acme.dev>" {
+		t.Errorf("CLEARANCE_AI_COAUTHORS %q", e["CLEARANCE_AI_COAUTHORS"])
+	}
 	var sawBundle, sawSourceToken bool
 	for _, v := range get(core, "spec", "template", "spec", "volumes").([]any) {
 		if get(v, "name") == "bundle-hangar" && get(v, "configMap", "name") == "clearance-bundle-hangar" {
@@ -462,5 +465,31 @@ func TestTheSigningKeyIsTheCoresAlone(t *testing.T) {
 	min := find(render(t, "-f", valuesFile("minimal-values.yaml")), "Deployment", "t-clearance-core")
 	if _, ok := env(container(t, min))["CLEARANCE_SIGNING_KEY_FILE"]; ok {
 		t.Error("a key file without a Secret")
+	}
+}
+
+// vocabulary.aiCoauthors: unset keeps the core's default matchers (the variable is absent), an empty list turns the
+// check off ("none"), on the core and clearance-api alike.
+func TestAICoauthorsUnsetEmptyAndSet(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+		set  bool
+	}{
+		{nil, "", false},
+		{[]string{"--set-json", "vocabulary.aiCoauthors=[]"}, "none", true},
+		{[]string{"--set-json", `vocabulary.aiCoauthors=["<bot@acme.dev>"]`}, "<bot@acme.dev>", true},
+	} {
+		objs := render(t, append([]string{"-f", valuesFile("minimal-values.yaml")}, tc.args...)...)
+		for _, d := range []string{"t-clearance-core", "t-clearance-api"} {
+			dep := find(objs, "Deployment", d)
+			if dep == nil {
+				continue
+			}
+			got, ok := env(container(t, dep))["CLEARANCE_AI_COAUTHORS"]
+			if ok != tc.set || got != tc.want {
+				t.Errorf("%v %s: %q (set %v), want %q (set %v)", tc.args, d, got, ok, tc.want, tc.set)
+			}
+		}
 	}
 }

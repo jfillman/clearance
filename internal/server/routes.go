@@ -285,7 +285,7 @@ var routeTable = []Route{
 		MaxBody: provenance.MaxBody,
 		Summary: "The agent-identity and agent-scope verdicts for a pull request, from the receipts Clearance " +
 			"recorded; the caller is a verifier. Recorded as provenance.verify.",
-		RequestNote: "provenance.Request: {repo, pr, head, paths, author?, trailers?}",
+		RequestNote: "provenance.Request: {repo, pr, head, paths, author?, trailers?, coauthors?: [{commit, trailer}]}",
 		Responses:   append([]Response{{200, "the verdicts", provenance.Verdict{}}}, errs(400, 401, 403, 413)...),
 	},
 	{

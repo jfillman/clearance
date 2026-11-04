@@ -12,6 +12,7 @@ import (
 func FuzzProvenanceRequest(f *testing.F) {
 	f.Add(`{"repo":"a/b","pr":1,"head":"` + commit + `","paths":["../x","a/./b",".tekton/x"],"trailers":{"Task":"t"}}`)
 	f.Add(`{"repo":"a/b","pr":1,"head":"` + commit + `","paths":[],"author":"x[bot]"}`)
+	f.Add(`{"repo":"a/b","pr":1,"head":"` + commit + `","paths":[],"coauthors":[{"commit":"` + commit + `","trailer":"Co-Authored-By: Claude <noreply@anthropic.com>"}]}`)
 	f.Fuzz(func(t *testing.T, body string) {
 		v, err := pycompat.Decode(strings.NewReader(body))
 		if err != nil {
@@ -22,8 +23,12 @@ func FuzzProvenanceRequest(f *testing.F) {
 			return
 		}
 		out := provenance.Verify(req, nil, nil, []string{"x[bot]"})
-		if out.AgentPR == out.Identity.OK {
-			t.Fatal("agent_pr must be the identity's failure when there is no record")
+		unattested := out.Identity.Status == provenance.Unattested
+		if out.AgentPR != (!out.Identity.OK || unattested) {
+			t.Fatal("agent_pr must be the identity's failure, or an unattested verdict, when there is no record")
+		}
+		if unattested && (!out.Identity.OK || !out.Scope.OK || out.Identity.Rule != nil || out.Identity.Coauthor == nil) {
+			t.Fatal("an unattested verdict is a warning: ok, no rule, and it names its trailer")
 		}
 	})
 }

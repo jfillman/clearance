@@ -9,6 +9,29 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Added
+- **agent-unattested: AI co-author trailers** (`internal/provenance`, `internal/vocab`, `internal/githubapp`;
+  [docs/provenance-app.md](docs/provenance-app.md#ai-co-author-trailers-agent-unattested-built)). A PR Clearance has
+  no record of, with no `<prefix>*` trailers and no agents' login, whose head commit carries an AI coding agent's
+  `Co-Authored-By` (or `Assisted-by`, `Generated-by`) trailer is `unattested` on both verdicts: `ok: true`, no rule,
+  `agent_pr: true`, and `coauthor: {commit, trailer}`. Warn-only (user decision 2026-11-04): the App's
+  `Clearance / agent-identity` and `agent-scope` checks conclude **neutral**, never failure, and say the PR was
+  co-authored by an AI agent outside Clearance; `provenance.verify` records `identity:unattested scope:unattested`.
+  Forged trailers (AI001), the agents' login (AI002) and a record still win.
+- `CLEARANCE_AI_COAUTHORS` (chart `vocabulary.aiCoauthors`): the matchers, `<email>` or `Name <email>`. Default:
+  Claude Code (`noreply@anthropic.com`), OpenAI Codex (`noreply@openai.com`), GitHub Copilot CLI
+  (`223556219+copilot@users.noreply.github.com`), Cursor (`cursoragent@cursor.com`), aider (`aider@aider.chat`);
+  `none` (chart `[]`) turns it off.
+- `POST /v1/provenance` takes an optional `coauthors: [{commit, trailer}]` (at most 200). Callers that send none, as
+  Glidepath's `agent-gates-` does today, get the verdicts they got before.
+
+### Changed
+- The deployment gate accepts `provenance: unattested` wherever it accepts `not-agent`, so the verdict never changes
+  a tier or a decision.
+
+Additive on the wire, with one exception for strict clients: a verdict's check may carry `coauthor`, so a Go client of
+an earlier release that decodes verdicts strictly refuses an unattested one; take this release's clients.
+
 ## [0.31.0] - 2026-11-03
 
 C-1: the clearance token. Additive on the wire, with one exception for strict clients: a change's view gains
