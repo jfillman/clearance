@@ -425,3 +425,28 @@ func FuzzOutcomeRoute(f *testing.F) {
 		}
 	})
 }
+
+// A plan to an environment the deployment does not protect is cleared at tier 0 (C-6), and its 24 hours still bound
+// the change and its token's horizon (PR Lens on #60: the unprotected path skipped classifyPlan).
+func TestAnUnprotectedPlanKeepsItsTwentyFourHours(t *testing.T) {
+	f, _ := withTokens(t)
+	f.svc.Config.Protected = []string{"*/prod"}
+	c := f.register(t, "ci", tfChange(plan(nil, res("aws_subnet.c", "aws_subnet", create)), nil))
+	if c.State != gate.StateCleared || c.Tier != 0 {
+		t.Fatalf("%s tier %d", c.State, c.Tier)
+	}
+	if got := c.ExpiresAt.Sub(c.CreatedAt.Time); got != 24*time.Hour {
+		t.Fatalf("an unprotected plan holds %s", got)
+	}
+	f.clock.advance(24*time.Hour + time.Minute)
+	if _, _, err := f.svc.Refresh(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if tk := f.token(t, c.ID); tk.ExpiresAt.After(T0.Add(24 * time.Hour)) {
+		t.Fatalf("the token lives past the plan's 24 hours: %s", tk.ExpiresAt)
+	}
+	gitops := f.register(t, "ci", change(map[string]any{"objects": replicas, "env": "staging"}))
+	if got := gitops.ExpiresAt.Sub(gitops.CreatedAt.Time); got != 7*24*time.Hour {
+		t.Fatalf("an unprotected gitops change holds %s", got)
+	}
+}
