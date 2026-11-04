@@ -694,3 +694,44 @@ func TestBreakGlassHTTP(t *testing.T) {
 		t.Fatal(code, out)
 	}
 }
+
+func TestAnAppWindowTagsOnlyThatAppsReports(t *testing.T) {
+	f := newGate(t)
+	g := glass
+	app := "gate-api"
+	g.App = &app
+	b, err := f.svc.OpenBreakglass(f.ctx, principals["root"], g, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := f.report(t, exceptionOf(f, "out-of-band", "")); r["breakglass"] != b.ID {
+		t.Fatal("the window's own app is not tagged", r)
+	}
+	other := exceptionOf(f, "out-of-band", "")
+	other["app"] = "flight-api"
+	if r := f.report(t, other); r["breakglass"] != nil {
+		t.Fatal("another app's report was tagged", r)
+	}
+	// a window per environment, whatever its app
+	if _, err := f.svc.OpenBreakglass(f.ctx, principals["root"], glass, ""); func() string { r, _ := ruleOf(err); return r }() != "DG-BREAKGLASS-OPEN" {
+		t.Fatal(err)
+	}
+}
+
+func TestAPreC6ChangeIsHeldToTheBaseline(t *testing.T) {
+	f := newGate(t)
+	c := f.register(t, "ci", change(map[string]any{"objects": imageBump}))
+	row, _ := f.st.Change(f.ctx, c.ID)
+	var m map[string]any
+	_ = json.Unmarshal(row.Record, &m)
+	delete(m, "outage")
+	raw, _ := json.Marshal(m)
+	row.Record = raw
+	if err := f.st.Atomic(f.ctx, func(tx store.Tx) error { return tx.PutChange(f.ctx, row) }); err != nil {
+		t.Fatal(err)
+	}
+	op := f.report(t, degradedOf(f, "allow", nil, c.ID))["outage_policy"].(map[string]any)
+	if op["source"] != "baseline" || op["action"] != gate.OutageAllow {
+		t.Fatal(op)
+	}
+}

@@ -293,7 +293,8 @@ func (s *Service) Report(ctx context.Context, ev store.Event, wr evidence.Writer
 			}
 		}
 		if !s.Config.Off {
-			bg, err := openWindow(ctx, tx, cluster, env, w.now)
+			app, _ := ev["app"].(string)
+			bg, err := openWindow(ctx, tx, cluster, env, &app, w.now)
 			if err != nil {
 				return err
 			}
@@ -348,8 +349,8 @@ func (s *Service) outagePolicy(ev store.Event, c *Change) map[string]any {
 	switch {
 	case c != nil:
 		action, source = c.Outage, "change"
-		if action == "" {
-			action = s.Policy.OutageFor(c.Tier)
+		if action == "" { // a change registered before C-6 carries no outage of its own
+			action, source = s.Policy.OutageFor(c.Tier), "baseline"
 		}
 	case ev["tier"] != nil:
 		if t, ok := SeqInt(ev["tier"]); ok {

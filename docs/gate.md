@@ -425,7 +425,8 @@ finding. An `allow` naming a holding change moves it to `degraded`.
 
 Break-glass clears nothing and applies nothing: Clearance holds no write credential to a protected environment. A
 change made in the window is still an exception when a provider sees it, and each `deploy.exception` and
-`deploy.degraded` inside the window carries the window's id (`breakglass`). When the TTL ends, the expiry loop
+`deploy.degraded` inside the window carries the window's id (`breakglass`) (a window that names an app tags only that app's reports; one
+window per environment either way). When the TTL ends, the expiry loop
 (`CLEARANCE_EXPIRE_SECONDS`) closes the window with a `breakglass.close` record: `window` {from, to}, `changes` (the
 deployment records the store holds about that cluster and environment, and app when the window names one, written
 while it was open: `deploy.exception`, `deploy.degraded`, `deploy.outcome`, `deploy.clear`; at most 200 listed),

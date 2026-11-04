@@ -112,15 +112,24 @@ func fromRow(r store.Breakglass) (*Breakglass, error) {
 	return &b, nil
 }
 
-// openWindow is the open window covering cluster and env at now (nil when none).
-func openWindow(ctx context.Context, r store.Reader, cluster, env string, now time.Time) (*Breakglass, error) {
+// openWindow is the open window on cluster and env at now (nil when none). With app nil any window there counts
+// (the one-window-per-environment check); with app set only a window for the whole environment or for that app
+// does (tagging a report, as inWindow scopes the close).
+func openWindow(ctx context.Context, r store.Reader, cluster, env string, app *string, now time.Time) (*Breakglass, error) {
 	rows, err := r.BreakglassOpen(ctx)
 	if err != nil {
 		return nil, err
 	}
 	for _, row := range rows {
-		if row.Cluster == cluster && row.Env == env && now.Before(row.ExpiresAt) {
-			return fromRow(row)
+		if row.Cluster != cluster || row.Env != env || !now.Before(row.ExpiresAt) {
+			continue
+		}
+		b, err := fromRow(row)
+		if err != nil {
+			return nil, err
+		}
+		if app == nil || b.App == nil || *b.App == *app {
+			return b, nil
 		}
 	}
 	return nil, nil
@@ -184,7 +193,7 @@ func (s *Service) OpenBreakglass(ctx context.Context, p authn.Principal, req Bre
 	}
 	var out *Breakglass
 	err = s.op(ctx, func(tx store.Tx, w *writer) error {
-		cur, err := openWindow(ctx, tx, req.Cluster, req.Env, w.now)
+		cur, err := openWindow(ctx, tx, req.Cluster, req.Env, nil, w.now)
 		if err != nil {
 			return err
 		}
