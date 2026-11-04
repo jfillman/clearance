@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
@@ -447,5 +448,19 @@ func TestTheChangeRequestSchemaMatchesTheParser(t *testing.T) {
 	}
 	if accepted != 6 {
 		t.Errorf("%d of %d bodies accepted, want 6 (the comparison would be vacuous)", accepted, len(bodies))
+	}
+}
+
+// A cleared plan's clearance token names its subject kind and binds the plan's digest as the tree root.
+func TestAPlanTokenIsATerraformPlanSubject(t *testing.T) {
+	f := newGate(t)
+	c := f.register(t, "ci", tfChange(plan(nil, res("aws_vpc.lab", "aws_vpc", update, "/tags/Owner")), nil))
+	cl := (&gate.Tokens{}).Claims(c, "n", T0, T0.Add(time.Minute))
+	if cl.Subjects.Kind != gate.KindTerraformPlan || cl.Subjects.TreeRoot != planDigest {
+		t.Fatalf("%+v", cl.Subjects)
+	}
+	m := f.register(t, "ci", change(map[string]any{"objects": imageBump}))
+	if k := (&gate.Tokens{}).Claims(m, "n", T0, T0.Add(time.Minute)).Subjects.Kind; k != gate.KindManifestTree {
+		t.Fatal(k)
 	}
 }

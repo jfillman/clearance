@@ -488,7 +488,7 @@ func TestWhoMayClearATier2Change(t *testing.T) {
 		t.Fatal(out, err)
 	}
 	via := tower
-	if !reflect.DeepEqual(out.Approvals, []gate.Approval{{"user:erin", &via, "owner", "2026-09-26T12:00:00Z"}}) {
+	if !reflect.DeepEqual(out.Approvals, []gate.Approval{{"user:erin", &via, "owner", "2026-09-26T12:00:00Z", "user:erin", "delegate:" + tower}}) {
 		t.Fatal(out.Approvals)
 	}
 	recs := f.records(t, "deploy.clear")
@@ -745,7 +745,7 @@ func TestTheViewHasPythonsKeysInOrder(t *testing.T) {
 	f := newGate(t)
 	out := f.register(t, "ci", change(map[string]any{"objects": replicas}))
 	raw, _ := json.Marshal(out)
-	keys := []string{"id", "app", "env", "cluster", "repo", "pr", "head", "base", "proposer", "proposer_kind", "agent", "owner",
+	keys := []string{"id", "app", "env", "cluster", "repo", "pr", "head", "base", "proposer", "proposer_kind", "agent", "task_id", "owner",
 		"protected", "tree_digest", "subject", "paths", "lines_changed", "objects", "checks", "policy_version", "repo_policy_digest", "tier",
 		"reasons", "requirement", "state", "created_at", "updated_at", "expires_at", "registered_by", "approvals", "cleared_by",
 		"decided_at", "deny_reason", "denied_by", "superseded_by", "deployments", "target", "objects_count", "paths_count"}

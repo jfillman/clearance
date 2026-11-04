@@ -9,7 +9,41 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+C-1: the clearance token. Additive on the wire, with one exception for strict clients: a change's view gains
+`task_id`, and its approvals gain `sub` and `iss`, so a Go or Python client of an earlier release that decodes gate
+answers strictly refuses them; take this release's clients (or `AllowUnknownFields`). Nothing changes for a
+deployment that sets no signing key, except that records and views carry the new fields.
+
 ### Added
+- **The clearance token** (`internal/token`, `internal/gate/token.go`; [docs/core.md](docs/core.md#the-clearance-token)).
+  On `deploy.clear` the core signs a short-lived token bound to the subject: a DSSE envelope
+  (`application/vnd.clearance.token.v1+json`) and its JWT projection (ES256), one set of claims (`clearance.token/v1`:
+  subjects, per-object rendered hashes with `changed`, target, tier, policy ref and verdict, provenance level and
+  `task_id`, approvals, `iat`, `exp`, `nonce`). Standard-library ECDSA P-256 only. Tokens are re-issued with the
+  same nonce while the change stays cleared, up to its horizon (the gate TTL after the clear); a new head on the pull
+  request revokes the older head's token (`deploy.revoke`); a signing failure rolls the clear back. Verification
+  (`token.Verify`, `token.VerifyJWT`, `Claims.Covers`, `token.NonceCache`, `gate.Service.CheckNonce`) is offline
+  against the published keys; the parsers are fuzzed.
+- `CLEARANCE_SIGNING_KEY_FILE` (a PEM P-256 key), `CLEARANCE_TOKEN_TTL` (default 15m), `CLEARANCE_TOKEN_ISSUER`
+  (default `clearance`), and `CLEARANCE_SIGNING_KMS`, reserved (the core refuses to start with it until a KMS signer
+  exists). Chart: `signing.existingSecret` and `signing.key` (an existing Secret, never created by the chart,
+  mounted for the core only), `signing.kms`, `token.ttl`, `token.issuer`.
+- The core's `GET /v1/clearances/{change_id}`: the state and live token, for registered providers and the verifier
+  that registered the change. `GET /v1/keys` (the core and clearance-api, public): the verification keys, a JWKS.
+- clearance-api: `cluster` on `GET /v1/clearances`; `cluster=<c>&state=cleared` is the grant feed (the cluster's
+  cleared changes with live tokens, each with its token); `GET /v1/clearances/{id}` adds `token`; a `feed` role
+  (`CLEARANCE_API_FEED_READERS`, chart `api.feedReaders`) that reads only its clusters' feed.
+- Tables `clearance_tokens` and `clearance_signing_keys` (created on start, no migration step).
+- Approvals name the person at their identity provider: `sub` and `iss` (the ID token's, or the person and
+  `delegate:<delegate>` through a delegate). `deploy.clear` records carry `approvals`, `cleared_by` and `token`; the
+  GitHub App's `deploy.request` and `deploy.answer` records carry `approvals` and `cleared_by` once the change is
+  cleared, so they name the people (or `policy`), not only `app:<installation>`.
+- `taskId` on `POST /v1/clearances` (kept as `task_id`, on every `deploy.*` record and in the token).
+- `provider.conformance`: a `CLEARANCE_PROVIDERS` entry's `conformance` (`clearance-conformance/v1@<date>`) is stamped
+  on every record that provider writes.
+- Go client `Clearance`, `Keys`; Python client `get_clearance`, `keys` (models regenerated).
+
+### Added (G-TF-1)
 - G-TF-1, the terraform-plan subject: `POST /v1/clearances` takes `subject: {kind: terraform-plan, planDigest,
   planJsonDigest, workspace: {backend, key, name}, versions: {terraform, providers}, summary: {create, update,
   replace, destroy, destroyedAddresses}, targeted, variableSetDigest, resources}` from a verifier or a GitHub Actions
@@ -31,7 +65,7 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   reason `tree:unbound`, `subject.flags: ["unbound-tree"]` and a subject bound to the commit only; refused, it is
   `DG-UNBOUND`. Flag is the default for this release for backward compatibility; refuse is planned to become it.
 
-### Changed
+### Changed (G-TF-1)
 - The manifest-tree digest is defined (docs/gate.md): sha256 over the sorted lines
   `apiVersion/kind/namespace/name:<sha256 of the object's canonical JSON>`, joined with newlines. `clearance register`
   now computes this, which is what Glidepath's `clearance-gate-` check already computed for the same render (it

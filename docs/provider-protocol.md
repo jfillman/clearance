@@ -6,9 +6,9 @@ a provider implements, written from the routes the Go core serves today (`intern
 `contract/clearance-core.json`), and the conformance suite that proves a provider keeps it.
 
 Status: **Built** (R-1f) for everything the core serves today: the two roles, the conformance control interface,
-`clearance conformance`, and the reference fakes. The wait route, the change-bound outcome route and the signed
-clearance token are **Proposal** (C-1, C-10, G-TF-2); the section [Not served yet](#not-served-yet) says how a
-provider works without them.
+`clearance conformance`, and the reference fakes; the core's read of a change and the signed clearance token are
+**Built** (C-1). The wait route and the change-bound outcome route are **Proposal** (G-TF-2, C-10); the section
+[Not served yet](#not-served-yet) says how a provider works without them.
 
 ## What you get
 
@@ -209,12 +209,12 @@ For every change to a protected environment:
 
 | What | Route or piece | Why a provider needs it | Interim |
 | --- | --- | --- | --- |
-| Wait for a decision | `GET /v1/clearances/{id}/wait?timeout=` (G-TF-2, shared with G-ARGO-5) | A held change can wait days; the PreSync hook and `clearance hold` need to block on it | Re-send the registration (`POST /v1/clearances`, same body) every few seconds; it answers the change as it stands. Each poll takes the gate's lock and rewrites the change row (`updated_at`), so keep the interval at 5 s or more in production |
-| Read a change | `GET /v1/clearances/{id}` on the core | A provider that did not register the change (the grant-sync agent, a reconciler) cannot learn its state from the core | clearance-api serves `GET /v1/clearances/{id}` (`getClearance`) to people, delegates and auditors only (the Go clearance-api, `internal/api`), so a provider needs a role there or a core route |
+| Wait for a decision | `GET /v1/clearances/{id}/wait?timeout=` (G-TF-2, shared with G-ARGO-5) | A held change can wait days; the PreSync hook and `clearance hold` need to block on it | Poll `GET /v1/clearances/{id}` on the core (below) every few seconds: it answers the state and, once cleared, the token, and writes no change row. The long-poll is G-TF-2's, on the same route's `/wait` |
+| Read a change | `GET /v1/clearances/{id}` on the core | A provider that did not register the change (the grant-sync agent, a reconciler) learns its state and its token | **Built** (C-1): for every registered provider and the verifier that registered the change; clearance-api's feed readers read a cluster's cleared changes there |
 | Change-bound outcome | `POST /v1/clearances/{id}/outcome` (G-TF-2) | The core should compare the applied digest with the cleared one, write `matched`, and file `deploy.exception` on a mismatch | `deploy.outcome` through `POST /v1/records`, which is all claimed: the core checks neither that `change.id` exists nor that the digest matches |
-| Signed clearance token | issued on `deploy.clear` (C-1) | Lets a provider (and admission) verify offline that a release binds this digest, without trusting the poll answer | Release on the polled `state` and compare the digest yourself |
+| Signed clearance token | issued on `deploy.clear` (C-1) | Lets a provider (and admission) verify offline that a release binds this digest, without trusting the poll answer | **Built** (C-1): a DSSE envelope and its JWT projection, verified against `GET /v1/keys` ([core.md](core.md#the-clearance-token)) |
 | A group directory in the Go core | `gate.Service.Directory` (nil from `core.Build`) | Without it nobody is in any group, so no person can clear a tier-2 or tier-3 change on `clearance core` | The harness sets its own directory on the built core; a deployment needs R-2 to wire one (the Python core reads Tower's catalog) |
-| Conformance in records | `provider.conformance` (reserved in the v1 schema) | A record could say which suite its writer passed | `CLEARANCE_PROVIDERS` has no field for it yet; the report's `suite` is the value to stamp |
+| Conformance in records | `provider.conformance` (reserved in the v1 schema) | A record says which suite its writer passed | **Built** (C-1): `CLEARANCE_PROVIDERS` entries take `conformance` (`clearance-conformance/v1@2026-11-03`: the report's `suite` and the date it passed), stamped on every record the provider writes |
 
 ## The conformance control interface (test only)
 

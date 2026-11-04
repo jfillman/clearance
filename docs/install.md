@@ -86,7 +86,7 @@ unset, so the core's default applies. Lists are joined with commas.
 
 | Value | Variable | Meaning |
 |---|---|---|
-| `providers` | `CLEARANCE_PROVIDERS` | The registered providers, `{name, version, principals, kinds?, intent_capture?, definitions?}` ([core.md](core.md#registered-providers-clearance_providers)). Without one nobody may evaluate or record. `definitions: true` (one provider at most) may publish its cluster-pinned agent definitions. |
+| `providers` | `CLEARANCE_PROVIDERS` | The registered providers, `{name, version, principals, kinds?, intent_capture?, definitions?, conformance?}` ([core.md](core.md#registered-providers-clearance_providers)). Without one nobody may evaluate or record. `definitions: true` (one provider at most) may publish its cluster-pinned agent definitions. |
 | `verifiers` | `CLEARANCE_VERIFIERS` | Principal globs that may register changes and ask for provenance. |
 | `delegates` | `CLEARANCE_DELEGATES` | Principal globs that may act for a person they name. |
 | `admins` | `CLEARANCE_ADMINS` | `user:<login>` globs that may deny any held change. |
@@ -118,6 +118,9 @@ unset, so the core's default applies. Lists are joined with commas.
 | `githubApp.enabled`, `githubApp.appId` | `CLEARANCE_GITHUB_APP_ID` | The Clearance GitHub App. |
 | `githubApp.existingSecret`, `githubApp.privateKeyKey`, `githubApp.webhookSecretKey` | `CLEARANCE_GITHUB_APP_KEY_FILE`, `..._WEBHOOK_SECRET_FILE` | The Secret and its keys, mounted read-only (mode 0400) at `/etc/clearance/github-app/`. |
 | `githubApp.comments`, `githubApp.api` | `CLEARANCE_GITHUB_APP_COMMENTS`, `CLEARANCE_GITHUB_API` | `off` or `agent-failures`; the API base. |
+| `signing.existingSecret`, `signing.key` | `CLEARANCE_SIGNING_KEY_FILE` | The clearance token signing key: an existing Secret (never created by the chart) and its key (default `signing-key.pem`), mounted read-only (mode 0400) for the core only at `/etc/clearance/signing/`. Empty: no tokens ([below](#the-clearance-token-signing-key)). |
+| `signing.kms` | `CLEARANCE_SIGNING_KMS` | A KMS key reference. Reserved: the core refuses to start with it until the KMS signer is built. |
+| `token.ttl`, `token.issuer` | `CLEARANCE_TOKEN_TTL`, `CLEARANCE_TOKEN_ISSUER` | Each token's life (empty: `15m`; at least four `gate.expireSeconds`) and its `iss` (empty: `clearance`). |
 | `backstage.url` | `BACKSTAGE_URL`, `BACKSTAGE_TOKEN_FILE` | The group directory and app owners. Without it no person can clear a tier-2 or tier-3 change. |
 | `backstage.tokenAudience`, `backstage.tokenExpirationSeconds` | | The projected token sent to Backstage (`backstage`, 3600). |
 
@@ -154,6 +157,7 @@ unset, so the core's default applies. Lists are joined with commas.
 | `api.replicas` | 2 | |
 | `api.pdb.{enabled,minAvailable}` | true, 1 | |
 | `api.auditors`, `api.notifiers` | | `CLEARANCE_API_AUDITORS`, `CLEARANCE_API_NOTIFIERS`. |
+| `api.feedReaders` | | `CLEARANCE_API_FEED_READERS`: `[{principal, cluster}]`, who reads a cluster's grant feed (a grant-sync agent). |
 | `api.pool`, `api.definitionsInterval` | 5, 30 | `CLEARANCE_API_POOL`, `CLEARANCE_API_DEFINITIONS_INTERVAL`. |
 | `api.resources`, `api.serviceAccount.*`, `api.topologySpreadConstraints` and the same pod settings as the core | | |
 | `service.type`, `service.port` | ClusterIP, 8080 | |
@@ -180,6 +184,27 @@ pack and definition variables above.
 | `httpRoutes.core.{enabled,parentRefs,hostnames,matches}` | An HTTPRoute to the core. To expose only the GitHub App webhook: `matches: [{path: {type: Exact, value: /v1/github/webhook}}]`. |
 | `httpRoutes.api.{enabled,parentRefs,hostnames,matches}` | An HTTPRoute to the api. |
 | `tests.chainVerify` | The `helm test` pod (true). |
+
+## The clearance token signing key
+
+The core signs a clearance token for every cleared change (C-1, [core.md](core.md#the-clearance-token)) with an
+ECDSA P-256 key you hold. The chart never creates the Secret and never renders a key; you make the key and the
+Secret yourself, outside the chart:
+
+```shell
+# On a machine you trust; the key never goes in git, values, a log or a chat.
+openssl ecparam -name prime256v1 -genkey -noout -out signing-key.pem   # SEC 1 "EC PRIVATE KEY"
+kubectl -n <namespace> create secret generic clearance-signing-key --from-file=signing-key.pem=signing-key.pem
+rm signing-key.pem   # once it is in the Secret (or only in your secret store)
+```
+
+or put the PEM in your secret store and sync it with an ExternalSecret you manage (the Secret's key must be the
+chart's `signing.key`). Then set `signing.existingSecret: clearance-signing-key`. The core logs the key's `kid` at
+start and publishes the public half at `GET /v1/keys` (the core and clearance-api).
+
+- **Rotation**: replace the key in the Secret and restart the core. The live tokens are re-signed with the new key at
+  once; the old public key stays in `GET /v1/keys` for 24 hours.
+- **KMS**: `signing.kms` is reserved for a KMS-held key (the core refuses it until the KMS signer is built).
 
 ## Upgrade
 

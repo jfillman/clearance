@@ -36,6 +36,14 @@
 //	                              any group and no person can clear a tier-2/3 change
 //	BACKSTAGE_TOKEN_FILE          the bearer token for Backstage, re-read on every call (default
 //	                              /var/run/clearance/backstage-token: a projected token for the backstage audience)
+//	CLEARANCE_SIGNING_KEY_FILE    the clearance token signing key: a PEM ECDSA P-256 private key (SEC 1 or PKCS #8),
+//	                              read once at start. Unset: no tokens are issued (and none of a gate provider's
+//	                              deploys can be admitted on one)
+//	CLEARANCE_SIGNING_KMS         a KMS key reference for the signing key (KMS signing is not built: setting it
+//	                              stops the start; docs/core.md, The clearance token)
+//	CLEARANCE_TOKEN_TTL           each token's life, a Go duration (default 15m, 1m to 24h, at least four expiry
+//	                              intervals); tokens are re-issued at half-life while their change stays cleared
+//	CLEARANCE_TOKEN_ISSUER        the tokens' iss, which verifiers check (default clearance)
 //
 // and the authenticator's (authn.EnvVars: CLEARANCE_AUDIENCE, CLEARANCE_OIDC_*, CLEARANCE_FOREIGN_*,
 // CLEARANCE_GITHUB_OIDC_*), and the deployment's vocabulary (vocab.EnvVars).
@@ -71,6 +79,7 @@ import (
 	"github.com/jfillman/clearance/internal/store"
 	"github.com/jfillman/clearance/internal/store/memory"
 	"github.com/jfillman/clearance/internal/store/pg"
+	"github.com/jfillman/clearance/internal/token"
 	"github.com/jfillman/clearance/internal/vocab"
 )
 
@@ -106,6 +115,10 @@ type Config struct {
 	BackstageTokenFile string
 	// BackstageTimeout is each Backstage call's deadline (<= 0: backstage.DefaultTimeout).
 	BackstageTimeout time.Duration
+	// Signer signs clearance tokens (nil: none are issued); TokenTTL and TokenIssuer are gate.Tokens'.
+	Signer      token.Signer
+	TokenTTL    time.Duration
+	TokenIssuer string
 }
 
 // FromEnv reads Config from getenv, the authenticator included (authn.FromEnv).
@@ -200,10 +213,49 @@ func FromEnv(getenv func(string) string) (Config, error) {
 			return cfg, errors.New("BACKSTAGE_URL must be an http(s) URL with a host and no credentials, query or fragment")
 		}
 	}
+	if get("CLEARANCE_SIGNING_KMS", "") != "" {
+		return cfg, errors.New("CLEARANCE_SIGNING_KMS: KMS signing is not built yet; sign with a key file " +
+			"(CLEARANCE_SIGNING_KEY_FILE) until it is (docs/core.md, The clearance token)")
+	}
+	if path := get("CLEARANCE_SIGNING_KEY_FILE", ""); path != "" {
+		if cfg.Signer, err = token.LoadKeyFile(path); err != nil {
+			return cfg, fmt.Errorf("CLEARANCE_SIGNING_KEY_FILE: %w", err)
+		}
+	}
+	if cfg.TokenTTL, err = ParseTokenTTL(get("CLEARANCE_TOKEN_TTL", ""), cfg.ExpireEvery); err != nil {
+		return cfg, fmt.Errorf("CLEARANCE_TOKEN_TTL: %w", err)
+	}
+	cfg.TokenIssuer = get("CLEARANCE_TOKEN_ISSUER", gate.DefaultTokenIssuer)
+	if len(cfg.TokenIssuer) > 200 || strings.ContainsAny(cfg.TokenIssuer, " \t\r\n") {
+		return cfg, errors.New("CLEARANCE_TOKEN_ISSUER is at most 200 characters, without spaces")
+	}
 	if cfg.Auth, err = authn.FromEnv(getenv); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
+}
+
+// MinTokenTTL is the shortest token life a deployment may set.
+const MinTokenTTL = time.Minute
+
+// ParseTokenTTL reads CLEARANCE_TOKEN_TTL: "" is gate.DefaultTokenTTL; else a Go duration from MinTokenTTL to
+// gate.MaxTokenTTL and at least four times the refresh interval (the expiry loop's), so a token is always
+// re-issued before it lapses.
+func ParseTokenTTL(v string, every time.Duration) (time.Duration, error) {
+	d := gate.DefaultTokenTTL
+	if v != "" {
+		var err error
+		if d, err = time.ParseDuration(v); err != nil {
+			return 0, fmt.Errorf("%q is not a Go duration (15m, 1h)", v)
+		}
+	}
+	if d < MinTokenTTL || d > gate.MaxTokenTTL {
+		return 0, fmt.Errorf("%s is not between %s and %s", d, MinTokenTTL, gate.MaxTokenTTL)
+	}
+	if every > 0 && d < 4*every {
+		return 0, fmt.Errorf("%s is under four refresh intervals (CLEARANCE_EXPIRE_SECONDS: %s)", d, every)
+	}
+	return d, nil
 }
 
 // MaxClockSkewLimit is the largest clock-skew bound a deployment may set.
@@ -351,6 +403,15 @@ func (c *Core) wire(ctx context.Context) error {
 
 	g := gate.NewService(cfg.Gate, c.Store, c.clock)
 	g.Writer, g.Tools, g.Parse = writer, tools, parse
+	if cfg.Signer != nil {
+		if err := c.useKey(ctx, cfg.Signer); err != nil {
+			return err
+		}
+		g.Tokens = &gate.Tokens{Signer: cfg.Signer, Issuer: cfg.TokenIssuer, TTL: cfg.TokenTTL, EngineVersion: writer.Provider.Version}
+	} else if !cfg.Gate.Off {
+		c.log.WarnContext(ctx, "gate: no CLEARANCE_SIGNING_KEY_FILE, so no clearance tokens: a gate provider that "+
+			"admits on a token (the Argo CD grant sync) admits nothing")
+	}
 	if cfg.BackstageURL != "" {
 		tokenFile := cfg.BackstageTokenFile
 		if tokenFile == "" {
@@ -388,6 +449,25 @@ func (c *Core) wire(ctx context.Context) error {
 	return nil
 }
 
+// useKey publishes the signing key's public half (GET /v1/keys) and retires the one used before it.
+func (c *Core) useKey(ctx context.Context, s token.Signer) error {
+	j, err := token.PublicJWK(s.Public())
+	if err != nil {
+		return fmt.Errorf("core: the signing key: %w", err)
+	}
+	raw, err := json.Marshal(j)
+	if err != nil {
+		return err
+	}
+	if err := c.Store.Atomic(ctx, func(tx store.Tx) error {
+		return tx.UseSigningKey(ctx, store.SigningKey{KeyID: j.Kid, JWK: raw}, c.clock().UTC())
+	}); err != nil {
+		return fmt.Errorf("core: publishing the signing key: %w", err)
+	}
+	c.log.InfoContext(ctx, "clearance tokens: signing", "kid", j.Kid)
+	return nil
+}
+
 // Close closes the store (once).
 func (c *Core) Close() { c.once.Do(c.closeFn) }
 
@@ -407,6 +487,7 @@ func (c *Core) Loops(ctx context.Context) {
 	}
 	t := time.NewTicker(every)
 	defer t.Stop()
+	c.refresh(ctx) // a restart with a new key re-signs the live tokens at once
 	for {
 		select {
 		case <-ctx.Done():
@@ -421,7 +502,19 @@ func (c *Core) Loops(ctx context.Context) {
 			} else if len(ids) > 0 {
 				c.log.InfoContext(ctx, "gate: expired changes", "count", len(ids))
 			}
+			c.refresh(ctx)
 		}
+	}
+}
+
+// refresh re-issues the clearance tokens due and revokes the lapsed (gate.Service.Refresh).
+func (c *Core) refresh(ctx context.Context) {
+	n, revoked, err := c.Gate.Refresh(ctx)
+	switch {
+	case err != nil && ctx.Err() == nil:
+		c.log.ErrorContext(ctx, "gate: refreshing clearance tokens failed", "error", err.Error())
+	case n > 0 || revoked > 0:
+		c.log.InfoContext(ctx, "gate: clearance tokens refreshed", "reissued", n, "revoked", revoked)
 	}
 }
 

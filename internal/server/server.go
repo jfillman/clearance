@@ -147,7 +147,7 @@ func (s *Server) mountServices() {
 // unauthenticated are the requests no bearer token is asked of.
 func unauthenticated(r *http.Request) bool {
 	switch {
-	case r.Method == http.MethodGet && (r.URL.Path == "/healthz" || r.URL.Path == "/readyz"):
+	case r.Method == http.MethodGet && (r.URL.Path == "/healthz" || r.URL.Path == "/readyz" || r.URL.Path == "/v1/keys"):
 		return true
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/github/webhook":
 		return true // the payload's HMAC signature authenticates it (githubapp.App.Accept)
