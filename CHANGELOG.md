@@ -55,6 +55,18 @@ deployment that sets no signing key, except that records and views carry the new
   "clearance-gate", engine_version, verdict: "clear" | "hold"}`: the gate's decision stays in `clearance.cleared_by`
   and `tier`, and the `clearance.yaml` digest is in `version`. Not yet released, so no token in the field carries
   the old shape.
+- `docs/gate.md`, "Phase 2 design pass" (G-ARGO-1, Draft): the Argo CD gate's chosen shapes, each spiked on hangar-dev
+  in Warn mode. The CMP replaces the tenant Application's Helm source; grants match the stamped
+  `clearance.hangar.io/rendered` annotation; admission is a native ValidatingAdmissionPolicy (not Kyverno), one
+  active grant per protected namespace, objects as a map; the agent watches Application status for outcomes; the CMP
+  and the agent reach the core as more hangar-prod foreign workloads. Also the release-record cross-reference the
+  owner decided on 2026-11-03 (Clearance's signed record is the authority; Glidepath's release record points at it by
+  `releaseId` and change id) and the card changes the spikes call for.
+- `docs/spikes/g-argo-1/`: the spike plugin, manifests and scripts (hangar-dev only), a CEL cost measurement with
+  the API server's own admission CEL evaluator (`celcost`, its own module), and `prod-plan.md`, the two hangar-prod
+  measurements prepared for the user.
+- `internal/authn`: a test that several service accounts of one foreign cluster authenticate as separate principals
+  (`TestSeveralServiceAccountsOfOneForeignCluster`).
 - **C-10: clearance-api for the gates.**
   - **The signed grant feed** (`token.Feed`, `internal/gate/feed.go`; [docs/gate.md](docs/gate.md#the-signed-grant-feed-c-10-built)):
     per cluster, a DSSE envelope (`application/vnd.clearance.grant-feed.v1+json`, the token key) over every live

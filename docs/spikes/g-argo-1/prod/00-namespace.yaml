@@ -1,0 +1,60 @@
+# G-ARGO-1 prod spike (hangar-prod, Warn only). The user applies this; see ../prod-plan.md.
+# One scratch namespace, labelled protected, and two identities: the writer the policies match (it stands in for
+# argocd-apps' application-controller, so no Argo CD sync on prod is involved) and the CMP identity for spike e.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: clearance-spike-prot
+  labels:
+    hangar.io/spike: g-argo-1
+    clearance.hangar.io/protected: "true"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: clearance-spike-writer, namespace: clearance-spike-prot, labels: {hangar.io/spike: g-argo-1}}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: clearance-spike-cmp, namespace: clearance-spike-prot, labels: {hangar.io/spike: g-argo-1}}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: clearance-spike-writer, namespace: clearance-spike-prot, labels: {hangar.io/spike: g-argo-1}}
+rules:
+  - {apiGroups: [""], resources: [configmaps], verbs: [get, create, update]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: clearance-spike-writer, namespace: clearance-spike-prot, labels: {hangar.io/spike: g-argo-1}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: clearance-spike-writer}
+subjects:
+  - {kind: ServiceAccount, name: clearance-spike-writer, namespace: clearance-spike-prot}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: clearance-spike-prot
+  labels: {hangar.io/spike: g-argo-1}
+  annotations:
+    clearance.hangar.io/grant: spike-grant
+    clearance.hangar.io/rendered: sha256:02db9f074f9dc1f688d75b169b1f313610def0713ffbf44a979c2c139d48acae
+data:
+  LOG_LEVEL: info
+---
+apiVersion: spike.clearance.hangar.io/v1
+kind: ClearanceGrant
+metadata:
+  name: spike-grant
+  namespace: clearance-spike-prot
+  labels: {hangar.io/spike: g-argo-1, clearance.hangar.io/active: "true"}
+spec:
+  subject: {commit: g-argo-1-design, tree: "sha256:50c5cc6327bb4d8371cac14cc3e871c63fffd53bebe364f0c935e141461fb435"}
+  expiresAt: "2026-12-31T00:00:00Z"
+  clearance: {id: ch-spike, tier: 1}
+  objects:
+    - {group: "", kind: ConfigMap, name: app-config, rendered: "sha256:02db9f074f9dc1f688d75b169b1f313610def0713ffbf44a979c2c139d48acae", changed: true}
+  index:
+    /ConfigMap/app-config: sha256:02db9f074f9dc1f688d75b169b1f313610def0713ffbf44a979c2c139d48acae
+status:
+  valid: true
