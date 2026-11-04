@@ -9,6 +9,7 @@ import (
 	"github.com/jfillman/clearance/internal/githubapp"
 	"github.com/jfillman/clearance/internal/provenance"
 	"github.com/jfillman/clearance/internal/review"
+	"github.com/jfillman/clearance/internal/token"
 )
 
 // How a route authenticates its caller.
@@ -156,9 +157,21 @@ var routeTable = []Route{
 		Summary: "The clearance-gate check registers (or re-evaluates) a change to a protected environment; the caller " +
 			"is a verifier (CLEARANCE_VERIFIERS).",
 		RequestNote: "gate.ChangeRequest (docs/gate.md): app, env, cluster, repo, pr, head, base, proposer, " +
-			"proposerKind, owner, protected, treeDigest, paths, linesChanged, objects, checks, policy, agent, " +
+			"proposerKind, owner, protected, treeDigest, paths, linesChanged, objects, checks, policy, policyCommit, " +
+			"admission, agent, " +
 			"definition; unknown fields are refused",
 		Responses: append([]Response{{200, "the change as recorded", gate.Change{}}}, gateErrs...),
+	},
+	{
+		Method: "GET", Path: "/v1/clearances/{change_id}", OperationID: "getClearance", Auth: AuthBearer,
+		MaxBody: DefaultMaxBody,
+		Summary: "A change's state and its live clearance token (a DSSE envelope and its JWT projection; null when " +
+			"the change is not cleared, its token was revoked by a new head, or it lapsed). For a registered provider " +
+			"and the verifier that registered the change; people read changes through clearance-api. A token with " +
+			"less than half its life left is re-issued (same nonce) before it is returned.",
+		Responses: []Response{{200, "the change and its token", gate.ClearanceAnswer{}}, errs(401)[0], errs(403)[0],
+			{404, "no such change, or a Clearance that keeps no changes (DG-OFF)", gate.ErrorBody{}}, errs(503)[0]},
+		serve: func(s *Server) http.HandlerFunc { return s.getClearance },
 	},
 	{
 		Method: "POST", Path: "/v1/clearances/{change_id}/clear", OperationID: "clearChange", Auth: AuthBearer,
@@ -172,6 +185,13 @@ var routeTable = []Route{
 		Summary:     "A person who could clear a holding change denies it, with a reason.",
 		RequestNote: `{"reason": string}`,
 		Responses:   append([]Response{{200, "the change and the record's seq", gate.Decided{}}}, gateErrs...),
+	},
+	{
+		Method: "GET", Path: "/v1/keys", OperationID: "getKeys", Auth: AuthNone, MaxBody: DefaultMaxBody,
+		Summary: "The clearance token verification keys, a JWKS (EC P-256, ES256, kid = the RFC 7638 thumbprint): the " +
+			"key in use and keys retired within the last 24 hours. Public: a verifier checks tokens offline with it.",
+		Responses: append([]Response{{200, "the key set", token.JWKS{}}}, errs(503)...),
+		serve:     func(s *Server) http.HandlerFunc { return s.keys },
 	},
 	{
 		Method: "POST", Path: "/v1/definitions/review", OperationID: "reviewDefinition", Auth: AuthBearer,

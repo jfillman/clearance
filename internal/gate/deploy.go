@@ -49,7 +49,8 @@ func (s *Service) DeploymentRequested(ctx context.Context, installation, repo, h
 				"agent": nil, "tool": "deploy.request", "tier": nil, "decision": "deny", "rule": "DG-UNREGISTERED",
 				"target":      repo + "@" + pycompat.Truncate(head, 7),
 				"args_sha256": pycompat.ArgsDigest(map[string]any{"run": runID, "environment": environment}),
-				"result":      fmt.Sprintf("deployment run %d to %s: rejected", runID, environment), "boundary": "deployment"})
+				"result":      fmt.Sprintf("deployment run %d to %s: rejected", runID, environment), "boundary": "deployment",
+				"policy": baselineGroup(s.Policy)})
 			out = DeploymentResult{strp("rejected"), strp("DG-UNREGISTERED"), why, nil, recordSeq(rec)}
 			return nil
 		}
@@ -78,12 +79,21 @@ func (s *Service) DeploymentRequested(ctx context.Context, installation, repo, h
 			word = *entry.Answer
 		}
 		rec := w.record(principal, nil, "deploy.request", c, "allow", nil, fmt.Sprintf("deployment run %d to %s: %s", runID, environment, word),
-			map[string]any{"run": runID, "environment": environment})
+			map[string]any{"run": runID, "environment": environment}, approverFields(c))
 		id := c.ID
 		out = DeploymentResult{entry.Answer, nil, s.deploymentComment(c, entry.Answer), &id, recordSeq(rec)}
 		return nil
 	})
 	return out, err
+}
+
+// approverFields are who cleared c, on a record the GitHub App writes as itself (app:<installation>): the people,
+// or cleared_by "policy". Nothing for a change that is not cleared.
+func approverFields(c *Change) map[string]any {
+	if c.State != "cleared" {
+		return nil
+	}
+	return clearedFields(c, "")
 }
 
 func (s *Service) deploymentComment(c *Change, answer *string) string {
@@ -183,7 +193,7 @@ func (s *Service) DeploymentDelivered(ctx context.Context, changeID string, runI
 				}
 				out = w.record("app:"+d.Installation, nil, "deploy.answer", c, decision, rule,
 					fmt.Sprintf("deployment run %d to %s: %s", runID, environment, pycompat.Str(strOrNil(d.Answer))),
-					map[string]any{"run": runID, "environment": environment, "answer": strOrNil(d.Answer)})
+					map[string]any{"run": runID, "environment": environment, "answer": strOrNil(d.Answer)}, approverFields(c))
 				return nil
 			}
 		}

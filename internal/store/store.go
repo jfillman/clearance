@@ -52,6 +52,26 @@ type Definition struct {
 	Record      json.RawMessage
 }
 
+// Token is one row of clearance_tokens: the clearance token issued for a cleared change (C-1), in both its
+// encodings. One per change: a refresh replaces the row and keeps its nonce; a new clearance of the change replaces
+// the nonce. A revoked token (a new head superseded it, or it lapsed) keeps its row with RevokedAt set.
+type Token struct {
+	ChangeID, Cluster, Nonce, KeyID string
+	IssuedAt, ExpiresAt             time.Time
+	RevokedAt                       *time.Time
+	Envelope                        json.RawMessage // the DSSE envelope
+	JWT                             string
+}
+
+// SigningKey is one row of clearance_signing_keys: a token verification key the core has signed with (GET
+// /v1/keys). RetiredAt is set when the core started with another key.
+type SigningKey struct {
+	KeyID     string
+	JWK       json.RawMessage
+	CreatedAt time.Time
+	RetiredAt *time.Time
+}
+
 // Store is a writable core store.
 type Store interface {
 	Reader
@@ -69,6 +89,10 @@ type Tx interface {
 	Append(ctx context.Context, event Event, w evidence.Writer) (Record, error)
 	PutChange(ctx context.Context, c Change) error
 	ReplaceDefinitions(ctx context.Context, defs []Definition) error
+	// PutToken writes the change's token (an upsert by change id).
+	PutToken(ctx context.Context, t Token) error
+	// UseSigningKey records k as the key in use (inserted, or un-retired) and retires every other key at now.
+	UseSigningKey(ctx context.Context, k SigningKey, now time.Time) error
 }
 
 // Reader is what both a Tx and the store outside a transaction can read.
@@ -89,4 +113,11 @@ type Reader interface {
 	// ChangesUndelivered are the changes with a deployment whose delivered is false (github_app.py retries them).
 	ChangesUndelivered(ctx context.Context) ([]Change, error)
 	Definitions(ctx context.Context) ([]Definition, error)
+	// Token is the change's token (ErrNotFound when it has none).
+	Token(ctx context.Context, changeID string) (Token, error)
+	// TokensDue are the tokens not revoked that expire before due or are signed by a key other than keyID: the
+	// ones a refresh re-issues (or revokes), oldest expiry first, at most limit.
+	TokensDue(ctx context.Context, due time.Time, keyID string, limit int) ([]Token, error)
+	// SigningKeys are the keys in use or retired after since, newest first.
+	SigningKeys(ctx context.Context, since time.Time) ([]SigningKey, error)
 }

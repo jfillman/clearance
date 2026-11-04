@@ -20,7 +20,9 @@ the inbox, trigger history, results), so the Go API serves only Clearance's own 
   Every record goes through `evidence.Project` (v0-draft rows gain `provider` and `subject`, named in `projected`)
   with `assurance` beside it ([evidence.md](evidence.md)).
 - PR receipts and the agent-gate verdicts (`provenance.verify` records) for a repo or a PR.
-- The deployment gate: changes, counts, one change, and the gate's baseline policy.
+- The deployment gate: changes, counts, one change (with its live clearance token, C-1), the grant feed (a
+  cluster's cleared changes with their tokens), and the gate's baseline policy.
+- The clearance token verification keys (`GET /v1/keys`, public): what a verifier checks tokens with offline.
 - The decision policy as data (rules in evaluation order with the bundle each came from as `pack`, the tool registry, and `core` plus the loaded bundles as `packs`) and the
   dry-run explainer, which runs the real engine (`decide.(*Engine).Decide` and the new `decide.(*Engine).Trace`, the
   port of `Policy.trace`) on a fresh session of a definition. Records nothing, spends nothing.
@@ -32,7 +34,7 @@ the inbox, trigger history, results), so the Go API serves only Clearance's own 
 - GET only; a request with a body is 413, another method on a known path 405, an unknown path 404 (JSON errors).
 - Every query parameter is checked against the route's list: an unknown or a repeated one is 400 (api.py ignored
   them). `limit` is capped at 200 (not refused); `since`/`until` must look like ISO times.
-- Every route but `/healthz`, `/readyz` and `/v1/contract` needs a bearer token (`internal/authn.FromEnv`: TokenReview,
+- Every route but `/healthz`, `/readyz`, `/v1/keys` and `/v1/contract` needs a bearer token (`internal/authn.FromEnv`: TokenReview,
   people's OIDC, the Tower cluster's foreign workloads). Roles exactly as api.py (Who sees what, below).
 - Server timeouts: read-header 5 s, read 10 s, write 30 s, idle 120 s, a 25 s deadline on every handler, 64 KiB of
   headers (the explainer's `args` are capped at 16 KiB).
@@ -51,13 +53,30 @@ the inbox, trigger history, results), so the Go API serves only Clearance's own 
 | explainPolicy | `GET /v1/policy/explain` | **ported** (`decide.(*Engine).Trace`) |
 | listReceipts | `GET /v1/receipts` | **ported** |
 | listProvenance | `GET /v1/provenance` | **ported** |
-| listClearances | `GET /v1/clearances` | **ported** |
+| listClearances | `GET /v1/clearances` | **ported**; adds `cluster`, and `cluster=<c>&state=cleared` is the grant feed (C-1, below) |
 | countClearances | `GET /v1/clearances/counts` | **ported** |
-| getClearance | `GET /v1/clearances/{id}` | **ported** |
+| getClearance | `GET /v1/clearances/{id}` | **ported**; adds `token` (C-1) |
 | getClearancePolicy | `GET /v1/clearance-policy` | **ported** |
 | getContract | `GET /v1/contract` | **ported**; names `core` (`CLEARANCE_CORE_URL`) beside `gateway` |
 | (healthz, readyz) | `GET /healthz`, `/readyz` | **ported**; readyz checks the database |
 | (new) listDefinitions | `GET /v1/definitions` | **new**: the definitions Clearance holds, api.py's agent view without the gateway's `hold` |
+| (new) getKeys | `GET /v1/keys` | **new** (C-1): the clearance token verification keys, a JWKS, from `clearance_signing_keys`; public |
+
+### The grant feed and the token (C-1)
+
+- `GET /v1/clearances/{id}` adds `token` beside the change: the live clearance token (`{nonce, key_id, issued_at,
+  expires_at, dsse, jwt}`), or `null` when the change has none (not cleared, revoked by a new head, lapsed, or a
+  core without a signing key). Anyone who may read the change gets it.
+- `GET /v1/clearances?cluster=<c>&state=cleared` is the **grant feed** the grant-sync agent (G-ARGO-3) reads: the
+  cluster's cleared changes whose token is live now, each with `token`, newest first, paged by `updated_at` like
+  the list. Any other list carries no tokens. `cluster` alone filters the list.
+- **Feed readers** (`CLEARANCE_API_FEED_READERS`, `<principal glob>=<cluster>` pairs; chart `api.feedReaders`) are a
+  role of their own: a grant-sync agent on a protected cluster (on Hangar, `hangar-prod/<ns>/<sa>` through the
+  foreign-cluster issuer). A feed reader may read only the feed of its own clusters and the changes on them, one at
+  a time; any other route or cluster is 403.
+- clearance-api never holds the signing key: tokens are signed and refreshed by the core and read here from
+  `clearance_tokens`; the keys from `clearance_signing_keys`. The feed is indexed by
+  `clearance_tokens_feed (cluster, expires_at) WHERE revoked_at IS NULL` and the token's primary key.
 | listAgents, getAgent | `GET /v1/agents`, `/v1/agents/{name}` | **left for the gateway (R-3)**: they carry the trigger hold (control.py) and are the runtime's view; `/v1/definitions` is Clearance's part of them |
 | listSessions, getSession | `GET /v1/sessions`, `/v1/sessions/{id}` | **left for the gateway (R-3)**: sessions are runtime state |
 | getSessionResult | `GET /v1/sessions/{id}/result` | **left for the gateway (R-3)**: run results |
@@ -104,6 +123,7 @@ only the operations in its vendored contract, so its copy is refreshed with R-3/
 | `CLEARANCE_API_DSN` | (required) | the read-only role's DSN |
 | `CLEARANCE_API_AUDITORS` | none | principal globs: every read, the chain check, `full=1` |
 | `CLEARANCE_API_NOTIFIERS` | none | principal globs: the notifier role |
+| `CLEARANCE_API_FEED_READERS` | none | `<principal glob>=<cluster>` pairs, comma-separated: the grant feed's readers (C-1) |
 | `CLEARANCE_DELEGATES` | none | principal globs that may name a person in the on-behalf-of header (`CLEARANCE_ON_BEHALF_OF_HEADER`; Hangar sets `X-Hangar-On-Behalf-Of`) |
 | `CLEARANCE_AGENTS_DIR` | none | the bundled definitions; cluster pins come from `clearance_definitions` |
 | `CLEARANCE_API_DEFINITIONS_INTERVAL` | 30 | seconds between re-reads of the stored definitions |
@@ -315,6 +335,7 @@ foreign workloads by public issuer (Tower). Roles are principal globs in config:
 | `delegate` | `CLEARANCE_DELEGATES` (Tower) | everything a person may, for the person named in `X-Hangar-On-Behalf-Of` |
 | `notifier` | `CLEARANCE_API_NOTIFIERS` (Tower) | the inbox feed across everyone (for notifications), nothing else |
 | `auditor` | `CLEARANCE_API_AUDITORS` | every read, including definitions' full instructions and the chain check |
+| `feed` | `CLEARANCE_API_FEED_READERS` (a grant-sync agent) | its clusters' grant feed and the changes on them, with their tokens; nothing else (C-1) |
 
 A record's visibility is decided by its session's owner and agent, so a person never sees another team's agents'
 sessions through a filter.

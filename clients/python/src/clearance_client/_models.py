@@ -18,7 +18,7 @@ CONTRACT_VERSION = "1.0.0"
 
 RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "run.finish", "human.answer", "session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome", "deploy.exception")
 
-__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Budgets", "BundleRef", "Context", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateApproval", "GateChange", "GateChangeWithAuditSeq", "GateDeployment", "GateErrorBody", "GateObjectChange", "GateReason", "GateRequirement", "Grant", "Health", "Hold", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Problem", "ProvenanceCheck", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "WebhookAnswer"]
+__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Budgets", "BundleRef", "Context", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateApproval", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateErrorBody", "GateObjectChange", "GateReason", "GateRequirement", "GateTokenView", "Grant", "Health", "Hold", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Problem", "ProvenanceCheck", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenSignature", "WebhookAnswer"]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -326,20 +326,44 @@ class EvaluationResult(Model):
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
+class GateAdmission(Model):
+    """Contract schema GateAdmission."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("bundle", "bundle", ("str",), False),
+        Field("deny", "deny", ("int",), True),
+        Field("engine", "engine", ("str",), True),
+        Field("verdict", "verdict", ("str",), True),
+        Field("warn", "warn", ("int",), True),
+    )
+
+    bundle: str | None = None
+    deny: int
+    engine: str
+    verdict: str
+    warn: int
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
 class GateApproval(Model):
     """Contract schema GateApproval."""
 
     _STRICT: ClassVar[bool] = False
     _FIELDS: ClassVar[tuple[Field, ...]] = (
         Field("at", "at", ("str",), True),
+        Field("iss", "iss", ("str",), False),
         Field("person", "person", ("str",), True),
         Field("role", "role", ("str",), True),
+        Field("sub", "sub", ("str",), False),
         Field("via", "via", ("nullable", ("str",)), True),
     )
 
     at: str
+    iss: str | None = None
     person: str
     role: str
+    sub: str | None = None
     via: str | None
 
 
@@ -349,6 +373,7 @@ class GateChange(Model):
 
     _STRICT: ClassVar[bool] = False
     _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("admission", "admission", ("nullable", ("ref", "GateAdmission")), False),
         Field("agent", "agent", ("nullable", ("str",)), True),
         Field("app", "app", ("str",), True),
         Field("approvals", "approvals", ("list", ("ref", "GateApproval")), True),
@@ -371,6 +396,7 @@ class GateChange(Model):
         Field("owner", "owner", ("str",), True),
         Field("paths", "paths", ("list", ("str",)), True),
         Field("paths_count", "paths_count", ("int",), True),
+        Field("policy_ref", "policy_ref", ("str",), False),
         Field("policy_version", "policy_version", ("str",), True),
         Field("pr", "pr", ("int",), True),
         Field("proposer", "proposer", ("str",), True),
@@ -384,11 +410,13 @@ class GateChange(Model):
         Field("state", "state", ("str",), True),
         Field("superseded_by", "superseded_by", ("nullable", ("str",)), True),
         Field("target", "target", ("str",), True),
+        Field("task_id", "task_id", ("nullable", ("str",)), True),
         Field("tier", "tier", ("int",), True),
         Field("tree_digest", "tree_digest", ("str",), True),
         Field("updated_at", "updated_at", ("str",), True),
     )
 
+    admission: GateAdmission | None = None
     agent: str | None
     app: str
     approvals: list[GateApproval]
@@ -411,6 +439,7 @@ class GateChange(Model):
     owner: str
     paths: list[str]
     paths_count: int
+    policy_ref: str | None = None
     policy_version: str
     pr: int
     proposer: str
@@ -424,6 +453,7 @@ class GateChange(Model):
     state: str
     superseded_by: str | None
     target: str
+    task_id: str | None
     tier: int
     tree_digest: str
     updated_at: str
@@ -435,6 +465,7 @@ class GateChangeWithAuditSeq(Model):
 
     _STRICT: ClassVar[bool] = False
     _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("admission", "admission", ("nullable", ("ref", "GateAdmission")), False),
         Field("agent", "agent", ("nullable", ("str",)), True),
         Field("app", "app", ("str",), True),
         Field("approvals", "approvals", ("list", ("ref", "GateApproval")), True),
@@ -458,6 +489,7 @@ class GateChangeWithAuditSeq(Model):
         Field("owner", "owner", ("str",), True),
         Field("paths", "paths", ("list", ("str",)), True),
         Field("paths_count", "paths_count", ("int",), True),
+        Field("policy_ref", "policy_ref", ("str",), False),
         Field("policy_version", "policy_version", ("str",), True),
         Field("pr", "pr", ("int",), True),
         Field("proposer", "proposer", ("str",), True),
@@ -471,11 +503,13 @@ class GateChangeWithAuditSeq(Model):
         Field("state", "state", ("str",), True),
         Field("superseded_by", "superseded_by", ("nullable", ("str",)), True),
         Field("target", "target", ("str",), True),
+        Field("task_id", "task_id", ("nullable", ("str",)), True),
         Field("tier", "tier", ("int",), True),
         Field("tree_digest", "tree_digest", ("str",), True),
         Field("updated_at", "updated_at", ("str",), True),
     )
 
+    admission: GateAdmission | None = None
     agent: str | None
     app: str
     approvals: list[GateApproval]
@@ -499,6 +533,7 @@ class GateChangeWithAuditSeq(Model):
     owner: str
     paths: list[str]
     paths_count: int
+    policy_ref: str | None = None
     policy_version: str
     pr: int
     proposer: str
@@ -512,9 +547,48 @@ class GateChangeWithAuditSeq(Model):
     state: str
     superseded_by: str | None
     target: str
+    task_id: str | None
     tier: int
     tree_digest: str
     updated_at: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class GateClearanceAnswer(Model):
+    """Contract schema GateClearanceAnswer."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("app", "app", ("str",), True),
+        Field("cleared_by", "cleared_by", ("nullable", ("str",)), True),
+        Field("cluster", "cluster", ("str",), True),
+        Field("env", "env", ("str",), True),
+        Field("expires_at", "expires_at", ("str",), True),
+        Field("head", "head", ("str",), True),
+        Field("id", "id", ("str",), True),
+        Field("pr", "pr", ("int",), True),
+        Field("repo", "repo", ("str",), True),
+        Field("state", "state", ("str",), True),
+        Field("task_id", "task_id", ("nullable", ("str",)), True),
+        Field("tier", "tier", ("int",), True),
+        Field("token", "token", ("nullable", ("ref", "GateTokenView")), True),
+        Field("tree_digest", "tree_digest", ("str",), True),
+    )
+
+    app: str
+    cleared_by: str | None
+    cluster: str
+    env: str
+    expires_at: str
+    head: str
+    id: str
+    pr: int
+    repo: str
+    state: str
+    task_id: str | None
+    tier: int
+    token: GateTokenView | None
+    tree_digest: str
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -619,6 +693,28 @@ class GateRequirement(Model):
     outsideGroups: list[str]
     owner: int
     ownerGroup: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class GateTokenView(Model):
+    """Contract schema GateTokenView."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("dsse", "dsse", ("ref", "TokenEnvelope"), True),
+        Field("expires_at", "expires_at", ("str",), True),
+        Field("issued_at", "issued_at", ("str",), True),
+        Field("jwt", "jwt", ("str",), True),
+        Field("key_id", "key_id", ("str",), True),
+        Field("nonce", "nonce", ("str",), True),
+    )
+
+    dsse: TokenEnvelope
+    expires_at: str
+    issued_at: str
+    jwt: str
+    key_id: str
+    nonce: str
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -1246,6 +1342,72 @@ class SubjectProperties(Model):
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
+class TokenEnvelope(Model):
+    """Contract schema TokenEnvelope."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("payload", "payload", ("str",), True),
+        Field("payloadType", "payloadType", ("str",), True),
+        Field("signatures", "signatures", ("list", ("ref", "TokenSignature")), True),
+    )
+
+    payload: str
+    payloadType: str
+    signatures: list[TokenSignature]
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class TokenJWK(Model):
+    """Contract schema TokenJWK."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("alg", "alg", ("str",), True),
+        Field("crv", "crv", ("str",), True),
+        Field("kid", "kid", ("str",), True),
+        Field("kty", "kty", ("str",), True),
+        Field("use", "use", ("str",), True),
+        Field("x", "x", ("str",), True),
+        Field("y", "y", ("str",), True),
+    )
+
+    alg: str
+    crv: str
+    kid: str
+    kty: str
+    use: str
+    x: str
+    y: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class TokenJWKS(Model):
+    """Contract schema TokenJWKS."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("keys", "keys", ("list", ("ref", "TokenJWK")), True),
+    )
+
+    keys: list[TokenJWK]
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class TokenSignature(Model):
+    """Contract schema TokenSignature."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("keyid", "keyid", ("str",), True),
+        Field("sig", "sig", ("str",), True),
+    )
+
+    keyid: str
+    sig: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
 class WebhookAnswer(Model):
     """Contract schema WebhookAnswer."""
 
@@ -1273,14 +1435,17 @@ MODELS: dict[str, type[Model]] = {
     "ErrorResponse": ErrorResponse,
     "EvaluationRequest": EvaluationRequest,
     "EvaluationResult": EvaluationResult,
+    "GateAdmission": GateAdmission,
     "GateApproval": GateApproval,
     "GateChange": GateChange,
     "GateChangeWithAuditSeq": GateChangeWithAuditSeq,
+    "GateClearanceAnswer": GateClearanceAnswer,
     "GateDeployment": GateDeployment,
     "GateErrorBody": GateErrorBody,
     "GateObjectChange": GateObjectChange,
     "GateReason": GateReason,
     "GateRequirement": GateRequirement,
+    "GateTokenView": GateTokenView,
     "Grant": Grant,
     "Health": Health,
     "Hold": Hold,
@@ -1312,6 +1477,10 @@ MODELS: dict[str, type[Model]] = {
     "Spend": Spend,
     "Subject": Subject,
     "SubjectProperties": SubjectProperties,
+    "TokenEnvelope": TokenEnvelope,
+    "TokenJWK": TokenJWK,
+    "TokenJWKS": TokenJWKS,
+    "TokenSignature": TokenSignature,
     "WebhookAnswer": WebhookAnswer,
 }
 
@@ -1320,12 +1489,14 @@ OPERATIONS: dict[str, Operation] = {
     "healthz": Operation("GET", "/healthz", "none", 65536, None, Health),
     "readyz": Operation("GET", "/readyz", "none", 65536, None, Ready),
     "registerChange": Operation("POST", "/v1/clearances", "bearer", 4194304, None, GateChange),
+    "getClearance": Operation("GET", "/v1/clearances/{change_id}", "bearer", 65536, None, GateClearanceAnswer),
     "clearChange": Operation("POST", "/v1/clearances/{change_id}/clear", "bearer", 65536, None, GateChangeWithAuditSeq),
     "denyChange": Operation("POST", "/v1/clearances/{change_id}/deny", "bearer", 65536, None, GateChangeWithAuditSeq),
     "recordOutcome": Operation("POST", "/v1/decisions/{id}/outcome", "provider", 65536, OutcomeRequest, RecordRef),
     "publishDefinitions": Operation("PUT", "/v1/definitions", "provider", 4194304, DefinitionsRequest, DefinitionsResult),
     "reviewDefinition": Operation("POST", "/v1/definitions/review", "bearer", 65536, None, ReviewResult),
     "githubWebhook": Operation("POST", "/v1/github/webhook", "github-signature", 26214400, None, WebhookAnswer),
+    "getKeys": Operation("GET", "/v1/keys", "none", 65536, None, TokenJWKS),
     "verifyProvenance": Operation("POST", "/v1/provenance", "bearer", 4194304, None, ProvenanceVerdict),
     "appendRecord": Operation("POST", "/v1/records", "provider", 262144, RecordRequest, RecordRef),
 }

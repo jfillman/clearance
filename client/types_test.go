@@ -14,6 +14,7 @@ import (
 	"github.com/jfillman/clearance/internal/gate"
 	"github.com/jfillman/clearance/internal/provenance"
 	"github.com/jfillman/clearance/internal/server"
+	"github.com/jfillman/clearance/internal/token"
 )
 
 // The client's wire types are the core's, field for field: same JSON names, same omitempty, same shapes. The
@@ -34,6 +35,8 @@ func TestWireTypesMirrorTheCore(t *testing.T) {
 		{client.ObjectChange{}, gate.ObjectChange{}},
 		{client.Verdict{}, provenance.Verdict{}},
 		{client.Health{}, server.Health{}},
+		{client.ClearanceAnswer{}, gate.ClearanceAnswer{}},
+		{client.JWKS{}, token.JWKS{}},
 		{client.Ready{}, server.Ready{}},
 	}
 	for _, p := range pairs {

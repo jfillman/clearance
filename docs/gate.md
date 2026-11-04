@@ -112,10 +112,14 @@ Evidence records, in the existing chain, `boundary: deployment`:
 | Tool | When | Carries |
 |---|---|---|
 | `deploy.request` | the check registers a change | app, env, repo, pr, commit, tree digest, objects, tier and why, provenance, requirement |
-| `deploy.clear` | policy or a person clears | principal (policy or the person), via, which requirement it satisfies |
+| `deploy.clear` | policy or a person clears | principal (policy or the person), via, which requirement it satisfies; `approvals` (each person's IdP `sub` and `iss`, `via`, `role`, `at`), `cleared_by`, and `token` (the clearance token's nonce) when it cleared the change (C-1) |
+| `deploy.revoke` | a new head supersedes a cleared change | the revoked token's nonce and the head that superseded it (C-1) |
 | `deploy.deny` | a person denies, or the classifier denies (unknown agent) | reason, rule |
 | `deploy.expire` | the TTL passes | — |
 | `deploy.exception` | admission or the controller sees a change no grant covers | object, who applied it (the admission request's user) |
+
+Every `deploy.*` record also carries a `policy` group naming the policy that decided and the policy engine's
+verdict (C-8, "The policy in the record" below).
 
 Apps' owners see their apps' records (the existing `app` scoping); the C1 queue is for everyone who may clear
 something; auditors see all. The run that drafted the change links by `task_id` through the PR receipt.
@@ -124,6 +128,9 @@ something; auditors see all. The run that drafted the change links by `task_id` 
 
 Gateway (writes, delegate model): `POST /v1/clearances` (the check: register or re-evaluate a change; the caller is a
 verifier, like `/v1/provenance`), `POST /v1/clearances/{id}/clear`, `POST /v1/clearances/{id}/deny` `{reason}`.
+The core also answers `GET /v1/clearances/{id}` (C-1) to a registered provider and to the verifier that registered
+the change: the state and the live clearance token, the read a gate provider waits on (the long-poll wait,
+`.../{id}/wait`, is G-TF-2's on this route).
 clearance-api (reads): `GET /v1/clearances?app&env&state&since`, `GET /v1/clearances/{id}`, `GET /v1/clearances/counts`,
 and the policy in force per environment `GET /v1/clearance-policy?app&env` (the tiers and approvers that apply).
 
@@ -407,6 +414,11 @@ public issuer `https://hangarplatform.dev/oidc/hangar-prod` (`CLEARANCE_FOREIGN_
   | hangar-prod, argocd-apps Helm values and the agent's chart | the hostAlias and an egress NetworkPolicy to 192.168.1.72:80 for the repo-server and the agent |
 - **The route is plain HTTP across the LAN**, as Tower's is today (https on `*.hangar-dev.local` is a Traefik 404). A
   verifier token on that hop is a lab limitation the decision records; a real deployment terminates TLS at the route.
+- **The grant feed's seq is not enough on its own.** C-10 (clearance#58) signs a grant feed per cluster whose seq
+  restarts at 1 if the core's database is rebuilt. G-ARGO-3's grant sync must therefore keep a feed epoch beside the
+  seq it last applied (the chain's genesis hash or a per-database id that the feed carries), so it can tell a rebuilt
+  core (new epoch: start again at 1) from a replay (same epoch, lower seq: refuse) without an operator resetting its
+  stored seq.
 
 ### Release records and the Clearance record (decided 2026-11-03)
 
@@ -473,7 +485,7 @@ release log already holds a promotion attestation by Rekor index, which is the p
 | Card | Change |
 | --- | --- |
 | G-ARGO-2 | objects as a map keyed `<group>/<kind>/<name>` (a list may stay for display); exactly one active grant per namespace; `status.valid` set by the agent; the Warn toggle also flips `parameterNotFoundAction`; typed `auditAnnotations` |
-| G-ARGO-3 | the outcome source is the watch, keyed by operation; expiry and the active label are the agent's; the exception scan hashes Argo's `last-applied-configuration` |
+| G-ARGO-3 | the grant sync keeps a feed epoch with its seq (C-10's feed seq restarts on a rebuilt database); the outcome source is the watch, keyed by operation; expiry and the active label are the agent's; the exception scan hashes Argo's `last-applied-configuration` |
 | G-ARGO-4 | the plugin replaces the Helm source; one generating source per protected app; chart fetched by tag and recorded by peeled commit; namespace set before hashing; lookup by tree digest for the merge commit; `release.id` from the tree |
 | G-ARGO-6 | the release-record fields above, in both directions |
 | C-10 | registration without `pr` (by app, env and tree); the grant-feed reader role on clearance-api; `release` on the change; record `seq`/`hash` in answers |
@@ -532,6 +544,28 @@ What exists in Clearance now; the check, the release guardrail and the screens f
 5. ~~Holding TTL~~ Decided: 7 days with the PR, a new push re-asks. Was: with the PR (7 days) or shorter (the board shows an hour); and whether a new push re-asks (recommended:
    yes, a new head is a new change).
 
+## The clearance token (C-1, Built)
+
+On `deploy.clear` the core signs a short-lived token bound to what was cleared: the tree root, the commit and image
+digests, each object's rendered hash, the target cluster and environment, the tier, the policy and its verdict,
+provenance and the task, and the approvals naming each person at their identity provider. It is a DSSE envelope
+with a JWT projection, signed with the core's ECDSA P-256 key; [core.md](core.md#the-clearance-token) has the
+format, the claims, the key and the replay rules. In short:
+
+- A token lives `CLEARANCE_TOKEN_TTL` (15 minutes) and is re-issued, with the same nonce, while its change stays
+  cleared, up to the change's horizon (as long after the clear as the change could have held: 7 days).
+- A new head on the same pull request revokes the older head's token (`deploy.revoke`); a token whose nonce is not
+  the clearance's live one is a replay.
+- The grant feed is clearance-api's `GET /v1/clearances?cluster=<c>&state=cleared`: the cluster's cleared changes
+  whose token is live, each with it. The grant-sync agent (G-ARGO-3) reads it as a feed reader
+  (`CLEARANCE_API_FEED_READERS`), verifies each token against `GET /v1/keys`, and writes the ClearanceGrants.
+- `registerChange` takes an optional `taskId` (the run that proposed the change), kept on the change as `task_id`,
+  carried in the token and on every `deploy.*` record's `task_id`.
+
+Not yet: admission on the grant (G-ARGO-2), the CMP that registers the whole rendered tree with unchanged objects
+marked (G-ARGO-4; today `objects` lists the objects the change touches, each `changed: true`), the PreSync wait
+(G-ARGO-5), and the Terraform plan subject (G-TF-1, which adds `subjects.plan_digest`).
+
 ## The Go core (R-1c, Built, deployed on hangar-dev 2026-11-03)
 
 The gate is ported to Go with behaviour unchanged: `internal/gate` (classification, the change record,
@@ -561,3 +595,59 @@ nobody is in either while Backstage is down. Differences from the Python transpo
 (was 30 s; the Go gate asks inside its lock and the operation's transaction), redirects are not followed (the token
 stays with the configured URL), the answer is capped at 1 MiB (was 16 MiB), a malformed answer is no groups where
 Python raised, and each cache holds at most 4096 entries.
+
+## The policy in the record (C-8, Built; live check pending)
+
+Two policies stand behind a deployment decision: Clearance's own tier policy (the baseline, tightened by the repo's
+`clearance.yaml`), which the core applies, and the target cluster's admission policies, which the verifier evaluates
+offline over the rendered tree before it registers the change. Every `deploy.*` record about a change
+(`deploy.request`, `deploy.clear`, `deploy.deny`, `deploy.expire`, a GitHub deployment's `deploy.request`) carries a
+`policy` group, in the evidence schema's Decision group, that names both:
+
+```json
+"policy": {
+  "ref": "clearance.yaml@9f2c...e1",
+  "version": "baseline-2026-10-31+sha256:3905e609...e3e5",
+  "engine": "kyverno/1.19.0",
+  "verdict": "pass",
+  "bundle": "https://github.com/jfillman/gitops-hangar-dev.git//30-policy@4b1d...07"
+}
+```
+
+| Field | What it is | Where it comes from |
+| --- | --- | --- |
+| `ref` | `clearance.yaml@<commit>`: the commit that last changed the repo's `clearance.yaml` at the change's head. `clearance.yaml@sha256:<digest>` when the verifier sent the file without its commit; `baseline` when the repo has none | the request's `policyCommit` (else the digest of `policy`) |
+| `version` | the gate baseline's version, plus `+sha256:<digest>` of the `clearance.yaml` that tightened it. With the core's baseline this reproduces the tier decision | the core |
+| `engine` | the admission engine and its version, `kyverno/1.19.0`; `none` when no admission result was sent | the request's `admission.engine` |
+| `verdict` | `pass`, `warn` (Audit/Warn findings only, or a rule offline evaluation could not decide), `fail` (a Deny/Enforce policy fails: the cluster would refuse the sync), `skipped` (no admission policy to evaluate), `error` (the evaluation could not run); `not-evaluated` when none was sent | the request's `admission.verdict` |
+| `bundle` | the admission rule set it ran: `<repo>//<path>@<commit>`. With the rendered tree (`subject`) and `engine`, it reproduces the admission verdict | the request's `admission.bundle` |
+
+A decision with no change on record (a GitHub deployment of an unregistered commit, `DG-UNREGISTERED`) records
+`{ref: baseline, version: <baseline>, engine: none, verdict: not-evaluated}`. The group is **claimed**: the verifier
+reports the commit and the verdict; the core fills `version` from what it applied. The runtime boundary's records keep
+their own `policy` group (`clearance-core+<bundle>@<version>`, the bundle digest, `engine: cel-go`), unchanged. The clearance token signed on `deploy.clear` carries the same group as its `policy` claim, field for field ([core.md](core.md) "The clearance token"): the token attests what the record says.
+
+**The request.** `POST /v1/clearances` takes two optional fields beside `policy` (all strictly decoded, unknown keys
+refused):
+
+- `policyCommit`: the 40-hex commit that last changed `clearance.yaml` at the head. Refused without `policy`.
+- `admission`: `{engine, verdict, bundle, deny, warn}`; `engine` is `<name>/<version>` (lowercase name), `verdict` one
+  of the five above, `bundle` at most 512 printable characters, `deny` and `warn` the blocking and warning finding
+  counts. It is a check result: `checks.admission` becomes its verdict, and a request whose `checks.admission` says
+  something else is refused (400).
+
+The change keeps `policy_ref` and `admission` (clearance-api serves them on `GET /v1/clearances/{id}`; a change
+registered before this release has neither, and its records name `clearance.yaml@sha256:<digest>` or `baseline`). A
+re-registration of a holding change takes the new admission result, so the `deploy.clear` that follows records the
+verdict it cleared on.
+
+**Recorded, not enforced.** The tier rules do not read the verdict: on Hangar the `policy-validation-` check is the
+required gate for an admission failure, and phase 2's grant-match admission is the hard one. Making a tier-1 clear by
+policy wait for `admission` in (`pass`, `warn`, `skipped`) is a one-line change to the checks a tier-1 change needs,
+left for the owner to decide (it would turn every verifier that sends no admission result into tier 2).
+
+**Who sends it.** Glidepath's `clearance-gate-` task evaluates each protected environment's rendered head with the
+Kyverno CLI against the target cluster's policy bundle, exactly as the `policy-validation-` gate does (glidepath
+`docs/admin/policy-validation.md`; the two tasks share the evaluation), and sends `admission` and `policyCommit`.
+Argo CD's config management plugin (G-ARGO) sends the same `admission` object from its own offline evaluation of the
+tree it rendered; `clearance register` sends none today (`not-evaluated`).

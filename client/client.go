@@ -231,6 +231,27 @@ func (c *Client) Provenance(ctx context.Context, req *ProvenanceRequest) (*Verdi
 	return &out, nil
 }
 
+// Clearance is a change's state and its live clearance token (Token nil when it has none). The caller is a
+// registered provider or the verifier that registered the change. A read: retried as an evaluation is.
+func (c *Client) Clearance(ctx context.Context, changeID string) (*ClearanceAnswer, error) {
+	var out ClearanceAnswer
+	if err := c.call(ctx, call{op: "getClearance", method: "GET", path: "/v1/clearances/" + url.PathEscape(changeID),
+		retry: retryAny}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Keys is the clearance token verification keys (GET /v1/keys, a JWKS): what a verifier checks tokens with
+// offline.
+func (c *Client) Keys(ctx context.Context) (*JWKS, error) {
+	var out JWKS
+	if err := c.call(ctx, call{op: "getKeys", method: "GET", path: "/v1/keys", retry: retryAny}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // Healthz is GET /healthz. Probes bypass the breaker and do not move it.
 func (c *Client) Healthz(ctx context.Context) (*Health, error) {
 	var out Health

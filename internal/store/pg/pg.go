@@ -33,8 +33,8 @@ import (
 	"github.com/jfillman/clearance/internal/store"
 )
 
-// Schema is pg.py's SCHEMA for the core's tables, verbatim: CREATE ... IF NOT EXISTS only, so migrate never
-// alters or drops what the Python core created.
+// Schema is pg.py's SCHEMA for the core's tables, verbatim, plus the Go core's own (clearance_tokens and
+// clearance_signing_keys, C-1): CREATE ... IF NOT EXISTS only, so migrate never alters or drops what is there.
 const Schema = `
 CREATE TABLE IF NOT EXISTS clearance_evidence (
   seq        bigint PRIMARY KEY,
@@ -68,6 +68,25 @@ CREATE TABLE IF NOT EXISTS clearance_definitions (
   record     jsonb       NOT NULL,
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (name, state)
+);
+CREATE TABLE IF NOT EXISTS clearance_tokens (
+  change_id  text        PRIMARY KEY,
+  cluster    text        NOT NULL,
+  nonce      text        NOT NULL,
+  key_id     text        NOT NULL,
+  issued_at  timestamptz NOT NULL,
+  expires_at timestamptz NOT NULL,
+  revoked_at timestamptz,
+  envelope   jsonb       NOT NULL,
+  jwt        text        NOT NULL
+);
+CREATE INDEX IF NOT EXISTS clearance_tokens_feed ON clearance_tokens (cluster, expires_at) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS clearance_tokens_due ON clearance_tokens (expires_at) WHERE revoked_at IS NULL;
+CREATE TABLE IF NOT EXISTS clearance_signing_keys (
+  key_id     text        PRIMARY KEY,
+  jwk        jsonb       NOT NULL,
+  created_at timestamptz NOT NULL,
+  retired_at timestamptz
 );
 `
 
@@ -491,6 +510,42 @@ func (t *tx) ReplaceDefinitions(ctx context.Context, defs []store.Definition) er
 	return nil
 }
 
+func (t *tx) PutToken(ctx context.Context, tk store.Token) error {
+	if err := t.lock(); err != nil {
+		return err
+	}
+	defer t.mu.Unlock()
+	ctx, cancel := deadline(ctx, t.s.opt)
+	defer cancel()
+	_, err := t.tx.Exec(ctx, "INSERT INTO clearance_tokens (change_id, cluster, nonce, key_id, issued_at, expires_at, "+
+		"revoked_at, envelope, jwt) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (change_id) DO UPDATE SET "+
+		"cluster = EXCLUDED.cluster, nonce = EXCLUDED.nonce, key_id = EXCLUDED.key_id, issued_at = EXCLUDED.issued_at, "+
+		"expires_at = EXCLUDED.expires_at, revoked_at = EXCLUDED.revoked_at, envelope = EXCLUDED.envelope, jwt = EXCLUDED.jwt",
+		tk.ChangeID, tk.Cluster, tk.Nonce, tk.KeyID, tk.IssuedAt, tk.ExpiresAt, tk.RevokedAt, string(tk.Envelope), tk.JWT)
+	if err != nil {
+		return fmt.Errorf("pg: put token: %w", err)
+	}
+	return nil
+}
+
+func (t *tx) UseSigningKey(ctx context.Context, k store.SigningKey, now time.Time) error {
+	if err := t.lock(); err != nil {
+		return err
+	}
+	defer t.mu.Unlock()
+	ctx, cancel := deadline(ctx, t.s.opt)
+	defer cancel()
+	if _, err := t.tx.Exec(ctx, "UPDATE clearance_signing_keys SET retired_at = $2 WHERE key_id <> $1 AND retired_at IS NULL",
+		k.KeyID, now); err != nil {
+		return fmt.Errorf("pg: use signing key: %w", err)
+	}
+	if _, err := t.tx.Exec(ctx, "INSERT INTO clearance_signing_keys (key_id, jwk, created_at) VALUES ($1, $2, $3) "+
+		"ON CONFLICT (key_id) DO UPDATE SET retired_at = NULL", k.KeyID, string(k.JWK), now); err != nil {
+		return fmt.Errorf("pg: use signing key: %w", err)
+	}
+	return nil
+}
+
 // Reads in a transaction see its own writes.
 
 func (t *tx) q() (querier, func(), error) {
@@ -647,6 +702,126 @@ func (r *Reader) ChangesUndelivered(ctx context.Context) ([]store.Change, error)
 
 func (r *Reader) Definitions(ctx context.Context) ([]store.Definition, error) {
 	return definitions(ctx, r.pool, r.opt)
+}
+
+func (r *Reader) Token(ctx context.Context, changeID string) (store.Token, error) {
+	return tokenOne(ctx, r.pool, r.opt, changeID)
+}
+
+func (r *Reader) TokensDue(ctx context.Context, due time.Time, keyID string, limit int) ([]store.Token, error) {
+	return tokensDue(ctx, r.pool, r.opt, due, keyID, limit)
+}
+
+func (r *Reader) SigningKeys(ctx context.Context, since time.Time) ([]store.SigningKey, error) {
+	return signingKeys(ctx, r.pool, r.opt, since)
+}
+
+func (t *tx) Token(ctx context.Context, changeID string) (store.Token, error) {
+	q, done, err := t.q()
+	if err != nil {
+		return store.Token{}, err
+	}
+	defer done()
+	return tokenOne(ctx, q, t.s.opt, changeID)
+}
+
+func (t *tx) TokensDue(ctx context.Context, due time.Time, keyID string, limit int) ([]store.Token, error) {
+	q, done, err := t.q()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	return tokensDue(ctx, q, t.s.opt, due, keyID, limit)
+}
+
+func (t *tx) SigningKeys(ctx context.Context, since time.Time) ([]store.SigningKey, error) {
+	q, done, err := t.q()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	return signingKeys(ctx, q, t.s.opt, since)
+}
+
+// TokenCols are clearance_tokens' columns in ScanToken's order.
+const TokenCols = "change_id, cluster, nonce, key_id, issued_at, expires_at, revoked_at, envelope::text, jwt"
+
+// ScanToken scans one row of TokenCols.
+func ScanToken(row pgx.Row) (store.Token, error) {
+	var tk store.Token
+	var env string
+	if err := row.Scan(&tk.ChangeID, &tk.Cluster, &tk.Nonce, &tk.KeyID, &tk.IssuedAt, &tk.ExpiresAt, &tk.RevokedAt, &env, &tk.JWT); err != nil {
+		return tk, err
+	}
+	tk.Envelope = []byte(env)
+	tk.IssuedAt, tk.ExpiresAt = tk.IssuedAt.UTC(), tk.ExpiresAt.UTC()
+	if tk.RevokedAt != nil {
+		at := tk.RevokedAt.UTC()
+		tk.RevokedAt = &at
+	}
+	return tk, nil
+}
+
+func tokenOne(ctx context.Context, q querier, opt Options, id string) (store.Token, error) {
+	ctx, cancel := deadline(ctx, opt)
+	defer cancel()
+	tk, err := ScanToken(q.QueryRow(ctx, "SELECT "+TokenCols+" FROM clearance_tokens WHERE change_id = $1", id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.Token{}, store.ErrNotFound
+	}
+	if err != nil {
+		return store.Token{}, fmt.Errorf("pg: %w", err)
+	}
+	return tk, nil
+}
+
+func tokensDue(ctx context.Context, q querier, opt Options, due time.Time, keyID string, limit int) ([]store.Token, error) {
+	if limit <= 0 {
+		limit = MaxRecords
+	}
+	ctx, cancel := deadline(ctx, opt)
+	defer cancel()
+	rows, err := q.Query(ctx, "SELECT "+TokenCols+" FROM clearance_tokens WHERE revoked_at IS NULL AND "+
+		`(expires_at < $1 OR key_id <> $2) ORDER BY expires_at, change_id COLLATE "C" LIMIT $3`, due, keyID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("pg: %w", err)
+	}
+	defer rows.Close()
+	out := []store.Token{}
+	for rows.Next() {
+		tk, err := ScanToken(rows)
+		if err != nil {
+			return nil, fmt.Errorf("pg: %w", err)
+		}
+		out = append(out, tk)
+	}
+	return out, rows.Err()
+}
+
+func signingKeys(ctx context.Context, q querier, opt Options, since time.Time) ([]store.SigningKey, error) {
+	ctx, cancel := deadline(ctx, opt)
+	defer cancel()
+	rows, err := q.Query(ctx, "SELECT key_id, jwk::text, created_at, retired_at FROM clearance_signing_keys "+
+		`WHERE retired_at IS NULL OR retired_at > $1 ORDER BY created_at DESC, key_id COLLATE "C"`, since)
+	if err != nil {
+		return nil, fmt.Errorf("pg: %w", err)
+	}
+	defer rows.Close()
+	out := []store.SigningKey{}
+	for rows.Next() {
+		var k store.SigningKey
+		var jwk string
+		if err := rows.Scan(&k.KeyID, &jwk, &k.CreatedAt, &k.RetiredAt); err != nil {
+			return nil, fmt.Errorf("pg: %w", err)
+		}
+		k.JWK, k.CreatedAt = []byte(jwk), k.CreatedAt.UTC()
+		if k.RetiredAt != nil {
+			at := k.RetiredAt.UTC()
+			k.RetiredAt = &at
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
 }
 
 // MaxRecords caps one Records call.

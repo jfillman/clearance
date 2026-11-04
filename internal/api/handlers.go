@@ -1,15 +1,20 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jfillman/clearance/internal/evidence"
+	"github.com/jfillman/clearance/internal/gate"
 	"github.com/jfillman/clearance/internal/provenance"
+	"github.com/jfillman/clearance/internal/token"
 )
 
 // CountBy are the record fields evidence counts group by; ChangeCountBy the change fields (api.py COUNT_BY,
@@ -225,10 +230,21 @@ func (s *Server) listClearances(w http.ResponseWriter, r *http.Request, v *Viewe
 		return
 	}
 	f := ChangeFilter{App: strings.ToLower(q["app"]), Env: q["env"], State: q["state"],
-		Repo: strings.ToLower(q["repo"]), Since: q["since"]}
+		Repo: strings.ToLower(q["repo"]), Since: q["since"], Cluster: q["cluster"]}
 	if f.State != "" && !in(ChangeStates, f.State) {
 		writeError(w, 400, "state is one of "+strings.Join(ChangeStates, ", "))
 		return
+	}
+	// The grant feed: one cluster's cleared changes whose token is live, each with its token.
+	feed := f.Cluster != "" && f.State == "cleared"
+	if v.Role == RoleFeed && (!feed || !v.FeedOf(f.Cluster)) {
+		writeError(w, 403, fmt.Sprintf("%s reads the grant feed of %s only (cluster=<cluster>&state=cleared)",
+			v.Person, strings.Join(v.Clusters, ", ")))
+		return
+	}
+	now := s.opt.Clock().UTC()
+	if feed {
+		f.LiveAt = &now
 	}
 	for _, k := range []string{"pr", "tier"} {
 		raw := q[k]
@@ -259,6 +275,12 @@ func (s *Server) listClearances(w http.ResponseWriter, r *http.Request, v *Viewe
 		s.readFailed(w, r, err)
 		return
 	}
+	if feed {
+		if items, err = s.withTokens(r, items, now, false); err != nil {
+			s.readFailed(w, r, err)
+			return
+		}
+	}
 	page := ChangePage{Items: items}
 	if len(items) == limit && limit > 0 {
 		var last struct {
@@ -278,6 +300,7 @@ func changeVisible(raw json.RawMessage, v *Viewer) bool {
 	}
 	var c struct {
 		App         string `json:"app"`
+		Cluster     string `json:"cluster"`
 		Owner       string `json:"owner"`
 		Requirement *struct {
 			OutsideGroups []string `json:"outsideGroups"`
@@ -285,6 +308,9 @@ func changeVisible(raw json.RawMessage, v *Viewer) bool {
 	}
 	if json.Unmarshal(raw, &c) != nil {
 		return false
+	}
+	if v.Role == RoleFeed {
+		return v.FeedOf(c.Cluster)
 	}
 	if (c.App != "" && in(v.Apps, c.App)) || (c.Owner != "" && in(v.Groups, c.Owner)) {
 		return true
@@ -309,7 +335,78 @@ func (s *Server) getClearance(w http.ResponseWriter, r *http.Request, v *Viewer)
 		writeError(w, 404, "no such change")
 		return
 	}
-	writeJSON(w, 200, raw)
+	out, err := s.withTokens(r, []json.RawMessage{raw}, s.opt.Clock().UTC(), true)
+	if err != nil {
+		s.readFailed(w, r, err)
+		return
+	}
+	writeJSON(w, 200, out[0])
+}
+
+// withTokens adds each change's live token beside it ("token"; null, when always, for a change without one).
+func (s *Server) withTokens(r *http.Request, items []json.RawMessage, now time.Time, always bool) ([]json.RawMessage, error) {
+	ids := make([]string, 0, len(items))
+	for _, raw := range items {
+		var c struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(raw, &c); err != nil {
+			return nil, fmt.Errorf("api: a stored change: %w", err)
+		}
+		ids = append(ids, c.ID)
+	}
+	tokens, err := s.opt.Store.Tokens(r.Context(), ids, now)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]json.RawMessage, 0, len(items))
+	for i, raw := range items {
+		var view any
+		if tk, ok := tokens[ids[i]]; ok {
+			v, err := gate.ViewToken(tk)
+			if err != nil {
+				return nil, err
+			}
+			view = v
+		} else if !always {
+			out = append(out, raw)
+			continue
+		}
+		tb, err := json.Marshal(view)
+		if err != nil {
+			return nil, err
+		}
+		// A stored change record is a JSON object without a "token" key (gate.Change has none).
+		trimmed := bytes.TrimRight(raw, " \t\r\n")
+		if len(trimmed) < 2 || trimmed[len(trimmed)-1] != '}' {
+			return nil, errors.New("api: a stored change is not a JSON object")
+		}
+		joined := append([]byte{}, trimmed[:len(trimmed)-1]...)
+		if len(trimmed) > 2 {
+			joined = append(joined, ',')
+		}
+		joined = append(append(append(joined, `"token":`...), tb...), '}')
+		out = append(out, joined)
+	}
+	return out, nil
+}
+
+// getKeys is the clearance token verification keys (the core's JWKS), read from the core's store.
+func (s *Server) getKeys(w http.ResponseWriter, r *http.Request, _ *Viewer) {
+	rows, err := s.opt.Store.SigningKeys(r.Context(), s.opt.Clock().Add(-token.MaxLifetime))
+	if err != nil {
+		s.readFailed(w, r, err)
+		return
+	}
+	out := token.JWKS{Keys: []token.JWK{}}
+	for _, k := range rows {
+		var j token.JWK
+		if json.Unmarshal(k.JWK, &j) == nil {
+			out.Keys = append(out.Keys, j)
+		}
+	}
+	w.Header().Set("Cache-Control", "max-age=300")
+	writeJSON(w, 200, out)
 }
 
 func (s *Server) countClearances(w http.ResponseWriter, r *http.Request, v *Viewer) {

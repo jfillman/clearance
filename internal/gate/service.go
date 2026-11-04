@@ -68,6 +68,8 @@ type Service struct {
 	// OnAnswered is called (non-blocking, after the commit) when a waiting GitHub deployment got its answer: the
 	// GitHub App's delivery poke.
 	OnAnswered []func()
+	// Tokens issues the clearance token on deploy.clear (C-1); nil: no tokens (a deployment without a signing key).
+	Tokens *Tokens
 
 	mu sync.Mutex
 }
@@ -89,7 +91,7 @@ func (s *Service) op(ctx context.Context, fn func(tx store.Tx, w *writer) error)
 	var result error
 	var answered int
 	err := s.Store.Atomic(ctx, func(tx store.Tx) error {
-		w := &writer{ctx: ctx, tx: tx, now: s.now(), wr: s.Writer.OrCore()}
+		w := &writer{ctx: ctx, tx: tx, now: s.now(), wr: s.Writer.OrCore(), svc: s}
 		result = fn(tx, w)
 		if w.err != nil {
 			return w.err
@@ -116,6 +118,7 @@ type writer struct {
 	err      error
 	answered int
 	wr       evidence.Writer
+	svc      *Service
 }
 
 func (w *writer) put(c *Change) {
@@ -143,17 +146,23 @@ func (w *writer) append(ev store.Event) store.Record {
 	return rec
 }
 
-// record is Gateway._gate_record.
-func (w *writer) record(principal string, via *string, tool string, c *Change, decision string, rule *string, result string, args any) store.Record {
+// record is Gateway._gate_record. extra are fields beside the record's own (approvals, cleared_by, token).
+func (w *writer) record(principal string, via *string, tool string, c *Change, decision string, rule *string, result string, args any, extra ...map[string]any) store.Record {
 	if via != nil {
 		result += " via " + *via
 	}
-	return w.append(store.Event{
-		"ts": pycompat.ISO(w.now), "task_id": nil, "session": nil, "parent": nil, "principal": principal,
+	ev := store.Event{
+		"ts": pycompat.ISO(w.now), "task_id": strOrNil(c.TaskID), "session": nil, "parent": nil, "principal": principal,
 		"agent": strOrNil(c.Agent), "tool": tool, "tier": nil, "decision": decision, "rule": strOrNil(rule),
 		"target": c.TargetOf(), "args_sha256": pycompat.ArgsDigest(args), "result": result, "app": c.App,
-		"boundary": "deployment", "change": c.Summary(),
-	})
+		"boundary": "deployment", "change": c.Summary(), "policy": c.PolicyGroup(),
+	}
+	for _, x := range extra {
+		for k, v := range x {
+			ev[k] = v
+		}
+	}
+	return w.append(ev)
 }
 
 func (w *writer) settle(c *Change) {
@@ -286,6 +295,12 @@ func (s *Service) Register(ctx context.Context, p authn.Principal, body any) (*C
 					w.put(old)
 					w.record("policy", nil, "deploy.expire", old, "allow", nil, "superseded by "+pycompat.Truncate(req.Head, 7), map[string]any{"by": req.Head})
 				}
+				// A new head invalidates the token of a cleared older head: on the same pull request, or, for a
+				// pushed commit (pr 0), for the same app, environment and cluster.
+				if old.State == "cleared" && old.Head != req.Head &&
+					(req.PR != 0 || (old.App == req.App && old.Env == req.Env && old.Cluster == req.Cluster)) {
+					w.revoke(old, req.Head)
+				}
 			}
 			ch = Open(req, c, w.now, p.ID)
 			w.record(p.ID, nil, "deploy.request", ch, "allow", nil, c.Why, body)
@@ -293,6 +308,8 @@ func (s *Service) Register(ctx context.Context, p authn.Principal, body any) (*C
 			ch = existing
 			ch.Checks, ch.Tier, ch.Reasons, ch.UpdatedAt = copyChecks(req.Checks), c.Tier, append([]Reason(nil), c.Reasons...), now
 			ch.Requirement = c.Requirement
+			ch.Admission = copyAdmission(req.Admission)
+			ch.PolicyRef, ch.PolicyVersion, ch.RepoPolicyDigest = policyRefOf(req), c.Policy.Version, c.Policy.RepoPolicyDigest
 		}
 		switch c.Decision {
 		case "deny":
@@ -300,7 +317,11 @@ func (s *Service) Register(ctx context.Context, p authn.Principal, body any) (*C
 			w.record("policy", nil, "deploy.deny", ch, "deny", c.Rule, c.Why, map[string]any{"rule": strOrNil(c.Rule)})
 		case "clear":
 			ch.State, ch.ClearedBy, ch.DecidedAt = "cleared", strp("policy"), &now
-			w.record("policy", nil, "deploy.clear", ch, "allow", nil, c.Why, map[string]any{"tier": c.Tier})
+			nonce, err := w.issue(ch, "")
+			if err != nil {
+				return err
+			}
+			w.record("policy", nil, "deploy.clear", ch, "allow", nil, c.Why, map[string]any{"tier": c.Tier}, clearedFields(ch, nonce))
 		}
 		w.settle(ch)
 		w.put(ch)
@@ -329,19 +350,37 @@ func (s *Service) definitionProblems(req ChangeRequest) []review.Problem {
 	return review.Validate(newDoc, s.Tools, s.Parse, o)
 }
 
+// identity is who approved, at their identity provider: the subject and issuer of the ID token they signed in
+// with, or, through a delegate, the person as the delegate named them and the delegate as the issuer.
+type identity struct{ sub, iss string }
+
+// UnattestedIssuer is the iss of a person whose principal carries no issuer (an authenticator that does not say,
+// such as `clearance core --insecure-dev-auth`).
+const UnattestedIssuer = "unattested"
+
 // person is Gateway._person through _gate_person: a person signed in themselves, or a delegate naming one.
-func (s *Service) person(ctx context.Context, p authn.Principal, onBehalfOf string) (string, *string, map[string]bool, error) {
+func (s *Service) person(ctx context.Context, p authn.Principal, onBehalfOf string) (string, *string, map[string]bool, identity, error) {
 	person, via := p.ID, (*string)(nil)
+	var who identity
 	if onBehalfOf != "" {
 		if !pycompat.MatchAny(p.ID, s.Config.Delegates) {
-			return "", nil, nil, gerr("DG-DELEGATE", p.ID+" may not act for a person", "", 403)
+			return "", nil, nil, who, gerr("DG-DELEGATE", p.ID+" may not act for a person", "", 403)
 		}
 		if len(onBehalfOf) < 5 || onBehalfOf[:5] != "user:" || pycompat.Len(onBehalfOf) > 200 {
-			return "", nil, nil, gerr("DG-PERSON", "on-behalf-of must name a person (user:<name>)", "", 400)
+			return "", nil, nil, who, gerr("DG-PERSON", "on-behalf-of must name a person (user:<name>)", "", 400)
 		}
 		person, via = onBehalfOf, strp(p.ID)
+		who = identity{sub: onBehalfOf, iss: "delegate:" + p.ID}
 	} else if !p.IsPerson() {
-		return "", nil, nil, gerr("DG-PERSON", p.ID+" is not a person", "", 403)
+		return "", nil, nil, who, gerr("DG-PERSON", p.ID+" is not a person", "", 403)
+	} else {
+		who = identity{sub: p.ID, iss: UnattestedIssuer}
+		if v, ok := p.Claims["sub"].(string); ok && v != "" {
+			who.sub = v
+		}
+		if v, ok := p.Claims["iss"].(string); ok && v != "" {
+			who.iss = v
+		}
 	}
 	groups := map[string]bool{}
 	if s.Directory != nil {
@@ -349,7 +388,7 @@ func (s *Service) person(ctx context.Context, p authn.Principal, onBehalfOf stri
 			groups[g] = true
 		}
 	}
-	return person, via, groups, nil
+	return person, via, groups, who, nil
 }
 
 // Decided is clear_change's and deny_change's answer: the change's view and the record's seq.
@@ -386,7 +425,7 @@ func (s *Service) Clear(ctx context.Context, p authn.Principal, changeID, onBeha
 		if c == nil {
 			return gerr("DG-UNKNOWN", "no such change", "", 404)
 		}
-		person, via, groups, err := s.person(ctx, p, onBehalfOf)
+		person, via, groups, who, err := s.person(ctx, p, onBehalfOf)
 		if err != nil {
 			return err
 		}
@@ -399,13 +438,17 @@ func (s *Service) Clear(ctx context.Context, p authn.Principal, changeID, onBeha
 			return err
 		}
 		now := PyTime{w.now}
-		c.Approvals = append(c.Approvals, Approval{person, via, role, pycompat.ISO(w.now)})
+		c.Approvals = append(c.Approvals, Approval{person, via, role, pycompat.ISO(w.now), who.sub, who.iss})
 		c.UpdatedAt = now
 		req := c.RequirementObj()
 		done := req != nil && req.Satisfied(c.Approvals)
+		nonce := ""
 		if done {
 			c.State, c.ClearedBy, c.DecidedAt = "cleared", strp("people"), &now
 			w.settle(c)
+			if nonce, err = w.issue(c, ""); err != nil {
+				return err
+			}
 		}
 		w.put(c)
 		result := "cleared as " + role
@@ -414,7 +457,7 @@ func (s *Service) Clear(ctx context.Context, p authn.Principal, changeID, onBeha
 		} else {
 			result += fmt.Sprintf(" (%d of the people needed)", len(c.Approvals))
 		}
-		rec := w.record(person, via, "deploy.clear", c, "allow", nil, result, map[string]any{"role": role})
+		rec := w.record(person, via, "deploy.clear", c, "allow", nil, result, map[string]any{"role": role}, clearedFields(c, nonce))
 		out = Decided{c.View(), recordSeq(rec)}
 		return nil
 	})
@@ -435,7 +478,7 @@ func (s *Service) Deny(ctx context.Context, p authn.Principal, changeID string, 
 		if c == nil {
 			return gerr("DG-UNKNOWN", "no such change", "", 404)
 		}
-		person, via, groups, err := s.person(ctx, p, onBehalfOf)
+		person, via, groups, _, err := s.person(ctx, p, onBehalfOf)
 		if err != nil {
 			return err
 		}

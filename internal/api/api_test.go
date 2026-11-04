@@ -60,6 +60,7 @@ var principals = map[string]authn.Principal{
 	"carol": {ID: "user:carol", Kind: authn.KindPerson}, "erin": {ID: "user:erin", Kind: authn.KindPerson},
 	"sam": {ID: "user:sam", Kind: authn.KindPerson}, "audit": {ID: "user:auditor", Kind: authn.KindPerson},
 	"tower": {ID: tower, Kind: authn.KindForeignWorkload}, "svc": {ID: "ns/svc", Kind: authn.KindServiceAccount},
+	"sync": {ID: "hangar-prod/clearance-system/grant-sync", Kind: authn.KindForeignWorkload},
 }
 
 var fakeAuth = authn.AuthenticatorFunc(func(_ context.Context, token string) (authn.Principal, error) {
@@ -210,6 +211,8 @@ type world struct {
 	events  []store.Event
 	changes []store.Change
 	defs    []store.Definition
+	tokens  []store.Token
+	keys    []store.SigningKey
 	raw     []map[string]any // stored rows written as they are (v0 fixtures), instead of events
 }
 
@@ -234,7 +237,7 @@ var backends = []backend{
 			}
 			m.recs = append(m.recs, c)
 		}
-		m.changes, m.defs = w.changes, w.defs
+		m.changes, m.defs, m.tokens, m.keys = w.changes, w.defs, w.tokens, w.keys
 		return m, ""
 	}},
 	{"postgres", func(t *testing.T, w world) (Store, string) {
@@ -254,6 +257,16 @@ var backends = []backend{
 		err = st.Atomic(bg, func(tx store.Tx) error {
 			for _, c := range w.changes {
 				if err := tx.PutChange(bg, c); err != nil {
+					return err
+				}
+			}
+			for _, tk := range w.tokens {
+				if err := tx.PutToken(bg, tk); err != nil {
+					return err
+				}
+			}
+			for _, k := range w.keys {
+				if err := tx.UseSigningKey(bg, k, k.CreatedAt); err != nil {
 					return err
 				}
 			}
@@ -324,8 +337,9 @@ func newHarness(t *testing.T, b backend, w world, opts ...option) *harness {
 	gp := gate.DefaultPolicy().View()
 	o := Options{Store: st, Auth: fakeAuth, Log: quiet,
 		Access: &Access{Delegates: []string{tower}, Notifiers: []string{tower}, Auditors: []string{"user:auditor"},
-			Directory: groups{"user:bob": {platform}, "user:erin": {"group:default/team-gate"}},
-			Ownership: owns{"user:carol": {"flight-api"}}, Owners: defs.Owners},
+			FeedReaders: []FeedReader{{"hangar-prod/clearance-system/*", "hangar-prod"}},
+			Directory:   groups{"user:bob": {platform}, "user:erin": {"group:default/team-gate"}},
+			Ownership:   owns{"user:carol": {"flight-api"}}, Owners: defs.Owners},
 		Engine: eng, GatePolicy: &gp, Definitions: defs, GatewayURL: "http://clearance.example",
 		Clock: func() time.Time { return time.Date(2026, 10, 30, 12, 30, 0, 0, time.UTC) }}
 	for _, f := range opts {
