@@ -91,6 +91,15 @@ app.kubernetes.io/component: {{ .component }}
 
 {{- define "clearance.csv" -}}{{ join "," . }}{{- end -}}
 
+{{/* api.feedReaders as CLEARANCE_API_FEED_READERS: <principal>=<cluster>, comma-separated. */}}
+{{- define "clearance.feedReaders" -}}
+{{- $out := list -}}
+{{- range . -}}
+{{- $out = append $out (printf "%s=%s" (required "api.feedReaders[].principal is required" .principal) (required "api.feedReaders[].cluster is required" .cluster)) -}}
+{{- end -}}
+{{- join "," $out -}}
+{{- end -}}
+
 {{/* env entries shared by the core and the api: identity, Backstage, definitions. Empty values are omitted. */}}
 {{- define "clearance.sharedEnv" -}}
 - name: CLEARANCE_LISTEN

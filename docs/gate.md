@@ -110,7 +110,8 @@ Evidence records, in the existing chain, `boundary: deployment`:
 | Tool | When | Carries |
 |---|---|---|
 | `deploy.request` | the check registers a change | app, env, repo, pr, commit, tree digest, objects, tier and why, provenance, requirement |
-| `deploy.clear` | policy or a person clears | principal (policy or the person), via, which requirement it satisfies |
+| `deploy.clear` | policy or a person clears | principal (policy or the person), via, which requirement it satisfies; `approvals` (each person's IdP `sub` and `iss`, `via`, `role`, `at`), `cleared_by`, and `token` (the clearance token's nonce) when it cleared the change (C-1) |
+| `deploy.revoke` | a new head supersedes a cleared change | the revoked token's nonce and the head that superseded it (C-1) |
 | `deploy.deny` | a person denies, or the classifier denies (unknown agent) | reason, rule |
 | `deploy.expire` | the TTL passes | — |
 | `deploy.exception` | admission or the controller sees a change no grant covers | object, who applied it (the admission request's user) |
@@ -122,6 +123,9 @@ something; auditors see all. The run that drafted the change links by `task_id` 
 
 Gateway (writes, delegate model): `POST /v1/clearances` (the check: register or re-evaluate a change; the caller is a
 verifier, like `/v1/provenance`), `POST /v1/clearances/{id}/clear`, `POST /v1/clearances/{id}/deny` `{reason}`.
+The core also answers `GET /v1/clearances/{id}` (C-1) to a registered provider and to the verifier that registered
+the change: the state and the live clearance token, the read a gate provider waits on (the long-poll wait,
+`.../{id}/wait`, is G-TF-2's on this route).
 clearance-api (reads): `GET /v1/clearances?app&env&state&since`, `GET /v1/clearances/{id}`, `GET /v1/clearances/counts`,
 and the policy in force per environment `GET /v1/clearance-policy?app&env` (the tiers and approvers that apply).
 
@@ -260,6 +264,28 @@ What exists in Clearance now; the check, the release guardrail and the screens f
    groups.
 5. ~~Holding TTL~~ Decided: 7 days with the PR, a new push re-asks. Was: with the PR (7 days) or shorter (the board shows an hour); and whether a new push re-asks (recommended:
    yes, a new head is a new change).
+
+## The clearance token (C-1, Built)
+
+On `deploy.clear` the core signs a short-lived token bound to what was cleared: the tree root, the commit and image
+digests, each object's rendered hash, the target cluster and environment, the tier, the policy and its verdict,
+provenance and the task, and the approvals naming each person at their identity provider. It is a DSSE envelope
+with a JWT projection, signed with the core's ECDSA P-256 key; [core.md](core.md#the-clearance-token) has the
+format, the claims, the key and the replay rules. In short:
+
+- A token lives `CLEARANCE_TOKEN_TTL` (15 minutes) and is re-issued, with the same nonce, while its change stays
+  cleared, up to the change's horizon (as long after the clear as the change could have held: 7 days).
+- A new head on the same pull request revokes the older head's token (`deploy.revoke`); a token whose nonce is not
+  the clearance's live one is a replay.
+- The grant feed is clearance-api's `GET /v1/clearances?cluster=<c>&state=cleared`: the cluster's cleared changes
+  whose token is live, each with it. The grant-sync agent (G-ARGO-3) reads it as a feed reader
+  (`CLEARANCE_API_FEED_READERS`), verifies each token against `GET /v1/keys`, and writes the ClearanceGrants.
+- `registerChange` takes an optional `taskId` (the run that proposed the change), kept on the change as `task_id`,
+  carried in the token and on every `deploy.*` record's `task_id`.
+
+Not yet: admission on the grant (G-ARGO-2), the CMP that registers the whole rendered tree with unchanged objects
+marked (G-ARGO-4; today `objects` lists the objects the change touches, each `changed: true`), the PreSync wait
+(G-ARGO-5), and the Terraform plan subject (G-TF-1, which adds `subjects.plan_digest`).
 
 ## The Go core (R-1c, Built, deployed on hangar-dev 2026-11-03)
 

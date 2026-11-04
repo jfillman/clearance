@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"github.com/jfillman/clearance/internal/vocab"
 	"sort"
 	"strings"
@@ -16,8 +17,35 @@ const (
 	RolePerson   = "person"
 	RoleDelegate = "delegate"
 	RoleNotifier = "notifier"
-	RoleAny      = "any" // no token asked (the contract)
+	RoleFeed     = "feed" // a grant-sync agent: the cleared changes and their tokens, for its clusters only
+	RoleAny      = "any"  // no token asked (the contract, the keys)
 )
+
+// FeedRoles are the roles that may read the gate's changes and their tokens: people's, and a feed reader's.
+var FeedRoles = []string{RolePerson, RoleDelegate, RoleAuditor, RoleFeed}
+
+// FeedReader is one entry of CLEARANCE_API_FEED_READERS: principals (an fnmatch glob) that read the cleared
+// changes of one cluster ("*": any) with their tokens. A grant-sync agent on a protected cluster is one.
+type FeedReader struct {
+	Principal, Cluster string
+}
+
+// ParseFeedReaders reads CLEARANCE_API_FEED_READERS: comma-separated <principal glob>=<cluster> pairs.
+func ParseFeedReaders(v string) ([]FeedReader, error) {
+	var out []FeedReader
+	for _, pair := range strings.Split(v, ",") {
+		if pair = strings.TrimSpace(pair); pair == "" {
+			continue
+		}
+		glob, cluster, ok := strings.Cut(pair, "=")
+		glob, cluster = strings.TrimSpace(glob), strings.TrimSpace(cluster)
+		if !ok || glob == "" || cluster == "" || strings.ContainsAny(cluster, " \t,=") {
+			return nil, fmt.Errorf("CLEARANCE_API_FEED_READERS entries are <principal glob>=<cluster>, not %q", pair)
+		}
+		out = append(out, FeedReader{glob, cluster})
+	}
+	return out, nil
+}
 
 // PersonRoles are the roles of every person read (api.py PERSON_ROLES). An auditor may call any route a person may.
 var PersonRoles = []string{RolePerson, RoleDelegate, RoleAuditor}
@@ -31,6 +59,7 @@ var PersonRoles = []string{RolePerson, RoleDelegate, RoleAuditor}
 //	delegate  everything the person named in the on-behalf-of header may (CLEARANCE_DELEGATES, e.g. a portal)
 //	notifier  CLEARANCE_API_NOTIFIERS: kept so the role resolves as at api.py, but no Clearance read is a
 //	          notifier's since the inbox feed moved to the gateway (R-3)
+//	feed      CLEARANCE_API_FEED_READERS: the changes on its clusters, with their tokens (the grant feed); nothing else
 type Viewer struct {
 	Role   string
 	Person string // user:<login> for a person or a delegate's person; the auditor's own id
@@ -38,6 +67,13 @@ type Viewer struct {
 	Agents []string
 	Apps   []string
 	Groups []string
+	// Clusters are a feed reader's clusters ("*": any).
+	Clusters []string
+}
+
+// FeedOf says whether a feed reader may read cluster's changes.
+func (v *Viewer) FeedOf(cluster string) bool {
+	return v.Role == RoleFeed && (in(v.Clusters, "*") || (cluster != "" && in(v.Clusters, cluster)))
 }
 
 // All is whether the viewer sees every record (an auditor).
@@ -64,6 +100,7 @@ type Ownership interface {
 // Access resolves a caller to a Viewer (api.py Access).
 type Access struct {
 	Delegates, Notifiers, Auditors []string // principal globs (fnmatchcase)
+	FeedReaders                    []FeedReader
 	Directory                      Directory
 	Ownership                      Ownership
 	// Owners is each live agent definition's owner group, by agent name ("" when it names none).
@@ -86,6 +123,16 @@ func (a *Access) Viewer(ctx context.Context, p authn.Principal, onBehalfOf strin
 	}
 	if pycompat.MatchAny(p.ID, a.Auditors) {
 		return &Viewer{Role: RoleAuditor, Person: p.ID}, nil
+	}
+	var clusters []string
+	for _, f := range a.FeedReaders {
+		if pycompat.MatchAny(p.ID, []string{f.Principal}) && !in(clusters, f.Cluster) {
+			clusters = append(clusters, f.Cluster)
+		}
+	}
+	if len(clusters) > 0 {
+		sort.Strings(clusters)
+		return &Viewer{Role: RoleFeed, Person: p.ID, Clusters: clusters}, nil
 	}
 	if pycompat.MatchAny(p.ID, a.Notifiers) {
 		return &Viewer{Role: RoleNotifier}, nil
