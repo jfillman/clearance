@@ -18,7 +18,7 @@ CONTRACT_VERSION = "1.0.0"
 
 RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "run.finish", "human.answer", "session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome", "deploy.exception")
 
-__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Budgets", "BundleRef", "Context", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateApproval", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateErrorBody", "GateObjectChange", "GateReason", "GateRequirement", "GateTokenView", "Grant", "Health", "Hold", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Problem", "ProvenanceCheck", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenSignature", "WebhookAnswer"]
+__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Budgets", "BundleRef", "Context", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateApproval", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateErrorBody", "GateObjectChange", "GateReason", "GateRequirement", "GateTokenView", "Grant", "Health", "Hold", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Problem", "ProvenanceCheck", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenSignature", "WaitAnswer", "WebhookAnswer"]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -1408,6 +1408,46 @@ class TokenSignature(Model):
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
+class WaitAnswer(Model):
+    """Contract schema WaitAnswer."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("app", "app", ("str",), True),
+        Field("changed", "changed", ("bool",), True),
+        Field("cleared_by", "cleared_by", ("nullable", ("str",)), True),
+        Field("cluster", "cluster", ("str",), True),
+        Field("env", "env", ("str",), True),
+        Field("expires_at", "expires_at", ("str",), True),
+        Field("head", "head", ("str",), True),
+        Field("id", "id", ("str",), True),
+        Field("pr", "pr", ("int",), True),
+        Field("repo", "repo", ("str",), True),
+        Field("state", "state", ("str",), True),
+        Field("task_id", "task_id", ("nullable", ("str",)), True),
+        Field("tier", "tier", ("int",), True),
+        Field("token", "token", ("nullable", ("ref", "GateTokenView")), True),
+        Field("tree_digest", "tree_digest", ("str",), True),
+    )
+
+    app: str
+    changed: bool
+    cleared_by: str | None
+    cluster: str
+    env: str
+    expires_at: str
+    head: str
+    id: str
+    pr: int
+    repo: str
+    state: str
+    task_id: str | None
+    tier: int
+    token: GateTokenView | None
+    tree_digest: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
 class WebhookAnswer(Model):
     """Contract schema WebhookAnswer."""
 
@@ -1481,6 +1521,7 @@ MODELS: dict[str, type[Model]] = {
     "TokenJWK": TokenJWK,
     "TokenJWKS": TokenJWKS,
     "TokenSignature": TokenSignature,
+    "WaitAnswer": WaitAnswer,
     "WebhookAnswer": WebhookAnswer,
 }
 
@@ -1492,6 +1533,7 @@ OPERATIONS: dict[str, Operation] = {
     "getClearance": Operation("GET", "/v1/clearances/{change_id}", "bearer", 65536, None, GateClearanceAnswer),
     "clearChange": Operation("POST", "/v1/clearances/{change_id}/clear", "bearer", 65536, None, GateChangeWithAuditSeq),
     "denyChange": Operation("POST", "/v1/clearances/{change_id}/deny", "bearer", 65536, None, GateChangeWithAuditSeq),
+    "waitClearance": Operation("GET", "/v1/clearances/{change_id}/wait", "bearer", 65536, None, WaitAnswer),
     "recordOutcome": Operation("POST", "/v1/decisions/{id}/outcome", "provider", 65536, OutcomeRequest, RecordRef),
     "publishDefinitions": Operation("PUT", "/v1/definitions", "provider", 4194304, DefinitionsRequest, DefinitionsResult),
     "reviewDefinition": Operation("POST", "/v1/definitions/review", "bearer", 65536, None, ReviewResult),

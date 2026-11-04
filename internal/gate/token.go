@@ -198,6 +198,7 @@ func (w *writer) issue(c *Change, nonce string) (string, error) {
 		w.err = err
 		return "", err
 	}
+	w.touch(row.ChangeID, row.Cluster)
 	return nonce, nil
 }
 
@@ -222,6 +223,7 @@ func (w *writer) revoke(c *Change, head string) {
 	if w.err = w.tx.PutToken(w.ctx, tk); w.err != nil {
 		return
 	}
+	w.touch(tk.ChangeID, tk.Cluster)
 	w.record("policy", nil, "deploy.revoke", c, "allow", nil, "token revoked: superseded by "+pycompat.Truncate(head, 7),
 		map[string]any{"by": head, "token": tk.Nonce}, map[string]any{"token": tk.Nonce})
 }
@@ -278,6 +280,7 @@ func (s *Service) Refresh(ctx context.Context) (reissued, revoked int, err error
 
 // refreshOne re-issues tk (true) or revokes it (false).
 func (s *Service) refreshOne(tx store.Tx, w *writer, tk store.Token) (bool, error) {
+	w.touch(tk.ChangeID, tk.Cluster)
 	c, err := load(w.ctx, tx, tk.ChangeID)
 	if err != nil {
 		return false, err

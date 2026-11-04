@@ -55,6 +55,32 @@ deployment that sets no signing key, except that records and views carry the new
   "clearance-gate", engine_version, verdict: "clear" | "hold"}`: the gate's decision stays in `clearance.cleared_by`
   and `tier`, and the `clearance.yaml` digest is in `version`. Not yet released, so no token in the field carries
   the old shape.
+- **C-10: clearance-api for the gates.**
+  - **The signed grant feed** (`token.Feed`, `internal/gate/feed.go`; [docs/gate.md](docs/gate.md#the-signed-grant-feed-c-10-built)):
+    per cluster, a DSSE envelope (`application/vnd.clearance.grant-feed.v1+json`, the token key) over every live
+    token with a per-cluster `seq`, `iat`/`exp` (5 minutes), the chain's `records_seq` and each token's payload
+    digest, so a grant-sync agent can tell a whole, fresh feed from a trimmed or replayed one (`token.VerifyFeed`,
+    `Feed.Match`, fuzzed). The core signs it in every transaction that writes the cluster's tokens and re-signs every
+    2 minutes; clearance-api serves it at `GET /v1/grant-feeds/{cluster}` (feed readers of the cluster, auditors).
+  - **The core's wait route** `GET /v1/clearances/{change_id}/wait?state=&timeout=` for every provider: long-polls
+    up to 60 s and answers the state and token as soon as the state changes, woken by an in-process notifier on the
+    gate's commit (no database polling); at most 512 waits; Go client `Wait`.
+  - **`GET /v1/stream`** (clearance-api): server-sent events of new records and gate state changes, `id` = record
+    seq, resumable with `Last-Event-ID`, scoped as the reads (a feed reader: its clusters' clearance events only);
+    one head poller per replica, 64 streams per replica and 8 per caller, a 10 s write deadline per event, 15 s
+    keep-alives, 10-minute streams.
+  - **`GET /v1/github/installations`** and **`installation=<id>`** on `/v1/evidence`, `/v1/evidence/counts`,
+    `/v1/provenance` and `/v1/receipts`, from the records the GitHub App writes (`app:<installation>`).
+  - Chart: `networkPolicy.kubeAPIServer.ciliumEntity` (default false) renders a CiliumNetworkPolicy to the
+    `kube-apiserver` entity for the core and the api (on Cilium an ipBlock never matches the API server).
+  - Store: table `clearance_feeds` and index `clearance_evidence_app`, created on start.
+
+### Changed
+- **`contract/clearance-api.json` is OpenAPI 3.1** (info.version 1.1.0), still generated from the route table: each
+  operation carries `x-clearance-roles`, its query parameters and its answers' schemas; `/v1/stream` is
+  `x-clearance-stream`. The pre-OpenAPI document (`api`, `version`, `notes`, `operations`) is gone, and
+  `GET /v1/contract` names the core and gateway as `x-clearance-core` and `x-clearance-gateway`. Breaking for a
+  reader of the old shape: the Backstage backend reads both.
 
 ## [0.30.0] - 2026-11-03
 

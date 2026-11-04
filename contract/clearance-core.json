@@ -2025,6 +2025,87 @@
         ],
         "type": "object"
       },
+      "WaitAnswer": {
+        "properties": {
+          "app": {
+            "type": "string"
+          },
+          "changed": {
+            "type": "boolean"
+          },
+          "cleared_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cluster": {
+            "type": "string"
+          },
+          "env": {
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "Python datetime.isoformat() of an aware time",
+            "type": "string"
+          },
+          "head": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "pr": {
+            "type": "integer"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tier": {
+            "type": "integer"
+          },
+          "token": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateTokenView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tree_digest": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "app",
+          "changed",
+          "cleared_by",
+          "cluster",
+          "env",
+          "expires_at",
+          "head",
+          "id",
+          "pr",
+          "repo",
+          "state",
+          "task_id",
+          "tier",
+          "token",
+          "tree_digest"
+        ],
+        "type": "object"
+      },
       "WebhookAnswer": {
         "properties": {
           "result": {
@@ -2587,6 +2668,110 @@
         ],
         "summary": "A person who could clear a holding change denies it, with a reason.",
         "x-clearance-auth": "bearer",
+        "x-clearance-max-body": 65536
+      }
+    },
+    "/v1/clearances/{change_id}/wait": {
+      "get": {
+        "operationId": "waitClearance",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "change_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "the state the caller last saw: answer at once if the change is in another",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "seconds to hold the call, 1 to 60 (default 30)",
+            "in": "query",
+            "name": "timeout",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaitAnswer"
+                }
+              }
+            },
+            "description": "the change, its token, and whether it changed"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "a timeout or state that is not valid"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no bearer token, or one the authenticator refused"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateErrorBody"
+                }
+              }
+            },
+            "description": "no such change, or a Clearance that keeps no changes (DG-OFF)"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the store could not be read, or too many calls are waiting"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Long-poll a change: the same answer as getClearance, returned as soon as the change's state is not `state` (default: its state when the call arrived), or after `timeout` seconds (1 to 60, default 30) with changed false. For any subject kind; the same callers as getClearance. The core is the one writer, so it wakes the call on the write itself (an in-process notifier), never by polling the database.",
+        "x-clearance-auth": "bearer",
+        "x-clearance-long-poll": true,
         "x-clearance-max-body": 65536
       }
     },

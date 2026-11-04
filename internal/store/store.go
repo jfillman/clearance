@@ -72,6 +72,18 @@ type SigningKey struct {
 	RetiredAt *time.Time
 }
 
+// Feed is one row of clearance_feeds: a cluster's signed grant feed (C-10), the latest only. Envelope is the DSSE
+// envelope of a token.Feed; Tokens are the tokens it lists as clearance-api serves them beside it (a JSON array),
+// kept in the same row so a reader never pairs a feed with tokens re-issued after it was signed.
+type Feed struct {
+	Cluster             string
+	Seq                 int64
+	KeyID               string
+	IssuedAt, ExpiresAt time.Time
+	Envelope            json.RawMessage
+	Tokens              json.RawMessage
+}
+
 // Store is a writable core store.
 type Store interface {
 	Reader
@@ -91,6 +103,8 @@ type Tx interface {
 	ReplaceDefinitions(ctx context.Context, defs []Definition) error
 	// PutToken writes the change's token (an upsert by change id).
 	PutToken(ctx context.Context, t Token) error
+	// PutFeed writes the cluster's signed grant feed (an upsert by cluster).
+	PutFeed(ctx context.Context, f Feed) error
 	// UseSigningKey records k as the key in use (inserted, or un-retired) and retires every other key at now.
 	UseSigningKey(ctx context.Context, k SigningKey, now time.Time) error
 }
@@ -120,4 +134,10 @@ type Reader interface {
 	TokensDue(ctx context.Context, due time.Time, keyID string, limit int) ([]Token, error)
 	// SigningKeys are the keys in use or retired after since, newest first.
 	SigningKeys(ctx context.Context, since time.Time) ([]SigningKey, error)
+	// LiveTokens are cluster's tokens not revoked and not expired at now, by change id, at most limit.
+	LiveTokens(ctx context.Context, cluster string, now time.Time, limit int) ([]Token, error)
+	// Feed is the cluster's signed grant feed (ErrNotFound when none was signed).
+	Feed(ctx context.Context, cluster string) (Feed, error)
+	// FeedClusters are the clusters with a token (live or revoked) or a feed: the ones whose feed the core signs.
+	FeedClusters(ctx context.Context) ([]string, error)
 }

@@ -631,6 +631,13 @@ type ClearanceAnswer struct {
 	Token      *TokenView `json:"token"`
 }
 
+// WaitAnswer is the wait route's answer (server.WaitAnswer): the change and its token, and whether its state
+// changed (false: the wait timed out).
+type WaitAnswer struct {
+	ClearanceAnswer
+	Changed bool `json:"changed"`
+}
+
 // TokenView is a clearance token: the DSSE envelope, its JWT projection, the nonce, the key and the validity
 // (gate.TokenView). Verify it with internal/token (or any DSSE / JWS ES256 verifier) against Keys.
 type TokenView struct {

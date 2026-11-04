@@ -45,7 +45,18 @@ type Route struct {
 	Request     any
 	RequestNote string
 	Responses   []Response
-	serve       func(*Server) http.HandlerFunc // nil: a mounted R-1c handler
+	// Query are the query parameters it takes, documented in the contract (the handler checks them).
+	Query []QueryParam
+	// LongPoll is a route that holds the request open (up to MaxWait): its handler deadline and write deadline are
+	// extended past HandlerTimeout and WriteTimeout for it alone.
+	LongPoll bool
+	serve    func(*Server) http.HandlerFunc // nil: a mounted R-1c handler
+}
+
+// QueryParam is one documented query parameter.
+type QueryParam struct {
+	Name, Description string
+	Integer           bool
 }
 
 // Pattern is the route's ServeMux pattern.
@@ -172,6 +183,23 @@ var routeTable = []Route{
 		Responses: []Response{{200, "the change and its token", gate.ClearanceAnswer{}}, errs(401)[0], errs(403)[0],
 			{404, "no such change, or a Clearance that keeps no changes (DG-OFF)", gate.ErrorBody{}}, errs(503)[0]},
 		serve: func(s *Server) http.HandlerFunc { return s.getClearance },
+	},
+	{
+		Method: "GET", Path: "/v1/clearances/{change_id}/wait", OperationID: "waitClearance", Auth: AuthBearer,
+		MaxBody: DefaultMaxBody, LongPoll: true,
+		Summary: "Long-poll a change: the same answer as getClearance, returned as soon as the change's state is not " +
+			"`state` (default: its state when the call arrived), or after `timeout` seconds (1 to 60, default 30) " +
+			"with changed false. For any subject kind; the same callers as getClearance. The core is the one writer, " +
+			"so it wakes the call on the write itself (an in-process notifier), never by polling the database.",
+		Query: []QueryParam{
+			{Name: "state", Description: "the state the caller last saw: answer at once if the change is in another"},
+			{Name: "timeout", Description: "seconds to hold the call, 1 to 60 (default 30)", Integer: true},
+		},
+		Responses: []Response{{200, "the change, its token, and whether it changed", WaitAnswer{}},
+			{400, "a timeout or state that is not valid", ErrorResponse{}}, errs(401)[0], errs(403)[0],
+			{404, "no such change, or a Clearance that keeps no changes (DG-OFF)", gate.ErrorBody{}},
+			{503, "the store could not be read, or too many calls are waiting", ErrorResponse{}}},
+		serve: func(s *Server) http.HandlerFunc { return s.waitClearance },
 	},
 	{
 		Method: "POST", Path: "/v1/clearances/{change_id}/clear", OperationID: "clearChange", Auth: AuthBearer,

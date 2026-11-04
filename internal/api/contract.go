@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"reflect"
 	"sort"
 	"strconv"
@@ -19,8 +20,12 @@ import (
 // ContractPath is the committed contract, relative to the module root.
 const ContractPath = "contract/clearance-api.json"
 
-// APIVersion is the contract's version: /v1 changes are additive only, a breaking change is /v2.
+// APIVersion is the API's path version: /v1 changes are additive only, a breaking change is /v2.
 const APIVersion = "v1"
+
+// ContractVersion is the contract's info.version: the minor moves with each additive change, the major with a
+// breaking one (that is /v2). 1.0.0 was the pre-OpenAPI document of v0.27.0 to v0.30.x.
+const ContractVersion = "1.1.0"
 
 // ContractNotes is the contract's note on where writes go.
 const ContractNotes = "GET only. clearance-api reads what the Clearance core committed. Writes go to the core " +
@@ -28,59 +33,91 @@ const ContractNotes = "GET only. clearance-api reads what the Clearance core com
 	"(sessions, tasks, agents and their holds, the human inbox, events, results, runtimes) are the AI " +
 	"gateway's."
 
-// Operation is one entry of the contract's operations, in api.py's shape (a portal's backend vendors it and forwards
-// only the operations it lists, by method, path and roles).
-type Operation struct {
-	OperationID string   `json:"operationId"`
-	Method      string   `json:"method"`
-	Path        string   `json:"path"`
-	Roles       []string `json:"roles"`
-	Params      []string `json:"params"`
-	Summary     string   `json:"summary"`
-}
+// The contract's extensions on each operation: the roles that may call it (person, delegate, auditor, feed,
+// notifier, any: docs/clearance-api.md, Roles) and, for /v1/stream, that it answers text/event-stream (a buffered
+// proxy must not forward it).
+const (
+	XRoles  = "x-clearance-roles"
+	XStream = "x-clearance-stream"
+)
 
-// Contract is contract/clearance-api.json: api.py's document (api, version, notes, operations), plus the answers'
-// JSON schemas generated from the Go types (responses by operationId and status, schemas by name). GET /v1/contract
-// adds gateway and core, where writes go, when the deployment names them.
-type Contract struct {
-	API        string                               `json:"api"`
-	Version    string                               `json:"version"`
-	Notes      string                               `json:"notes"`
-	Operations []Operation                          `json:"operations"`
-	Responses  map[string]map[string]map[string]any `json:"responses"`
-	Schemas    map[string]any                       `json:"schemas"`
-	Gateway    string                               `json:"gateway,omitempty"`
-	Core       string                               `json:"core,omitempty"`
-}
-
-// ContractDoc is the contract as a value.
-func ContractDoc() (*Contract, error) {
+// ContractDoc is contract/clearance-api.json as a value: an OpenAPI 3.1 document generated from the route table
+// (Routes: paths, methods, roles, query parameters, the statuses each answers) and, by reflection, the answers'
+// Go types (components.schemas). gateway and core, when not "", are where writes go (GET /v1/contract names them
+// as x-clearance-gateway and x-clearance-core); the committed file has neither.
+func ContractDoc(gateway, core string) (map[string]any, error) {
 	g := &schemaGen{defs: map[string]any{}}
-	doc := &Contract{API: "clearance-api", Version: APIVersion, Notes: ContractNotes, Operations: []Operation{},
-		Responses: map[string]map[string]map[string]any{}}
+	paths := map[string]any{}
 	for _, rt := range Routes() {
-		params := rt.Params
-		if params == nil {
-			params = []string{}
+		op := map[string]any{"operationId": rt.OperationID, "summary": rt.Summary, XRoles: rt.Roles}
+		if in(rt.Roles, RoleAny) {
+			op["security"] = []any{}
+		} else {
+			op["security"] = []any{map[string]any{"bearer": []any{}}}
 		}
-		doc.Operations = append(doc.Operations, Operation{OperationID: rt.OperationID, Method: rt.Method,
-			Path: rt.Path, Roles: rt.Roles, Params: params, Summary: rt.Summary})
-		resp := map[string]map[string]any{"200": g.schema(reflect.TypeOf(rt.Response))}
+		params := []any{}
+		for _, seg := range strings.Split(rt.Path, "/") {
+			if strings.HasPrefix(seg, "{") {
+				params = append(params, map[string]any{"name": strings.Trim(seg, "{}"), "in": "path", "required": true,
+					"schema": map[string]any{"type": "string"}})
+			}
+		}
+		for _, name := range rt.Params {
+			params = append(params, map[string]any{"name": name, "in": "query", "required": false,
+				"schema": map[string]any{"type": "string"}})
+		}
+		if rt.Stream {
+			op[XStream] = true
+			params = append(params, map[string]any{"name": "Last-Event-ID", "in": "header", "required": false,
+				"schema": map[string]any{"type": "string"}, "description": "the seq of the last event received"})
+		}
+		if len(params) > 0 {
+			op["parameters"] = params
+		}
+		ctype := "application/json"
+		if rt.Stream {
+			ctype = "text/event-stream"
+		}
+		resps := map[string]any{"200": map[string]any{"description": "OK", "content": map[string]any{
+			ctype: map[string]any{"schema": g.schema(reflect.TypeOf(rt.Response))}}}}
 		for _, c := range rt.Errors {
-			resp[strconv.Itoa(c)] = g.schema(reflect.TypeOf(ErrorBody{}))
+			resps[strconv.Itoa(c)] = map[string]any{"description": http.StatusText(c), "content": map[string]any{
+				"application/json": map[string]any{"schema": g.schema(reflect.TypeOf(ErrorBody{}))}}}
 		}
-		doc.Responses[rt.OperationID] = resp
+		op["responses"] = resps
+		item, _ := paths[rt.Path].(map[string]any)
+		if item == nil {
+			item = map[string]any{}
+			paths[rt.Path] = item
+		}
+		item[strings.ToLower(rt.Method)] = op
 	}
 	if g.err != nil {
 		return nil, g.err
 	}
-	doc.Schemas = g.defs
+	doc := map[string]any{
+		"openapi": "3.1.0",
+		"info": map[string]any{"title": "clearance-api", "version": ContractVersion, "description": ContractNotes +
+			" Generated by tools/contract -api from the route table and the Go types (internal/api); do not edit."},
+		"paths": paths,
+		"components": map[string]any{
+			"schemas":         g.defs,
+			"securitySchemes": map[string]any{"bearer": map[string]any{"type": "http", "scheme": "bearer"}},
+		},
+		"x-clearance-api-version": APIVersion,
+	}
+	if gateway != "" {
+		doc["x-clearance-gateway"] = gateway
+	}
+	if core != "" {
+		doc["x-clearance-core"] = core
+	}
 	return doc, nil
 }
 
 // ContractJSON is the committed file's bytes: two-space indent, HTML characters unescaped, a trailing newline.
 func ContractJSON() ([]byte, error) {
-	doc, err := ContractDoc()
+	doc, err := ContractDoc("", "")
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +168,7 @@ func (g *schemaGen) special(t reflect.Type) (map[string]any, bool) {
 				"v0-draft row projected into it) with assurance beside it and projected naming the fields the api " +
 				"added (docs/evidence.md)",
 			"required": []any{"seq", "ts", "tool", "hash", "prev_hash", "schema", "provider", "subject", "assurance", "projected"}}
-		return map[string]any{"$ref": "#/schemas/EvidenceRecord"}, true
+		return map[string]any{"$ref": "#/components/schemas/EvidenceRecord"}, true
 	case tChanges:
 		// The items are the gate's stored records, served as stored.
 		return g.schema(reflect.TypeOf(struct {
@@ -184,7 +221,7 @@ func (g *schemaGen) schema(t reflect.Type) map[string]any {
 			return g.object(t)
 		}
 		name := defName(t)
-		ref := map[string]any{"$ref": "#/schemas/" + name}
+		ref := map[string]any{"$ref": "#/components/schemas/" + name}
 		if _, done := g.defs[name]; done {
 			return ref
 		}
