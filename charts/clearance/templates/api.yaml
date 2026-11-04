@@ -69,6 +69,10 @@ spec:
             - name: CLEARANCE_API_NOTIFIERS
               value: {{ include "clearance.csv" . | quote }}
             {{- end }}
+            {{- with .Values.api.feedReaders }}
+            - name: CLEARANCE_API_FEED_READERS
+              value: {{ include "clearance.feedReaders" . | quote }}
+            {{- end }}
             - name: CLEARANCE_API_POOL
               value: {{ .Values.api.pool | quote }}
             - name: CLEARANCE_API_DEFINITIONS_INTERVAL

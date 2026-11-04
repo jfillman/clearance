@@ -97,6 +97,25 @@ gate:
   # anywhere else is tier 2 (image:not-trusted-registry). Empty: any registry (the product default).
   trustedRegistries: []
 
+# -- The clearance token (C-1; docs/core.md, The clearance token) ------------------------------------------------
+# The core signs a short-lived token for every cleared change with an ECDSA P-256 key. The key is never in this
+# file and the chart never creates its Secret: name an existing one (in the lab, made from Infisical by an
+# ExternalSecret you manage). Empty existingSecret and kms: no tokens are issued, and a gate provider that admits on
+# a token (the Argo CD grant sync) admits nothing.
+signing:
+  # An existing Secret holding the PEM private key (SEC 1 "EC PRIVATE KEY" or PKCS #8), mounted read-only for the
+  # core only at /etc/clearance/signing/<key> (CLEARANCE_SIGNING_KEY_FILE). The api never sees it.
+  existingSecret: ""
+  key: signing-key.pem
+  # CLEARANCE_SIGNING_KMS: a KMS key reference (awskms:///<key arn>, gcpkms://projects/.../cryptoKeyVersions/1,
+  # hashivault://<key>). Reserved for the KMS signer, which is not built yet: the core refuses to start with it set.
+  kms: ""
+token:
+  # CLEARANCE_TOKEN_TTL: each token's life, a Go duration (empty: 15m; 1m to 24h, at least 4 x gate.expireSeconds).
+  ttl: ""
+  # CLEARANCE_TOKEN_ISSUER: the tokens' iss, which verifiers check (empty: clearance).
+  issuer: ""
+
 # Bundled agent definitions (*.yaml) from a ConfigMap you manage, mounted at /etc/clearance/agents and named in
 # CLEARANCE_AGENTS_DIR for the core and the api. Empty: none.
 agents:
@@ -241,6 +260,12 @@ api:
   # CLEARANCE_API_AUDITORS and CLEARANCE_API_NOTIFIERS: principal globs.
   auditors: []
   notifiers: []
+  # CLEARANCE_API_FEED_READERS: who reads a cluster's grant feed (GET /v1/clearances?cluster=<c>&state=cleared, the
+  # cleared changes with their tokens), each {principal: <glob>, cluster: <name or "*">}: a protected cluster's
+  # grant-sync agent. A feed reader reads nothing else.
+  feedReaders: []
+  #  - principal: hangar-prod/clearance-system/clearance-agent
+  #    cluster: hangar-prod
   # CLEARANCE_GATEWAY_URL: the AI gateway (where the runtime's writes go), named in /v1/contract. Empty: none.
   gatewayURL: ""
   # CLEARANCE_API_POOL: the read pool's size.

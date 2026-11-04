@@ -26,10 +26,13 @@ import (
 // whose globs match it. kinds narrows which POST /v1/records kinds the provider may write (default: all of
 // RecordKinds). intent_capture is "redacted" (default) or "full" for its records' intent text. definitions lets the
 // provider publish its cluster-pinned agent definitions (PUT /v1/definitions; default false). At most one provider
-// has it: a publish replaces the whole pinned set, so two publishers would undo each other.
+// has it: a publish replaces the whole pinned set, so two publishers would undo each other. conformance is the
+// conformance suite the provider passed, as `clearance conformance` reports it, with the date
+// ("clearance-conformance/v1@2026-11-03"): stamped on every record it writes as provider.conformance.
 type Provider struct {
 	Name          string   `json:"name"`
 	Version       string   `json:"version"`
+	Conformance   string   `json:"conformance,omitempty"`
 	Principals    []string `json:"principals"`
 	Kinds         []string `json:"kinds,omitempty"`
 	IntentCapture string   `json:"intent_capture,omitempty"`
@@ -71,6 +74,9 @@ func ParseProviders(v string) ([]Provider, error) {
 			return nil, fmt.Errorf("CLEARANCE_PROVIDERS[%d]: principals names no principal glob", i)
 		case p.IntentCapture != "" && !slices.Contains(evidence.IntentCapture, p.IntentCapture):
 			return nil, fmt.Errorf("CLEARANCE_PROVIDERS[%d]: intent_capture is one of %v", i, evidence.IntentCapture)
+		case p.Conformance != "" && !evidence.ConformanceRx.MatchString(p.Conformance):
+			return nil, fmt.Errorf("CLEARANCE_PROVIDERS[%d]: conformance %q is <suite>/v<n>[@YYYY-MM-DD], e.g. clearance-conformance/v1@2026-11-03",
+				i, p.Conformance)
 		}
 		for _, g := range p.Principals {
 			if g == "" {
@@ -100,7 +106,7 @@ func (p *Provider) Writer() evidence.Writer {
 }
 
 func (p *Provider) provider() evidence.Provider {
-	return evidence.Provider{Name: p.Name, Version: p.Version}
+	return evidence.Provider{Name: p.Name, Version: p.Version, Conformance: p.Conformance}
 }
 
 func (p *Provider) matches(principal string) bool { return pycompat.MatchAny(principal, p.Principals) }

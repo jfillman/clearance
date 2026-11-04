@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/jfillman/clearance/internal/store"
 )
@@ -30,6 +31,10 @@ type EvidenceFilter struct {
 type ChangeFilter struct {
 	App, Env, State, Repo, Since string
 	PR, Tier                     *int64
+	Cluster                      string
+	// LiveAt, when set, keeps only the changes whose token is live at that moment (not revoked, not expired): the
+	// grant feed (cluster and state=cleared).
+	LiveAt *time.Time
 }
 
 // Count is one group of a counts answer: its key (null when the field is absent) and how many.
@@ -69,6 +74,10 @@ type Store interface {
 	ChangeCounts(ctx context.Context, f ChangeFilter, v *Viewer, by string) ([]Count, error)
 	// Definitions are the cluster-pinned definitions the core stored (clearance_definitions).
 	Definitions(ctx context.Context) ([]store.Definition, error)
+	// Tokens are the live tokens (not revoked, not expired at now) of the changes ids, by change id.
+	Tokens(ctx context.Context, ids []string, now time.Time) (map[string]store.Token, error)
+	// SigningKeys are the token verification keys in use or retired after since (clearance_signing_keys).
+	SigningKeys(ctx context.Context, since time.Time) ([]store.SigningKey, error)
 	// Ping answers when the database does.
 	Ping(ctx context.Context) error
 }

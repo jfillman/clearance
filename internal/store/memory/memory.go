@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/jfillman/clearance/internal/canon"
 	"github.com/jfillman/clearance/internal/evidence"
@@ -31,6 +32,8 @@ type Store struct {
 	head    evidence.Checkpoint
 	changes map[string]store.Change
 	defs    []store.Definition
+	tokens  map[string]store.Token
+	keys    map[string]store.SigningKey
 	closed  bool
 }
 
@@ -43,7 +46,10 @@ var ErrClosed = errors.New("memory: store closed")
 var ErrTxDone = errors.New("memory: transaction is finished")
 
 // New returns an empty store.
-func New() *Store { return &Store{head: evidence.Start, changes: map[string]store.Change{}} }
+func New() *Store {
+	return &Store{head: evidence.Start, changes: map[string]store.Change{}, tokens: map[string]store.Token{},
+		keys: map[string]store.SigningKey{}}
+}
 
 // Load returns a store holding an existing chain, verified from genesis like store/pg's Open.
 func Load(records []store.Record) (*Store, error) {
@@ -83,7 +89,7 @@ func (s *Store) Atomic(ctx context.Context, fn func(tx store.Tx) error) (err err
 	if closed {
 		return ErrClosed
 	}
-	t := &tx{s: s, head: head, changes: map[string]store.Change{}}
+	t := &tx{s: s, head: head, changes: map[string]store.Change{}, tokens: map[string]store.Token{}}
 	defer func() {
 		t.mu.Lock()
 		t.done = true
@@ -105,6 +111,12 @@ func (s *Store) Atomic(ctx context.Context, fn func(tx store.Tx) error) (err err
 	if t.defs != nil {
 		s.defs = *t.defs
 	}
+	for id, tk := range t.tokens {
+		s.tokens[id] = tk
+	}
+	if t.keys != nil {
+		s.keys = t.keys
+	}
 	return nil
 }
 
@@ -117,6 +129,8 @@ type tx struct {
 	records [][]byte
 	changes map[string]store.Change
 	defs    *[]store.Definition
+	tokens  map[string]store.Token
+	keys    map[string]store.SigningKey // nil: unchanged
 }
 
 func (t *tx) lock() error {
@@ -186,6 +200,61 @@ func (t *tx) ReplaceDefinitions(ctx context.Context, defs []store.Definition) er
 	return nil
 }
 
+func (t *tx) PutToken(ctx context.Context, tk store.Token) error {
+	if err := t.lock(); err != nil {
+		return err
+	}
+	defer t.mu.Unlock()
+	if tk.ChangeID == "" || !json.Valid(tk.Envelope) {
+		return errors.New("memory: a token needs a change id and a JSON envelope")
+	}
+	t.tokens[tk.ChangeID] = cloneToken(tk)
+	return nil
+}
+
+func (t *tx) UseSigningKey(ctx context.Context, k store.SigningKey, now time.Time) error {
+	if err := t.lock(); err != nil {
+		return err
+	}
+	defer t.mu.Unlock()
+	if k.KeyID == "" || !json.Valid(k.JWK) {
+		return errors.New("memory: a signing key needs an id and a JWK")
+	}
+	keys := t.keys
+	if keys == nil {
+		t.s.mu.RLock()
+		keys = make(map[string]store.SigningKey, len(t.s.keys)+1)
+		for id, x := range t.s.keys {
+			keys[id] = x
+		}
+		t.s.mu.RUnlock()
+	}
+	for id, x := range keys {
+		if id != k.KeyID && x.RetiredAt == nil {
+			at := now
+			x.RetiredAt = &at
+			keys[id] = x
+		}
+	}
+	if old, ok := keys[k.KeyID]; ok {
+		old.RetiredAt = nil
+		keys[k.KeyID] = old
+	} else {
+		keys[k.KeyID] = store.SigningKey{KeyID: k.KeyID, JWK: bytes.Clone(k.JWK), CreatedAt: now}
+	}
+	t.keys = keys
+	return nil
+}
+
+func cloneToken(tk store.Token) store.Token {
+	tk.Envelope = bytes.Clone(tk.Envelope)
+	if tk.RevokedAt != nil {
+		at := *tk.RevokedAt
+		tk.RevokedAt = &at
+	}
+	return tk
+}
+
 // change looks a change up in the overlay, then the committed state. Callers hold t.mu.
 func (t *tx) change(id string) (store.Change, bool) {
 	if c, ok := t.changes[id]; ok {
@@ -203,6 +272,8 @@ type view struct {
 	records [][]byte
 	changes map[string]store.Change
 	defs    []store.Definition
+	tokens  map[string]store.Token
+	keys    map[string]store.SigningKey
 }
 
 func (s *Store) view() (view, error) {
@@ -211,7 +282,12 @@ func (s *Store) view() (view, error) {
 	if s.closed {
 		return view{}, ErrClosed
 	}
-	return view{head: s.head, records: s.records[:len(s.records):len(s.records)], changes: maps(s.changes), defs: s.defs}, nil
+	tokens := make(map[string]store.Token, len(s.tokens))
+	for k, v := range s.tokens {
+		tokens[k] = v
+	}
+	return view{head: s.head, records: s.records[:len(s.records):len(s.records)], changes: maps(s.changes), defs: s.defs,
+		tokens: tokens, keys: s.keys}, nil
 }
 
 func maps(m map[string]store.Change) map[string]store.Change {
@@ -238,6 +314,12 @@ func (t *tx) view() (view, error) {
 	}
 	if t.defs != nil {
 		v.defs = *t.defs
+	}
+	for id, tk := range t.tokens {
+		v.tokens[id] = tk
+	}
+	if t.keys != nil {
+		v.keys = t.keys
 	}
 	return v, nil
 }
@@ -509,6 +591,98 @@ func (v view) definitions() []store.Definition {
 			return out[i].State < out[j].State
 		}
 		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+func (s *Store) Token(ctx context.Context, changeID string) (store.Token, error) {
+	v, err := s.view()
+	if err != nil {
+		return store.Token{}, err
+	}
+	return v.token(changeID)
+}
+
+func (t *tx) Token(ctx context.Context, changeID string) (store.Token, error) {
+	v, err := t.view()
+	if err != nil {
+		return store.Token{}, err
+	}
+	return v.token(changeID)
+}
+
+func (v view) token(id string) (store.Token, error) {
+	tk, ok := v.tokens[id]
+	if !ok {
+		return store.Token{}, store.ErrNotFound
+	}
+	return cloneToken(tk), nil
+}
+
+func (s *Store) TokensDue(ctx context.Context, due time.Time, keyID string, limit int) ([]store.Token, error) {
+	v, err := s.view()
+	if err != nil {
+		return nil, err
+	}
+	return v.tokensDue(due, keyID, limit), nil
+}
+
+func (t *tx) TokensDue(ctx context.Context, due time.Time, keyID string, limit int) ([]store.Token, error) {
+	v, err := t.view()
+	if err != nil {
+		return nil, err
+	}
+	return v.tokensDue(due, keyID, limit), nil
+}
+
+func (v view) tokensDue(due time.Time, keyID string, limit int) []store.Token {
+	out := []store.Token{}
+	for _, tk := range v.tokens {
+		if tk.RevokedAt == nil && (tk.ExpiresAt.Before(due) || tk.KeyID != keyID) {
+			out = append(out, cloneToken(tk))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].ExpiresAt.Equal(out[j].ExpiresAt) {
+			return out[i].ExpiresAt.Before(out[j].ExpiresAt)
+		}
+		return out[i].ChangeID < out[j].ChangeID
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
+func (s *Store) SigningKeys(ctx context.Context, since time.Time) ([]store.SigningKey, error) {
+	v, err := s.view()
+	if err != nil {
+		return nil, err
+	}
+	return v.signingKeys(since), nil
+}
+
+func (t *tx) SigningKeys(ctx context.Context, since time.Time) ([]store.SigningKey, error) {
+	v, err := t.view()
+	if err != nil {
+		return nil, err
+	}
+	return v.signingKeys(since), nil
+}
+
+func (v view) signingKeys(since time.Time) []store.SigningKey {
+	out := []store.SigningKey{}
+	for _, k := range v.keys {
+		if k.RetiredAt == nil || k.RetiredAt.After(since) {
+			k.JWK = bytes.Clone(k.JWK)
+			out = append(out, k)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.After(out[j].CreatedAt)
+		}
+		return out[i].KeyID < out[j].KeyID
 	})
 	return out
 }

@@ -187,6 +187,10 @@ func TestAValidIDTokenIsAUser(t *testing.T) {
 	if p.ID != "user:alice@example.com" || p.Kind != KindPerson || !p.IsPerson() {
 		t.Fatalf("got %+v", p)
 	}
+	// The person at their identity provider, for an approval's sub and iss (C-1).
+	if p.Claims["iss"] != iss || p.Claims["sub"] == nil || p.Claims["sub"] == "" {
+		t.Fatalf("claims %v", p.Claims)
+	}
 }
 
 func TestAValidTokenForSomeoneNotAllowedIsRefused(t *testing.T) {
