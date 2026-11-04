@@ -1,0 +1,67 @@
+# Spike d: Argo CD Notifications to a webhook receiver (what an outcome-by-webhook design would use), against the
+# agent design (a watch on Application status). The receiver logs each POST with its arrival time.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: spike-receiver, namespace: clearance-spike-argo}
+data:
+  receiver.py: |
+    import http.server, json, sys, time
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(min(n, 65536)).decode("utf-8", "replace")
+            print(json.dumps({"received": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "path": self.path, "body": body}), flush=True)
+            self.send_response(204); self.end_headers()
+        def log_message(self, *a): pass
+    http.server.ThreadingHTTPServer(("", 8080), H).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: spike-receiver, namespace: clearance-spike-argo}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: spike-receiver}}
+  template:
+    metadata: {labels: {app: spike-receiver}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: receiver
+          image: python:3.13-alpine
+          command: [python, -u, /app/receiver.py]
+          ports: [{containerPort: 8080}]
+          resources: {requests: {cpu: 5m, memory: 16Mi}, limits: {memory: 64Mi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: app, mountPath: /app}]
+      volumes: [{name: app, configMap: {name: spike-receiver}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: spike-receiver, namespace: clearance-spike-argo}
+spec:
+  selector: {app: spike-receiver}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+# Merged into the upstream argocd-notifications-cm by run-d.sh.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: argocd-notifications-cm, namespace: clearance-spike-argo}
+data:
+  service.webhook.clearance: |
+    url: http://spike-receiver.clearance-spike-argo.svc:8080
+  template.outcome: |
+    webhook:
+      clearance:
+        method: POST
+        path: /outcome
+        body: |
+          {"app": "{{.app.metadata.name}}", "phase": "{{.app.status.operationState.phase}}",
+           "revision": "{{.app.status.sync.revision}}", "health": "{{.app.status.health.status}}",
+           "finishedAt": "{{.app.status.operationState.finishedAt}}"}
+  trigger.on-sync-done: |
+    - when: app.status.operationState != nil and app.status.operationState.phase in ['Succeeded', 'Failed', 'Error']
+      oncePer: app.status.operationState.finishedAt
+      send: [outcome]
+  subscriptions: |
+    - recipients: [clearance]
+      triggers: [on-sync-done]

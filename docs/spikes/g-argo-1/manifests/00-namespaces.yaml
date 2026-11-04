@@ -1,0 +1,14 @@
+# G-ARGO-1 spike namespaces (hangar-dev only; deleted by down.sh).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: clearance-spike-argo
+  labels: {hangar.io/spike: g-argo-1}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: clearance-spike-prot
+  labels:
+    hangar.io/spike: g-argo-1
+    clearance.hangar.io/protected: "true"

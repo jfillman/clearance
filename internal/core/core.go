@@ -12,7 +12,12 @@
 //	                              rules only). A bundle whose sources cannot be read fails the start.
 //	CLEARANCE_VERIFIERS           principal globs that may register changes and ask for provenance
 //	CLEARANCE_DELEGATES           principal globs that may act for a person they name (the on-behalf-of header)
-//	CLEARANCE_ADMINS              principal globs (user:<login>) that may deny any held change
+//	CLEARANCE_ADMINS              principal globs (user:<login>) that may deny any held change and break glass
+//	CLEARANCE_PROTECTED_ENVIRONMENTS
+//	                              comma-separated <cluster glob>/<env glob> entries: the environments the gate
+//	                              protects. Unset: every environment is protected (fail closed). A change to any
+//	                              other is cleared at tier 0, reason unprotected
+//	CLEARANCE_BREAKGLASS_MAX_TTL  the longest break-glass window, a Go duration (default and ceiling 4h, at least 1m)
 //	CLEARANCE_EXPIRE_SECONDS      how often holding changes past their TTL are expired (default 60)
 //	CLEARANCE_MAX_CLOCK_SKEW      how far an evaluation's context.now may be from the core's clock, a Go duration
 //	                              (default 5m, at most 24h); 0 turns the check off, which `clearance core` allows
@@ -152,6 +157,17 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	cfg.Gate = gate.Config{Verifiers: list(get("CLEARANCE_VERIFIERS", "")),
 		Delegates: list(get("CLEARANCE_DELEGATES", "")), Admins: list(get("CLEARANCE_ADMINS", "")),
 		ImageAllow: list(get("RUNTIME_IMAGES_EXTRA", "")), TrustedRegistries: list(get("CLEARANCE_TRUSTED_REGISTRIES", ""))}
+	if cfg.Gate.Protected, err = gate.ParseProtected(list(get("CLEARANCE_PROTECTED_ENVIRONMENTS", ""))); err != nil {
+		return cfg, fmt.Errorf("CLEARANCE_PROTECTED_ENVIRONMENTS: %w", err)
+	}
+	if v := get("CLEARANCE_BREAKGLASS_MAX_TTL", ""); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < gate.MinBreakglassTTL || d > gate.MaxBreakglassTTL {
+			return cfg, fmt.Errorf("CLEARANCE_BREAKGLASS_MAX_TTL: %q is not a Go duration from %s to %s", v,
+				gate.MinBreakglassTTL, gate.MaxBreakglassTTL)
+		}
+		cfg.Gate.BreakglassMaxTTL = d
+	}
 	switch cfg.Gate.UnboundTree = get("CLEARANCE_GATE_UNBOUND_TREE", gate.UnboundFlag); cfg.Gate.UnboundTree {
 	case gate.UnboundFlag, gate.UnboundRefuse:
 	default:
@@ -424,6 +440,9 @@ func (c *Core) wire(ctx context.Context) error {
 		c.log.WarnContext(ctx, "gate: no BACKSTAGE_URL, so no group directory and no app owners: "+
 			"nobody is in any group and no person can clear a tier-2 or tier-3 change")
 	}
+	if !cfg.Gate.Off && len(cfg.Gate.Protected) == 0 {
+		c.log.InfoContext(ctx, "gate: no CLEARANCE_PROTECTED_ENVIRONMENTS, so every environment is protected")
+	}
 	c.Gate = g
 	prov := &provenance.Service{Config: provenance.Config{Verifiers: cfg.Gate.Verifiers, AgentLogins: cfg.AgentLogins},
 		Store: c.Store, Clock: c.clock, Defs: reg, Writer: writer}
@@ -508,7 +527,19 @@ func (c *Core) Loops(ctx context.Context) {
 				c.log.InfoContext(ctx, "gate: expired changes", "count", len(ids))
 			}
 			c.refresh(ctx)
+			c.reconcile(ctx)
 		}
+	}
+}
+
+// reconcile closes the break-glass windows whose TTL has passed (gate.Service.ReconcileBreakglass).
+func (c *Core) reconcile(ctx context.Context) {
+	ids, err := c.Gate.ReconcileBreakglass(ctx)
+	switch {
+	case err != nil && ctx.Err() == nil:
+		c.log.ErrorContext(ctx, "gate: reconciling break-glass windows failed", "error", err.Error())
+	case len(ids) > 0:
+		c.log.InfoContext(ctx, "gate: break-glass windows closed", "count", len(ids))
 	}
 }
 

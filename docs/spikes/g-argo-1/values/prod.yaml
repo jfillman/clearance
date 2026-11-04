@@ -1,0 +1,27 @@
+# G-ARGO-1 spike: the values a gitops-<app> repo would hold for one environment (the $appsrc source).
+# No release.image, so the chart renders no Rollout and no RolloutWatch; the Deployment below has replicas 0, so
+# nothing runs, but the API server still defaults its spec (the point of spike b).
+appName: spike
+envName: prot
+cluster: hangar-dev
+serviceNamespacePattern: 'clearance-{app}-{env}'
+configMaps:
+  - name: app-config
+    data:
+      LOG_LEVEL: info
+extraManifests:
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: spike-web
+    spec:
+      replicas: 0
+      selector:
+        matchLabels: {app: spike-web}
+      template:
+        metadata:
+          labels: {app: spike-web}
+        spec:
+          containers:
+            - name: web
+              image: registry.k8s.io/pause:3.10

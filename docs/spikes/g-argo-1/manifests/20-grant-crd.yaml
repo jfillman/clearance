@@ -1,0 +1,55 @@
+# Spike stand-in for G-ARGO-2's ClearanceGrant, in a spike group so it never collides with the real CRD.
+# objects is a list (the card's shape) AND a map keyed "<group>/<kind>/<name>" (the lookup shape), so spike c can
+# measure both. No status subresource in the spike: the real CRD (G-ARGO-2) has one, written by the agent only.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: clearancegrants.spike.clearance.hangar.io
+  labels: {hangar.io/spike: g-argo-1}
+spec:
+  group: spike.clearance.hangar.io
+  names: {kind: ClearanceGrant, plural: clearancegrants, singular: clearancegrant}
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [subject, expiresAt]
+              properties:
+                subject:
+                  type: object
+                  properties:
+                    commit: {type: string, maxLength: 64}
+                    tree: {type: string, maxLength: 80}
+                expiresAt: {type: string, format: date-time}
+                clearance:
+                  type: object
+                  properties:
+                    id: {type: string, maxLength: 64}
+                    tier: {type: integer, minimum: 0, maximum: 3}
+                objects:
+                  type: array
+                  maxItems: 2000
+                  items:
+                    type: object
+                    required: [kind, name, rendered]
+                    properties:
+                      group: {type: string, maxLength: 253}
+                      kind: {type: string, maxLength: 63}
+                      name: {type: string, maxLength: 253}
+                      rendered: {type: string, maxLength: 80}
+                      changed: {type: boolean}
+                index:
+                  type: object
+                  maxProperties: 2000
+                  additionalProperties: {type: string, maxLength: 80}
+            status:
+              type: object
+              properties:
+                valid: {type: boolean}

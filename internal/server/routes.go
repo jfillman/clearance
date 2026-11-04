@@ -171,7 +171,8 @@ var routeTable = []Route{
 			"repo, pr, head, base, proposer, proposerKind, owner, protected, treeDigest, paths, linesChanged, objects, " +
 			"checks, policy, policyCommit, admission, agent, taskId, definition, subject (a saved Terraform plan: kind " +
 			"terraform-plan, planDigest, planJsonDigest, workspace, versions, summary, targeted, variableSetDigest, " +
-			"resources); unknown fields are refused",
+			"resources); unknown fields are refused. protected: false is refused (DG-PROTECTED): Clearance decides " +
+			"protection from CLEARANCE_PROTECTED_ENVIRONMENTS, and clears a change elsewhere at tier 0 (unprotected)",
 		Responses: append([]Response{{200, "the change as recorded", gate.Change{}}}, gateErrs...),
 	},
 	{
@@ -214,6 +215,39 @@ var routeTable = []Route{
 		Summary:     "A person who could clear a holding change denies it, with a reason.",
 		RequestNote: `{"reason": string}`,
 		Responses:   append([]Response{{200, "the change and the record's seq", gate.Decided{}}}, gateErrs...),
+	},
+	{
+		Method: "POST", Path: "/v1/breakglass", OperationID: "openBreakglass", Auth: AuthBearer,
+		MaxBody: gate.MaxBreakglassBody,
+		Summary: "An admin (CLEARANCE_ADMINS), or a delegate naming one in the on-behalf-of header, opens a " +
+			"break-glass window on one protected environment: a reason, a TTL (a Go duration, at most " +
+			"CLEARANCE_BREAKGLASS_MAX_TTL, never over 4h) and the cluster and env. Recorded as breakglass.open and " +
+			"committed before the answer, so the record precedes every change it covers. It clears nothing; " +
+			"exceptions inside it carry its id. At the TTL the core reconciles it (breakglass.close).",
+		Request: gate.BreakglassRequest{},
+		Responses: []Response{{200, "the open window", gate.Breakglass{}},
+			{400, "a malformed body, a TTL out of range, or an environment that is not protected", gate.ErrorBody{}},
+			errs(401)[0], {403, "not an admin, or a delegate naming no admin", gate.ErrorBody{}},
+			{404, "a Clearance that keeps no changes (DG-OFF)", gate.ErrorBody{}},
+			{409, "a window is already open on that environment", gate.ErrorBody{}}, errs(413)[0]},
+	},
+	{
+		Method: "POST", Path: "/v1/breakglass/{id}/close", OperationID: "closeBreakglass", Auth: AuthBearer,
+		MaxBody: gate.MaxPersonBody,
+		Summary: "An admin closes a break-glass window early; it is reconciled at once (breakglass.close lists what " +
+			"the record store knows changed in the window).",
+		Responses: []Response{{200, "the closed window", gate.Breakglass{}}, errs(401)[0],
+			{403, "not an admin", gate.ErrorBody{}}, {404, "no such window", gate.ErrorBody{}},
+			{409, "the window is already closed", gate.ErrorBody{}}},
+	},
+	{
+		Method: "GET", Path: "/v1/breakglass", OperationID: "listBreakglass", Auth: AuthBearer,
+		MaxBody: DefaultMaxBody,
+		Summary: "The break-glass windows open now (?cluster= narrows them), for a registered provider that honours " +
+			"break-glass and for admins.",
+		Responses: []Response{{200, "the open windows", BreakglassList{}}, errs(400)[0], errs(401)[0], errs(403)[0],
+			{404, "a Clearance that keeps no changes", ErrorResponse{}}, errs(503)[0]},
+		serve: func(s *Server) http.HandlerFunc { return s.listBreakglass },
 	},
 	{
 		Method: "GET", Path: "/v1/keys", OperationID: "getKeys", Auth: AuthNone, MaxBody: DefaultMaxBody,

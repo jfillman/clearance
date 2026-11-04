@@ -1,0 +1,7 @@
+# Merged into the upstream argocd-cm: cache and manage only the kinds the spike renders (a namespaced controller
+# cannot list every API in the cluster, and a smaller cache is lighter on hangar-dev).
+data:
+  resource.inclusions: |
+    - apiGroups: ["", "apps", "batch", "networking.k8s.io"]
+      kinds: [ConfigMap, ServiceAccount, Service, Deployment, ReplicaSet, Pod, Job, NetworkPolicy]
+      clusters: ["*"]

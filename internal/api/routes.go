@@ -92,6 +92,14 @@ var routeTable = []Route{
 			"or only: the outcome records the core writes beside each allowed decision (outcome_of). installation=<id> " +
 			"keeps one GitHub App installation's records (principal app:<id>)",
 		Response: EvidencePage{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).listEvidence},
+	{OperationID: "listExceptions", Method: "GET", Path: "/v1/exceptions", Roles: PersonRoles,
+		Params: []string{"tool", "kind", "app", "since", "until", "limit", "after"},
+		Summary: "The packet's exceptions, newest first; the cursor is seq: every deploy.exception (kind=out-of-band, " +
+			"drift, untraced-apply or digest-mismatch), every provider's degraded-mode report (deploy.degraded: what " +
+			"it did while the core was unreachable, with the outage policy it was held to), every break-glass window " +
+			"(breakglass.open, breakglass.close with what changed in it) and every runtime read allowed during an " +
+			"outage (tool.call, coverage-unavailable). tool narrows to one of those",
+		Response: EvidencePage{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).listExceptions},
 	{OperationID: "getEvidence", Method: "GET", Path: "/v1/evidence/{seq}", Roles: PersonRoles, Params: []string{},
 		Summary:  "One evidence record with its hash",
 		Response: Record{}, Errors: []int{400, 401, 403, 404, 503}, serve: (*Server).getEvidence},
@@ -127,7 +135,7 @@ var routeTable = []Route{
 	{OperationID: "listClearances", Method: "GET", Path: "/v1/clearances", Roles: FeedRoles,
 		Params: []string{"app", "env", "state", "repo", "pr", "tier", "since", "limit", "after", "cluster"},
 		Summary: "The deployment gate's changes, newest first: tier and why, state (holding, cleared, denied, " +
-			"expired, superseded), the requirement and the approvals so far, what the grant binds to. A person sees " +
+			"expired, superseded, degraded, exception), the requirement and the approvals so far, what the grant binds to. A person sees " +
 			"their apps' changes and the ones their groups may clear; the cursor is updated_at. cluster=<c>&state=" +
 			"cleared is the grant feed: the cluster's cleared changes whose clearance token is live, each with its " +
 			"token; a feed reader (CLEARANCE_API_FEED_READERS) may read only that, for its own clusters",
@@ -144,7 +152,8 @@ var routeTable = []Route{
 	{OperationID: "getClearancePolicy", Method: "GET", Path: "/v1/clearance-policy", Roles: PersonRoles,
 		Params: []string{},
 		Summary: "The deployment gate's baseline policy: the tier table, the people each tier needs, the outside " +
-			"groups, the TTL. A repo's clearance.yaml can only tighten it",
+			"groups, the TTL, the outage policy by tier (allow-and-record or hold). A repo's clearance.yaml can only " +
+			"tighten it",
 		Response: gate.PolicyView{}, Errors: []int{401, 403, 404}, serve: (*Server).getClearancePolicy},
 	{OperationID: "listDefinitions", Method: "GET", Path: "/v1/definitions", Roles: PersonRoles,
 		Params: []string{"full"},

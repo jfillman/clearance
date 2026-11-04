@@ -37,7 +37,7 @@ Status: **Built** (R-1f) for everything the core serves today: the two roles, th
 | Provider | Role | Status |
 | --- | --- | --- |
 | Autopilot gateway (`autopilot-gateway`) | runtime | Built in Python; it calls the Go core from R-3b (autopilot#71) and is tested then, and again as the Go port (A-9) |
-| Argo CD gate: CMP, grant-sync agent, PreSync wait (G-ARGO-3, -4, -5) | deployment | Proposal; G-ARGO-9 requires conformance |
+| Argo CD gate: CMP, grant-sync agent, PreSync wait (G-ARGO-3, -4, -5) | deployment | Proposal; shapes chosen in [gate.md, phase 2](gate.md#phase-2-design-pass-g-argo-1-2026-11-03) (CMP principal `hangar-prod/argocd-apps/argocd-apps-repo-server`, a verifier; the agent its own); G-ARGO-9 requires conformance |
 | Terraform gate: `clearance hold`, `release`, `report` (G-TF-3) | deployment | Proposal |
 | Clearance GitHub App, deployment protection rule | deployment | Built inside the core (`internal/githubapp`); it answers GitHub's callback rather than applying, so it is not driven by this suite |
 | `clearance register` (a workflow registering its change) | deployment, register step only | Built (`cmd/clearance/register.go`) |
@@ -48,7 +48,7 @@ The core knows its providers from `CLEARANCE_PROVIDERS` (`server.Provider`):
 
 ```json
 [{"name": "argo-gate", "version": "0.1.0", "principals": ["hangar-prod/argocd/clearance-sync"],
-  "kinds": ["deploy.outcome", "deploy.exception"]}]
+  "kinds": ["deploy.outcome", "deploy.exception", "deploy.degraded"]}]
 ```
 
 - `name` and `version` are what every record the provider writes carries as `provider` (verified: the core sets
@@ -185,8 +185,9 @@ For every change to a protected environment:
 3. **Release on `cleared`, once, and only the cleared digest.** Re-hash what is about to be applied and compare it
    with `tree_digest`; if they differ, do not apply (a push after clearing is a new head, so a new change). Apply
    exactly once.
-4. **Refuse on `denied`, `expired` or `superseded`.** Never apply. A change the core never answered for is not
-   cleared either.
+4. **Refuse on `denied`, `expired`, `superseded`, `degraded` or `exception`.** Never apply. A change the core never
+   answered for is not cleared either. A change to an environment the deployment does not protect comes back
+   `cleared` at tier 0 (reason `unprotected`); never send `protected: false` (refused, `DG-PROTECTED`).
 5. **Report the outcome.** `POST /v1/records`, kind `deploy.outcome` (must carry `app`, `target`, `outcome`):
 
    ```json
@@ -201,9 +202,20 @@ For every change to a protected environment:
    `change.id` names the change, and `outcome.digests.sha256` is the digest the provider actually applied: the
    auditor's question 5 ("what deployed, and does it match what was cleared") is answered by comparing it with the
    cleared change's `tree_digest` (docs/evidence.md). The core does not compare them yet; the harness does.
-6. **Report exceptions.** A break-glass apply, or a change seen in the environment that no clearance covers, is a
-   `deploy.exception` record (must carry `principal`, `target`, `result`; set `coverage: out-of-band-detected`).
-   It is a finding, never a way around the hold.
+6. **Report exceptions.** A change seen in the environment that no clearance covers (a break-glass apply included)
+   is a `deploy.exception` record: `principal`, `target`, `result`, `destination` {cluster, environment} and
+   `exception` {kind: `out-of-band` | `drift` | `untraced-apply` | `digest-mismatch`, and what the kind carries}; the
+   core sets the coverage from the kind ([gate.md](gate.md#exceptions-deployexception)). Name the change
+   (`change.id`) when there is one: it moves to `exception` and its token is revoked. It is a finding, never a way
+   around the hold.
+7. **When the core is unreachable, follow the outage policy and report on recovery.** Tiers 0 and 1 may go through
+   (allow-and-record), 2 and 3 and any change whose tier you do not know hold; a change's own `outage` (from its
+   registration) and the repo's `clearance.yaml` may say `hold` for 0 and 1 too. Once the core answers, post a
+   `deploy.degraded` record for each change you let through or held: `decision`, `coverage: coverage-unavailable`,
+   `outage` {from, to}, `destination`, and `change.id` and `tier` when you know them
+   ([gate.md](gate.md#degraded-mode-reports-deploydegraded)). The core records the outage policy you were held to.
+8. **Honour break-glass.** `GET /v1/breakglass?cluster=` lists the windows open now; what a window permits is the
+   provider's (G-ARGO-3's marker). Every exception you file inside one is tagged with it.
 
 ## The federated role
 

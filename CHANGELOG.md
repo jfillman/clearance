@@ -14,6 +14,14 @@ C-1: the clearance token. Additive on the wire, with one exception for strict cl
 answers strictly refuses them; take this release's clients (or `AllowUnknownFields`). Nothing changes for a
 deployment that sets no signing key, except that records and views carry the new fields.
 
+C-6: protected environments, the outage policy, the clearance state machine, exceptions and break-glass. Two
+behaviour changes on the gate: a deployment that sets no `CLEARANCE_PROTECTED_ENVIRONMENTS` protects every
+environment (as before; set the list to let the rest clear at tier 0), and `protected: false` on a registration is
+now refused (`DG-PROTECTED`; no caller sends it). A new head now moves a cleared older head to `superseded` (it
+stayed `cleared` with a revoked token), and a pushed commit supersedes only its own app, environment and cluster.
+Additive on the wire for strict clients of this release's models: a change gains `outage` and `ended`, the policy
+view `outage`, `ProviderEvent` `exception` and `outage`; take this release's clients.
+
 ### Added
 - **The clearance token** (`internal/token`, `internal/gate/token.go`; [docs/core.md](docs/core.md#the-clearance-token)).
   On `deploy.clear` the core signs a short-lived token bound to the subject: a DSSE envelope
@@ -69,6 +77,18 @@ deployment that sets no signing key, except that records and views carry the new
   "clearance-gate", engine_version, verdict: "clear" | "hold"}`: the gate's decision stays in `clearance.cleared_by`
   and `tier`, and the `clearance.yaml` digest is in `version`. Not yet released, so no token in the field carries
   the old shape.
+- `docs/gate.md`, "Phase 2 design pass" (G-ARGO-1, Draft): the Argo CD gate's chosen shapes, each spiked on hangar-dev
+  in Warn mode. The CMP replaces the tenant Application's Helm source; grants match the stamped
+  `clearance.hangar.io/rendered` annotation; admission is a native ValidatingAdmissionPolicy (not Kyverno), one
+  active grant per protected namespace, objects as a map; the agent watches Application status for outcomes; the CMP
+  and the agent reach the core as more hangar-prod foreign workloads. Also the release-record cross-reference the
+  owner decided on 2026-11-03 (Clearance's signed record is the authority; Glidepath's release record points at it by
+  `releaseId` and change id) and the card changes the spikes call for.
+- `docs/spikes/g-argo-1/`: the spike plugin, manifests and scripts (hangar-dev only), a CEL cost measurement with
+  the API server's own admission CEL evaluator (`celcost`, its own module), and `prod-plan.md`, the two hangar-prod
+  measurements prepared for the user.
+- `internal/authn`: a test that several service accounts of one foreign cluster authenticate as separate principals
+  (`TestSeveralServiceAccountsOfOneForeignCluster`).
 - **C-10: clearance-api for the gates.**
   - **The signed grant feed** (`token.Feed`, `internal/gate/feed.go`; [docs/gate.md](docs/gate.md#the-signed-grant-feed-c-10-built)):
     per cluster, a DSSE envelope (`application/vnd.clearance.grant-feed.v1+json`, the token key) over every live
@@ -88,6 +108,35 @@ deployment that sets no signing key, except that records and views carry the new
   - Chart: `networkPolicy.kubeAPIServer.ciliumEntity` (default false) renders a CiliumNetworkPolicy to the
     `kube-apiserver` entity for the core and the api (on Cilium an ipBlock never matches the API server).
   - Store: table `clearance_feeds` and index `clearance_evidence_app`, created on start.
+
+- **Protected environments** (`CLEARANCE_PROTECTED_ENVIRONMENTS`, chart `gate.protectedEnvironments`):
+  `<cluster glob>/<env glob>` entries. Empty protects every environment (fail closed); a change to an environment not
+  listed is cleared at tier 0 with the reason `unprotected` and recorded. `ChangeRequest.protected` is no longer
+  trusted: `false` is refused 400 `DG-PROTECTED`, `true` decides nothing.
+- **The outage policy**: the platform baseline (tiers 0 and 1 `allow-and-record`, 2 and 3 `hold`) and a tighten-only
+  `outage:` block in `clearance.yaml` (`DG-POLICY` when it loosens); `outage` in `GET /v1/clearance-policy` and on
+  each change.
+- **The state machine** (`gate.Transitions`): side states `degraded` and `exception` beside `holding`, `cleared`,
+  `denied`, `expired`, `superseded`; every edge tested, any other refused; a token is live only while its change is
+  cleared (every edge out of cleared revokes it, `deploy.revoke`).
+- **`deploy.exception` as a first-class record**: `exception.kind` `out-of-band`, `drift`, `untraced-apply`,
+  `digest-mismatch`, each with what it must carry; the core sets the coverage from the kind and moves a named holding
+  or cleared change to `exception`.
+- **`deploy.degraded`**, a provider's report on recovery of what it did while the core was unreachable
+  (`coverage-unavailable`, `outage` {from, to}); the core records `outage_policy` {action, source, conforms} and
+  moves a named holding change it let through to `degraded`.
+- **Break-glass**: `POST /v1/breakglass` (admins, or a delegate naming one; reason, TTL at most
+  `CLEARANCE_BREAKGLASS_MAX_TTL`, never over 4h; cluster and env), recorded as `breakglass.open` before it answers;
+  `POST /v1/breakglass/{id}/close`; `GET /v1/breakglass` for providers and admins; reconciled at its TTL by the expiry
+  loop into `breakglass.close` listing what the record store knows changed in the window and what it cannot know.
+  Exceptions inside a window carry its id. Refusals `DG-BREAKGLASS`, `DG-BREAKGLASS-TTL`, `DG-BREAKGLASS-SCOPE`,
+  `DG-BREAKGLASS-OPEN`. Table `clearance_breakglass`.
+- clearance-api `GET /v1/exceptions`: the packet's exceptions (the four tools above and every `coverage-unavailable`
+  record), on the partial index `clearance_evidence_exceptions`.
+- Evidence schema revision 3: `exception`, `outage`, `outage_policy`, `breakglass`, `window`, `changes`, `reported`,
+  `truncated`, `limitations`.
+- A fuzz target for provider reports (`FuzzProviderReport`); `tools/fuzz-all.sh` caps input minimization at 5s
+  (`FUZZ_MINIMIZE_TIME`) so a short run does not end "context deadline exceeded".
 
 ### Changed
 - **`contract/clearance-api.json` is OpenAPI 3.1** (info.version 1.1.0), still generated from the route table: each

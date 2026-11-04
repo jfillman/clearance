@@ -1,10 +1,13 @@
 # The deployment gate (Clearances): design pass, 2026-10-31
 
-Status (v0.26.1): **phase 1a built** (the gate's core, v0.19.0), fed by Glidepath's `clearance-gate-` check
-(advisory on Hangar) and `clearance register` (v0.23.0), and answered to GitHub Actions deployments by the App's
-protection rule (v0.22.0; [provenance-app.md](provenance-app.md)). **Not built**: phase 2 admission (the pulled grant
-and the Kyverno policy), `deploy.exception` and outcome records. The design below is as reviewed; the Built sections
-at the end say what exists. G-TF-1 adds a second subject beside the manifest tree, a saved Terraform plan, with its
+Status (v0.30.0): **phase 1a built** (the gate's core, v0.19.0; in Go since R-1c), fed by Glidepath's
+`clearance-gate-` check (advisory on Hangar) and `clearance register` (v0.23.0), and answered to GitHub Actions
+deployments by the App's protection rule (v0.22.0; [provenance-app.md](provenance-app.md)). **Not built**: phase 2
+admission (the pulled grant and the admission policy), `deploy.exception` and outcome records. **Phase 2's shapes are
+chosen** ([Phase 2 design pass](#phase-2-design-pass-g-argo-1-2026-11-03), Draft, spiked on hangar-dev 2026-11-03):
+the admission policy is a native ValidatingAdmissionPolicy, not the Kyverno policy the first draft below names. The
+design below is as reviewed; the Built sections at the end say what exists.
+G-TF-1 adds a second subject beside the manifest tree, a saved Terraform plan, with its
 own tier table ([The terraform-plan subject](#the-terraform-plan-subject-g-tf-1)), and defines the digest a manifest
 change binds to ([The manifest-tree digest](#the-manifest-tree-digest-built)).
 
@@ -226,6 +229,282 @@ A middle path worth considering: ship **B first as phase 2a** (weeks, not months
 environments go manual, the gateway syncs on `deploy.clear`), and **A as phase 2b** once the normaliser exists,
 keeping B's manual sync policy as defence in depth. The record is the same either way.
 
+## Phase 2 design pass (G-ARGO-1, 2026-11-03)
+
+Status: **Draft.** The shapes below are chosen; none of them is built. Each was spiked on hangar-dev (Argo CD 3.5.0,
+Kubernetes 1.36.5, Kyverno 1.19.0) in scratch namespaces created and deleted for the purpose, in Warn mode only. The
+two measurements that only mean something on hangar-prod (Kyverno's failure modes under prod load, the cross-cluster
+path) are prepared for the user in [spikes/g-argo-1/prod-plan.md](spikes/g-argo-1/prod-plan.md) and are
+**Unverified** until the user runs them. The spike code and manifests are in [spikes/g-argo-1/](spikes/g-argo-1/).
+The hangar decisions D25 to D29 record the choices.
+
+### The chosen shapes
+
+| Question | Chosen | Why, in one line |
+| --- | --- | --- |
+| (a) Where the CMP sits in a tenant Application | **The plugin replaces the Helm source.** The plugin source is the gitops (values) repo; the CMP fetches the airframe chart at the pinned tag and renders it with those values. The Application keeps no other generating source | A plugin source is handed only its own repository: `$appsrc` never reaches it (a1), and objects from any other source are not stamped |
+| (b) What a grant matches | **The `clearance.hangar.io/rendered` annotation the CMP stamps**, keyed by group/kind/name, never the live spec | The stamp survived Argo's tracking annotation, a mutating policy and API-server defaulting byte for byte; the live object's canonical hash differed from the render for every object |
+| (c) The admission engine | **A native ValidatingAdmissionPolicy**, `paramKind: ClearanceGrant`, one binding, `paramRef` by selector with **exactly one active grant per protected namespace**, objects as a map | In-process (about 1 ms, no webhook to time out); Kyverno's webhook refused Argo's writes in Audit/Warn mode while its controller was down on hangar-dev |
+| (d) The outcome source | **The agent watches Application status** | The watch saw every operation within a second, including one Notifications lost for good when its receiver was down for 30 s |
+| (e) How prod reaches the core | **Two more hangar-prod foreign workloads** on the existing path (prod issuer, Traefik route, hostAlias): the CMP as `argocd-apps/argocd-apps-repo-server`, the agent as its own service account | The core's foreign authenticator already takes a list of service accounts; three config lists and one route change, no code |
+
+### (a) The Config Management Plugin on a multi-source Application
+
+Hangar's tenant Applications are multi-source: on hangar-prod the airframe chart (a Helm source whose value files
+are `$appsrc/hangar-prod/...`) and the `gitops-<app>` repo as `ref: appsrc`; on hangar-dev a third source,
+`charts/glidepath-env`. The spike ran three shapes on a namespaced Argo CD 3.5.0 with a spike plugin
+([spikes/g-argo-1/cmp](spikes/g-argo-1/cmp/main.go)), against the real airframe chart at v0.3.168 and a values file in
+this repository standing in for the gitops repo:
+
+| Shape | Result |
+| --- | --- |
+| control: today's Helm source with `$appsrc` value files | renders the values (4 objects) |
+| a1: the plugin source **is** the chart; its parameters name `$appsrc/...` value files | the plugin gets the chart directory only (22 files), no `ref` variable in its environment and no `$appsrc` path anywhere; it rendered the chart's **defaults** (2 objects, empty names) **without any error**. A plugin cannot read a ref source |
+| a2: the plugin **replaces** the Helm source: it sits on the values repo and clones the chart at the pinned tag (`v0.3.168`, peeled to commit `c7e846a`) | renders the values (4 objects plus a ConfigMap from a plain directory source beside it); the stamps on the 4 chart objects matched a render of the same inputs on a laptop, so the render is deterministic across machines |
+| deny: the plugin exits 1 | `ComparisonError: ... CMP processing failed ... tier 3 change denied by policy (spike): DG-POLICY; nothing syncs`, as G-ARGO-4 wants |
+
+What follows for G-ARGO-4 and the ApplicationSet template:
+
+- The protected Application has **one generating source**, the plugin on `gitops-<app>`; the chart's repo, tag and
+  path are plugin parameters set by the tenant-onboarding template (`#@if clearance.gate.enabled`). The `ref: appsrc`
+  source can stay for the template's other environments but means nothing to the plugin. Any other generating source
+  (hangar-dev's `glidepath-env`) must be rendered by the CMP too or left out of protected apps: an object from a
+  non-plugin source carries no stamp and admission refuses it (seen in a2: the directory source's ConfigMap was the
+  one object the policy flagged as unstamped).
+- The CMP fetches the chart itself. On Hangar the airframe repo is public, so a shallow clone at the tag works; the
+  CMP records the **peeled commit**, not the tag, in the change subject. A customer's private chart means an OCI
+  chart pulled by digest with a registry credential mounted into the sidecar only. The gitops repo stays Argo's to
+  fetch with its own repository credentials, which the CMP never sees.
+- The render is `helm template <Application name> <chart> --namespace <destination>`: the release name and the
+  namespace are part of what is hashed (the chart stamps `app.kubernetes.io/instance`), so the Tekton
+  `clearance-gate` render must use the same two values for the parity test (G-ARGO-8).
+- The CMP computes the tree root as [The manifest-tree digest](#the-manifest-tree-digest-built) defines it (G-TF-1);
+  the spike plugin's own line format predates that definition and is not the one to build.
+- The CMP must set `metadata.namespace` to the destination on every namespaced object **before** hashing. Argo adds
+  it to objects that lack it (the chart's `extraManifests` do), and without it the agent cannot reproduce the stamp
+  (see b).
+- **The merge commit is not the PR head.** The clearance-gate check registers the PR head; Argo syncs the merge
+  commit on `main`. The rendered tree is the same, the commit is not, so the CMP must find the cleared change by
+  **tree digest** (app, env, tree), not by repo, PR and head. G-ARGO-4 and C-10 gain that lookup: a registration
+  without `pr` answers the cleared change for the same app, environment and tree, and otherwise registers a new one.
+- The CMP renders tenant input while holding a verifier token. Helm templates cannot execute code and the CMP runs no
+  Kustomize exec plugins, but a CMP compromise would be a gate bypass (it chooses what it registers and stamps), so
+  the sidecar is its own minimal image, mounts the clearance token in its container only, and the G-ARGO-8 parity
+  render on the control plane is the second opinion.
+
+### (b) Grant matching on the stamped annotation
+
+The question was whether the `clearance.hangar.io/rendered` annotation survives to admission and the live object,
+and whether normalised spec equality is workable instead. a2 was synced into a protected scratch namespace with a
+`MutatingAdmissionPolicy` that adds a label and an annotation to Deployments, under the spike's admission policy in
+Warn.
+
+- **The stamp survived** on every object, unchanged and equal to the CMP's hash: Argo added
+  `argocd.argoproj.io/tracking-id` and `kubectl.kubernetes.io/last-applied-configuration`, the mutating policy
+  added its label and annotation, and the API server defaulted the Deployment (`strategy`, `revisionHistoryLimit`,
+  `progressDeadlineSeconds`, `imagePullPolicy`, `terminationMessagePath`, `dnsPolicy`).
+- **Spec equality fails without a normaliser that knows every defaulter.** The canonical hash of the live object
+  differed from the stamp for all four objects, the plain ConfigMap included (Argo's own annotations are enough).
+- **The agent can still check content.** Argo applies client-side, and its `last-applied-configuration` is the
+  rendered object plus the tracking id: hashing it with the tracking id removed reproduced the stamp for the
+  ConfigMap, the ServiceAccount and the NetworkPolicy, and for the Deployment once the CMP's missing namespace was
+  accounted for. That is the exception scan G-ARGO-3 needs ("a hash no grant lists"), without a normaliser. A sync
+  with `ServerSideApply=true` has no last-applied annotation; protected apps stay on client-side apply until the
+  agent reads Argo's managed fields instead.
+- What the stamp does not do: admission cannot hash content (Kubernetes CEL has no digest function). A writer that
+  copies a valid stamp onto other content is admitted, which is why the policy matches only Argo's controller (any
+  other writer is the agent's exception, by construction), the CMP alone computes stamps, and the agent's scan
+  compares the stamp with the last-applied content.
+
+### (c) The native ValidatingAdmissionPolicy against a Kyverno ValidatingPolicy
+
+Both policies were written for the same rule ([30-vap.yaml](spikes/g-argo-1/manifests/30-vap.yaml),
+[31-kyverno.yaml](spikes/g-argo-1/manifests/31-kyverno.yaml)): match only Argo's application-controller, only
+CREATE and UPDATE of main resources (`!has(request.subResource) || request.subResource == ''`), only namespaces
+labelled `clearance.hangar.io/protected=true`; admit when the stamped object is listed in a valid grant at that hash.
+Each case below was a server-side dry run impersonating the controller ([run-c.sh](spikes/g-argo-1/run-c.sh)):
+
+| Case | Native VAP (Warn) | Kyverno ValidatingPolicy (Audit, Warn) |
+| --- | --- | --- |
+| listed, stamped hash | admitted | admitted (when Kyverno was up) |
+| stamp changed | warned: does not list ... at sha256:00 | warned |
+| unlisted object | warned | warned |
+| no stamp | warned | warned |
+| another writer (cluster admin) | not matched | not matched |
+| the `scale` subresource as the controller | not matched | not matched |
+| grant marked invalid (`status.valid: false`) | warned | not checked: Kyverno has a clock, so it checks `expiresAt` instead (warned: expired) |
+| grant named by the stamp does not exist | n/a (selector) | warned: not found |
+| two active grants, the object in one | **warned by the other**: `paramRef` by selector evaluates every matching grant and each must pass | admitted (the stamp names the grant, `resource.Get` reads that one) |
+| no grant at all, `parameterNotFoundAction: Deny` | **refused, in Warn**: a missing param is a binding error, not a validation result, so `validationActions: [Warn]` does not soften it. Argo's whole sync failed on it | n/a |
+| no grant at all, `parameterNotFoundAction: Allow` | admitted silently (no warning, even with a bad stamp) | n/a |
+| Kyverno's admission controller down (234 to 237 restarts on hangar-dev during the spike) | unaffected | **refused**: `failed calling webhook ... connection refused` or `context deadline exceeded` (10 s timeout), in Audit/Warn, because the policy is `failurePolicy: Fail`. Argo failed to sync the Deployment four times in a row; 16 of 30 webhook calls were rejected with 503 |
+| the policy deleted while Kyverno is down | gone at once | its webhook stayed about 4 minutes, until the controller came back to reconcile it |
+
+Cost and latency:
+
+- **CEL cost**, measured with the API server's own admission CEL compiler and evaluator (k8s.io/apiserver v0.36.3,
+  [celcost](spikes/g-argo-1/celcost/cost_test.go)): with the grant's objects as a **list** and `exists()`, a
+  200-object grant costs 4,647 units (2,000 objects: 46,047); with a **map** keyed by group/kind/name, 52 units
+  whatever the size. The budget is 10,000,000 per binding and 1,000,000 per expression, so neither shape is close,
+  but the map is constant and is the one chosen. The API server type-checked the policy against the CRD's schema
+  with no warnings.
+- **Latency** (API server metrics on hangar-dev): the VAP's checks took 21 ms for 20 evaluations, about 1 ms each;
+  the Kyverno webhook averaged 0.5 to 1.2 s per call when it answered.
+- Kyverno's 1.19 webhook is fine-grained: it carried the policy's namespace selector and match condition, so its blast
+  radius was the policy's scope. Inside that scope, though, its availability is the gate's.
+
+What follows for G-ARGO-2:
+
+- **Native VAP.** One policy, one binding, `paramRef` by selector `clearance.hangar.io/active=true` with no
+  namespace (the grant is read from the admitted object's own namespace).
+- **Exactly one active grant per protected namespace.** Because every selected grant must pass, the agent labels only
+  the newest cleared grant active and that grant lists **every** object of its tree (with `changed` marking the diff),
+  so unchanged objects stay admitted. Older grants stay for the record, unlabelled.
+- **Expiry is the agent's.** Kubernetes CEL in admission has no clock; the agent sets `status.valid` (status
+  subresource, written only by the agent) and removes the active label on expiry, and the policy checks
+  `status.valid`.
+- **The Warn to Deny toggle flips two fields**, `validationActions` and `parameterNotFoundAction` (Allow in Warn,
+  Deny in Deny), and Warn has a gap the agent covers: with no grant, nothing warns.
+- `auditAnnotations` must be typed: `string(params.metadata.name)` (an untyped `params.metadata.name` is refused at
+  create).
+- Kyverno is not used for the gate. It stays Hangar's Flight-registry policy engine; a Kyverno outage must not decide
+  whether a protected sync can land.
+
+### (d) The outcome source
+
+The same Application was synced with Argo CD Notifications sending a webhook on every finished operation
+([50-notifications.yaml](spikes/g-argo-1/manifests/50-notifications.yaml)) and a watch on the Application beside it
+([run-d.sh](spikes/g-argo-1/run-d.sh)):
+
+| | Watch on Application status | Notifications webhook |
+| --- | --- | --- |
+| receiver or agent up | saw `Running` and then `Succeeded` within a second of `finishedAt` | delivered once, about 3 s after `finishedAt` |
+| receiver down for one sync (30 s) | saw it (a watch relists on reconnect, so a restarted agent catches up from state) | 4 attempts in 8 s, then `giving up`, and the trigger was marked sent: **the outcome was lost for good** |
+| first start | the current state | it back-filled two operations that had finished 9 and 22 minutes earlier |
+| multi-source | `status.sync.revisions` and `status.operationState.syncResult.revisions` (plural) | the template's `.app.status.sync.revision` was empty (`<no value>`) |
+| credential | the agent's own read of Applications on its cluster | the notifications controller would hold a token for the core on the protected cluster |
+
+Glidepath's relay already lives with this (its doc: Rollouts and Argo notifications are at-most-once and fail
+silently; the 15-minute heartbeat is the retry). An outcome record cannot wait for a heartbeat: it is what C-2
+signs. **The agent watches.** It keys each outcome by the operation's `finishedAt` and the Application's UID, posts
+it once (`deploy.outcome` through `POST /v1/records`, or the change-bound route when C-10 has it), and on restart
+reposts the last operation, which the core must answer idempotently.
+
+### (e) How the CMP on hangar-prod reaches the core on hangar-dev
+
+The path exists: hangar-prod Backstage (service account `app-backstage-prod/backstage-ingestor`) holds a projected
+token with audience `clearance`, reaches `clearance.hangar-dev.local` and `clearance-api.hangar-dev.local` through a
+hostAlias to hangar-dev's ingress (192.168.1.72) and Traefik, and the core verifies the token against hangar-prod's
+public issuer `https://hangarplatform.dev/oidc/hangar-prod` (`CLEARANCE_FOREIGN_*`, principal
+`hangar-prod/<namespace>/<sa>`).
+
+- **More than one service account: supported.** `CLEARANCE_FOREIGN_SERVICE_ACCOUNTS` is a comma-separated list of
+  `<namespace>/<sa>` globs (`internal/authn`, `ForeignWorkloadAuthenticator.Allowed`). A new test,
+  `TestSeveralServiceAccountsOfOneForeignCluster`, proves three prod accounts authenticate as three principals and a
+  sibling account in the same namespace is refused. **Limit:** one foreign cluster per core (one issuer); a second
+  protected cluster needs a list of issuers, a code change for later.
+- **The CMP's identity** is the repo-server pod's service account, `argocd-apps/argocd-apps-repo-server`, with the
+  projected `clearance` token mounted into the CMP sidecar only. **The agent** gets its own,
+  `clearance-system/clearance-argocd-agent` (name to be fixed by G-ARGO-3).
+- **Config changes, all apron values for hangar-dev, no code:**
+
+  | Where | Change |
+  | --- | --- |
+  | `clearance-core` `CLEARANCE_FOREIGN_SERVICE_ACCOUNTS` | add `argocd-apps/argocd-apps-repo-server` and the agent's account |
+  | `clearance-api` `CLEARANCE_FOREIGN_SERVICE_ACCOUNTS` (its own copy) | add the agent's account (the grant feed is read there) |
+  | `CLEARANCE_VERIFIERS` | add `hangar-prod/argocd-apps/argocd-apps-repo-server` (the CMP registers changes) |
+  | `CLEARANCE_PROVIDERS` | `argocd-cmp` for the repo-server principal; `argocd-agent` for the agent's, `kinds: [deploy.outcome, deploy.exception]` |
+  | clearance-api roles | a grant-feed reader role for the agent's principal (today only auditors, notifiers, delegates and owners exist): C-10's work |
+  | HTTPRoute `clearance-github-webhook` | add `Exact /v1/records` (probed from the laptop: `/v1/clearances` reaches the core, 401 without a token; `/v1/records` is a Traefik 404 today) |
+  | hangar-prod, argocd-apps Helm values and the agent's chart | the hostAlias and an egress NetworkPolicy to 192.168.1.72:80 for the repo-server and the agent |
+- **The route is plain HTTP across the LAN**, as Tower's is today (https on `*.hangar-dev.local` is a Traefik 404). A
+  verifier token on that hop is a lab limitation the decision records; a real deployment terminates TLS at the route.
+- **The grant feed's seq is not enough on its own.** C-10 (clearance#58) signs a grant feed per cluster whose seq
+  restarts at 1 if the core's database is rebuilt. G-ARGO-3's grant sync must therefore keep a feed epoch beside the
+  seq it last applied (the chain's genesis hash or a per-database id that the feed carries), so it can tell a rebuilt
+  core (new epoch: start again at 1) from a replay (same epoch, lower seq: refuse) without an operator resetting its
+  stored seq.
+
+### Release records and the Clearance record (decided 2026-11-03)
+
+The owner's decision (hangar D25): **Clearance's signed record is the authority for what was cleared and what
+deployed; Glidepath's release record cross-references it by `releaseId` and the change id.** The release record is
+a pointer, never evidence; when the two disagree, the signed record wins and the disagreement is a finding.
+
+What each carries today:
+
+| Record | Where, who writes | Carries |
+| --- | --- | --- |
+| `release.yaml` `releaseTracking` | the gitops repo, inside the rendered tree; `open-release-pr` | `releaseId` (`<chainId>:<cluster>/<env>`), `cluster`, `appNamespace`; the airframe chart renders `releaseId` onto the Rollout as `hangar.io/release-id` |
+| `release-tracking-<chainId>` ConfigMap, served by glidepath-api `GET /v1/apps/{app}/releases/{chainId}` | hangar-dev; `open-release-pr`, `mark-release-merged`, the relay, the ITSM tasks | PR, image, state machine, facts, drift, the change request |
+| the release log, `releases/<app>@<tag>.yaml` | the gitops repo, outside the tree; Tower, once final | guardrails (every check's result), change request, test evidence, promotion attestation (Rekor `logIndex`), release mode and sign-off, outcome |
+| Clearance's change and `deploy.*` records | the core's chain | the change (repo, PR, head, tree digest, objects, tier and why, approvals), outcome, and from C-2 the signed attestation |
+
+The overlap is the decision about the change (Tower's sign-off block, the guardrail list) and the outcome; the
+release log already holds a promotion attestation by Rekor index, which is the pattern to follow.
+
+**The fields.**
+
+| Record | New fields | Written by, when |
+| --- | --- | --- |
+| Clearance change row and its `deploy.request` | `release: {id}`, the `releaseId` | the registering provider. The CMP reads it from the rendered Rollout's `hangar.io/release-id` (or the values file's `releaseTracking.releaseId` when the app has no Rollout); because it is inside the tree, it is bound by the tree digest, not only claimed. The clearance-gate check sends the same value from `release.yaml` |
+| `deploy.outcome` | `release: {id}` beside `change: {id, tree}` | the agent, from the live Rollout's `hangar.io/release-id` and the object's `clearance.hangar.io/grant` |
+| the attestation predicate (C-2) | `release: {id}` | the core's signer, copied from the change |
+| `release-tracking-<chainId>` ConfigMap | `clearanceId`, `clearanceTree`, `clearanceRequestSeq`, `clearanceRequestHash` | the `clearance-gate` task, right after `POST /v1/clearances` answers (the answer gains the `deploy.request` record's `seq` and `hash`) |
+| glidepath-api `GET /v1/apps/{app}/releases/{chainId}` | `clearance: {id, tree, request: {seq, hash}}` | glidepath-api, from the ConfigMap |
+| the release log `releases/<app>@<tag>.yaml` | `clearance: {id, tree, state, request: {seq, hash}, outcome: {seq, hash}, attestation: {digest, rekorLogIndex}}` | Tower, when it writes the final outcome, read from clearance-api `GET /v1/clearances/{id}` |
+| `release.yaml` `releaseTracking` | **nothing new** | it is inside the rendered tree: a change id written there would change the tree it names, so it carries only `releaseId`, as today |
+
+**Following the link.**
+
+- *From Clearance to the release.* A `deploy.request` or `deploy.outcome` names `release.id`. The verifier splits it
+  into the chain id and `<cluster>/<env>`, reads the release (glidepath-api `GET /v1/apps/{app}/releases/{chainId}`,
+  or the release log file after the sweep), and checks that its `clearance.id` is this change and its `clearance.tree`
+  is this tree digest.
+- *From the release to Clearance.* The release log's `clearance.request.seq` and `hash` name a record: the verifier
+  reads it (`GET /v1/evidence/{seq}` on clearance-api, or the packet offline), checks the hash, checks that the chain
+  verifies through it, and checks that the record's `release.id` and tree are this release's. The attestation is
+  checked with `cosign verify-attestation` against the tree digest and the Rekor index the log names.
+- A pointer that does not round-trip is a finding (`deploy.exception`-style, raised by `clearance verify` and shown by
+  Tower), never a reason to trust the release record over the chain.
+
+**What changes where.**
+
+- **G-ARGO-4 (CMP):** read `releaseId` from the rendered tree and send `release.id` with the registration.
+- **G-ARGO-3 (agent):** put `release.id` and `change.id` on every `deploy.outcome`.
+- **C-10 / G-ARGO-6 (core):** store `release_id` on the change; `GET /v1/clearances?release=<releaseId>`; return the
+  `deploy.request` record's `seq` and `hash` in the registration answer and in `GET /v1/clearances/{id}`; the signer
+  copies `release.id` into the predicate.
+- **Glidepath `open-release-pr`:** nothing new in `release.yaml`, deliberately. It keeps writing
+  `releaseTracking.releaseId` into the tree (that is how the CMP learns the release), and the release-tracking
+  ConfigMap it creates gains the four `clearance*` keys, empty until the gate task fills them.
+- **Glidepath `clearance-gate` task and glidepath-api:** the task sends `release.id` and writes the four keys; the API
+  returns them (G-ARGO-6 already names `clearanceId` and `treeDigest`).
+- **Tower:** writes the `clearance:` block into the release log with the final outcome; Hand-flown's `signoff` block
+  retires with the sign-off status (decision 2 above), replaced by the clearance block.
+- Clearance stays installable without Glidepath: `release` is an optional, opaque identifier on the change, and the
+  annotation it is read from is deployment vocabulary (Hangar's `hangar.io/release-id`), not product code.
+
+### Card changes this pass recommends
+
+| Card | Change |
+| --- | --- |
+| G-ARGO-2 | objects as a map keyed `<group>/<kind>/<name>` (a list may stay for display); exactly one active grant per namespace; `status.valid` set by the agent; the Warn toggle also flips `parameterNotFoundAction`; typed `auditAnnotations` |
+| G-ARGO-3 | the grant sync keeps a feed epoch with its seq (C-10's feed seq restarts on a rebuilt database); the outcome source is the watch, keyed by operation; expiry and the active label are the agent's; the exception scan hashes Argo's `last-applied-configuration` |
+| G-ARGO-4 | the plugin replaces the Helm source; one generating source per protected app; chart fetched by tag and recorded by peeled commit; namespace set before hashing; lookup by tree digest for the merge commit; `release.id` from the tree |
+| G-ARGO-6 | the release-record fields above, in both directions |
+| C-10 | registration without `pr` (by app, env and tree); the grant-feed reader role on clearance-api; `release` on the change; record `seq`/`hash` in answers |
+| G-ARGO-7 | the route's `Exact /v1/records`, the hostAlias and egress on hangar-prod, the three foreign-list entries |
+
+### Reproducing the spikes (hangar-dev only)
+
+`spikes/g-argo-1/up.sh` installs a namespaced Argo CD 3.5.0 with the spike plugin in `clearance-spike-argo`
+(deploying into `clearance-spike-prot`), `kubectl apply -f manifests/40-apps.yaml` creates the four Applications,
+`manifests/20-grant-crd.yaml`, `30-vap.yaml`, `31-kyverno.yaml` and `32-mutating.yaml` the CRD and policies (Warn),
+`run-c.sh` and `run-d.sh` run spikes c and d, `celcost` (`go test -v ./...` in that directory) measures the CEL cost,
+and `down.sh` removes everything. The scripts refuse any context but hangar-dev. The spike plugin is not G-ARGO-4:
+it registers nothing and keeps no cache.
+
 ## Built, phase 1a (v0.19.0): the gate's core
 
 What exists in Clearance now; the check, the release guardrail and the screens follow (1b, 1c).
@@ -293,6 +572,186 @@ format, the claims, the key and the replay rules. In short:
 Not yet: admission on the grant (G-ARGO-2), the CMP that registers the whole rendered tree with unchanged objects
 marked (G-ARGO-4; today `objects` lists the objects the change touches, each `changed: true`), the PreSync wait
 (G-ARGO-5), and the Terraform plan subject (G-TF-1, which adds `subjects.plan_digest`).
+
+## Protected environments, the outage policy, states, exceptions and break-glass (C-6, Built)
+
+C-6 makes the gate's edges explicit: which environments it protects, what a provider does when it cannot reach the
+core, every state a change can be in, the records a provider files when something lands outside a clearance, and a
+recorded break-glass path. Everything here is in the core (`internal/gate`: `protected.go`, `outage.go`,
+`states.go`, `exception.go`, `breakglass.go`) and clearance-api; the providers that act on it are G-ARGO and G-TF.
+
+### What you get
+
+- **Protection is Clearance's decision.** The deployment lists the environments it protects; a caller cannot opt a
+  change out (`protected: false` is refused, `DG-PROTECTED`). A change elsewhere is cleared at tier 0 with the reason
+  `unprotected`, and recorded like any other.
+- **Fail closed when unconfigured.** An empty list protects every environment.
+- **An outage policy per tier**, tighten-only per repo: tiers 0 and 1 allow-and-record, 2 and 3 hold.
+- **One state machine** with every edge listed and tested; a token is live only while its change is cleared, and
+  every edge out of cleared revokes it in the same transaction.
+- **Exceptions as first-class records** (`deploy.exception`, four kinds) and **degraded-mode reports**
+  (`deploy.degraded`), both acting on the change they name, and both in the packet's exceptions
+  (clearance-api `GET /v1/exceptions`).
+- **Break-glass for admins only**, bounded (at most 4h), recorded before any effect, reconciled when it ends.
+
+### Protected environments
+
+`CLEARANCE_PROTECTED_ENVIRONMENTS` (chart `gate.protectedEnvironments`) is a comma-separated list of
+`<cluster glob>/<env glob>` entries (fnmatch: `prod-*/*`, `*/prod`, `hangar-prod/*`).
+
+| Configured | A change to `cluster/env` |
+| --- | --- |
+| **Empty (the default)** | **Every environment is protected.** A deployment that has not said which environments it protects fails closed: everything is tiered and held as before. |
+| Listed and matching | Protected: tiered by the baseline and the repo's `clearance.yaml`, held or cleared as before. `protected: true` in the view. |
+| Listed, not matching | **Cleared at tier 0**, one reason `{subject: "<cluster>/<env>", rule: "unprotected", tier: 0}`, `cleared_by: policy`, `protected: false`, a token issued, and recorded (`deploy.request`, `deploy.clear` "tier 0: cleared (<cluster>/<env> is not a protected environment)"). |
+
+The caller's `protected` field: `true` (what Glidepath's clearance-gate task sends) or absent is accepted and decides
+nothing; `false` is refused 400 `DG-PROTECTED`, so a caller cannot unprotect a change and nobody reads a stored
+`protected: false` as the caller's say-so. The user's decision of 2026-11-03 left ignore-or-refuse to this
+package; refusing was chosen because no caller sends `false` today (Glidepath sends `true`), so it breaks nothing and
+makes a caller that tries visible.
+
+### The outage policy
+
+What a deployment-gate provider does with a change while it cannot reach the core:
+
+| Tier | Platform baseline | `clearance.yaml` `outage:` may set |
+| --- | --- | --- |
+| 0 | `allow-and-record` | `hold` |
+| 1 | `allow-and-record` | `hold` |
+| 2 | `hold` | `hold` only |
+| 3 | `hold` | `hold` only |
+
+`allow-and-record`: the provider lets the change through and keeps what it did; once the core answers it posts a
+`deploy.degraded` record (below). `hold`: nothing lands until the core is back. A tier the provider cannot know (it
+never reached the core to classify the change) is held. The block is tighten-only like the rest of `clearance.yaml`:
+`outage: {"1": "hold"}` is accepted, `outage: {"2": "allow-and-record"}` is `DG-POLICY`. The baseline is in
+`GET /v1/clearance-policy` (`outage`), and each change carries its own action (`outage`, its tier under its
+effective policy) so a provider that cached the change knows what to do with it.
+
+This is the deployment boundary's outage policy. The runtime gateway's (R-3: fail closed, T0 reads only with
+`GATEWAY_OUTAGE_ALLOW_READS`, replayed as `tool.call` `coverage-unavailable`) is unchanged.
+
+### The state machine
+
+| From | To | What moves it | Token |
+| --- | --- | --- | --- |
+| (new) | `holding` | register: tier 2 or 3, or tier 1 waiting on its checks | none |
+| (new) | `cleared` | register: tier 0 or 1 cleared by policy, or an unprotected environment | issued |
+| (new) | `denied` | register: denied by policy (`DG-PROVENANCE`, `DG-POLICY`, `DG-DEFINITION`) | none |
+| `holding` | `cleared` | the requirement is met by people, or a re-registration clears by policy | issued |
+| `holding` | `denied` | a person or an admin denies it, or a re-registration denies by policy | none |
+| `holding` | `expired` | its TTL passes | none |
+| `holding` | `superseded` | a new head registers (same PR; for a push, same app, env and cluster) | none |
+| `holding` | `degraded` | a provider reports it let the change land during an outage (`deploy.degraded`, `allow`) | none |
+| `holding` | `exception` | a `deploy.exception` names it | none |
+| `cleared` | `superseded` | a new head registers | **revoked** (`deploy.revoke`) |
+| `cleared` | `exception` | a `deploy.exception` names it (drift, a digest mismatch, out of band) | **revoked** (`deploy.revoke` "token revoked: exception: <kind>") |
+
+`denied`, `expired`, `superseded`, `degraded` and `exception` are final: nothing moves a change out of them, and a new
+head registers a new change. "Held" in the card is the state `holding`; a provider that held a change during an
+outage (`deploy.degraded`, `deny`) leaves its state as it was. A cleared change a provider let through during an
+outage stays cleared. `gate.Transitions` is the table; any other move is a bug the gate refuses to write (the
+operation fails and nothing commits). The GitHub App's deployment answer for `degraded` and `exception` is
+`rejected`, with the reason in the comment.
+
+Two behaviour changes from C-1, both to keep the token consistent with the state: a new head now moves a **cleared**
+older head to `superseded` (it stayed `cleared` with a revoked token), so a GitHub deployment of the old head is
+rejected `DG-UNREGISTERED`; and a pushed commit (`pr` 0) supersedes only the holding and cleared changes of the same
+app, environment and cluster (it superseded every holding pushed commit of the repository).
+
+### Exceptions: `deploy.exception`
+
+A registered provider posts it through `POST /v1/records` (kind `deploy.exception`; principal, target, result,
+`exception` and `destination` {cluster, environment} required). The `exception` object:
+
+| `exception.kind` | Must carry | Coverage the core sets | Written by |
+| --- | --- | --- | --- |
+| `out-of-band` | `objects` [{apiVersion, kind, namespace, name, rendered?, grant?}] (at least one) | `out-of-band-detected` | the Argo agent (G-ARGO-3): objects with no grant, or a hash no grant lists |
+| `drift` | `addresses` or `objects` (at least one) | `observed-not-attributed` | G-TF-3's scheduled plan; live drift |
+| `untraced-apply` | `actor` (the principal behind the write) | `out-of-band-detected` | G-TF-3's state-backend watch (CloudTrail) |
+| `digest-mismatch` | `expected`, `observed` and `change.id` | `out-of-band-detected` | G-TF-2's outcome route; the CMP's applied-tree check |
+
+Optional on every kind: `state` {backend, key, version}, `detected_at` (RFC 3339), `detail`. Unknown fields are
+refused. A provider's `coverage` must be absent or the kind's. The core adds `breakglass` (verified) when an open
+break-glass window covers the destination. When `change.id` names a holding or cleared change, the change moves to
+`exception` (its `ended` names the record's seq, tool and kind), and a cleared change's token is revoked, in the same
+transaction as the record.
+
+```json
+{"provider": "argo-gate", "kind": "deploy.exception", "record": {
+  "principal": "kubernetes-admin", "target": "apps/v1/Deployment/app-gate-api-prod/gate-api",
+  "result": "applied without a grant", "app": "gate-api",
+  "destination": {"cluster": "hangar-prod", "environment": "prod"},
+  "exception": {"kind": "out-of-band", "objects": [{"apiVersion": "apps/v1", "kind": "Deployment",
+    "namespace": "app-gate-api-prod", "name": "gate-api"}]}}}
+```
+
+### Degraded-mode reports: `deploy.degraded`
+
+When a provider could not reach the core and acted on the outage policy, it posts what it did once the core answers:
+`POST /v1/records`, kind `deploy.degraded`, with principal, target, app, result, `decision` (`allow`: it let the
+change land; `deny`: it held it), `coverage: coverage-unavailable`, `outage` {from, to} (RFC 3339, `to` not in the
+future) and `destination`; optionally `tier` (what it believed), `change.id`, `subject`. No `rule`: the core decided
+nothing. The core adds `outage_policy` (verified): `action` (the named change's `outage`, else the baseline for the
+claimed tier, else `hold` for an unknown tier), `source` (`change`, `baseline`, `unknown-tier`) and `conforms`
+(`decision` was `deny`, or the action was `allow-and-record`). A non-conforming report is still recorded; it is a
+finding. An `allow` naming a holding change moves it to `degraded`.
+
+### Break-glass
+
+| Route | Who | What |
+| --- | --- | --- |
+| `POST /v1/breakglass` `{reason, ttl, cluster, env, app?}` | a person matching `CLEARANCE_ADMINS`, or a delegate (`CLEARANCE_DELEGATES`) naming one in the on-behalf-of header | Opens a window on one protected environment. `ttl` is a Go duration, 1m to `CLEARANCE_BREAKGLASS_MAX_TTL` (default and ceiling 4h). The named user is the authenticated admin (or the one the delegate names): never a free-text field (an unknown field is refused). The answer comes after `breakglass.open` and the window's row commit together, so the record precedes every change it covers. |
+| `POST /v1/breakglass/{id}/close` | an admin (or a delegate naming one) | Closes the window early and reconciles it at once. |
+| `GET /v1/breakglass[?cluster=]` | a registered provider, or an admin | The windows open now: what a provider that honours break-glass (the Argo agent's marker, G-ARGO-3) reads. |
+
+Break-glass clears nothing and applies nothing: Clearance holds no write credential to a protected environment. A
+change made in the window is still an exception when a provider sees it, and each `deploy.exception` and
+`deploy.degraded` inside the window carries the window's id (`breakglass`) (a window that names an app tags only that app's reports; one
+window per environment either way). When the TTL ends, the expiry loop
+(`CLEARANCE_EXPIRE_SECONDS`) closes the window with a `breakglass.close` record: `window` {from, to}, `changes` (the
+deployment records the store holds about that cluster and environment, and app when the window names one, written
+while it was open: `deploy.exception`, `deploy.degraded`, `deploy.outcome`, `deploy.clear`; at most 200 listed),
+`reported` (the full count), `truncated`, and `limitations`, the statement of what the store cannot know:
+
+> Lists only what a provider reported to Clearance in the window. A change made directly (kubectl, a cloud console,
+> a script) appears only if an exception detector watches this environment and reported it; a report that arrived
+> after the window closed is not listed.
+
+Refusals: `DG-BREAKGLASS` (403, not an admin), `DG-BREAKGLASS-TTL` (400), `DG-BREAKGLASS-SCOPE` (400: not names, or
+an environment Clearance does not protect: there is no glass to break), `DG-BREAKGLASS-OPEN` (409, a window is
+already open there), `DG-REASON`, `DG-DELEGATE`, `DG-PERSON`, `DG-UNKNOWN` and `DG-STATE` (close). A refused request
+records nothing. Windows are kept in `clearance_breakglass`.
+
+### The packet's exceptions
+
+clearance-api `GET /v1/exceptions` is the list the packet's Exceptions section (C-4, C-5) reads: every
+`deploy.exception`, `deploy.degraded`, `breakglass.open` and `breakglass.close`, and every record whose coverage is
+`coverage-unavailable` (the runtime's outage reads too), newest first, scoped by viewer like the evidence list, on the
+partial index `clearance_evidence_exceptions`. Filters: `tool`, `kind` (an exception kind), `app`, `since`, `until`,
+`limit`, `after` ([clearance-api.md](clearance-api.md)).
+
+### Rule ids and reasons added
+
+| Id | Where | Meaning |
+| --- | --- | --- |
+| `DG-PROTECTED` | `POST /v1/clearances`, 400 | `protected: false` is refused: Clearance decides protection |
+| `unprotected` | a change's reason (tier 0) | the environment is not on `CLEARANCE_PROTECTED_ENVIRONMENTS` |
+| `DG-POLICY` (outage) | `clearance.yaml` | an `outage:` entry that loosens the baseline, or not a tier 0 to 3 |
+| `DG-BREAKGLASS` | `POST /v1/breakglass`, `/close`, 403 | not an admin |
+| `DG-BREAKGLASS-TTL` | `POST /v1/breakglass`, 400 | the TTL is not a Go duration from 1m to the deployment's maximum (at most 4h) |
+| `DG-BREAKGLASS-SCOPE` | `POST /v1/breakglass`, 400 | cluster, env or app are not names, or the environment is not protected |
+| `DG-BREAKGLASS-OPEN` | `POST /v1/breakglass`, 409 | a window is already open on that environment |
+
+### Not yet
+
+- The providers that file these records: the Argo agent's exceptions and break-glass marker (G-ARGO-3), Terraform
+  drift and untraced-apply detection (G-TF-3), the change-bound outcome route that writes `digest-mismatch` itself
+  (G-TF-2: the record shape is defined here; `gate.Service.Report` with kind `digest-mismatch` and `change.id` is
+  what it calls).
+- The packet itself (C-4, C-5) and its coverage statement (counts by coverage and degraded windows).
+- A report that arrives after its break-glass window closed is not tagged with it.
 
 ## The signed grant feed (C-10, Built)
 

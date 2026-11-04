@@ -79,6 +79,16 @@
             },
             "type": "array"
           },
+          "ended": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateEnded"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "env": {
             "type": "string"
           },
@@ -103,6 +113,9 @@
           },
           "objects_count": {
             "type": "integer"
+          },
+          "outage": {
+            "type": "string"
           },
           "owner": {
             "type": "string"
@@ -887,6 +900,24 @@
         ],
         "type": "object"
       },
+      "GateEnded": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "tool": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "tool"
+        ],
+        "type": "object"
+      },
       "GateFeedToken": {
         "properties": {
           "change_id": {
@@ -1096,6 +1127,12 @@
           "maxLinesTier1": {
             "type": "integer"
           },
+          "outage": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
           "outsideGroups": {
             "items": {
               "type": "string"
@@ -1130,6 +1167,7 @@
         "required": [
           "approvers",
           "maxLinesTier1",
+          "outage",
           "outsideGroups",
           "repoPolicy",
           "terraform",
@@ -1555,6 +1593,16 @@
             },
             "type": "array"
           },
+          "ended": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateEnded"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "env": {
             "type": "string"
           },
@@ -1579,6 +1627,9 @@
           },
           "objects_count": {
             "type": "integer"
+          },
+          "outage": {
+            "type": "string"
           },
           "owner": {
             "type": "string"
@@ -2050,7 +2101,7 @@
             "bearer": []
           }
         ],
-        "summary": "The deployment gate's baseline policy: the tier table, the people each tier needs, the outside groups, the TTL. A repo's clearance.yaml can only tighten it",
+        "summary": "The deployment gate's baseline policy: the tier table, the people each tier needs, the outside groups, the TTL, the outage policy by tier (allow-and-record or hold). A repo's clearance.yaml can only tighten it",
         "x-clearance-roles": [
           "person",
           "delegate",
@@ -2218,7 +2269,7 @@
             "bearer": []
           }
         ],
-        "summary": "The deployment gate's changes, newest first: tier and why, state (holding, cleared, denied, expired, superseded), the requirement and the approvals so far, what the grant binds to. A person sees their apps' changes and the ones their groups may clear; the cursor is updated_at. cluster=<c>&state=cleared is the grant feed: the cluster's cleared changes whose clearance token is live, each with its token; a feed reader (CLEARANCE_API_FEED_READERS) may read only that, for its own clusters",
+        "summary": "The deployment gate's changes, newest first: tier and why, state (holding, cleared, denied, expired, superseded, degraded, exception), the requirement and the approvals so far, what the grant binds to. A person sees their apps' changes and the ones their groups may clear; the cursor is updated_at. cluster=<c>&state=cleared is the grant feed: the cluster's cleared changes whose clearance token is live, each with its token; a feed reader (CLEARANCE_API_FEED_READERS) may read only that, for its own clusters",
         "x-clearance-roles": [
           "person",
           "delegate",
@@ -2999,6 +3050,132 @@
           }
         ],
         "summary": "One evidence record with its hash",
+        "x-clearance-roles": [
+          "person",
+          "delegate",
+          "auditor"
+        ]
+      }
+    },
+    "/v1/exceptions": {
+      "get": {
+        "operationId": "listExceptions",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "tool",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "app",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidencePage"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The packet's exceptions, newest first; the cursor is seq: every deploy.exception (kind=out-of-band, drift, untraced-apply or digest-mismatch), every provider's degraded-mode report (deploy.degraded: what it did while the core was unreachable, with the outage policy it was held to), every break-glass window (breakglass.open, breakglass.close with what changed in it) and every runtime read allowed during an outage (tool.call, coverage-unavailable). tool narrows to one of those",
         "x-clearance-roles": [
           "person",
           "delegate",

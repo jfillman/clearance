@@ -29,7 +29,7 @@ providers: []
 verifiers: []
 # CLEARANCE_DELEGATES: principal globs that may act for a person they name (vocabulary.onBehalfOfHeader), e.g. a portal.
 delegates: []
-# CLEARANCE_ADMINS: principal globs (user:<login>) that may deny any held change.
+# CLEARANCE_ADMINS: principal globs (user:<login>) that may deny any held change and break glass (POST /v1/breakglass).
 admins: []
 # -- Policy bundles (docs/core.md, Policy bundles) ---------------------------------------------------------------
 policy:
@@ -96,6 +96,13 @@ gate:
   # CLEARANCE_TRUSTED_REGISTRIES: image prefixes, each ending in "/", a tier-1 image bump may come from; a bump from
   # anywhere else is tier 2 (image:not-trusted-registry). Empty: any registry (the product default).
   trustedRegistries: []
+  # CLEARANCE_PROTECTED_ENVIRONMENTS: "<cluster glob>/<env glob>" entries, the environments the gate protects (C-6).
+  # A change to any other environment is cleared at tier 0 (reason unprotected) and recorded. Empty: EVERY
+  # environment is protected (fail closed): list them to let the rest through.
+  protectedEnvironments: []
+  # CLEARANCE_BREAKGLASS_MAX_TTL: the longest break-glass window an admin may open, a Go duration (1m to 4h; empty:
+  # 4h, the product's ceiling).
+  breakglassMaxTTL: ""
   # CLEARANCE_GATE_UNBOUND_TREE: flag | refuse. A manifest-tree registration whose treeDigest is a placeholder (64
   # copies of one digit, or sha256 of nothing) is flagged tree:unbound and binds to its commit only, or refused
   # (DG-UNBOUND). Empty: flag (the core's default for one release; refuse is planned to become it).

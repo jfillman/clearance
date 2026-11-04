@@ -1,0 +1,64 @@
+# PROD spike (hangar-prod, Audit+Warn): narrowed to ConfigMaps written by the spike writer in the scratch namespace.
+# Spike c, Kyverno: the same rule as a Kyverno ValidatingPolicy. Audit + Warn only. Unlike the native policy it
+# can look up the grant the object's clearance.hangar.io/grant annotation names (resource.Get) and has a clock
+# (time.now()), so expiry is checked at admission. It cannot be auto-generated to a native VAP (resource.Get and
+# time are Kyverno libraries), so it runs in Kyverno's webhook.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spike-kyverno-read-clearancegrants
+  labels:
+    hangar.io/spike: g-argo-1
+    rbac.kyverno.io/aggregate-to-admission-controller: "true"
+rules:
+  - {apiGroups: [spike.clearance.hangar.io], resources: [clearancegrants], verbs: [get, list, watch]}
+---
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: spike-clearance-protected-writes
+  labels: {hangar.io/spike: g-argo-1}
+spec:
+  validationActions: [Audit, Warn]
+  failurePolicy: Fail
+  evaluation:
+    background: {enabled: false}
+  autogen:
+    podControllers: {controllers: []}
+    validatingAdmissionPolicy: {enabled: false}
+  matchConstraints:
+    namespaceSelector:
+      matchLabels: {clearance.hangar.io/protected: "true"}
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: [configmaps]
+  matchConditions:
+    - name: argo-controller-main-resource
+      expression: >-
+        has(request.userInfo.username) &&
+        request.userInfo.username == 'system:serviceaccount:clearance-spike-prot:clearance-spike-writer' &&
+        (!has(request.subResource) || request.subResource == '')
+  variables:
+    - name: ann
+      expression: "has(object.metadata.annotations) ? object.metadata.annotations : {}"
+    - name: rendered
+      expression: "'clearance.hangar.io/rendered' in variables.ann ? variables.ann['clearance.hangar.io/rendered'] : ''"
+    - name: grantName
+      expression: "'clearance.hangar.io/grant' in variables.ann ? variables.ann['clearance.hangar.io/grant'] : ''"
+    - name: key
+      expression: "(object.apiVersion.contains('/') ? object.apiVersion.split('/')[0] : '') + '/' + object.kind + '/' + object.metadata.name"
+    - name: grant
+      expression: >-
+        variables.grantName == '' ? {} :
+        resource.Get('spike.clearance.hangar.io/v1', 'clearancegrants', object.metadata.namespace, variables.grantName)
+  validations:
+    - expression: "variables.rendered != '' && variables.grantName != ''"
+      messageExpression: "'no clearance annotations on ' + variables.key"
+    - expression: "has(variables.grant.spec)"
+      messageExpression: "'grant ' + variables.grantName + ' not found'"
+    - expression: "time.now() < timestamp(variables.grant.spec.expiresAt)"
+      messageExpression: "'grant ' + variables.grantName + ' expired'"
+    - expression: "has(variables.grant.spec.index) && variables.key in variables.grant.spec.index && variables.grant.spec.index[variables.key] == variables.rendered"
+      messageExpression: "'grant ' + variables.grantName + ' does not list ' + variables.key + ' at ' + variables.rendered"

@@ -1,0 +1,7 @@
+# G-ARGO-1 spike: a second, plain directory source beside the plugin source (as glidepath-env is on hangar-dev).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: extra-source
+data:
+  from: directory-source
