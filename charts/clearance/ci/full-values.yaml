@@ -120,3 +120,8 @@ httpRoutes:
     hostnames: [clearance-api.example.test]
 core:
   maxClockSkew: 2m
+
+attestation:
+  rekorUrl: https://rekor.example.com
+  keyless:
+    fulcioUrl: https://fulcio.example.com

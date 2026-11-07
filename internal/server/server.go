@@ -67,6 +67,11 @@ type Options struct {
 	Version string
 	Clock   func() time.Time
 	Log     *slog.Logger
+	// OnOutcome is called with each deploy.outcome record a provider wrote, after its commit (the attestation signer's
+	// trigger, C-2). nil: none.
+	OnOutcome func(store.Record)
+	// Attestation is what /readyz says of the change attestation signer (C-2).
+	Attestation Attestation
 	// MaxClockSkew bounds |context.now - Clock()| on an evaluation; 0 is DefaultMaxClockSkew, negative is off.
 	MaxClockSkew time.Duration
 	// DevRecords serves GET /v1/dev/records (DevRecordsPath): the chain, for another package's tests to read what
@@ -375,7 +380,7 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 			degraded = append(degraded, b.Name)
 		}
 	}
-	writeJSON(w, http.StatusOK, Ready{OK: true, Policy: pol, Head: seq, Degraded: degraded})
+	writeJSON(w, http.StatusOK, Ready{OK: true, Policy: pol, Head: seq, Degraded: degraded, Attestation: s.opt.Attestation})
 }
 
 // Health is GET /healthz's answer.
@@ -391,6 +396,15 @@ type Ready struct {
 	Head   int64            `json:"head"`
 	// Degraded names the policy bundles whose sources could not be read (still 200: see readyz).
 	Degraded []string `json:"degraded,omitempty"`
+	// Attestation says whether the change attestation signer (C-2) runs. Off is not unready: nothing else depends on it.
+	Attestation Attestation `json:"attestation"`
+}
+
+// Attestation is the change attestation signer's status: whether it runs, with which backend, or why it is off.
+type Attestation struct {
+	Enabled bool   `json:"enabled"`
+	Backend string `json:"backend,omitempty"` // keyless | static
+	Detail  string `json:"detail,omitempty"`
 }
 
 // ErrorResponse is every refusal of this package's routes.

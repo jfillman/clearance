@@ -16,6 +16,20 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   CloudTrail for the principal) file `deploy.exception` kind `drift` and `untraced-apply`. SigV4 over the standard
   library, no AWS SDK. The core's report check now accepts `destination.workspace` {backend, key, name} in place of
   cluster and environment, so a Terraform plan's exception is no longer refused (`internal/gate/exception.go`).
+- **The change attestation signer (C-2)** (`internal/attest`, `cmd/clearance/attest.go`;
+  [docs/core.md](docs/core.md#change-attestations)). After a deploy reports an applied outcome for a cleared change,
+  the core signs an in-toto Statement v1 (predicate `https://clearance.hangarplatform.dev/change-attestation/v1`,
+  [schema](schemas/change-attestation.schema.json)) in a DSSE envelope, logs it in Rekor, appends `deploy.attestation`
+  with the envelope digest and keeps the Sigstore bundle (new table `clearance_attestations`). No attestation for an
+  approved change that never synced, a mismatched apply, or a change never cleared. Backends: keyless (Fulcio + Rekor;
+  tested against fakes, not yet against a real Fulcio) and static key (`CLEARANCE_ATTEST_KEY_FILE`, labs). With neither
+  configured attestations are off and `/readyz` says so (`attestation`).
+- clearance-api: `GET /v1/clearances/{id}` adds `attestation`; `GET /v1/clearances/{id}/attestation` is the bundle.
+- `clearance attest verify`: checks a bundle offline (signature, certificate chain and identity, Rekor's signed entry
+  timestamp, subjects).
+- Config `CLEARANCE_ATTEST_KEY_FILE`, `CLEARANCE_ATTEST_FULCIO_URL`, `CLEARANCE_ATTEST_REKOR_URL`,
+  `CLEARANCE_ATTEST_OIDC_TOKEN_FILE`; chart `attestation.*`.
+
 - **The Argo CD plugin and the PreSync wait** (G-ARGO-4, G-ARGO-5; `providers/argocd/cmp`, `providers/argocd/wait`;
   [docs/gate.md](docs/gate.md#the-argo-cd-plugin-and-the-presync-wait-g-argo-4-and-g-argo-5-built-not-deployed)).
   `clearance-cmp` is a Config Management Plugin sidecar for argocd-apps' repo-server: it renders the chart at its pinned

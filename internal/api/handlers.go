@@ -14,6 +14,8 @@ import (
 	"github.com/jfillman/clearance/internal/evidence"
 	"github.com/jfillman/clearance/internal/gate"
 	"github.com/jfillman/clearance/internal/provenance"
+	"github.com/jfillman/clearance/internal/pycompat"
+	"github.com/jfillman/clearance/internal/store"
 	"github.com/jfillman/clearance/internal/token"
 )
 
@@ -430,7 +432,69 @@ func (s *Server) getClearance(w http.ResponseWriter, r *http.Request, v *Viewer)
 		s.readFailed(w, r, err)
 		return
 	}
-	writeJSON(w, 200, out[0])
+	att, err := s.opt.Store.Attestation(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.readFailed(w, r, err)
+		return
+	}
+	var view any
+	if att != nil {
+		view = viewAttestation(*att)
+	}
+	vb, err := json.Marshal(view)
+	if err != nil {
+		s.readFailed(w, r, err)
+		return
+	}
+	joined, err := addField(out[0], "attestation", vb)
+	if err != nil {
+		s.readFailed(w, r, err)
+		return
+	}
+	writeJSON(w, 200, joined)
+}
+
+// getAttestation is the change's attestation bundle: the DSSE envelope and what verifies it (a Sigstore bundle),
+// the bytes `clearance attest verify` takes.
+func (s *Server) getAttestation(w http.ResponseWriter, r *http.Request, v *Viewer) {
+	id := r.PathValue("id")
+	raw, err := s.opt.Store.Change(r.Context(), id)
+	if err != nil {
+		s.readFailed(w, r, err)
+		return
+	}
+	if raw == nil || !changeVisible(raw, v) {
+		writeError(w, 404, "no such change")
+		return
+	}
+	att, err := s.opt.Store.Attestation(r.Context(), id)
+	if err != nil {
+		s.readFailed(w, r, err)
+		return
+	}
+	if att == nil {
+		writeError(w, 404, "this change has no attestation (it is not attested until a deploy reports its outcome)")
+		return
+	}
+	writeJSON(w, 200, json.RawMessage(att.Bundle))
+}
+
+// addField appends "key": value to a JSON object.
+func addField(obj json.RawMessage, key string, value []byte) (json.RawMessage, error) {
+	trimmed := bytes.TrimRight(obj, " \t\r\n")
+	if len(trimmed) < 2 || trimmed[len(trimmed)-1] != '}' {
+		return nil, errors.New("api: a stored change is not a JSON object")
+	}
+	joined := append([]byte{}, trimmed[:len(trimmed)-1]...)
+	if len(trimmed) > 2 {
+		joined = append(joined, ',')
+	}
+	return append(append(append(append(joined, '"'), key...), `":`...), append(value, '}')...), nil
+}
+
+func viewAttestation(a store.Attestation) AttestationView {
+	return AttestationView{Digest: a.Digest, Backend: a.Backend, KeyID: a.KeyID, RekorLogIndex: a.RekorLogIndex,
+		RekorUUID: a.RekorUUID, OutcomeSeq: a.OutcomeSeq, RecordSeq: a.RecordSeq, CreatedAt: pycompat.ISO(a.CreatedAt)}
 }
 
 // withTokens adds each change's live token beside it ("token"; null, when always, for a change without one).

@@ -55,7 +55,8 @@ the inbox, trigger history, results), so the Go API serves only Clearance's own 
 | listProvenance | `GET /v1/provenance` | **ported**; adds `installation` (C-10) |
 | listClearances | `GET /v1/clearances` | **ported**; adds `cluster`, and `cluster=<c>&state=cleared` is the grant feed (C-1, below) |
 | countClearances | `GET /v1/clearances/counts` | **ported** |
-| getClearance | `GET /v1/clearances/{id}` | **ported**; adds `token` (C-1) |
+| getClearance | `GET /v1/clearances/{id}` | **ported**; adds `token` (C-1) and `attestation` (C-2: the digest, backend and Rekor index of the signed change attestation, or `null`) |
+| (new) getClearanceAttestation | `GET /v1/clearances/{id}/attestation` | **new** (C-2): the change's attestation as a Sigstore bundle, for `clearance attest verify`; 404 until a deploy reports an applied outcome ([core.md](core.md#change-attestations)) |
 | getClearancePolicy | `GET /v1/clearance-policy` | **ported** |
 | getContract | `GET /v1/contract` | **ported**; an OpenAPI 3.1 document since C-10, naming `x-clearance-core` (`CLEARANCE_CORE_URL`) and `x-clearance-gateway` |
 | (healthz, readyz) | `GET /healthz`, `/readyz` | **ported**; readyz checks the database |

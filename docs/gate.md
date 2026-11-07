@@ -118,6 +118,7 @@ Evidence records, in the existing chain, `boundary: deployment`:
 | `deploy.request` | the check registers a change | app, env, repo, pr, commit, tree digest, objects, tier and why, provenance, requirement |
 | `deploy.clear` | policy or a person clears | principal (policy or the person), via, which requirement it satisfies; `approvals` (each person's IdP `sub` and `iss`, `via`, `role`, `at`), `cleared_by`, and `token` (the clearance token's nonce) when it cleared the change (C-1) |
 | `deploy.revoke` | a new head supersedes a cleared change | the revoked token's nonce and the head that superseded it (C-1) |
+| `deploy.attestation` | the core signed the change's attestation after an applied `deploy.outcome` (C-2) | `attestation` {digest (sha256 of the DSSE envelope), backend, outcome_seq, rekor_log_index, rekor_uuid, key_id}; [core.md](core.md#change-attestations) |
 | `deploy.deny` | a person denies, or the classifier denies (unknown agent) | reason, rule |
 | `deploy.expire` | the TTL passes | — |
 | `deploy.exception` | admission or the controller sees a change no grant covers | object, who applied it (the admission request's user) |
