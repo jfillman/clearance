@@ -1,7 +1,8 @@
 name: release
 # A vX.Y.Z tag on main publishes that version (VERSION names it): the Python client's wheel (clients/python), and a
 # GitHub Release whose notes are the version's CHANGELOG.md section, the Go image (ghcr.io/jfillman/clearance) and
-# the Helm chart (oci://ghcr.io/jfillman/charts/clearance), and reruns the chart's install test on the published
+# the Helm chart (oci://ghcr.io/jfillman/charts/clearance), the Argo CD gate's three images (clearance-argocd-agent,
+# clearance-cmp, clearance-wait) and the agent chart (oci://ghcr.io/jfillman/charts/clearance-argocd-agent), and reruns the chart's install test on the published
 # chart and image before the Release is made. The tag is cut by hand after the version-bump PR merges and main's CI
 # is green (never off a red main).
 on:
@@ -125,6 +126,74 @@ jobs:
           path: clearance-${{ github.ref_name }}.spdx.json
           if-no-files-found: error
 
+  # The Argo CD gate's images, built like the Go image above: ghcr.io/jfillman/<name>:vX.Y.Z for the agent
+  # (providers/argocd/agent), the Argo CD plugin sidecar (clearance-cmp) and the PreSync wait Job (clearance-wait),
+  # amd64 and arm64, SBOM and provenance on the index, the index signed keyless with this workflow's identity. Each
+  # leg uploads its index digest as an artifact for the release notes.
+  provider-images:
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - {name: clearance-argocd-agent, dockerfile: providers/argocd/agent/Dockerfile}
+          - {name: clearance-cmp, dockerfile: providers/argocd/cmp/Dockerfile}
+          - {name: clearance-wait, dockerfile: providers/argocd/wait/Dockerfile}
+    steps:
+      - uses: actions/checkout@v4
+      - id: ref
+        env:
+          NAME: ${{ matrix.name }}
+        run: |
+          echo "ref=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${NAME}" >> "$GITHUB_OUTPUT"
+          echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@v4.4.1
+      - uses: docker/login-action@v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: build
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          build-args: VERSION=${{ github.ref_name }}
+          outputs: type=image,name=${{ steps.ref.outputs.ref }}:${{ github.ref_name }},push=true,rewrite-timestamp=true
+          sbom: true
+          provenance: mode=max
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+      - uses: sigstore/cosign-installer@v4.1.1
+      - name: sign the image index (keyless) and verify the signature
+        env:
+          IMAGE: ${{ steps.ref.outputs.ref }}@${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes "$IMAGE"
+          cosign verify "$IMAGE" \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yaml@${GITHUB_REF}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com > /dev/null
+      - name: record the index digest
+        env:
+          NAME: ${{ matrix.name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          test -n "$DIGEST"
+          mkdir digests
+          echo "$DIGEST" > "digests/${NAME}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.name }}
+          path: digests/${{ matrix.name }}
+          if-no-files-found: error
+
   # The Helm chart at the tag's version (vX.Y.Z -> X.Y.Z, for version and appVersion, so the chart's default image
   # tag is this release's), pushed as an OCI artifact to oci://ghcr.io/jfillman/charts/clearance and signed keyless.
   chart:
@@ -158,6 +227,40 @@ jobs:
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           echo "$GH_TOKEN" | cosign login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           cosign sign --yes "ghcr.io/${owner}/charts/clearance@${digest}"
+
+  # The agent chart (charts/clearance-argocd-agent) at the tag's version, pushed to
+  # oci://ghcr.io/jfillman/charts/clearance-argocd-agent and signed keyless; its default image tag is this release's.
+  agent-chart:
+    needs: [check, provider-images]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4.3.0
+        with:
+          version: v3.21.3
+      - uses: sigstore/cosign-installer@v4.1.1
+      - id: push
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "$GH_TOKEN" | helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          helm lint charts/clearance-argocd-agent --strict -f charts/clearance-argocd-agent/ci/minimal-values.yaml
+          helm package charts/clearance-argocd-agent --version "$VERSION" --app-version "$VERSION" -d dist
+          helm push "dist/clearance-argocd-agent-${VERSION}.tgz" "oci://ghcr.io/${owner}/charts" 2>&1 | tee push.log
+          digest=$(sed -n 's/^Digest: //p' push.log)
+          test -n "$digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "$GH_TOKEN" | cosign login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          cosign sign --yes "ghcr.io/${owner}/charts/clearance-argocd-agent@${digest}"
 
   # The card's done bar on the published artifacts: helm install oci://ghcr.io/jfillman/charts/clearance on a fresh
   # kind cluster (no Airframe, no Glidepath) passes the install test, with the published image.
@@ -210,7 +313,7 @@ jobs:
         run: tools/chart-install-test/run.sh
 
   release:
-    needs: [check, wheel, image, chart, install-test]
+    needs: [check, wheel, image, chart, provider-images, agent-chart, install-test]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -227,6 +330,11 @@ jobs:
         with:
           name: sbom
           path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          path: digests
+          merge-multiple: true
       - name: publish the GitHub Release with the changelog section as its notes
         env:
           GH_TOKEN: ${{ github.token }}
@@ -234,14 +342,22 @@ jobs:
           IMAGE: ${{ needs.image.outputs.ref }}
           IMAGE_DIGEST: ${{ needs.image.outputs.digest }}
           CHART_DIGEST: ${{ needs.chart.outputs.digest }}
+          AGENT_CHART_DIGEST: ${{ needs.agent-chart.outputs.digest }}
         run: |
           go run ./tools/releasenotes "$VERSION" CHANGELOG.md > notes.md
           owner="${GITHUB_REPOSITORY_OWNER,,}"
+          agent_digest=$(cat digests/clearance-argocd-agent)
+          cmp_digest=$(cat digests/clearance-cmp)
+          wait_digest=$(cat digests/clearance-wait)
           cat >> notes.md <<EOF
 
           ### Artifacts
           - Image: \`${IMAGE}:${GITHUB_REF_NAME}\`, index digest \`${IMAGE_DIGEST}\` (linux/amd64, linux/arm64; SPDX SBOM and keyless signature)
           - Chart: \`helm install clearance oci://ghcr.io/${owner}/charts/clearance --version ${VERSION}\`, digest \`${CHART_DIGEST}\`
+          - Argo CD agent image: \`ghcr.io/${owner}/clearance-argocd-agent:${GITHUB_REF_NAME}\`, index digest \`${agent_digest}\` (linux/amd64, linux/arm64; SPDX SBOM and keyless signature)
+          - Argo CD plugin (CMP) image: \`ghcr.io/${owner}/clearance-cmp:${GITHUB_REF_NAME}\`, index digest \`${cmp_digest}\` (linux/amd64, linux/arm64; SPDX SBOM and keyless signature)
+          - Argo CD PreSync wait image: \`ghcr.io/${owner}/clearance-wait:${GITHUB_REF_NAME}\`, index digest \`${wait_digest}\` (linux/amd64, linux/arm64; SPDX SBOM and keyless signature)
+          - Agent chart: \`helm install clearance-argocd-agent oci://ghcr.io/${owner}/charts/clearance-argocd-agent --version ${VERSION}\`, digest \`${AGENT_CHART_DIGEST}\`
           EOF
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag \
             --title "Clearance $GITHUB_REF_NAME" --notes-file notes.md

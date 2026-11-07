@@ -114,7 +114,7 @@ func (t *Tokens) Claims(c *Change, nonce string, now, exp time.Time) token.Claim
 			}
 		}
 		objects = append(objects, token.Object{APIVersion: o.APIVersion, Kind: o.Kind, Namespace: o.Namespace,
-			Name: o.Name, Rendered: o.Digest, Changed: o.Op != "", Op: o.Op})
+			Name: o.Name, Rendered: o.Digest, Changed: o.Op != "" && o.Op != "unchanged", Op: o.Op})
 	}
 	sort.Strings(images)
 	approvals := make([]token.Approval, 0, len(c.Approvals))
