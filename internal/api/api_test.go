@@ -250,11 +250,12 @@ var backends = []backend{
 			if err != nil {
 				t.Fatal(err)
 			}
+			// One critical section: no reader sees the records without their change rows.
+			m.mu.Lock()
 			for _, r := range recs {
 				r["assurance"] = "recorded-not-checkpointed"
-				m.appendRec(r)
+				m.recs = append(m.recs, r)
 			}
-			m.mu.Lock()
 			m.changes = append(m.changes, cs...)
 			m.mu.Unlock()
 		}))
