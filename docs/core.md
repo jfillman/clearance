@@ -369,7 +369,7 @@ for these. An outcome with no digest is attested with `matched: null` and a limi
 
 **Where.** The signer is the core's `internal/attest`, never a provider or a CMP. A provider's POST is answered
 before signing starts: the outcome is queued after its commit and signed off the request path, retried with a
-doubling delay (5 s to 5 min, 12 attempts) when Fulcio or Rekor is down, and found again after a restart (the core
+doubling delay (5 s to 5 min, 12 attempts) when Fulcio or Rekor is down (a bundle already signed and logged whose storing failed is kept in memory and stored on the retry, not signed and logged again; a restart between the log and the store costs one extra Rekor entry), and found again after a restart (the core
 looks back over the last 2000 records for outcomes with no attestation). A signing failure never fails or delays an
 outcome.
 

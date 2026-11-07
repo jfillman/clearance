@@ -37,7 +37,16 @@ type Attestor struct {
 
 	mu      sync.Mutex
 	pending map[string]*item
-	wake    chan struct{}
+	// signed holds a bundle already signed and logged whose storing failed, by change id: the retry stores it
+	// instead of signing and logging again (one Rekor entry, not one per retry). It is in memory only: a restart
+	// between the log and the store costs one extra Rekor entry.
+	signed map[string]heldAttestation
+	wake   chan struct{}
+}
+
+type heldAttestation struct {
+	seq int64
+	att store.Attestation
 }
 
 type item struct {
@@ -183,6 +192,7 @@ func (a *Attestor) Drain(ctx context.Context) {
 			it.attempts++
 			if it.attempts >= MaxAttempts {
 				delete(a.pending, id)
+				delete(a.signed, id)
 				a.log().ErrorContext(ctx, "attest: giving up until the next start", "change", id, "error", err.Error())
 			} else {
 				it.next = a.now().Add(min(baseDelay<<(it.attempts-1), maxDelay))
@@ -212,6 +222,9 @@ func (a *Attestor) processAny(ctx context.Context, id string, seqs []int64) erro
 // wrapping ErrNoAttestation when it gets none.
 func (a *Attestor) Process(ctx context.Context, id string, seq int64) error {
 	if _, err := a.Store.Attestation(ctx, id); err == nil {
+		a.mu.Lock()
+		delete(a.signed, id)
+		a.mu.Unlock()
 		return nil
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return err
@@ -236,16 +249,33 @@ func (a *Attestor) Process(ctx context.Context, id string, seq int64) error {
 	if err != nil {
 		return err
 	}
-	signed, err := a.Backend.Sign(ctx, payload)
-	if err != nil {
-		return err
+	a.mu.Lock()
+	held, ok := a.signed[id]
+	a.mu.Unlock()
+	if !ok || held.seq != seq {
+		signed, err := a.Backend.Sign(ctx, payload)
+		if err != nil {
+			return err
+		}
+		bundle, err := json.Marshal(signed.Bundle)
+		if err != nil {
+			return err
+		}
+		held = heldAttestation{seq: seq, att: store.Attestation{ChangeID: id, Digest: EnvelopeDigest(signed.Bundle.DSSEEnvelope),
+			Backend: signed.Backend, KeyID: signed.KeyID, RekorLogIndex: signed.RekorLogIndex, RekorUUID: signed.RekorUUID,
+			OutcomeSeq: seq, Bundle: bundle}}
+		a.mu.Lock()
+		if a.signed == nil {
+			a.signed = map[string]heldAttestation{}
+		}
+		a.signed[id] = held
+		a.mu.Unlock()
 	}
-	bundle, err := json.Marshal(signed.Bundle)
-	if err != nil {
-		return err
+	if _, err := a.Gate.RecordAttestation(ctx, held.att); err != nil {
+		return err // the signed bundle is kept: the retry stores it
 	}
-	_, err = a.Gate.RecordAttestation(ctx, store.Attestation{ChangeID: id, Digest: EnvelopeDigest(signed.Bundle.DSSEEnvelope),
-		Backend: signed.Backend, KeyID: signed.KeyID, RekorLogIndex: signed.RekorLogIndex, RekorUUID: signed.RekorUUID,
-		OutcomeSeq: seq, Bundle: bundle})
-	return err
+	a.mu.Lock()
+	delete(a.signed, id)
+	a.mu.Unlock()
+	return nil
 }

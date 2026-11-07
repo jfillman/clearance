@@ -276,3 +276,43 @@ func TestTheRetryDelayDoublesFromFiveSeconds(t *testing.T) {
 		}
 	}
 }
+
+// failOnce fails the first transaction after it is armed.
+type failOnce struct {
+	store.Store
+	armed bool
+}
+
+func (f *failOnce) Atomic(ctx context.Context, fn func(store.Tx) error) error {
+	if f.armed {
+		f.armed = false
+		return errors.New("the store is down")
+	}
+	return f.Store.Atomic(ctx, fn)
+}
+
+// A store failure after the Rekor entry was made is retried with the signed bundle: one entry, not one per retry.
+func TestAStoreFailureAfterLoggingDoesNotLogAgain(t *testing.T) {
+	ctx := context.Background()
+	mem := memory.New()
+	now := time.Date(2026, 11, 7, 1, 0, 0, 0, time.UTC)
+	k := newKeyless(t)
+	fo := &failOnce{Store: mem, armed: true}
+	a := &attest.Attestor{Backend: k.b, Store: mem, Gate: gate.NewService(gate.Config{}, fo, func() time.Time { return now }),
+		Issuer: "clearance", Clock: func() time.Time { return now }}
+	seqs := seedOutcomes(t, mem, now, true)
+	a.Notify("chg-9", seqs[0])
+	a.Drain(ctx)
+	if _, err := mem.Attestation(ctx, "chg-9"); err == nil || k.rekor.Logged() != 1 {
+		t.Fatalf("after the failed store: attested %v, logged %d", err == nil, k.rekor.Logged())
+	}
+	now = now.Add(6 * time.Second)
+	a.Drain(ctx)
+	got, err := mem.Attestation(ctx, "chg-9")
+	if err != nil || k.rekor.Logged() != 1 || k.fulcio.Issued != 1 {
+		t.Fatalf("%+v %v logged %d certificates %d", got, err, k.rekor.Logged(), k.fulcio.Issued)
+	}
+	if _, err := attest.Verify(got.Bundle, k.opts); err != nil {
+		t.Fatal(err)
+	}
+}
