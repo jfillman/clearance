@@ -28,7 +28,7 @@ func attestVerify(_ context.Context, args []string, stdout, stderr io.Writer) in
 	fs.SetOutput(stderr)
 	file := fs.String("file", "-", "the bundle (GET /v1/clearances/{id}/attestation) or a bare DSSE envelope; - for stdin")
 	keyFile := fs.String("key", "", "static key: the signing key's public half (PEM) or the core's JWKS (GET /v1/keys)")
-	roots := fs.String("trust-root", "", "keyless: the Fulcio root and intermediate certificates to trust (PEM)")
+	roots := fs.String("trust-root", "", "keyless: the Fulcio root and intermediate certificates to trust (PEM), or a Sigstore TrustedRoot JSON from `clearance trust-root build` (then Rekor's key comes from it, not --rekor-key)")
 	identity := fs.String("identity", "", "keyless: the identity the certificate must name (its SAN), e.g. the core's OIDC subject")
 	issuer := fs.String("issuer", "", "keyless: the OIDC issuer the certificate must record")
 	rekorKey := fs.String("rekor-key", "", "Rekor's public key (PEM): checks the log entry; required for keyless")
@@ -36,7 +36,8 @@ func attestVerify(_ context.Context, args []string, stdout, stderr io.Writer) in
 	fs.Var(&subjects, "subject", "a digest the statement must name as a subject, <alg>:<hex> (sha256:..., gitCommit:...); repeatable")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "usage: clearance attest verify [--file <bundle>] [--subject sha256:<hex>]... "+
-			"(--key <pem|jwks> | --trust-root <pem> --identity <id> --issuer <url> --rekor-key <pem>)")
+			"(--key <pem|jwks> | --trust-root <pem|trusted-root.json> --identity <id> --issuer <url> [--rekor-key <pem>])\n"+
+			"  --rekor-key is required with a PEM --trust-root, and refused with a trusted-root.json (which carries Rekor's keys)")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -83,7 +84,14 @@ func attestVerify(_ context.Context, args []string, stdout, stderr io.Writer) in
 		if !ok {
 			return 1
 		}
-		if opts.Roots, err = attest.ParseRoots(b); err != nil {
+		if strings.HasPrefix(strings.TrimSpace(string(b)), "{") {
+			if *rekorKey != "" {
+				return fail("--rekor-key: not with a TrustedRoot JSON, which carries Rekor's keys")
+			}
+			if opts.Trust, err = attest.ParseTrustedRoot(b); err != nil {
+				return fail("--trust-root: %v", err)
+			}
+		} else if opts.Roots, err = attest.ParseRoots(b); err != nil {
 			return fail("--trust-root: %v", err)
 		}
 	}

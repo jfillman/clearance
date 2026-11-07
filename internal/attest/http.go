@@ -20,8 +20,9 @@ const maxResponse = 1 << 20
 // DefaultTimeout is each Fulcio or Rekor call's deadline.
 const DefaultTimeout = 20 * time.Second
 
-// CheckURL accepts an https URL, or an http one only for a loopback host (tests, a local lab), with no credentials,
-// query or fragment.
+// CheckURL accepts an https URL, or an http one only for a loopback host (tests, a local lab) or an in-cluster Service
+// name (<service>.<namespace>.svc, optionally .cluster.local: the platform's own Fulcio and Rekor, which serve plain
+// HTTP inside the cluster), with no credentials, query or fragment.
 func CheckURL(name, raw string) (*url.URL, error) {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
@@ -34,14 +35,32 @@ func CheckURL(name, raw string) (*url.URL, error) {
 		if err != nil {
 			host = u.Host
 		}
-		if ip := net.ParseIP(strings.Trim(host, "[]")); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
-			return nil, fmt.Errorf("%s must be https (http is for loopback only)", name)
+		if ip := net.ParseIP(strings.Trim(host, "[]")); host != "localhost" && (ip == nil || !ip.IsLoopback()) && !clusterService(host) {
+			return nil, fmt.Errorf("%s must be https (http is for loopback and in-cluster Service names only)", name)
 		}
 	default:
 		return nil, fmt.Errorf("%s must be an https URL", name)
 	}
 	u.Path = strings.TrimRight(u.Path, "/")
 	return u, nil
+}
+
+// clusterService reports whether host is <service>.<namespace>.svc or <service>.<namespace>.svc.cluster.local.
+func clusterService(host string) bool {
+	h := strings.TrimSuffix(host, ".cluster.local")
+	if !strings.HasSuffix(h, ".svc") {
+		return false
+	}
+	parts := strings.Split(strings.TrimSuffix(h, ".svc"), ".")
+	if len(parts) != 2 {
+		return false
+	}
+	for _, p := range parts {
+		if p == "" {
+			return false
+		}
+	}
+	return true
 }
 
 // postJSON POSTs body as JSON and decodes a 2xx JSON answer into out (when not nil); anything else is an error that

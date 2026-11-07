@@ -10,6 +10,12 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 ## [Unreleased]
 
 ### Added
+- **`clearance trust-root build`** (C-2a; [docs/core.md](docs/core.md#trusted-root-c-2a), Built): a Sigstore TrustedRoot JSON
+  from public Fulcio chains and Rekor keys, each with a validity window. **`clearance attest verify --trust-root`
+  accepts it** (Rekor's key comes from the document, picked by the entry's log id and its signed time), so one trust root
+  verifies the legacy root's attestations and the new Hangar PKI's through a cutover. The PEM form is unchanged.
+- **The Fulcio and Rekor URLs may be `http` for an in-cluster Service name** (`<svc>.<ns>.svc`, `.cluster.local`), beside
+  https and loopback. The platform's Fulcio and Rekor serve plain HTTP inside the cluster; any other host stays https.
 - **The release-record join (G-ARGO-6)** ([docs/gate.md](docs/gate.md#the-release-record-join-g-argo-6-built)). A
   `deploy.outcome` names its release in the record's own `release {id}` (`ProviderEvent.release`; `change.release.id`
   is still accepted and copied), and the attestation's `predicate.release.id` reads either. The change's `outcome`
