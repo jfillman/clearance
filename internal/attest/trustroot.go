@@ -187,11 +187,15 @@ func BuildTrustedRoot(cas []BuildCA, logs []BuildLog) ([]byte, error) {
 			details = "PKIX_ECDSA_P384_SHA_384"
 		}
 		id := sha256.Sum256(der)
+		w := l.Window
+		if w.Start.IsZero() {
+			w.Start = time.Unix(0, 0) // cosign and sigstore-go always read a start; open means the beginning of time
+		}
 		var j jLog
 		j.BaseURL, j.HashAlgorithm = l.BaseURL, "SHA2_256"
 		j.PublicKey.RawBytes = base64.StdEncoding.EncodeToString(der)
 		j.PublicKey.KeyDetails = details
-		j.PublicKey.ValidFor = l.Window.json()
+		j.PublicKey.ValidFor = w.json()
 		j.LogID.KeyID = base64.StdEncoding.EncodeToString(id[:])
 		out.Tlogs = append(out.Tlogs, j)
 	}
