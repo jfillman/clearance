@@ -48,7 +48,7 @@ var (
 var (
 	States        = []string{StateHolding, StateCleared, StateDenied, StateExpired, StateSuperseded, StateDegraded, StateException}
 	ProposerKinds = []string{"person", "agent", "unknown"}
-	ops           = []string{"added", "changed", "removed"}
+	ops           = []string{"added", "changed", "removed", "unchanged"} // unchanged: in the rendered tree, not in the diff
 	metadataOnly  = []string{"/metadata/labels", "/metadata/annotations"}
 	// checksOK is what each check must say for policy to clear a tier-1 change, in gate.py's order. provenance
 	// "unattested" (agent work outside Clearance, provenance.Unattested) clears as not-agent does: the verdict is a

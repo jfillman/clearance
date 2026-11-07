@@ -31,6 +31,22 @@ func outOfBand() map[string]any {
 		"destination": map[string]any{"cluster": "hangar-prod", "environment": "prod"}}}
 }
 
+// A Terraform plan exception is located by its workspace, not a cluster (G-TF-5).
+func TestPlanExceptionThroughTheCore(t *testing.T) {
+	f := memFixture(t)
+	rec := map[string]any{"principal": argo, "target": "s3:prod/network.tfstate#default", "result": "drift",
+		"exception": map[string]any{"kind": "drift", "addresses": []any{"aws_security_group.web"}},
+		"destination": map[string]any{"workspace": map[string]any{"backend": "s3", "key": "prod/network.tfstate",
+			"name": "default"}}}
+	f.do("POST", "/v1/records", argo, map[string]any{"provider": "argo-gate", "kind": "deploy.exception", "record": rec}).want(t, 200, "")
+	recs := f.records()
+	if last := recs[len(recs)-1]; last["coverage"] != "observed-not-attributed" {
+		t.Fatal(last)
+	}
+	rec["destination"] = map[string]any{}
+	f.do("POST", "/v1/records", argo, map[string]any{"provider": "argo-gate", "kind": "deploy.exception", "record": rec}).want(t, 400, "destination")
+}
+
 func registration(head string) map[string]any {
 	return map[string]any{"app": "gate-api", "env": "prod", "cluster": "hangar-prod", "repo": "jfillman/gitops-gate-api",
 		"pr": 7, "head": head, "base": strings.Repeat("b", 40), "proposer": "user:dana", "proposerKind": "person",

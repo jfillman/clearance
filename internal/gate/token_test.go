@@ -59,6 +59,21 @@ func (f *fixture) verify(t *testing.T, ks token.KeySet, tk store.Token, nonces t
 	return dsse, nil
 }
 
+func TestAnUnchangedObjectIsInTheTokenNotChanged(t *testing.T) {
+	f, ks := withTokens(t)
+	unchanged := objs(obj("ConfigMap", "cfg", "unchanged", nil, nil, "v1"))
+	c := f.register(t, "ci", change(map[string]any{"objects": append(append([]any{}, imageBump...), unchanged...)}))
+	cl, err := f.verify(t, ks, f.token(t, c.ID), f.svc)
+	if err != nil || len(cl.Objects) != 2 {
+		t.Fatal(err, cl.Objects)
+	}
+	for _, o := range cl.Objects {
+		if o.Changed != (o.Kind != "ConfigMap") || (o.Kind == "ConfigMap" && o.Op != "unchanged") {
+			t.Errorf("%+v", o)
+		}
+	}
+}
+
 func TestAPolicyClearIssuesABoundToken(t *testing.T) {
 	f, ks := withTokens(t)
 	body := change(map[string]any{"objects": imageBump, "taskId": "task-42"})
