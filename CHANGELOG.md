@@ -9,6 +9,12 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Fixed
+- **A terraform-plan change registered by a workflow can be released and reported by another job of that repository**
+  (G-TF-4; `gate.SameRepoWorkflow`; [docs/terraform-gate.md](docs/terraform-gate.md)). The plan job and the
+  environment job have different OIDC subjects, so `release` and `report` got 403. Same repository, still a verifier;
+  other change kinds stay exact-registrant.
+
 ### Added
 - **The Argo CD plugin and the PreSync wait** (G-ARGO-4, G-ARGO-5; `providers/argocd/cmp`, `providers/argocd/wait`;
   [docs/gate.md](docs/gate.md#the-argo-cd-plugin-and-the-presync-wait-g-argo-4-and-g-argo-5-built-not-deployed)).

@@ -420,3 +420,51 @@ func TestAPlanWaitsClearsAndReportsItsOutcome(t *testing.T) {
 		t.Fatalf("the chain breaks at %d", bad)
 	}
 }
+
+// The lab workflow holds a plan in one job (sub repo:o/r:ref:refs/heads/main) and releases and reports it in the
+// job that targets a GitHub environment (sub repo:o/r:environment:lab). A terraform-plan change is readable, waitable
+// and reportable by any verifier workflow of its own repository; every other kind stays exact.
+func TestAPlanIsReadAndReportedByAnotherJobOfItsRepository(t *testing.T) {
+	cfg := config(t, "")
+	s := signer(t)
+	cfg.Signer, cfg.TokenIssuer, cfg.TokenTTL = s, "clearance", 15*time.Minute
+	cfg.Gate.Verifiers = append(cfg.Gate.Verifiers, "github:repo:jfillman/*")
+	f := newFixture(t, cfg)
+	const (
+		planJob = "github:repo:jfillman/hangar-infra:ref:refs/heads/main"
+		envJob  = "github:repo:jfillman/hangar-infra:environment:lab"
+		other   = "github:repo:jfillman/other-repo:environment:lab"
+		notVer  = "github:repo:acme/hangar-infra:environment:lab" // same repo name, another owner, not a verifier glob
+	)
+	digest := strings.Repeat("e6", 32)
+	planChange := map[string]any{"app": "network", "env": "lab", "repo": "jfillman/hangar-infra", "pr": 0, "head": headSHA,
+		"proposer": "user:dana", "owner": owner, "paths": []string{"network/lab/main.tf"},
+		"checks": map[string]any{"ci": "pass", "provenance": "not-agent"},
+		"subject": map[string]any{"kind": "terraform-plan", "planDigest": digest, "planJsonDigest": strings.Repeat("4f", 32),
+			"variableSetDigest": strings.Repeat("1c", 32),
+			"workspace":         map[string]any{"backend": "s3", "key": "network/lab/terraform.tfstate", "name": "default"},
+			"versions":          map[string]any{"terraform": "1.9.8", "providers": map[string]any{}},
+			"summary":           map[string]any{"create": 0, "update": 1, "replace": 0, "destroy": 0, "destroyedAddresses": []any{}},
+			"resources": []any{map[string]any{"address": "aws_vpc.lab", "type": "aws_vpc", "actions": []any{"update"},
+				"fields": []any{"/tags/Owner"}}}}}
+	id := f.do("POST", "/v1/clearances", planJob, planChange).want(t, 200, "").body["id"].(string)
+	f.do("GET", "/v1/clearances/"+id, envJob, nil).want(t, 200, "")
+	f.do("GET", "/v1/clearances/"+id+"/wait?timeout=1", envJob, nil).want(t, 200, "")
+	f.do("GET", "/v1/clearances/"+id, other, nil).want(t, 403, "neither a registered provider")
+	f.do("GET", "/v1/clearances/"+id, notVer, nil).want(t, 403, "")
+	now := time.Now().UTC().Format(time.RFC3339)
+	out := map[string]any{"applied": true, "planDigest": "sha256:" + digest, "startedAt": now, "finishedAt": now,
+		"changes": []any{map[string]any{"address": "aws_vpc.lab", "action": "update", "status": "complete"}}}
+	f.do("POST", "/v1/clearances/"+id+"/outcome", other, out).want(t, 403, "did not register")
+	f.do("POST", "/v1/clearances/"+id+"/outcome", notVer, out).want(t, 403, "did not register")
+	if got := f.do("POST", "/v1/clearances/"+id+"/outcome", envJob, out).want(t, 200, ""); got.body["matched"] != true {
+		t.Fatal(got.body)
+	}
+
+	// A gitops (manifest) change registered by a workflow stays exact-registrant: the same repository's other job is refused.
+	m := change("pass")
+	m["repo"] = "jfillman/hangar-infra"
+	mid := f.do("POST", "/v1/clearances", planJob, m).want(t, 200, "").body["id"].(string)
+	f.do("GET", "/v1/clearances/"+mid, planJob, nil).want(t, 200, "")
+	f.do("GET", "/v1/clearances/"+mid, envJob, nil).want(t, 403, "neither a registered provider")
+}

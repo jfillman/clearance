@@ -149,9 +149,9 @@ func (s *Service) Outcome(ctx context.Context, p authn.Principal, changeID strin
 		if c == nil {
 			return gerr("DG-UNKNOWN", "no such change", "", 404)
 		}
-		if p.ID != c.RegisteredBy {
+		if p.ID != c.RegisteredBy && !s.SameRepoWorkflow(c, p) {
 			return gerr("DG-FORBIDDEN", p.ID+" did not register this change",
-				"Only the principal that registered a change reports its outcome (the same workflow, or the same verifier).", 403)
+				"Only the principal that registered a change reports its outcome (the same workflow, the same verifier, or, for a plan registered by a GitHub Actions workflow, another job of that repository's workflows).", 403)
 		}
 		if c.Subject == nil || c.Subject.Kind != KindTerraformPlan {
 			return gerr("DG-SUBJECT", "this route takes the outcome of a terraform-plan change",
@@ -325,4 +325,35 @@ func (h *Handler) outcome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpjson.Write(w, http.StatusOK, out)
+}
+
+// workflowRepo is the "owner/name" (lower-cased) of a GitHub Actions principal id (github:repo:owner/name:<ref or
+// environment>), or "" for any other principal.
+func workflowRepo(id string) string {
+	rest, ok := strings.CutPrefix(id, "github:repo:")
+	if !ok {
+		return ""
+	}
+	repo, _, _ := strings.Cut(rest, ":")
+	return strings.ToLower(repo)
+}
+
+// SameRepoWorkflow reports whether p may read and report a terraform-plan change that a GitHub Actions workflow
+// registered, although p is not that exact principal. The plan is held in one job (sub ...:ref:refs/heads/main) and
+// released and applied in another, inside a GitHub environment (sub ...:environment:lab), so the subjects differ.
+// It holds only for a terraform-plan change, a registrant and a caller that are both workflows of one repository (the
+// repository DG-REPO bound at registration, and the caller's own verified claim when it has one), and a caller that
+// is still a configured verifier. Every other change kind keeps the exact-registrant rule.
+func (s *Service) SameRepoWorkflow(c *Change, p authn.Principal) bool {
+	if c == nil || c.Subject == nil || c.Subject.Kind != KindTerraformPlan {
+		return false
+	}
+	repo := workflowRepo(c.RegisteredBy)
+	if repo == "" || repo != workflowRepo(p.ID) || repo != strings.ToLower(c.Repo) {
+		return false
+	}
+	if claim, ok := p.Claims["repository"].(string); ok && strings.ToLower(claim) != repo {
+		return false
+	}
+	return pycompat.MatchAny(p.ID, s.Config.Verifiers)
 }
