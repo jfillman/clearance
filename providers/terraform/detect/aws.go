@@ -54,7 +54,6 @@ func EnvCreds(ctx context.Context, hc *http.Client, region string) (Creds, error
 		return Creds{}, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", "application/json")
 	body, status, err := doAWS(hc, req)
 	if err != nil {
 		return Creds{}, err
@@ -62,22 +61,26 @@ func EnvCreds(ctx context.Context, hc *http.Client, region string) (Creds, error
 	if status != 200 {
 		return Creds{}, fmt.Errorf("sts AssumeRoleWithWebIdentity: %d %s", status, clip(body))
 	}
+	return parseSTS(body)
+}
+
+// parseSTS reads STS's default XML answer:
+// AssumeRoleWithWebIdentityResponse > AssumeRoleWithWebIdentityResult > Credentials.
+func parseSTS(body []byte) (Creds, error) {
 	var out struct {
-		R struct {
-			C struct{ AccessKeyId, SecretAccessKey, SessionToken string } `json:"Credentials"`
-		} `json:"AssumeRoleWithWebIdentityResponse"`
-		R2 struct {
-			C struct{ AccessKeyId, SecretAccessKey, SessionToken string } `json:"Credentials"`
-		} `json:"AssumeRoleWithWebIdentityResult"`
+		Result struct {
+			C struct {
+				AccessKeyId     string
+				SecretAccessKey string
+				SessionToken    string
+			} `xml:"Credentials"`
+		} `xml:"AssumeRoleWithWebIdentityResult"`
 	}
-	if err := json.Unmarshal(body, &out); err != nil {
+	if err := xml.Unmarshal(body, &out); err != nil {
 		return Creds{}, fmt.Errorf("sts answer: %w", err)
 	}
-	c := out.R.C
-	if c.AccessKeyId == "" {
-		c = out.R2.C
-	}
-	if c.AccessKeyId == "" {
+	c := out.Result.C
+	if c.AccessKeyId == "" || c.SecretAccessKey == "" {
 		return Creds{}, errors.New("sts answered without credentials")
 	}
 	return Creds{c.AccessKeyId, c.SecretAccessKey, c.SessionToken}, nil

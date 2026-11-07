@@ -215,3 +215,32 @@ func TestAWSOverHTTP(t *testing.T) {
 		t.Fatal(ps, err)
 	}
 }
+
+// A real STS AssumeRoleWithWebIdentity answer (XML, the default), with AWS's documentation example values.
+func TestParseSTS(t *testing.T) {
+	c, err := parseSTS([]byte(`<AssumeRoleWithWebIdentityResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">
+  <AssumeRoleWithWebIdentityResult>
+    <SubjectFromWebIdentityToken>amzn1.account.AF6RHO7KZU5XRVQJGXK6HB56KR2A</SubjectFromWebIdentityToken>
+    <Audience>client.5498841531868486423.1548@apps.example.com</Audience>
+    <AssumedRoleUser>
+      <Arn>arn:aws:sts::123456789012:assumed-role/FederatedWebIdentityRole/app1</Arn>
+      <AssumedRoleId>AROACLKWSDQRAOEXAMPLE:app1</AssumedRoleId>
+    </AssumedRoleUser>
+    <Credentials>
+      <SessionToken>AQoDYXdzEE0a8ANXXXXXXXXNO1ewxE5TijQyp+IEXAMPLE</SessionToken>
+      <SecretAccessKey>wJalrXUtnFEMI/K7MDENG/bPxRfiCYzEXAMPLEKEY</SecretAccessKey>
+      <Expiration>2026-11-07T13:00:00Z</Expiration>
+      <AccessKeyId>ASIACLKWSDQRAOEXAMPLE</AccessKeyId>
+    </Credentials>
+    <Provider>www.amazon.com</Provider>
+  </AssumeRoleWithWebIdentityResult>
+  <ResponseMetadata><RequestId>ad4156e9-bce1-11e2-82e6-6b6efEXAMPLE</RequestId></ResponseMetadata>
+</AssumeRoleWithWebIdentityResponse>`))
+	if err != nil || c.AccessKey != "ASIACLKWSDQRAOEXAMPLE" || c.SecretKey != "wJalrXUtnFEMI/K7MDENG/bPxRfiCYzEXAMPLEKEY" ||
+		!strings.HasPrefix(c.Token, "AQoDYXdzEE0a8ANXXXXXXXXNO1ewxE5TijQyp") {
+		t.Fatal(c, err)
+	}
+	if _, err := parseSTS([]byte(`<AssumeRoleWithWebIdentityResponse></AssumeRoleWithWebIdentityResponse>`)); err == nil {
+		t.Fatal("an answer with no credentials is an error")
+	}
+}

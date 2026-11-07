@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -32,9 +33,18 @@ func env(k, d string) string {
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "terraform-detector:", err)
+		var u usageError
+		if errors.As(err, &u) || errors.Is(err, flag.ErrHelp) {
+			os.Exit(2)
+		}
 		os.Exit(1)
 	}
 }
+
+// usageError is a bad invocation: exit 2, nothing run.
+type usageError string
+
+func (u usageError) Error() string { return string(u) }
 
 func run() error {
 	fs := flag.NewFlagSet("terraform-detector", flag.ContinueOnError)
@@ -53,6 +63,9 @@ func run() error {
 	)
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return err
+	}
+	if *only != "all" && *only != "drift" && *only != "untraced" {
+		return usageError("--only is all, drift or untraced, not " + *only)
 	}
 	if *showVer {
 		fmt.Println(detect.ProviderName + "/" + version)
