@@ -93,6 +93,11 @@ func (s *Service) RecordOutcome(ctx context.Context, ev store.Event, wr evidence
 	id, err := changeRef(ev)
 	if err != nil {
 		id = ""
+		if ch, _ := ev["change"].(map[string]any); ch != nil {
+			if v, present := ch["id"]; present && v != "" { // no id at all (change {tree}) is not malformed
+				ev["unattached"] = "malformed change id: the outcome is recorded, not attached"
+			}
+		}
 	}
 	var out store.Record
 	err = s.op(ctx, func(tx store.Tx, w *writer) error {

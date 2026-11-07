@@ -72,6 +72,10 @@ func TestOnlyAClearedChangeTakesAnOutcome(t *testing.T) {
 	if rec := postFor(other.ID, "other-app", "hangar-prod"); rec["unattached"] == nil || f.get(t, other.ID).Outcome != nil {
 		t.Errorf("an outcome for another app attached to a cleared change: %+v", f.get(t, other.ID).Outcome)
 	}
+	// A malformed change id is marked too (the signer would retry it), unlike an outcome that names no id at all.
+	if rec := postFor("not-a-change-id", "gate-api", "hangar-prod"); rec["unattached"] != "malformed change id: the outcome is recorded, not attached" {
+		t.Errorf("malformed change id: %v", rec["unattached"])
+	}
 	// An unknown change id: recorded, marked, so the signer does not retry it.
 	if rec := postFor("ch-0000000000000000", "gate-api", "hangar-prod"); rec["unattached"] != "no such change: the outcome is recorded, not attached" {
 		t.Errorf("unknown change: %v", rec["unattached"])
