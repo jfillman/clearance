@@ -205,7 +205,9 @@ func TestAWSOverHTTP(t *testing.T) {
 	}))
 	defer srv.Close()
 	a := &AWS{Region: "us-east-1", S3Endpoint: srv.URL, TrailEndpoint: srv.URL, HTTP: srv.Client(), Now: func() time.Time { return t0 },
-		Creds: func(context.Context, *http.Client, string) (Creds, error) { return Creds{AccessKey: "AK", SecretKey: "SK", Token: "TOK"}, nil }}
+		Creds: func(context.Context, *http.Client, string) (Creds, error) {
+			return Creds{AccessKey: "AK", SecretKey: "SK", Token: "TOK"}, nil
+		}}
 	vs, err := a.ListVersions(context.Background(), "tf-state", "prod/net.tfstate")
 	if err != nil || len(vs) != 1 || vs[0].ID != "v1" || !vs[0].Modified.Equal(time.Date(2026, 11, 7, 11, 0, 0, 0, time.UTC)) {
 		t.Fatal(vs, err)
