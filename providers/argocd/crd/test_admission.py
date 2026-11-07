@@ -113,7 +113,9 @@ CORE_URL = "http://clearance-core.invalid:8080"
 
 
 def wait_job(name, image=WAIT_IMAGE, label="wait", hook="PreSync", ns="prot", extra_volume=False, token="clearance",
-             host=None, privileged=False, command=None, args=None, env=None, env_from=False, aliases=False, init=False):
+             host=None, privileged=False, command=None, args=None, env=None, env_from=False, aliases=False, init=False,
+             pod=None, ctr=None, job=None, automount=False):
+    ctr_extra = ctr
     """The Job exactly as providers/argocd/cmp/job.go builds it, with one deviation per call."""
     md = {"name": name, "namespace": ns, "annotations": {"argocd.argoproj.io/hook": hook}}
     if label:
@@ -129,7 +131,14 @@ def wait_job(name, image=WAIT_IMAGE, label="wait", hook="PreSync", ns="prot", ex
         ctr["command"] = command
     if env_from:
         ctr["envFrom"] = [{"secretRef": {"name": "anything"}}]
-    spec = {"restartPolicy": "Never", "automountServiceAccountToken": False, "containers": [ctr],
+    ctr.update({"imagePullPolicy": "IfNotPresent", "terminationMessagePolicy": "FallbackToLogsOnError",
+                "resources": {"requests": {"cpu": "5m", "memory": "16Mi"}, "limits": {"memory": "64Mi"}}})
+    ctr.setdefault("securityContext", {"allowPrivilegeEscalation": False, "readOnlyRootFilesystem": True,
+                                       "capabilities": {"drop": ["ALL"]}})
+    ctr.update(ctr_extra or {})
+    spec = {"restartPolicy": "Never", "containers": [ctr],
+            "securityContext": {"runAsNonRoot": True, "runAsUser": 65532, "runAsGroup": 65532,
+                                "seccompProfile": {"type": "RuntimeDefault"}},
             "volumes": [{"name": "clearance-token", "projected": {"sources": [
                 {"serviceAccountToken": {"audience": token, "expirationSeconds": 3600, "path": "clearance"}}]}}]}
     if extra_volume:
@@ -140,7 +149,12 @@ def wait_job(name, image=WAIT_IMAGE, label="wait", hook="PreSync", ns="prot", ex
         spec["hostAliases"] = [{"ip": "10.9.9.9", "hostnames": ["clearance-core.invalid"]}]
     if init:
         spec["initContainers"] = [{"name": "i", "image": image}]
-    return {"apiVersion": "batch/v1", "kind": "Job", "metadata": md, "spec": {"template": {"spec": spec}}}
+    if automount is not None:
+        spec["automountServiceAccountToken"] = automount
+    spec.update(pod or {})
+    jspec = {"backoffLimit": 0, "activeDeadlineSeconds": 3900, "template": {"metadata": {"labels": md.get("labels", {})}, "spec": spec}}
+    jspec.update(job or {})
+    return {"apiVersion": "batch/v1", "kind": "Job", "metadata": md, "spec": jspec}
 
 
 def grant(name, objects, active=True, ns="prot"):
@@ -285,6 +299,28 @@ def run(deny):
             ("a token volume for another audience", dict(token="kubernetes.default")),
             ("hostAliases (the pin is none)", dict(aliases=True)),
             ("an init container", dict(init=True)),
+            ("a livenessProbe", dict(ctr={"livenessProbe": {"exec": {"command": ["true"]}}})),
+            ("a readinessProbe", dict(ctr={"readinessProbe": {"exec": {"command": ["true"]}}})),
+            ("a startupProbe", dict(ctr={"startupProbe": {"exec": {"command": ["true"]}}})),
+            ("a lifecycle hook", dict(ctr={"lifecycle": {"preStop": {"exec": {"command": ["true"]}}}})),
+            ("a serviceAccountName", dict(pod={"serviceAccountName": "default"})),
+            ("the deprecated serviceAccount field", dict(pod={"serviceAccount": "default"})),
+            ("a dnsPolicy other than the default", dict(pod={"dnsPolicy": "Default"})),
+            ("another schedulerName", dict(pod={"schedulerName": "evil"})),
+            ("parallelism 5", dict(job={"parallelism": 5, "completions": 5})),
+            ("a dnsConfig", dict(pod={"dnsConfig": {"nameservers": ["10.9.9.9"]}})),
+            ("automountServiceAccountToken true", dict(automount=True)),
+            ("automountServiceAccountToken unset", dict(automount=None)),
+            ("a nodeName", dict(pod={"nodeName": "somewhere"})),
+            ("tolerations", dict(pod={"tolerations": [{"operator": "Exists"}]})),
+            ("a container workingDir", dict(ctr={"workingDir": "/"})),
+            ("container ports", dict(ctr={"ports": [{"containerPort": 80}]})),
+            ("an added capability", dict(ctr={"securityContext": {"capabilities": {"add": ["NET_ADMIN"]}}})),
+            ("allowPrivilegeEscalation true", dict(ctr={"securityContext": {"allowPrivilegeEscalation": True}})),
+            ("a subPath on the token mount", dict(ctr={"volumeMounts": [{"name": "clearance-token", "mountPath": "/var/run/secrets/tokens", "subPath": "x"}]})),
+            ("a mount of the token elsewhere", dict(ctr={"volumeMounts": [{"name": "clearance-token", "mountPath": "/etc", "readOnly": True}]})),
+            ("a pod sysctl", dict(pod={"securityContext": {"sysctls": [{"name": "net.ipv4.ip_forward", "value": "1"}]}})),
+            ("an extra Job field (ttlSecondsAfterFinished)", dict(job={"ttlSecondsAfterFinished": 1})),
             ("the label with another value", dict(label="x")),
             ("no label", dict(label=None)),
             ("no PreSync hook annotation", dict(hook="Sync")),

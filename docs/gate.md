@@ -457,7 +457,7 @@ kube-apiserver); **not yet applied** anywhere. Apron renders them into an upper 
   control plane writes on its own and Argo never applies (`clearancegrants`, events, endpoints, endpointslices,
   leases); and Deny with no grant freezes the namespace's controllers (a ReplicaSet cannot create Pods) until a grant
   is active. That is the fail-closed outcome the design wants, but it is why Warn uses `Allow`.
-- **Envtest** (`providers/argocd/crd/test_admission.py`, CI `admission-policy`, 100 checks over both modes): admit (listed
+- **Envtest** (`providers/argocd/crd/test_admission.py`, CI `admission-policy`, 144 checks over both modes): admit (listed
   ConfigMap and Deployment, an update); refuse (unlisted, wrong hash on create and update, no stamp, `generateName`
   with no name, expired grant, grant with no status, two active grants, no active grant); not matched (another
   writer, another service account, an unprotected namespace, a labelled Namespace object, the `scale` subresource);
@@ -465,18 +465,20 @@ kube-apiserver); **not yet applied** anywhere. Apron renders them into an upper 
   CEL error in any response.
 - **The injected wait Job (G-ARGO-4).** The CMP adds an unstamped PreSync Job labelled
   `clearance.hangar.io/injected: wait`. The policy exempts only a Job that is **exactly what the CMP builds**
-  (`providers/argocd/cmp/job.go`): that label and the `argocd.argoproj.io/hook: PreSync` annotation; one container on
-  the pinned wait image (a digest reference Apron renders from `versions.clearance.waitImage`; empty means no
-  exemption); no `command`, no `envFrom`; `args` `[--change <id> --timeout <duration>]` (only the id and the duration
-  vary); `env` exactly `CLEARANCE_URL=<the pinned core URL>` and `CLEARANCE_TOKEN_FILE=/var/run/secrets/tokens/clearance`;
-  no init containers; no `hostNetwork`, `hostPID` or `hostIPC`; no privileged container; `hostAliases` exactly the
-  pinned one (none when the pin is empty); and no volume but one projected service-account token with audience
-  `clearance`. The label and image alone would not do: the waiter mounts a clearance token, so any control of its URL or
-  host aliases would leak it, which is why the URL and aliases are pinned too. It still needs an active grant to exist
-  under Deny (the param resolves first). Envtest: the CMP's own Job is admitted; a different image, extra or different
-  args, another URL, an extra env var, `envFrom`, a command, each host namespace, a privileged container, an extra
-  volume, another token audience, host aliases, an init container, another label value, no label and no hook are each
-  refused by the policy.
+  (`providers/argocd/cmp/job.go`), as an **allowlist of fields**: any Job, pod or container field the CMP does not set
+  is refused (probes, `lifecycle`, `dnsConfig`, `serviceAccountName`, `nodeName`, tolerations, init containers, host
+  namespaces, ports, sysctls, `ttlSecondsAfterFinished`, ...), except the values the API server defaults before
+  admission (`dnsPolicy: ClusterFirst`, `schedulerName: default-scheduler`, completions and parallelism 1, `suspend: false`,
+  the generated selector, `terminationMessagePath`, the projected volume's `defaultMode`), each held to its default.
+  The Job must have that label and the PreSync hook; one container on the pinned wait image (a digest reference
+  Apron renders from `versions.clearance.waitImage`; empty means no exemption); `args` `[--change <id> --timeout
+  <duration>]` (only the id and the duration vary); `env` exactly `CLEARANCE_URL=<the pinned core URL>` and
+  `CLEARANCE_TOKEN_FILE=/var/run/secrets/tokens/clearance`; `automountServiceAccountToken: false` and **no**
+  `serviceAccountName` (the CMP sets none, so the pod runs as the namespace's default account, and only the projected
+  token with audience `clearance` is mounted); `hostAliases` exactly the pinned one (none when the pin is empty); one
+  read-only mount of the one projected token volume. The waiter mounts a clearance token, so anything that could
+  redirect it is refused. It still needs an active grant to exist under Deny (the param resolves first). Envtest: the CMP's
+  Job is admitted; about 40 deviations (listed in `test_admission.py`) are each refused by the policy.
 - **Not checked by admission:** the stamp's content (CEL has no digest function), expiry by time (the agent's
   `status.valid`), the signature. Those stay the CMP's, the agent's and G-ARGO-3's.
 
