@@ -80,6 +80,25 @@ jobs:
           after: ${{ runner.temp }}/after
           args: --check ci=pass --dry-run
       - run: test -n "${{ steps.register.outputs.result }}" && command -v clearance
+  # G-ARGO-2: the ClearanceGrant CRD and the admission policies against a real kube-apiserver (envtest binaries).
+  admission-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.10"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install pyyaml
+      - run: go install sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.25.2
+      - run: |
+          set -euo pipefail
+          assets="$($(go env GOPATH)/bin/setup-envtest use 1.36.2 -p path)"
+          test -n "$assets"
+          test -x "$assets/kube-apiserver"
+          KUBEBUILDER_ASSETS="$assets" python3 providers/argocd/crd/test_admission.py
   # The Terraform gate action (terraform/action.yml) is linted and run: its metadata parses, every composite step names
   # a shell, shellcheck passes on each embedded script, and a dry run of the hold step validates the request the
   # gate would get from a fixture plan, stopping before an OIDC token is fetched or Clearance is called.

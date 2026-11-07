@@ -29,6 +29,9 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   other change kinds stay exact-registrant.
 
 ### Added
+- G-ARGO-2: the `ClearanceGrant` CRD (`clearancegrants.clearance.hangar.io/v1`) and the admission policies
+  `clearance-protected-writes` and `clearance-grant-writer` (`providers/argocd/crd/`), shipped in Warn mode, with an
+  envtest suite (`test_admission.py`, CI job `admission-policy`). docs/gate.md "G-ARGO-2".
 - **`objects[].op: "unchanged"`** on a change request: an object in the rendered tree that the diff does not touch. It
   is accepted, never tiered, and is in the token with `changed: false`, so Glidepath's clearance-gate can register every
   rendered object (grants need the whole tree). Glidepath sends it, so it needs a Clearance release with this first.
