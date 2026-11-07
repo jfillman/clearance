@@ -67,6 +67,9 @@ func TestTheGrantFeedIsSignedWithEveryTokenWrite(t *testing.T) {
 		t.Fatal(n, err)
 	}
 	feed2, _ := f.feed(t, ks, "hangar-prod", feed.Seq)
+	if len(feed.Epoch) != 64 || feed2.Epoch != feed.Epoch {
+		t.Fatalf("the epoch is the chain's first record's hash, the same across feeds: %q %q", feed.Epoch, feed2.Epoch)
+	}
 	if feed2.Seq != 2 || feed2.Entries[0].PayloadSHA256 == feed.Entries[0].PayloadSHA256 {
 		t.Fatalf("after refresh %+v", feed2)
 	}

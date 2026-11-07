@@ -80,7 +80,11 @@ func (s *Service) signFeed(ctx context.Context, tx store.Tx, cluster string, now
 	if err != nil {
 		return err
 	}
-	f := token.Feed{Type: token.FeedType, Issuer: s.Tokens.issuer(), Cluster: cluster, Seq: seq,
+	epoch, err := feedEpoch(ctx, tx)
+	if err != nil {
+		return err
+	}
+	f := token.Feed{Type: token.FeedType, Issuer: s.Tokens.issuer(), Cluster: cluster, Epoch: epoch, Seq: seq,
 		IssuedAt: now.Unix(), Expires: now.Add(FeedTTL).Unix(), RecordsSeq: head, Entries: []token.FeedEntry{}}
 	served := make([]FeedToken, 0, len(live))
 	for _, tk := range live {
@@ -110,6 +114,24 @@ func (s *Service) signFeed(ctx context.Context, tx store.Tx, cluster string, now
 	}
 	return tx.PutFeed(ctx, store.Feed{Cluster: cluster, Seq: seq, KeyID: s.Tokens.Signer.KeyID(),
 		IssuedAt: time.Unix(f.IssuedAt, 0).UTC(), ExpiresAt: time.Unix(f.Expires, 0).UTC(), Envelope: rawEnv, Tokens: rawToks})
+}
+
+// feedEpoch names the database a feed's seq counts in: the hash of the chain's first record, which no two databases
+// share (it carries the time it was written) and which a rebuilt or restored database does not keep. An empty chain
+// has the genesis hash (it signs no feed until a token exists, and a token comes with a record).
+func feedEpoch(ctx context.Context, tx store.Tx) (string, error) {
+	first, err := tx.Records(ctx, 0, 1)
+	if err != nil {
+		return "", err
+	}
+	if len(first) == 0 {
+		return store.Genesis, nil
+	}
+	h, _ := first[0]["hash"].(string)
+	if h == "" {
+		return "", errors.New("gate: the chain's first record has no hash")
+	}
+	return h, nil
 }
 
 // RefreshFeeds re-signs every cluster's feed that is older than FeedResign or signed by a key the core no longer

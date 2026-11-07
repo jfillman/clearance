@@ -1,0 +1,61 @@
+# Clearance's Argo CD gate agent. Install it on the protected cluster (hangar-prod), in its own namespace.
+image:
+  repository: ghcr.io/jfillman/clearance-argocd-agent
+  # Empty: the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# The agent's identity on the core is this service account: the core's CLEARANCE_FOREIGN_SERVICE_ACCOUNTS lists
+# <namespace>/<name> and clearance-api's feedReaders names <cluster>/<namespace>/<name> (docs/gate.md).
+serviceAccount:
+  name: clearance-argocd-agent
+
+# The protected cluster's name as the core knows it: its grant feed GET /v1/grant-feeds/<cluster>.
+cluster: ""
+# The environment of a protected namespace that carries no clearance.hangar.io/environment label.
+environment: prod
+
+# clearance-api (the keys, the grant feed) and the core (records, break-glass), reached from this cluster.
+apiURL: ""
+coreURL: ""
+# CLEARANCE_TOKEN_ISSUER of the core (empty: clearance).
+issuer: clearance
+# The projected token's audience: the core's CLEARANCE_FOREIGN_AUDIENCE (default clearance).
+tokenAudience: clearance
+
+# Argo CD: the namespace its Applications live in, and the projects the gate protects (comma-free list; "*": all).
+argocd:
+  namespace: argocd
+  projects: []
+
+# The namespaces labelled clearance.hangar.io/protected=true. The agent reads (never writes) workloads only in these
+# namespaces: one Role and RoleBinding per entry. It reads no Secret anywhere.
+protectedNamespaces: []
+
+# The ClearanceGrant CRD's group/version (G-ARGO-2).
+grantAPI: clearance.hangar.io/v1alpha1
+
+grantInterval: 30s
+scanInterval: 1m
+
+# hangar-prod reaches the lab core over plain HTTP through a host alias to the other cluster's ingress.
+hostAliases: []
+#  - ip: 192.168.1.72
+#    hostnames: [clearance.hangar-dev.local, clearance-api.hangar-dev.local]
+
+# Egress for the agent: DNS, the kube-apiserver and the core/api. Off by default; turn it on with the CIDRs.
+networkPolicy:
+  enabled: false
+  apiServerCIDRs: []
+  clearanceCIDRs: []
+  clearancePorts: [80, 443]
+
+resources:
+  requests: {cpu: 20m, memory: 32Mi}
+  limits: {memory: 128Mi}
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []

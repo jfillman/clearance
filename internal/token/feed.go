@@ -46,8 +46,12 @@ type Feed struct {
 	Type    string `json:"_type"`
 	Issuer  string `json:"iss"`
 	Cluster string `json:"cluster"`
-	// Seq is the cluster's feed number: one more than the feed it replaces, never reused. A reader keeps the highest
-	// it accepted and refuses a lower one.
+	// Epoch names the database Seq counts in (the hash of the evidence chain's first record). A rebuilt or restored
+	// core has a new epoch and starts Seq again at 1; a reader keeps the epoch beside the highest seq it accepted:
+	// a new epoch is taken from seq 1, the same epoch with a lower seq is a replay (ErrFeedReplay).
+	Epoch string `json:"epoch"`
+	// Seq is the cluster's feed number within the epoch: one more than the feed it replaces, never reused. A reader
+	// keeps the highest it accepted and refuses a lower one of the same epoch.
 	Seq int64 `json:"seq"`
 	// IssuedAt and Expires are NumericDate seconds. The core re-signs a cluster's feed whenever one of its tokens is
 	// issued, re-issued or revoked, and at least every few minutes otherwise, so a reader holding an expired feed
@@ -80,6 +84,8 @@ func (f *Feed) Check() error {
 		return fmt.Errorf("%w: iss and cluster are required", ErrMalformed)
 	case f.Seq < 1:
 		return fmt.Errorf("%w: seq starts at 1", ErrMalformed)
+	case len(f.Epoch) > 128:
+		return fmt.Errorf("%w: epoch is over 128 bytes", ErrMalformed)
 	case f.IssuedAt <= 0 || f.Expires <= f.IssuedAt:
 		return fmt.Errorf("%w: exp must follow iat", ErrMalformed)
 	case time.Duration(f.Expires-f.IssuedAt)*time.Second > MaxFeedLifetime:
@@ -144,6 +150,9 @@ type FeedOptions struct {
 	// MinSeq is the highest seq the reader accepted before (0: none): a feed below it is a replay. The same seq is
 	// the same feed read again, and is accepted.
 	MinSeq int64
+	// Epoch is the epoch MinSeq belongs to ("": it applies to every epoch, as before). A feed of another epoch is a
+	// rebuilt core's, whose seq starts again at 1: MinSeq does not apply to it.
+	Epoch  string
 	Now    func() time.Time // nil: time.Now
 	Leeway time.Duration    // 0: DefaultLeeway; negative: none
 }
@@ -175,7 +184,7 @@ func VerifyFeed(raw []byte, keys KeySet, opts FeedOptions) (*Feed, error) {
 	if opts.Cluster == "" || f.Cluster != opts.Cluster {
 		return nil, fmt.Errorf("%w: %q", ErrFeedCluster, f.Cluster)
 	}
-	if f.Seq < opts.MinSeq {
+	if f.Seq < opts.MinSeq && (opts.Epoch == "" || f.Epoch == opts.Epoch) {
 		return nil, fmt.Errorf("%w: %d < %d", ErrFeedReplay, f.Seq, opts.MinSeq)
 	}
 	now := time.Now

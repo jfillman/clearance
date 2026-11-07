@@ -153,3 +153,24 @@ func FuzzVerifyFeed(f *testing.F) {
 		_, _ = token.VerifyFeed(b, ks, feedOpts(t0, 0))
 	})
 }
+
+func TestGrantFeedEpoch(t *testing.T) {
+	s := newSigner(t)
+	f := token.Feed{Type: token.FeedType, Issuer: "clearance", Cluster: "prod-1", Epoch: "e1", Seq: 3, IssuedAt: t0.Unix(),
+		Expires: t0.Add(5 * time.Minute).Unix(), RecordsSeq: 1}
+	env, err := token.SignFeed(bg, s, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(env)
+	o := feedOpts(t0, 9)
+	o.Epoch = "e1"
+	if _, err := token.VerifyFeed(raw, keys(t, s), o); !errors.Is(err, token.ErrFeedReplay) {
+		t.Errorf("same epoch, lower seq: %v", err)
+	}
+	o.Epoch = "e0" // the reader last saw another epoch: a rebuilt core, seq starts again
+	got, err := token.VerifyFeed(raw, keys(t, s), o)
+	if err != nil || got.Epoch != "e1" {
+		t.Errorf("new epoch: %v %+v", err, got)
+	}
+}

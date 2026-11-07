@@ -37,7 +37,7 @@ are **Built**; the section [Not served yet](#not-served-yet) lists what still is
 | Provider | Role | Status |
 | --- | --- | --- |
 | Autopilot gateway (`autopilot-gateway`) | runtime | Built in Python; it calls the Go core from R-3b (autopilot#71) and is tested then, and again as the Go port (A-9) |
-| Argo CD gate: CMP, grant-sync agent, PreSync wait (G-ARGO-3, -4, -5) | deployment | Proposal; shapes chosen in [gate.md, phase 2](gate.md#phase-2-design-pass-g-argo-1-2026-11-03) (CMP principal `hangar-prod/argocd-apps/argocd-apps-repo-server`, a verifier; the agent its own); G-ARGO-9 requires conformance |
+| Argo CD gate: CMP, grant-sync agent, PreSync wait (G-ARGO-3, -4, -5) | deployment | The agent (G-ARGO-3) **Built**, [gate.md](gate.md#the-argo-cd-agent-g-argo-3-built); the CMP and the PreSync wait Proposal; shapes chosen in [gate.md, phase 2](gate.md#phase-2-design-pass-g-argo-1-2026-11-03) (CMP principal `hangar-prod/argocd-apps/argocd-apps-repo-server`, a verifier; the agent its own); G-ARGO-9 requires conformance |
 | Terraform gate: `clearance hold`, `release`, `report` (G-TF-3) | deployment | Proposal |
 | Clearance GitHub App, deployment protection rule | deployment | Built inside the core (`internal/githubapp`); it answers GitHub's callback rather than applying, so it is not driven by this suite |
 | `clearance register` (a workflow registering its change) | deployment, register step only | Built (`cmd/clearance/register.go`) |
