@@ -116,12 +116,12 @@ Enable data events for the state bucket's key on a trail, and consider a CloudTr
 **Config** (`--config`, JSON): `{"workspaces": [{"name": "default", "key": "prod/network.tfstate", "bucket":
 "acme-tf-state", "dir": "infra/network", "env": "prod"}]}`. Flags: `--core-url`, `--api-url`, `--token-file`,
 `--region`, `--only drift|untraced|all`, `--window` (default 2h: longer than the schedule), `--settle` (10m),
-`--slack` (5m), `--terraform`. Exit 1 when any workspace's check failed.
+`--slack` (5m), `--drift-dedup` (7 days: how long a filed drift suppresses the same drift; it is its own lookback because drift runs nightly, far apart from `--window`), `--terraform`. Exit 1 when any workspace's check failed.
 
 **Credentials, never stored.** Clearance: a bearer token from `--token-file` (a projected service-account token or the
 workflow's OIDC token), read per request. AWS: `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN` from
 the environment, or `AWS_ROLE_ARN` + `AWS_WEB_IDENTITY_TOKEN_FILE` (the detector assumes the role for 15 minutes with
-STS and keeps the keys in memory). Requests are SigV4-signed with the standard library; the repository takes no AWS
+STS, mints them once per run and keeps them in memory only, replacing them 2 minutes before they expire). Requests are SigV4-signed with the standard library; the repository takes no AWS
 SDK. The drift plan's own provider credentials are the plan role's, outside this tool.
 
 **Read-only IAM policy** (for the owner to create; nothing here creates it). Attach it to the detector's role beside

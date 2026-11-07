@@ -167,7 +167,7 @@ func TestAddressesOf(t *testing.T) {
 // AWS's published SigV4 test vector (get-vanilla).
 func TestSigV4Vector(t *testing.T) {
 	req, _ := http.NewRequest("GET", "https://example.amazonaws.com/", nil)
-	Sign(req, nil, Creds{"AKIDEXAMPLE", "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY", ""}, "service", "us-east-1",
+	Sign(req, nil, Creds{AccessKey: "AKIDEXAMPLE", SecretKey: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"}, "service", "us-east-1",
 		time.Date(2015, 8, 30, 12, 36, 0, 0, time.UTC))
 	want := "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, " +
 		"SignedHeaders=host;x-amz-date, Signature=5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31"
@@ -205,7 +205,7 @@ func TestAWSOverHTTP(t *testing.T) {
 	}))
 	defer srv.Close()
 	a := &AWS{Region: "us-east-1", S3Endpoint: srv.URL, TrailEndpoint: srv.URL, HTTP: srv.Client(), Now: func() time.Time { return t0 },
-		Creds: func(context.Context, *http.Client, string) (Creds, error) { return Creds{"AK", "SK", "TOK"}, nil }}
+		Creds: func(context.Context, *http.Client, string) (Creds, error) { return Creds{AccessKey: "AK", SecretKey: "SK", Token: "TOK"}, nil }}
 	vs, err := a.ListVersions(context.Background(), "tf-state", "prod/net.tfstate")
 	if err != nil || len(vs) != 1 || vs[0].ID != "v1" || !vs[0].Modified.Equal(time.Date(2026, 11, 7, 11, 0, 0, 0, time.UTC)) {
 		t.Fatal(vs, err)
@@ -236,7 +236,7 @@ func TestParseSTS(t *testing.T) {
   </AssumeRoleWithWebIdentityResult>
   <ResponseMetadata><RequestId>ad4156e9-bce1-11e2-82e6-6b6efEXAMPLE</RequestId></ResponseMetadata>
 </AssumeRoleWithWebIdentityResponse>`))
-	if err != nil || c.AccessKey != "ASIACLKWSDQRAOEXAMPLE" || c.SecretKey != "wJalrXUtnFEMI/K7MDENG/bPxRfiCYzEXAMPLEKEY" ||
+	if err != nil || !c.Expires.Equal(time.Date(2026, 11, 7, 13, 0, 0, 0, time.UTC)) || c.AccessKey != "ASIACLKWSDQRAOEXAMPLE" || c.SecretKey != "wJalrXUtnFEMI/K7MDENG/bPxRfiCYzEXAMPLEKEY" ||
 		!strings.HasPrefix(c.Token, "AQoDYXdzEE0a8ANXXXXXXXXNO1ewxE5TijQyp") {
 		t.Fatal(c, err)
 	}
@@ -259,5 +259,46 @@ func TestReportedMatchesTheWholeWorkspace(t *testing.T) {
 	}
 	if det := c.reqs[0].Record.Exception["detail"].(string); !strings.Contains(det, " 0 address(es)") {
 		t.Fatal(det)
+	}
+}
+
+func TestDriftDedupUsesItsOwnLookback(t *testing.T) {
+	var asked time.Time
+	d, _ := detector(fakePlan{exit: 0}, nil, nil, fakeEv{})
+	d.Ev = sinceEv{&asked}
+	if err := d.Drift(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := t0.Sub(asked); got != 7*24*time.Hour {
+		t.Fatalf("drift de-duplication looks back %s, want 7 days (not the 2h window)", got)
+	}
+}
+
+type sinceEv struct{ since *time.Time }
+
+func (s sinceEv) Outcomes(context.Context, time.Time) ([]Outcome, error) { return nil, nil }
+func (s sinceEv) Reported(_ context.Context, since time.Time) ([]Reported, error) {
+	*s.since = since
+	return nil, nil
+}
+
+func TestCredentialsMintedOnceAndRefreshedBeforeExpiry(t *testing.T) {
+	now, minted := t0, 0
+	a := &AWS{Now: func() time.Time { return now }, Creds: func(context.Context, *http.Client, string) (Creds, error) {
+		minted++
+		return Creds{AccessKey: "AK", SecretKey: "SK", Expires: now.Add(15 * time.Minute)}, nil
+	}}
+	for i := 0; i < 5; i++ {
+		if _, err := a.credentials(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if minted != 1 {
+		t.Fatalf("minted %d times for 5 requests", minted)
+	}
+	now = t0.Add(14 * time.Minute) // inside the 2 minute refresh margin
+	a.credentials(context.Background())
+	if minted != 2 {
+		t.Fatalf("minted %d, want a refresh near expiry", minted)
 	}
 }

@@ -86,6 +86,7 @@ type Core interface {
 type Config struct {
 	Workspaces []Workspace
 	Window     time.Duration // how far back state versions are looked at (default 2h: longer than the schedule)
+	DriftDedup time.Duration // how far back a filed drift suppresses the same drift (default 7 days: drift runs nightly)
 	Settle     time.Duration // a version younger than this is left for its outcome to arrive (default 10m)
 	Slack      time.Duration // how far outside an apply window a state write may fall and still be its (default 5m)
 	Version    string
@@ -94,6 +95,9 @@ type Config struct {
 func (c *Config) defaults() {
 	if c.Window == 0 {
 		c.Window = 2 * time.Hour
+	}
+	if c.DriftDedup == 0 {
+		c.DriftDedup = 7 * 24 * time.Hour
 	}
 	if c.Settle == 0 {
 		c.Settle = 10 * time.Minute
@@ -157,11 +161,11 @@ func (d *Detector) post(ctx context.Context, ws Workspace, result string, x map[
 	return nil
 }
 
-// Drift plans every workspace and reports a diff as kind=drift, once per distinct set of addresses within the
-// window. Every workspace is tried; the errors are joined.
+// Drift plans every workspace and reports a diff as kind=drift, once per distinct set of addresses within
+// DriftDedup. Every workspace is tried; the errors are joined.
 func (d *Detector) Drift(ctx context.Context) error {
 	d.Cfg.defaults()
-	done, err := d.Ev.Reported(ctx, d.now().Add(-d.Cfg.Window))
+	done, err := d.Ev.Reported(ctx, d.now().Add(-d.Cfg.DriftDedup))
 	if err != nil {
 		return fmt.Errorf("reading what is already reported: %w", err)
 	}

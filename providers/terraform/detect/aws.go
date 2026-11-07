@@ -21,13 +21,17 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
 const maxAWSBody = 16 << 20
 
 // Creds are AWS credentials. Token is empty for long-lived keys.
-type Creds struct{ AccessKey, SecretKey, Token string }
+type Creds struct {
+	AccessKey, SecretKey, Token string
+	Expires                     time.Time // zero: long-lived keys, no expiry
+}
 
 // CredSource gives a run its credentials.
 type CredSource func(ctx context.Context, hc *http.Client, region string) (Creds, error)
@@ -36,7 +40,7 @@ type CredSource func(ctx context.Context, hc *http.Client, region string) (Creds
 // AWS_ROLE_ARN and AWS_WEB_IDENTITY_TOKEN_FILE are set (IRSA, GitHub OIDC), it assumes the role with the token.
 func EnvCreds(ctx context.Context, hc *http.Client, region string) (Creds, error) {
 	if k, s := os.Getenv("AWS_ACCESS_KEY_ID"), os.Getenv("AWS_SECRET_ACCESS_KEY"); k != "" && s != "" {
-		return Creds{k, s, os.Getenv("AWS_SESSION_TOKEN")}, nil
+		return Creds{AccessKey: k, SecretKey: s, Token: os.Getenv("AWS_SESSION_TOKEN")}, nil
 	}
 	role, file := os.Getenv("AWS_ROLE_ARN"), os.Getenv("AWS_WEB_IDENTITY_TOKEN_FILE")
 	if role == "" || file == "" {
@@ -73,6 +77,7 @@ func parseSTS(body []byte) (Creds, error) {
 				AccessKeyId     string
 				SecretAccessKey string
 				SessionToken    string
+				Expiration      string
 			} `xml:"Credentials"`
 		} `xml:"AssumeRoleWithWebIdentityResult"`
 	}
@@ -83,7 +88,11 @@ func parseSTS(body []byte) (Creds, error) {
 	if c.AccessKeyId == "" || c.SecretAccessKey == "" {
 		return Creds{}, errors.New("sts answered without credentials")
 	}
-	return Creds{c.AccessKeyId, c.SecretAccessKey, c.SessionToken}, nil
+	cr := Creds{AccessKey: c.AccessKeyId, SecretKey: c.SecretAccessKey, Token: c.SessionToken}
+	if t, err := time.Parse(time.RFC3339, c.Expiration); err == nil {
+		cr.Expires = t
+	}
+	return cr, nil
 }
 
 func clip(b []byte) string {
@@ -196,6 +205,26 @@ type AWS struct {
 	Now    func() time.Time
 	// S3Endpoint and TrailEndpoint override the service URLs (tests, VPC endpoints). S3 is path-style when set.
 	S3Endpoint, TrailEndpoint string
+
+	mu    sync.Mutex
+	creds *Creds // in memory only: minted once, reused until shortly before it expires
+}
+
+// credsRefreshBefore is how long before expiry a cached credential is replaced.
+const credsRefreshBefore = 2 * time.Minute
+
+func (a *AWS) credentials(ctx context.Context) (Creds, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if c := a.creds; c != nil && (c.Expires.IsZero() || a.now().Before(c.Expires.Add(-credsRefreshBefore))) {
+		return *c, nil
+	}
+	c, err := a.Creds(ctx, a.client(), a.Region)
+	if err != nil {
+		return Creds{}, err
+	}
+	a.creds = &c
+	return c, nil
 }
 
 func (a *AWS) client() *http.Client {
@@ -213,7 +242,7 @@ func (a *AWS) now() time.Time {
 }
 
 func (a *AWS) send(ctx context.Context, req *http.Request, body []byte, service string) ([]byte, error) {
-	c, err := a.Creds(ctx, a.client(), a.Region)
+	c, err := a.credentials(ctx)
 	if err != nil {
 		return nil, err
 	}

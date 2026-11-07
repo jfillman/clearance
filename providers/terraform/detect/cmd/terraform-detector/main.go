@@ -57,6 +57,7 @@ func run() error {
 		only      = fs.String("only", "all", "drift, untraced or all")
 		window    = fs.Duration("window", 2*time.Hour, "how far back state versions are checked (longer than the schedule)")
 		settle    = fs.Duration("settle", 10*time.Minute, "a state version younger than this waits for its outcome")
+		driftDed  = fs.Duration("drift-dedup", 7*24*time.Hour, "how long a filed drift suppresses the same drift (drift runs nightly, so longer than --window)")
 		slack     = fs.Duration("slack", 5*time.Minute, "tolerance around an apply window")
 		tfBin     = fs.String("terraform", "terraform", "the terraform binary")
 		showVer   = fs.Bool("version", false, "print the version")
@@ -71,9 +72,10 @@ func run() error {
 		fmt.Println(detect.ProviderName + "/" + version)
 		return nil
 	}
-	for k, v := range map[string]string{"config": *cfgFile, "api-url": *apiURL, "core-url": *coreURL, "token-file": *tokenFile, "region": *region} {
-		if v == "" {
-			return fmt.Errorf("--%s is required", k)
+	for _, f := range []struct{ name, val string }{{"config", *cfgFile}, {"api-url", *apiURL}, {"core-url", *coreURL},
+		{"token-file", *tokenFile}, {"region", *region}} { // a fixed order: the first missing one is named
+		if f.val == "" {
+			return usageError("--" + f.name + " is required")
 		}
 	}
 	raw, err := os.ReadFile(*cfgFile)
@@ -102,7 +104,7 @@ func run() error {
 	}
 	aws := &detect.AWS{Region: *region, Creds: detect.EnvCreds}
 	d := &detect.Detector{
-		Cfg:   detect.Config{Workspaces: file.Workspaces, Window: *window, Settle: *settle, Slack: *slack, Version: version},
+		Cfg:   detect.Config{Workspaces: file.Workspaces, Window: *window, DriftDedup: *driftDed, Settle: *settle, Slack: *slack, Version: version},
 		Plan:  detect.Terraform{Bin: *tfBin},
 		State: aws, Trail: aws,
 		Ev:   &detect.HTTPEvidence{Base: *apiURL, Token: tok},
