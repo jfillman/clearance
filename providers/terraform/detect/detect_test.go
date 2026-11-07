@@ -157,10 +157,13 @@ func TestBlindOutcomeListReportsNothing(t *testing.T) {
 }
 
 func TestAddressesOf(t *testing.T) {
-	got := AddressesOf([]byte(`{"resource_changes":[{"address":"a.x","change":{"actions":["no-op"]}},
+	got, err := AddressesOf([]byte(`{"resource_changes":[{"address":"a.x","change":{"actions":["no-op"]}},
 	 {"address":"a.y","change":{"actions":["update"]}},{"address":"a.z","change":{"actions":["delete","create"]}}]}`))
-	if strings.Join(got, ",") != "a.y,a.z" {
-		t.Fatal(got)
+	if err != nil || strings.Join(got, ",") != "a.y,a.z" {
+		t.Fatal(got, err)
+	}
+	if _, err := AddressesOf([]byte(`{"resource_changes": [`)); err == nil {
+		t.Fatal("unparseable plan JSON must be an error, not an empty drift")
 	}
 }
 

@@ -56,7 +56,11 @@ func (t Terraform) Plan(ctx context.Context, ws Workspace) (int, []string, error
 	if err != nil {
 		return 2, nil, fmt.Errorf("terraform show: %w", err)
 	}
-	return 2, AddressesOf(js), nil
+	addrs, err := AddressesOf(js)
+	if err != nil {
+		return 2, nil, fmt.Errorf("terraform show -json: %w", err)
+	}
+	return 2, addrs, nil
 }
 
 func tail(b []byte) string {
@@ -66,8 +70,8 @@ func tail(b []byte) string {
 	return strings.TrimSpace(string(b))
 }
 
-// AddressesOf is the resource addresses a plan's JSON changes (anything but no-op and read).
-func AddressesOf(planJSON []byte) []string {
+// AddressesOf is the resource addresses a plan's JSON changes (anything but no-op and read); a JSON that does not parse is an error, never an empty list.
+func AddressesOf(planJSON []byte) ([]string, error) {
 	var p struct {
 		RC []struct {
 			Address string `json:"address"`
@@ -76,8 +80,8 @@ func AddressesOf(planJSON []byte) []string {
 			} `json:"change"`
 		} `json:"resource_changes"`
 	}
-	if json.Unmarshal(planJSON, &p) != nil {
-		return nil
+	if err := json.Unmarshal(planJSON, &p); err != nil {
+		return nil, fmt.Errorf("the plan JSON does not parse: %w", err)
 	}
 	var out []string
 	for _, r := range p.RC {
@@ -87,7 +91,7 @@ func AddressesOf(planJSON []byte) []string {
 		}
 		out = append(out, r.Address)
 	}
-	return out
+	return out, nil
 }
 
 // HTTPEvidence reads clearance-api (GET /v1/evidence, GET /v1/exceptions) as the detector's identity: a bearer
