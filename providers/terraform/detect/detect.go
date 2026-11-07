@@ -68,7 +68,7 @@ type Outcome struct {
 
 // Reported is a deploy.exception the detector already filed: its kind, state version and drift fingerprint.
 type Reported struct {
-	Kind, Bucket, Key, Version, Fingerprint string
+	Kind, Backend, Key, Name, Version, Fingerprint string
 }
 
 // Evidence reads Clearance's records.
@@ -182,6 +182,7 @@ func (d *Detector) Drift(ctx context.Context) error {
 		if reportedDrift(done, ws, fp) {
 			continue
 		}
+		n := len(addrs)
 		if len(addrs) == 0 { // a diff with no resource change (outputs only) names nothing to report
 			addrs = []string{"(outputs or data only)"}
 		}
@@ -189,7 +190,7 @@ func (d *Detector) Drift(ctx context.Context) error {
 			addrs = addrs[:4000]
 		}
 		x := map[string]any{"kind": "drift", "addresses": addrs, "observed": fp,
-			"detail": fmt.Sprintf("terraform plan -detailed-exitcode exited 2 on %s: %d address(es) differ from the state with no cleared plan behind them", ws.Key, len(addrs))}
+			"detail": fmt.Sprintf("terraform plan -detailed-exitcode exited 2 on %s: %d address(es) differ from the state with no cleared plan behind them", ws.Key, n)}
 		if err := d.post(ctx, ws, "drift", x, d.Provider()); err != nil {
 			errs = append(errs, err.Error())
 		}
@@ -199,7 +200,7 @@ func (d *Detector) Drift(ctx context.Context) error {
 
 func reportedDrift(done []Reported, ws Workspace, fp string) bool {
 	for _, r := range done {
-		if r.Kind == "drift" && r.Bucket == "" && r.Key == ws.Key && r.Fingerprint == fp {
+		if r.Kind == "drift" && sameWorkspace(r, ws) && r.Fingerprint == fp {
 			return true
 		}
 	}
@@ -271,9 +272,14 @@ func (d *Detector) Untraced(ctx context.Context) error {
 	return joinErrs(errs)
 }
 
+// sameWorkspace: the record's destination.workspace is the whole workspace {backend, key, name}.
+func sameWorkspace(r Reported, ws Workspace) bool {
+	return r.Backend == ws.backend() && r.Key == ws.Key && r.Name == ws.Name
+}
+
 func reportedVersion(done []Reported, ws Workspace, id string) bool {
 	for _, r := range done {
-		if r.Kind == "untraced-apply" && r.Key == ws.Key && r.Version == id {
+		if r.Kind == "untraced-apply" && sameWorkspace(r, ws) && r.Version == id {
 			return true
 		}
 	}

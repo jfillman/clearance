@@ -83,7 +83,7 @@ func TestDriftFound(t *testing.T) {
 		t.Fatal(r.Record.Destination)
 	}
 	// the same drift, already filed, is not filed again
-	d.Ev = fakeEv{reported: []Reported{{Kind: "drift", Key: ws.Key, Fingerprint: x["observed"].(string)}}}
+	d.Ev = fakeEv{reported: []Reported{{Kind: "drift", Backend: "s3", Key: ws.Key, Name: "default", Fingerprint: x["observed"].(string)}}}
 	if err := d.Drift(context.Background()); err != nil || len(c.reqs) != 1 {
 		t.Fatal(err, len(c.reqs))
 	}
@@ -136,7 +136,7 @@ func TestUntracedVersionNamesThePrincipal(t *testing.T) {
 		t.Fatal(x)
 	}
 	// filed once: the next run sees it reported
-	d.Ev = fakeEv{reported: []Reported{{Kind: "untraced-apply", Key: ws.Key, Version: "v9"}}}
+	d.Ev = fakeEv{reported: []Reported{{Kind: "untraced-apply", Backend: "s3", Key: ws.Key, Name: "default", Version: "v9"}}}
 	if err := d.Untraced(context.Background()); err != nil || len(c.reqs) != 1 {
 		t.Fatal(err, len(c.reqs))
 	}
@@ -242,5 +242,22 @@ func TestParseSTS(t *testing.T) {
 	}
 	if _, err := parseSTS([]byte(`<AssumeRoleWithWebIdentityResponse></AssumeRoleWithWebIdentityResponse>`)); err == nil {
 		t.Fatal("an answer with no credentials is an error")
+	}
+}
+
+// One workspace's filed drift does not suppress another's (same key, other workspace name), and a drift with no
+// resource addresses is counted as zero in its detail.
+func TestReportedMatchesTheWholeWorkspace(t *testing.T) {
+	d, c := detector(fakePlan{exit: 2, addrs: []string{"a.x"}}, nil, nil, fakeEv{})
+	d.Ev = fakeEv{reported: []Reported{{Kind: "drift", Backend: "s3", Key: ws.Key, Name: "staging", Fingerprint: Fingerprint([]string{"a.x"})}}}
+	if err := d.Drift(context.Background()); err != nil || len(c.reqs) != 1 {
+		t.Fatal(err, len(c.reqs))
+	}
+	d, c = detector(fakePlan{exit: 2}, nil, nil, fakeEv{})
+	if err := d.Drift(context.Background()); err != nil || len(c.reqs) != 1 {
+		t.Fatal(err, len(c.reqs))
+	}
+	if det := c.reqs[0].Record.Exception["detail"].(string); !strings.Contains(det, " 0 address(es)") {
+		t.Fatal(det)
 	}
 }

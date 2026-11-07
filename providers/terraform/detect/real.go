@@ -184,11 +184,8 @@ func (e *HTTPEvidence) Reported(ctx context.Context, since time.Time) ([]Reporte
 		if k != "drift" && k != "untraced-apply" {
 			continue
 		}
-		key := str(r, "exception", "state", "key")
-		if key == "" {
-			key = str(r, "destination", "workspace", "key")
-		}
-		out = append(out, Reported{Kind: k, Key: key, Version: str(r, "exception", "state", "version"),
+		out = append(out, Reported{Kind: k, Backend: str(r, "destination", "workspace", "backend"),
+			Key: str(r, "destination", "workspace", "key"), Name: str(r, "destination", "workspace", "name"), Version: str(r, "exception", "state", "version"),
 			Fingerprint: str(r, "exception", "observed")})
 	}
 	return out, nil
