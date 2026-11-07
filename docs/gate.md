@@ -451,7 +451,7 @@ release log already holds a promotion attestation by Rekor index, which is the p
 | Record | New fields | Written by, when |
 | --- | --- | --- |
 | Clearance change row and its `deploy.request` | `release: {id}`, the `releaseId` | the registering provider. The CMP reads it from the rendered Rollout's `hangar.io/release-id` (or the values file's `releaseTracking.releaseId` when the app has no Rollout); because it is inside the tree, it is bound by the tree digest, not only claimed. The clearance-gate check sends the same value from `release.yaml` |
-| `deploy.outcome` | `release: {id}` beside `change: {id, tree}` | the agent, from the live Rollout's `hangar.io/release-id` and the object's `clearance.hangar.io/grant` |
+| `deploy.outcome` | `release: {id}` beside `change: {id, tree}` (Built, G-ARGO-6) | the agent, from the objects' `clearance.hangar.io/release` stamp (else the Rollout's `hangar.io/release-id`) and the object's `clearance.hangar.io/grant` |
 | the attestation predicate (C-2) | `release: {id}` | the core's signer, copied from the change |
 | `release-tracking-<chainId>` ConfigMap | `clearanceId`, `clearanceTree`, `clearanceRequestSeq`, `clearanceRequestHash` | the `clearance-gate` task, right after `POST /v1/clearances` answers (the answer gains the `deploy.request` record's `seq` and `hash`) |
 | glidepath-api `GET /v1/apps/{app}/releases/{chainId}` | `clearance: {id, tree, request: {seq, hash}}` | glidepath-api, from the ConfigMap |
@@ -487,6 +487,59 @@ release log already holds a promotion attestation by Rekor index, which is the p
   retires with the sign-off status (decision 2 above), replaced by the clearance block.
 - Clearance stays installable without Glidepath: `release` is an optional, opaque identifier on the change, and the
   annotation it is read from is deployment vocabulary (Hangar's `hangar.io/release-id`), not product code.
+
+### The release-record join (G-ARGO-6, Built)
+
+What is built of the design above, and the chain a test walks end to end (`internal/server/release_join_test.go`):
+pull request, change, grant, outcome, attestation, release record, joined by ids and nothing else.
+
+| Link | Carries | Where |
+| --- | --- | --- |
+| the PR's change | `id`, `tree_digest`, `pr`, `head` | `POST /v1/clearances`; the `clearance-gate` task |
+| the release record | `clearanceId`, `clearanceTree` | glidepath's `release-tracking-<chainId>` ConfigMap, written by the `clearance-gate` task; glidepath-api returns `clearance: {id, tree}`; the release log has `clearance_id`, `clearance_tree` |
+| the grant | the change id, in the cleared token and on every object as `clearance.hangar.io/grant` | the CMP, the agent |
+| the outcome | `release: {id}` and `change: {id, tree}` | the agent's `deploy.outcome` on `POST /v1/records` |
+| the change's view | `outcome: {seq, hash, applied, matched, digest, release, provider, at}` | `GET /v1/clearances/{id}` on the core and clearance-api |
+| the attestation | `predicate.release.id`, `predicate.outcome.seq`; the row's Rekor log index | `GET /v1/clearances/{id}` (`attestation`), `GET /v1/clearances/{id}/attestation` |
+
+- **One path for the release id.** A `deploy.outcome` names its release in the record's own `release {id}`
+  (`ProviderEvent.release`; a non-empty string, `id` only, a `deploy.outcome` field). A provider that still sends
+  `change.release.id` (the Argo CD agent before this change) is accepted: the core copies the id to `release` and
+  keeps `change` as sent. The signer reads `release.id`, else `change.release.id`, so older outcome records still
+  attest with their release. The agent now sends `release {id}` and no `change.release`.
+- **The outcome on the change.** The core sets the change's `outcome` in the same transaction that appends the
+  provider's `deploy.outcome` (`gate.Service.RecordOutcome`); the latest outcome stands, since an Application can sync
+  more than once. `seq` and `hash` are the record's, so a reader finds it on the chain (`GET /v1/evidence/{seq}`) and
+  checks the hash. `matched` is whether the applied digest is the cleared tree; a record with no digest is
+  `matched: false`, with `digest` empty. Everything in it is the provider's claim; the core did not observe the target.
+  A terraform-plan change keeps its own outcome route.
+- **The stamp.** The airframe chart renders `hangar.io/release-id` onto the Rollout, so the id is inside the tree and
+  bound by the tree digest. An app with no Rollout has none, so the CMP now copies the release id to every object as
+  `clearance.hangar.io/release`: the one the objects' `hangar.io/release-id` agree on, else `releaseTracking.releaseId`
+  of the value files. Two objects naming different releases get no stamp. It is a gate annotation: never hashed, removed
+  before the agent recomputes an object's digest, and a tenant-written one is replaced or removed, never trusted. The
+  agent reads the stamp first, then `hangar.io/release-id`; objects that disagree report no release and
+  `mixed_stamps`.
+
+Not built: registering the release id on the change (`GET /v1/clearances?release=<releaseId>`), and the
+`deploy.request` record's `seq` and `hash` in the registration answer, with glidepath's `clearanceRequestSeq` and
+`clearanceRequestHash` keys. The join above runs from the release record to the change by id, and from the outcome and
+attestation back to the release by `release.id`.
+
+**The live check on hangar-prod** (Unverified until run). For one real release of a protected app, with `<chainId>`
+from its release PR and `<app>` its name:
+
+1. `GET <glidepath-api>/v1/apps/<app>/releases/<chainId>`: `clearance.id` is `ch-...`, `clearance.tree` is the PR's tree
+   digest.
+2. `GET <clearance-api>/v1/clearances/<clearance.id>`: `state` is `cleared`; `outcome.release` is
+   `<chainId>:<cluster>/<env>`, `outcome.applied` and `outcome.matched` are true, `outcome.digest` equals the tree
+   digest from step 1; `attestation.outcome_seq` equals `outcome.seq` and `attestation.rekor_log_index` is set.
+3. `GET <clearance-api>/v1/evidence/<outcome.seq>`: the record's `hash` equals `outcome.hash` and its `release.id`
+   equals step 2's.
+4. `GET <clearance-api>/v1/clearances/<id>/attestation | clearance attest verify --subject sha256:<tree digest>`:
+   passes, and the statement's `predicate.release.id` is the same release id.
+5. The live Rollout (`kubectl -n <ns> get rollout -o jsonpath='{.metadata.annotations}'`) carries
+   `clearance.hangar.io/release` (needs the CMP of this change) and `clearance.hangar.io/grant` equal to the change id.
 
 ### Card changes this pass recommends
 

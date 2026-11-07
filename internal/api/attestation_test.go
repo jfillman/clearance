@@ -41,3 +41,28 @@ func TestTheAttestationReferenceAndTheEnvelope(t *testing.T) {
 		}
 	})
 }
+
+// G-ARGO-6: the change's view shows the outcome the core recorded (its release, and the record's seq and hash) beside
+// the attestation and its Rekor index, so a reader joins them by id.
+func TestTheChangeViewShowsTheOutcomeBesideTheAttestation(t *testing.T) {
+	w := feedWorld()
+	var rec map[string]any
+	if err := json.Unmarshal(w.changes[2].Record, &rec); err != nil {
+		t.Fatal(err)
+	}
+	rec["outcome"] = map[string]any{"seq": 5, "applied": true, "matched": true, "at": "2026-11-01T12:30:00Z",
+		"digest": strings.Repeat("c", 64), "release": "chain-1:hangar-prod/prod", "hash": strings.Repeat("d", 64), "provider": "argocd-agent"}
+	w.changes[2].Record, _ = json.Marshal(rec)
+	idx := int64(77)
+	w.atts = []store.Attestation{{ChangeID: "c-3", Digest: "sha256:" + strings.Repeat("a", 64), Backend: "keyless", RekorLogIndex: &idx,
+		OutcomeSeq: 5, RecordSeq: 6, CreatedAt: feedNow.Add(-time.Minute), Bundle: json.RawMessage(`{}`)}}
+	each(t, w, func(t *testing.T, h *harness) {
+		one := h.ok("/v1/clearances/c-3", "erin")
+		oc, _ := one["outcome"].(map[string]any)
+		att, _ := one["attestation"].(map[string]any)
+		if oc["release"] != "chain-1:hangar-prod/prod" || oc["hash"] != strings.Repeat("d", 64) || oc["matched"] != true ||
+			num(oc["seq"]) != 5 || num(att["outcome_seq"]) != num(oc["seq"]) || num(att["rekor_log_index"]) != 77 {
+			t.Fatalf("outcome %v attestation %v", oc, att)
+		}
+	})
+}

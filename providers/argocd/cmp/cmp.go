@@ -45,6 +45,7 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 	if err != nil {
 		return "", err
 	}
+	tree.SetRelease(releaseFromValues(cfg, srcDir))
 	fmt.Fprintf(d.Stderr, "clearance: %s/%s rendered %d objects, tree %s", cfg.App, cfg.Env, len(tree.Hashes), tree.Root[:12])
 	if r.ChartMerge != "" {
 		fmt.Fprintf(d.Stderr, ", chart %s@%s (%s)", cfg.ChartRepo, cfg.ChartRev, r.ChartMerge[:12])

@@ -24,6 +24,9 @@ const (
 	AnnTree     = "clearance.hangar.io/tree"     // the tree digest it was rendered in
 	AnnTracking = "argocd.argoproj.io/tracking-id"
 	AnnRelease  = "hangar.io/release-id"
+	// AnnStampRelease is the release id the CMP stamped on every object (G-ARGO-6); AnnRelease is what the chart
+	// renders onto the Rollout. The agent reads the stamp first.
+	AnnStampRelease = "clearance.hangar.io/release"
 
 	LabelProtected   = "clearance.hangar.io/protected" // namespace: the gate protects it
 	LabelActive      = "clearance.hangar.io/active"    // grant: the one the admission policy reads

@@ -66,7 +66,7 @@ func TestOutcomes(t *testing.T) {
 	if *r.App != "web" || *r.Result != "applied" || out["applied"] != true || out["observed_revision"] != "abc123" ||
 		out["health"] != "Healthy" || out["phase"] != "Succeeded" || out["digests"].(map[string]any)["sha256"] != tree ||
 		r.Change["id"] != ch2 || r.Change["tree"] != "sha256:"+tree ||
-		r.Change["release"].(map[string]any)["id"] != "chain-1:hangar-prod/prod" ||
+		r.Release["id"] != "chain-1:hangar-prod/prod" || r.Change["release"] != nil ||
 		r.Destination["cluster"] != "hangar-prod" || r.Destination["environment"] != "prod" ||
 		r.Source["provider"] != "argocd-agent/0.0.0-test" || r.Source["operation"] != "uid-app@2026-11-07T12:00:00Z" {
 		t.Errorf("record: %+v %+v", r, out)
@@ -327,7 +327,25 @@ func TestMixedReleaseIsNotReportedAsOne(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := w.core.of("deploy.outcome")[0].Record
-	if r.Change["release"] != nil || r.Outcome["mixed_stamps"] != true {
+	if r.Release != nil || r.Change["release"] != nil || r.Outcome["mixed_stamps"] != true {
+		t.Errorf("%+v", r)
+	}
+}
+
+// G-ARGO-6: the CMP's stamp on every object is read first, so an app with no Rollout still names its release; the
+// outcome carries it as release {id}, not under change.
+func TestTheReleaseStampIsReadBeforeTheChartsAnnotation(t *testing.T) {
+	w := newWorld(t)
+	w.kube.protect("app-a", nil)
+	c, _ := stamped(t, "ConfigMap", "cfg", "app-a", "web", ch2, hex("c"))
+	delete(c.Annotations, agent.AnnRelease) // no Rollout: only the CMP's stamp
+	c.Annotations[agent.AnnStampRelease] = "chain-9:hangar-prod/prod"
+	w.kube.objs["app-a"] = []agent.ObjectDetail{c}
+	if err := w.a.HandleApplication(bg, webApp(succeeded("2026-11-07T12:00:00Z"))); err != nil {
+		t.Fatal(err)
+	}
+	r := w.core.of("deploy.outcome")[0].Record
+	if r.Release["id"] != "chain-9:hangar-prod/prod" || r.Change["release"] != nil {
 		t.Errorf("%+v", r)
 	}
 }

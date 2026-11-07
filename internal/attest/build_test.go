@@ -54,6 +54,16 @@ func TestAManifestOutcomeBecomesAStatement(t *testing.T) {
 	if st, err := attest.BuildStatement(manifestChange(), withRelease, "clearance"); err != nil || st.Predicate.Release == nil || st.Predicate.Release.ID != "rel-42" {
 		t.Fatalf("release: %+v %v", st, err)
 	}
+	// release {id} wins; the Argo CD agent's older placement, change.release.id, still counts.
+	legacy := outcomeRec(true, treeRoot)
+	legacy["change"].(map[string]any)["release"] = map[string]any{"id": "rel-old"}
+	if st, err := attest.BuildStatement(manifestChange(), legacy, "clearance"); err != nil || st.Predicate.Release == nil || st.Predicate.Release.ID != "rel-old" {
+		t.Fatalf("legacy release: %+v %v", st, err)
+	}
+	legacy["release"] = map[string]any{"id": "rel-new"}
+	if st, _ := attest.BuildStatement(manifestChange(), legacy, "clearance"); st.Predicate.Release.ID != "rel-new" {
+		t.Fatalf("release {id} must win: %+v", st.Predicate.Release)
+	}
 	// A provider that reports no digest still gets an attestation, with matched null and a limitation saying so.
 	st, err = attest.BuildStatement(manifestChange(), outcomeRec(true, ""), "clearance")
 	if err != nil || st.Predicate.Outcome.Matched != nil || len(st.Predicate.Limitations) < 3 {

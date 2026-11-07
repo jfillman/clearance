@@ -414,27 +414,30 @@ func ViewToken(tk store.Token) (*TokenView, error) {
 // ClearanceAnswer is GET /v1/clearances/{id} on the core: the change's state and what it is bound to, and its live
 // token (null when it has none).
 type ClearanceAnswer struct {
-	ID         string     `json:"id"`
-	State      string     `json:"state"`
-	App        string     `json:"app"`
-	Env        string     `json:"env"`
-	Cluster    string     `json:"cluster"`
-	Repo       string     `json:"repo"`
-	PR         int64      `json:"pr"`
-	Head       string     `json:"head"`
-	TreeDigest string     `json:"tree_digest"`
-	Tier       int        `json:"tier"`
-	ClearedBy  *string    `json:"cleared_by"`
-	TaskID     *string    `json:"task_id"`
-	ExpiresAt  PyTime     `json:"expires_at"`
-	Token      *TokenView `json:"token"`
+	ID         string  `json:"id"`
+	State      string  `json:"state"`
+	App        string  `json:"app"`
+	Env        string  `json:"env"`
+	Cluster    string  `json:"cluster"`
+	Repo       string  `json:"repo"`
+	PR         int64   `json:"pr"`
+	Head       string  `json:"head"`
+	TreeDigest string  `json:"tree_digest"`
+	Tier       int     `json:"tier"`
+	ClearedBy  *string `json:"cleared_by"`
+	TaskID     *string `json:"task_id"`
+	ExpiresAt  PyTime  `json:"expires_at"`
+	// Outcome is what the deploy reported for the change (null before one did): the deploy.outcome record's seq
+	// and hash, whether it applied, the digest, and the release it names (G-ARGO-6).
+	Outcome *Outcome   `json:"outcome"`
+	Token   *TokenView `json:"token"`
 }
 
 // Answer is the ClearanceAnswer for c and its live token.
 func Answer(c *Change, tk *store.Token) (ClearanceAnswer, error) {
 	a := ClearanceAnswer{ID: c.ID, State: c.State, App: c.App, Env: c.Env, Cluster: c.Cluster, Repo: c.Repo, PR: c.PR,
 		Head: c.Head, TreeDigest: c.TreeDigest, Tier: c.Tier, ClearedBy: c.ClearedBy, TaskID: c.TaskID,
-		ExpiresAt: c.ExpiresAt}
+		ExpiresAt: c.ExpiresAt, Outcome: c.Outcome}
 	if tk != nil {
 		v, err := ViewToken(*tk)
 		if err != nil {

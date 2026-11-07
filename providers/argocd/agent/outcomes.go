@@ -118,10 +118,14 @@ func stampOf(objs []ObjectDetail, ann string) (v string, mixed bool) {
 }
 
 // releaseOf is the release id every stamped object agrees on; mixed when two objects name different ones (no id is
-// then reported: the objects are not one release).
+// then reported: the objects are not one release). The CMP's stamp (on every object) is read first, then what the
+// chart renders (the Rollout's hangar.io/release-id).
 func releaseOf(objs []ObjectDetail) (id string, mixed bool) {
 	for _, o := range objs {
-		v := o.Annotations[AnnRelease]
+		v := o.Annotations[AnnStampRelease]
+		if v == "" {
+			v = o.Annotations[AnnRelease]
+		}
 		if v == "" {
 			v = o.Labels[AnnRelease]
 		}
@@ -187,8 +191,9 @@ func (a *Agent) OutcomeRecord(ctx context.Context, app Application) (*client.Rec
 	if mixedRel {
 		out["mixed_stamps"] = true
 	}
+	var release map[string]any
 	if rel != "" {
-		change_["release"] = map[string]any{"id": rel}
+		release = map[string]any{"id": rel} // the record's own release {id}; the core also reads change.release.id (older agents)
 	}
 	src := map[string]any{"provider": a.Provider(), "operation": OperationKey(app), "application": app.Namespace + "/" + app.Name}
 	req := &client.RecordRequest{Kind: "deploy.outcome", Record: client.ProviderEvent{
@@ -201,6 +206,7 @@ func (a *Agent) OutcomeRecord(ctx context.Context, app Application) (*client.Rec
 	if len(change_) > 0 {
 		req.Record.Change = change_
 	}
+	req.Record.Release = release
 	if tree != "" {
 		req.Record.Subject = map[string]any{"kind": "manifest-tree", "name": app.Name,
 			"digests": map[string]any{"sha256": trimSHA(tree)}}

@@ -662,7 +662,7 @@ func agentContentHash(t *testing.T, o map[string]any) string {
 	t.Helper()
 	md := o["metadata"].(map[string]any)
 	if a, ok := md["annotations"].(map[string]any); ok {
-		for _, k := range []string{"argocd.argoproj.io/tracking-id", AnnRendered, AnnGrant, AnnTree} {
+		for _, k := range []string{"argocd.argoproj.io/tracking-id", AnnRendered, AnnGrant, AnnTree, AnnRelease} {
 			delete(a, k)
 		}
 		if len(a) == 0 {
@@ -696,5 +696,68 @@ func TestAppWithNoValueFilesYetStillRenders(t *testing.T) {
 	}
 	if last := e.exec.calls[2][len(e.exec.calls[2])-1]; !strings.HasSuffix(last, "injected.json") {
 		t.Fatalf("the injected values are still passed: %v", e.exec.calls[2])
+	}
+}
+
+// G-ARGO-6: the release id rides on every object as a gate annotation, from the chart's own hangar.io/release-id (the
+// Rollout), else the values' releaseTracking.releaseId; two releases in one tree are none; a tenant-written stamp is
+// never trusted; and the stamp never changes what the agent recomputes.
+func TestTheReleaseIdIsStampedOnEveryObject(t *testing.T) {
+	doc := "apiVersion: argoproj.io/v1alpha1\nkind: Rollout\nmetadata: {name: r, annotations: {hangar.io/release-id: 'c1:hangar-prod/prod'}}\n---\n" +
+		"apiVersion: v1\nkind: ConfigMap\nmetadata: {name: plain, annotations: {clearance.hangar.io/release: forged}}\ndata: {a: b}\n"
+	tree, err := Canonicalize([]byte(doc), "dest", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree.SetRelease("values:hangar-prod/prod") // the chart's own id wins over the values
+	tree.Stamp("ch-1")
+	for _, o := range tree.Emitted {
+		if got := ann(o)[AnnRelease]; got != "c1:hangar-prod/prod" {
+			t.Errorf("%v: release stamp %v", keyOf(o), got)
+		}
+		raw, _ := json.Marshal(o)
+		var live map[string]any
+		_ = json.Unmarshal(raw, &live)
+		if got := agentContentHash(t, live); got != ann(o)[AnnRendered] {
+			t.Errorf("%v: the release stamp changed what the agent recomputes", keyOf(o))
+		}
+	}
+	// no Rollout: the values' id
+	tree, _ = Canonicalize([]byte("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: a}\n"), "dest", nil)
+	tree.SetRelease("c2:hangar-prod/prod")
+	tree.Stamp("")
+	if got := ann(tree.Emitted[0])[AnnRelease]; got != "c2:hangar-prod/prod" {
+		t.Errorf("values fallback: %v", got)
+	}
+	// two releases in one tree: none (and a forged stamp is removed, not kept)
+	two := "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: a, annotations: {hangar.io/release-id: x, clearance.hangar.io/release: forged}}\n---\n" +
+		"apiVersion: v1\nkind: ConfigMap\nmetadata: {name: b, annotations: {hangar.io/release-id: y}}\n"
+	tree, _ = Canonicalize([]byte(two), "dest", nil)
+	tree.SetRelease("values")
+	tree.Stamp("")
+	for _, o := range tree.Emitted {
+		if v, ok := ann(o)[AnnRelease]; ok {
+			t.Errorf("%v: stamped %v although the objects name two releases", keyOf(o), v)
+		}
+	}
+}
+
+func TestTheReleaseIdIsReadFromTheValuesFiles(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) {
+		p := filepath.Join(dir, name)
+		_ = os.MkdirAll(filepath.Dir(p), 0o755)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("base.yaml", "replicas: 2\n")
+	write("prod/release.yaml", "releaseTracking:\n  releaseId: \"c9:hangar-prod/prod\"\n  cluster: hangar-prod\n")
+	cfg := Config{ValueFiles: []string{"base.yaml", "missing.yaml", "prod/release.yaml"}}
+	if got := releaseFromValues(cfg, dir); got != "c9:hangar-prod/prod" {
+		t.Errorf("%q", got)
+	}
+	if got := releaseFromValues(Config{ValueFiles: []string{"base.yaml"}}, dir); got != "" {
+		t.Errorf("%q", got)
 	}
 }

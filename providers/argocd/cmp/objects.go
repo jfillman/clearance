@@ -20,6 +20,13 @@ const (
 	AnnRendered = "clearance.hangar.io/rendered" // the object's hash in the manifest-tree digest (bare hex)
 	AnnTree     = "clearance.hangar.io/tree"     // the tree root (bare hex)
 	AnnGrant    = "clearance.hangar.io/grant"    // the clearance id; only on a cleared change's objects
+	// AnnRelease is the release id the tree carries (G-ARGO-6), copied to every object so the agent can put it on the
+	// deploy.outcome whatever kinds the app has: from the objects' own hangar.io/release-id (the airframe chart
+	// renders it onto the Rollout), else releaseTracking.releaseId of the values. Both are inside the tree, so the
+	// tree digest binds the value; the stamp only makes it findable. A gate annotation: never hashed.
+	AnnRelease = "clearance.hangar.io/release"
+	// AnnChartRelease is what the chart writes (Hangar's vocabulary: docs/gate.md, "The release-record join").
+	AnnChartRelease = "hangar.io/release-id"
 )
 
 // clusterScoped are the kinds that take no namespace. Argo CD asks the cluster's discovery; a plugin cannot, so
@@ -60,6 +67,31 @@ type Tree struct {
 	Hashes  map[render.Key]string
 	Emitted []map[string]any // the objects to emit, parsed as Kubernetes parses them, in key order
 	Keys    []render.Key     // parallel to Emitted
+	Release string           // the release id the tree carries ("" = none): see SetRelease
+}
+
+// SetRelease sets the tree's release id: the one every object that carries hangar.io/release-id agrees on, else
+// fromValues (releaseTracking.releaseId, for an app with no Rollout). Two objects naming different releases are not
+// one release: none is stamped.
+func (t *Tree) SetRelease(fromValues string) {
+	t.Release = ""
+	id := ""
+	for _, o := range t.Emitted {
+		md := asMap(o["metadata"])
+		ann, _ := md["annotations"].(map[string]any)
+		v, _ := ann[AnnChartRelease].(string)
+		if v == "" {
+			continue
+		}
+		if id != "" && id != v {
+			return
+		}
+		id = v
+	}
+	if id == "" {
+		id = fromValues
+	}
+	t.Release = id
 }
 
 // Canonicalize reads helm's (or kustomize's) output and returns the tree. Hashing follows docs/gate.md (the
@@ -204,6 +236,11 @@ func (t *Tree) Stamp(grant string) {
 		} else {
 			delete(ann, AnnGrant)
 		}
+		if t.Release != "" {
+			ann[AnnRelease] = t.Release
+		} else {
+			delete(ann, AnnRelease) // a tenant-written one is never trusted
+		}
 	}
 }
 
@@ -238,7 +275,7 @@ func sameValue(hashed, emitted any) bool {
 }
 
 // stripGate removes the gate's own annotations from an object before it is hashed, and an annotations map that is
-// then empty. The agent hashes a live object's last-applied configuration the same way (it strips these three and
+// then empty. The agent hashes a live object's last-applied configuration the same way (it strips these four and
 // Argo CD's tracking id, deleting an empty map), so the stamp and the agent's check agree whatever a chart wrote.
 func stripGate(o map[string]any) {
 	md := asMap(o["metadata"])
@@ -246,7 +283,7 @@ func stripGate(o map[string]any) {
 	if !ok {
 		return
 	}
-	for _, k := range []string{AnnRendered, AnnGrant, AnnTree} {
+	for _, k := range []string{AnnRendered, AnnGrant, AnnTree, AnnRelease} {
 		delete(ann, k)
 	}
 	if len(ann) == 0 {

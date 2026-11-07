@@ -109,8 +109,11 @@ type ProviderEvent struct {
 	Source      map[string]any `json:"source,omitempty"`
 	Destination map[string]any `json:"destination,omitempty"`
 	Change      map[string]any `json:"change,omitempty"`
-	Effect      map[string]any `json:"effect,omitempty"`
-	Outcome     map[string]any `json:"outcome,omitempty"`
+	// Release is {id}: the release a deploy.outcome belongs to (G-ARGO-6), the record's one place for it. A provider
+	// that sent change.release.id (the Argo CD agent before this) is read the same way. Claimed, like the rest.
+	Release map[string]any `json:"release,omitempty"`
+	Effect  map[string]any `json:"effect,omitempty"`
+	Outcome map[string]any `json:"outcome,omitempty"`
 	// Exception is a deploy.exception's {kind, objects, addresses, actor, expected, observed, state, detected_at,
 	// detail} (gate.ExceptionKinds; docs/gate.md, Exceptions).
 	Exception map[string]any `json:"exception,omitempty"`
@@ -190,11 +193,14 @@ func (e *ProviderEvent) event(kind string, spec kindSpec, ts string) (store.Even
 		k string
 		v map[string]any
 	}{{"subject", e.Subject}, {"initiator", e.Initiator}, {"source", e.Source}, {"destination", e.Destination},
-		{"change", e.Change}, {"effect", e.Effect}, {"outcome", e.Outcome}, {"exception", e.Exception},
+		{"change", e.Change}, {"release", e.Release}, {"effect", e.Effect}, {"outcome", e.Outcome}, {"exception", e.Exception},
 		{"outage", e.Outage}} {
 		if f.v != nil {
 			ev[f.k] = f.v
 		}
+	}
+	if err := normalizeRelease(kind, ev); err != nil {
+		return nil, err
 	}
 	if err := e.recorderFields(kind, ev); err != nil {
 		return nil, err
@@ -213,6 +219,32 @@ func (e *ProviderEvent) event(kind string, spec kindSpec, ts string) (store.Even
 		return nil, fmt.Errorf("exception is a %s field and outage a %s field", gate.KindException, gate.KindDegraded)
 	}
 	return ev, nil
+}
+
+// normalizeRelease makes release {id} the one place a deploy.outcome names its release (G-ARGO-6). A provider that
+// sent change.release.id (the Argo CD agent before this) is accepted: the id is copied to release, and the record
+// carries both, as sent. release is a deploy.outcome field, {id} only, and the id a bounded, non-empty string.
+func normalizeRelease(kind string, ev store.Event) error {
+	rel, _ := ev["release"].(map[string]any)
+	if rel == nil {
+		if ch, _ := ev["change"].(map[string]any); ch != nil {
+			if old, _ := ch["release"].(map[string]any); old != nil && kind == "deploy.outcome" {
+				rel = map[string]any{"id": old["id"]}
+				ev["release"] = rel
+			}
+		}
+	}
+	if rel == nil {
+		return nil
+	}
+	if kind != "deploy.outcome" {
+		return errors.New("release is a deploy.outcome field")
+	}
+	id, ok := rel["id"].(string)
+	if !ok || id == "" || len(rel) != 1 {
+		return errors.New("release is {id}: the id a non-empty string")
+	}
+	return text("release.id", id)
 }
 
 // checkOutageRead holds a tool.call record to what the outage policy allows a provider to run without the core: a
@@ -322,6 +354,9 @@ func (s *Server) records(w http.ResponseWriter, r *http.Request) {
 				return err
 			})
 		}
+	} else if body.Kind == "deploy.outcome" && s.opt.Gate != nil {
+		// The gate appends it and sets the outcome of the change it names (the clearance view shows it).
+		rec, err = s.opt.Gate.RecordOutcome(r.Context(), ev, wr)
 	} else {
 		err = s.opt.Store.Atomic(r.Context(), func(tx store.Tx) error {
 			var err error

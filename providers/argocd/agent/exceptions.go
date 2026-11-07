@@ -195,7 +195,7 @@ func ContentHash(lastApplied string) (string, error) {
 	}
 	if md, ok := o["metadata"].(map[string]any); ok {
 		if ann, ok := md["annotations"].(map[string]any); ok {
-			for _, k := range []string{AnnTracking, AnnRendered, AnnGrant, AnnTree} {
+			for _, k := range []string{AnnTracking, AnnRendered, AnnGrant, AnnTree, AnnStampRelease} {
 				delete(ann, k)
 			}
 			if len(ann) == 0 {

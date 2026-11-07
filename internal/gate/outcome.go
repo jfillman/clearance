@@ -68,9 +68,73 @@ type Outcome struct {
 	Seq        int64  `json:"seq"`
 	Applied    bool   `json:"applied"`
 	Matched    bool   `json:"matched"`
-	PlanDigest string `json:"plan_digest"`
+	PlanDigest string `json:"plan_digest,omitempty"`
 	At         string `json:"at"`
 	Exception  *int64 `json:"exception,omitempty"`
+	// Digest, Release, Hash and Provider are a manifest change's outcome as its provider reported it through
+	// POST /v1/records (G-ARGO-6): the digest it applied (bare hex; matched is whether it is the cleared tree), the
+	// release it names (release {id}), the deploy.outcome record's hash (with seq, the join key into the chain) and
+	// the provider. Claimed by the provider; the core did not observe the target.
+	Digest   string `json:"digest,omitempty"`
+	Release  string `json:"release,omitempty"`
+	Hash     string `json:"hash,omitempty"`
+	Provider string `json:"provider,omitempty"`
+}
+
+// RecordOutcome appends a provider's deploy.outcome record and, in the same transaction, sets the outcome of the
+// manifest change it names (the latest outcome stands: an Application can sync more than once), so the change's
+// view shows what the deploy reported, with the release it names and the record's seq and hash
+// (GET /v1/clearances/{id}). An outcome that names no change, or one the core does not know, is only recorded. A
+// terraform-plan change takes its outcome through POST /v1/clearances/{id}/outcome, not here. Judging the outcome
+// (an exception for a mismatch) is the provider's report to make; the attestation signer is notified by the caller.
+func (s *Service) RecordOutcome(ctx context.Context, ev store.Event, wr evidence.Writer) (store.Record, error) {
+	id, err := changeRef(ev)
+	if err != nil {
+		return nil, err
+	}
+	var out store.Record
+	err = s.op(ctx, func(tx store.Tx, w *writer) error {
+		rec, err := tx.Append(ctx, ev, wr)
+		if err != nil {
+			return err
+		}
+		out = rec
+		if id == "" || s.Config.Off {
+			return nil
+		}
+		c, err := load(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if c == nil || (c.Subject != nil && c.Subject.Kind == KindTerraformPlan) {
+			return nil
+		}
+		seq, ok := SeqInt(rec["seq"])
+		if !ok {
+			return nil
+		}
+		oc, _ := ev["outcome"].(map[string]any)
+		applied, _ := oc["applied"].(bool)
+		digest := ""
+		if dg, _ := oc["digests"].(map[string]any); dg != nil {
+			digest, _ = dg["sha256"].(string)
+		}
+		digest = strings.TrimPrefix(digest, "sha256:")
+		rel, _ := ev["release"].(map[string]any)
+		relID, _ := rel["id"].(string)
+		hash, _ := rec["hash"].(string)
+		prov, _ := rec["provider"].(string)
+		at := pycompat.ISO(w.now)
+		c.Outcome = &Outcome{Seq: seq, Applied: applied, Matched: digest != "" && digest == strings.TrimPrefix(c.TreeDigest, "sha256:"),
+			At: at, Digest: digest, Release: relID, Hash: hash, Provider: prov}
+		c.UpdatedAt = PyTime{w.now}
+		w.put(c)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // OutcomeResult is the outcome route's answer: the change as recorded (with its outcome), whether the plan matched,
