@@ -39,7 +39,7 @@ func TestAReleaseIsJoinedToItsChangeOutcomeAndAttestation(t *testing.T) {
 			tree := strings.Repeat("c", 64)
 			chg := map[string]any{"id": id, "tree": "sha256:" + tree}
 			rec := map[string]any{"app": "gate-api", "target": "app-gate-api-prod/gate-api@abc123", "result": "applied",
-				"change": chg, "outcome": map[string]any{"applied": true, "digests": map[string]any{"sha256": tree},
+				"destination": map[string]any{"cluster": "hangar-prod", "environment": "prod"}, "change": chg, "outcome": map[string]any{"applied": true, "digests": map[string]any{"sha256": tree},
 					"observed_revision": "abc123", "finished_at": time.Now().UTC().Format(time.RFC3339)}}
 			place(rec, chg)
 			ref := f.do("POST", "/v1/records", argo, map[string]any{"provider": "argo-gate", "kind": "deploy.outcome", "record": rec}).

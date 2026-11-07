@@ -103,12 +103,23 @@ func (s *Service) RecordOutcome(ctx context.Context, ev store.Event, wr evidence
 				return err
 			}
 		}
-		attach := c != nil && (c.Subject == nil || c.Subject.Kind != KindTerraformPlan)
-		if attach && c.State != StateCleared {
+		attach := false
+		switch {
+		case id == "" || s.Config.Off:
+		case c == nil:
+			ev["unattached"] = "no such change: the outcome is recorded, not attached"
+		case c.Subject != nil && c.Subject.Kind == KindTerraformPlan:
+		case !outcomeIsFor(ev, c):
+			// A registered provider may report any change's id; only an outcome for the change's own destination
+			// attaches (and so reaches the attestation).
+			ev["unattached"] = "the outcome's destination or app is not the change's (" + c.Cluster + "/" + c.Env + ", " +
+				c.App + "): the outcome is recorded, not attached"
+		case c.State != StateCleared:
 			// The evidence is kept, but only a cleared change takes an outcome (and so an attestation): the record
 			// says why this one was not attached.
-			attach = false
 			ev["unattached"] = "the change is " + c.State + ", not cleared: the outcome is recorded, not attached"
+		default:
+			attach = true
 		}
 		rec, err := tx.Append(ctx, ev, wr)
 		if err != nil {
@@ -438,4 +449,13 @@ func (s *Service) SameRepoWorkflow(c *Change, p authn.Principal) bool {
 		return false
 	}
 	return pycompat.MatchAny(p.ID, s.Config.Verifiers)
+}
+
+// outcomeIsFor is whether a deploy.outcome's destination (cluster, environment) and app are the change's.
+func outcomeIsFor(ev store.Event, c *Change) bool {
+	d, _ := ev["destination"].(map[string]any)
+	cluster, _ := d["cluster"].(string)
+	env, _ := d["environment"].(string)
+	app, _ := ev["app"].(string)
+	return cluster == c.Cluster && env == c.Env && app == c.App
 }

@@ -13,10 +13,11 @@ import (
 func TestOnlyAClearedChangeTakesAnOutcome(t *testing.T) {
 	f := newGate(t)
 	w := evidence.Writer{Provider: evidence.Provider{Name: "argocd-agent", Version: "1"}}
-	post := func(id string) map[string]any {
+	postFor := func(id, app, cluster string) map[string]any {
 		t.Helper()
-		ev := map[string]any{"ts": "2026-11-07T00:59:00Z", "tool": "deploy.outcome", "boundary": "deployment", "app": "gate-api",
-			"target": "t", "principal": "p", "result": "applied", "change": map[string]any{"id": id},
+		ev := map[string]any{"ts": "2026-11-07T00:59:00Z", "tool": "deploy.outcome", "boundary": "deployment", "app": app,
+			"destination": map[string]any{"cluster": cluster, "environment": "prod"},
+			"target":      "t", "principal": "p", "result": "applied", "change": map[string]any{"id": id},
 			"release": map[string]any{"id": "r1"}, "outcome": map[string]any{"applied": true, "digests": map[string]any{"sha256": strings.Repeat("c", 64)}}}
 		rec, err := f.svc.RecordOutcome(f.ctx, ev, w)
 		if err != nil {
@@ -24,6 +25,7 @@ func TestOnlyAClearedChangeTakesAnOutcome(t *testing.T) {
 		}
 		return rec
 	}
+	post := func(id string) map[string]any { return postFor(id, "gate-api", "hangar-prod") }
 	held := f.register(t, "ci", change(map[string]any{"objects": replicas, "head": strings.Repeat("1", 40)}))
 	denied := f.register(t, "ci", change(map[string]any{"objects": replicas, "head": strings.Repeat("2", 40), "pr": 8}))
 	if _, err := f.svc.Deny(f.ctx, principals["erin"], denied.ID, "no", ""); err != nil {
@@ -56,5 +58,22 @@ func TestOnlyAClearedChangeTakesAnOutcome(t *testing.T) {
 	}
 	if got := f.get(t, cleared.ID).Outcome.Provider; got != "argocd-agent" {
 		t.Errorf("the outcome's provider is the envelope's name: %q", got)
+	}
+	// A provider naming another app's (or another cluster's) change attaches nothing, and the record says so.
+	for name, rec := range map[string]map[string]any{
+		"another app":     postFor(cleared.ID, "other-app", "hangar-prod"),
+		"another cluster": postFor(cleared.ID, "gate-api", "hangar-dev"),
+	} {
+		if u, _ := rec["unattached"].(string); !strings.Contains(u, "not the change's") {
+			t.Errorf("%s: %v", name, rec["unattached"])
+		}
+	}
+	other := f.register(t, "ci", change(map[string]any{"objects": nil, "head": strings.Repeat("6", 40), "pr": 12}))
+	if rec := postFor(other.ID, "other-app", "hangar-prod"); rec["unattached"] == nil || f.get(t, other.ID).Outcome != nil {
+		t.Errorf("an outcome for another app attached to a cleared change: %+v", f.get(t, other.ID).Outcome)
+	}
+	// An unknown change id: recorded, marked, so the signer does not retry it.
+	if rec := postFor("ch-0000000000000000", "gate-api", "hangar-prod"); rec["unattached"] != "no such change: the outcome is recorded, not attached" {
+		t.Errorf("unknown change: %v", rec["unattached"])
 	}
 }
