@@ -195,7 +195,7 @@ func ContentHash(lastApplied string) (string, error) {
 	}
 	if md, ok := o["metadata"].(map[string]any); ok {
 		if ann, ok := md["annotations"].(map[string]any); ok {
-			for _, k := range []string{AnnTracking, AnnRendered, AnnGrant, AnnTree} {
+			for _, k := range []string{AnnTracking, AnnRendered, AnnGrant, AnnTree, AnnStampRelease} {
 				delete(ann, k)
 			}
 			if len(ann) == 0 {
@@ -325,18 +325,18 @@ func (a *Agent) reportRefusedSync(ctx context.Context, app Application, opKey st
 	if done {
 		return nil
 	}
-	env := a.environment(ctx, app.DestNS)
+	env := a.appEnvironment(ctx, app)
 	req := &client.RecordRequest{Kind: "deploy.exception", Record: client.ProviderEvent{
 		Principal:   client.String("argocd-application-controller"),
 		Target:      client.String(fmt.Sprintf("%s/%s", app.DestNS, app.Name)),
-		App:         client.String(app.Name),
+		App:         client.String(app.GateApp()),
 		Result:      client.String(ReasonRefused),
 		Destination: map[string]any{"cluster": a.cfg.Cluster, "environment": env, "application": app.Name, "namespace": app.DestNS},
 		Source:      map[string]any{"provider": a.Provider(), "operation": opKey},
 		Exception: map[string]any{"kind": "out-of-band", "objects": objs, "detected_at": a.now().UTC().Format(time.RFC3339),
 			"detail": truncate(why, 1000)}}}
 	if w, err := a.core.Breakglass(ctx, a.cfg.Cluster); err == nil {
-		if id := a.breakglassFor(w, env, app.Name); id != "" {
+		if id := a.breakglassFor(w, env, app.GateApp()); id != "" {
 			req.Record.Exception["detail"] = truncate(why, 900) + "; break-glass window " + id + " is open here"
 		}
 	}

@@ -1434,6 +1434,16 @@
           "id": {
             "type": "string"
           },
+          "outcome": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "pr": {
             "type": "integer"
           },
@@ -1474,6 +1484,7 @@
           "expires_at",
           "head",
           "id",
+          "outcome",
           "pr",
           "repo",
           "state",
@@ -1626,16 +1637,28 @@
           "at": {
             "type": "string"
           },
+          "digest": {
+            "type": "string"
+          },
           "exception": {
             "type": [
               "integer",
               "null"
             ]
           },
+          "hash": {
+            "type": "string"
+          },
           "matched": {
             "type": "boolean"
           },
           "plan_digest": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "release": {
             "type": "string"
           },
           "seq": {
@@ -1646,7 +1669,6 @@
           "applied",
           "at",
           "matched",
-          "plan_digest",
           "seq"
         ],
         "type": "object"
@@ -2370,6 +2392,10 @@
               "null"
             ]
           },
+          "release": {
+            "additionalProperties": {},
+            "type": "object"
+          },
           "result": {
             "type": [
               "string",
@@ -2741,6 +2767,16 @@
           "id": {
             "type": "string"
           },
+          "outcome": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "pr": {
             "type": "integer"
           },
@@ -2782,6 +2818,7 @@
           "expires_at",
           "head",
           "id",
+          "outcome",
           "pr",
           "repo",
           "state",

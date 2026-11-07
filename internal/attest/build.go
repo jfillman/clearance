@@ -120,7 +120,11 @@ func BuildStatement(c *gate.Change, rec store.Record, issuer string) (*Statement
 			ObservedRevision: obs, At: at},
 		Coverage: coverage, Limitations: lim,
 	}
-	if id := mapStr(rec, "release", "id"); id != "" {
+	id := mapStr(rec, "release", "id")
+	if id == "" {
+		id = mapStr(rec, "change", "release", "id") // an outcome from before release {id} (the Argo CD agent <= v0.32)
+	}
+	if id != "" {
 		st.Predicate.Release = &Release{ID: id}
 	}
 	if err := st.Check(); err != nil {

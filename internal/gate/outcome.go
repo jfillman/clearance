@@ -68,9 +68,105 @@ type Outcome struct {
 	Seq        int64  `json:"seq"`
 	Applied    bool   `json:"applied"`
 	Matched    bool   `json:"matched"`
-	PlanDigest string `json:"plan_digest"`
+	PlanDigest string `json:"plan_digest,omitempty"`
 	At         string `json:"at"`
 	Exception  *int64 `json:"exception,omitempty"`
+	// Digest, Release, Hash and Provider are a manifest change's outcome as its provider reported it through
+	// POST /v1/records (G-ARGO-6): the digest it applied (bare hex; matched is whether it is the cleared tree), the
+	// release it names (release {id}), the deploy.outcome record's hash (with seq, the join key into the chain) and
+	// the provider. Claimed by the provider; the core did not observe the target.
+	Digest   string `json:"digest,omitempty"`
+	Release  string `json:"release,omitempty"`
+	Hash     string `json:"hash,omitempty"`
+	Provider string `json:"provider,omitempty"`
+}
+
+// RecordOutcome appends a provider's deploy.outcome record and, in the same transaction, sets the outcome of the
+// manifest change it names (the latest outcome stands: an Application can sync more than once), so the change's
+// view shows what the deploy reported, with the release it names and the record's seq and hash
+// (GET /v1/clearances/{id}). An outcome that names no change, or one the core does not know, is only recorded. A
+// terraform-plan change takes its outcome through POST /v1/clearances/{id}/outcome, not here. Judging the outcome
+// (an exception for a mismatch) is the provider's report to make; the attestation signer is notified by the caller.
+func (s *Service) RecordOutcome(ctx context.Context, ev store.Event, wr evidence.Writer) (store.Record, error) {
+	// An outcome whose change names no valid id (the agent sends change {tree} for objects that carry no grant) is
+	// still recorded: the id is only needed to set a change's outcome.
+	id, err := changeRef(ev)
+	if err != nil {
+		id = ""
+		if ch, _ := ev["change"].(map[string]any); ch != nil {
+			if v, present := ch["id"]; present && v != "" { // no id at all (change {tree}) is not malformed
+				ev["unattached"] = "malformed change id: the outcome is recorded, not attached"
+			}
+		}
+	}
+	var out store.Record
+	err = s.op(ctx, func(tx store.Tx, w *writer) error {
+		var c *Change
+		if id != "" && !s.Config.Off {
+			var err error
+			if c, err = load(ctx, tx, id); err != nil {
+				return err
+			}
+		}
+		attach := false
+		switch {
+		case id == "" || s.Config.Off:
+		case c == nil:
+			ev["unattached"] = "no such change: the outcome is recorded, not attached"
+		case c.Subject != nil && c.Subject.Kind == KindTerraformPlan:
+			ev["unattached"] = "terraform-plan outcomes go through POST /v1/clearances/{id}/outcome: the outcome is recorded, not attached"
+		case !outcomeIsFor(ev, c):
+			// A registered provider may report any change's id; only an outcome for the change's own destination
+			// attaches (and so reaches the attestation).
+			ev["unattached"] = "the outcome's destination or app is not the change's (" + c.Cluster + "/" + c.Env + ", " +
+				c.App + "): the outcome is recorded, not attached"
+		case c.State != StateCleared:
+			// The evidence is kept, but only a cleared change takes an outcome (and so an attestation): the record
+			// says why this one was not attached.
+			ev["unattached"] = "the change is " + c.State + ", not cleared: the outcome is recorded, not attached"
+		default:
+			attach = true
+		}
+		rec, err := tx.Append(ctx, ev, wr)
+		if err != nil {
+			return err
+		}
+		out = rec
+		if !attach {
+			return nil
+		}
+		seq, ok := SeqInt(rec["seq"])
+		if !ok {
+			return nil
+		}
+		oc, _ := ev["outcome"].(map[string]any)
+		applied, _ := oc["applied"].(bool)
+		digest := ""
+		if dg, _ := oc["digests"].(map[string]any); dg != nil {
+			digest, _ = dg["sha256"].(string)
+		}
+		digest = strings.TrimPrefix(digest, "sha256:")
+		rel, _ := ev["release"].(map[string]any)
+		relID, _ := rel["id"].(string)
+		hash, _ := rec["hash"].(string)
+		prov := "" // the envelope's provider is {name, version}
+		switch pv := rec["provider"].(type) {
+		case map[string]any:
+			prov, _ = pv["name"].(string)
+		case string:
+			prov = pv
+		}
+		at := pycompat.ISO(w.now)
+		c.Outcome = &Outcome{Seq: seq, Applied: applied, Matched: digest != "" && digest == strings.TrimPrefix(c.TreeDigest, "sha256:"),
+			At: at, Digest: digest, Release: relID, Hash: hash, Provider: prov}
+		c.UpdatedAt = PyTime{w.now}
+		w.put(c)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // OutcomeResult is the outcome route's answer: the change as recorded (with its outcome), whether the plan matched,
@@ -359,4 +455,13 @@ func (s *Service) SameRepoWorkflow(c *Change, p authn.Principal) bool {
 		return false
 	}
 	return pycompat.MatchAny(p.ID, s.Config.Verifiers)
+}
+
+// outcomeIsFor is whether a deploy.outcome's destination (cluster, environment) and app are the change's.
+func outcomeIsFor(ev store.Event, c *Change) bool {
+	d, _ := ev["destination"].(map[string]any)
+	cluster, _ := d["cluster"].(string)
+	env, _ := d["environment"].(string)
+	app, _ := ev["app"].(string)
+	return cluster == c.Cluster && env == c.Env && app == c.App
 }

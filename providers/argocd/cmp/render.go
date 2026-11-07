@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"go.yaml.in/yaml/v3"
 )
 
 // Exec runs a program and returns its stdout; a failure carries its stderr.
@@ -105,4 +107,26 @@ func Render(ctx context.Context, run Exec, cfg Config, srcDir string) (*Rendered
 		}
 	}
 	return out, nil
+}
+
+// releaseFromValues is releaseTracking.releaseId of the value files (the last file that sets it wins, as Helm merges
+// them): the release id for an app whose chart renders no hangar.io/release-id (no Rollout). "" when none sets one.
+// Not part of the rendered objects, so the tree digest does not bind it: the stamp built from it is only claimed.
+func releaseFromValues(cfg Config, srcDir string) string {
+	id := ""
+	for _, f := range cfg.ValueFiles {
+		raw, err := os.ReadFile(filepath.Join(srcDir, filepath.FromSlash(f)))
+		if err != nil {
+			continue
+		}
+		var v struct {
+			ReleaseTracking struct {
+				ReleaseID string `yaml:"releaseId"`
+			} `yaml:"releaseTracking"`
+		}
+		if yaml.Unmarshal(raw, &v) == nil && v.ReleaseTracking.ReleaseID != "" {
+			id = v.ReleaseTracking.ReleaseID
+		}
+	}
+	return id
 }

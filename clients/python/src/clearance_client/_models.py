@@ -720,6 +720,7 @@ class GateClearanceAnswer(Model):
         Field("expires_at", "expires_at", ("str",), True),
         Field("head", "head", ("str",), True),
         Field("id", "id", ("str",), True),
+        Field("outcome", "outcome", ("nullable", ("ref", "GateOutcome")), True),
         Field("pr", "pr", ("int",), True),
         Field("repo", "repo", ("str",), True),
         Field("state", "state", ("str",), True),
@@ -736,6 +737,7 @@ class GateClearanceAnswer(Model):
     expires_at: str
     head: str
     id: str
+    outcome: GateOutcome | None
     pr: int
     repo: str
     state: str
@@ -839,17 +841,25 @@ class GateOutcome(Model):
     _FIELDS: ClassVar[tuple[Field, ...]] = (
         Field("applied", "applied", ("bool",), True),
         Field("at", "at", ("str",), True),
+        Field("digest", "digest", ("str",), False),
         Field("exception", "exception", ("nullable", ("int",)), False),
+        Field("hash", "hash", ("str",), False),
         Field("matched", "matched", ("bool",), True),
-        Field("plan_digest", "plan_digest", ("str",), True),
+        Field("plan_digest", "plan_digest", ("str",), False),
+        Field("provider", "provider", ("str",), False),
+        Field("release", "release", ("str",), False),
         Field("seq", "seq", ("int",), True),
     )
 
     applied: bool
     at: str
+    digest: str | None = None
     exception: int | None = None
+    hash: str | None = None
     matched: bool
-    plan_digest: str
+    plan_digest: str | None = None
+    provider: str | None = None
+    release: str | None = None
     seq: int
 
 
@@ -1388,6 +1398,7 @@ class ProviderEvent(Model):
         Field("preflight", "preflight", ("nullable", ("ref", "Preflight")), False),
         Field("principal", "principal", ("nullable", ("str",)), False),
         Field("reason", "reason", ("nullable", ("str",)), False),
+        Field("release", "release", ("map", ("any",)), False),
         Field("result", "result", ("nullable", ("str",)), False),
         Field("rule", "rule", ("nullable", ("str",)), False),
         Field("session", "session", ("nullable", ("str",)), False),
@@ -1418,6 +1429,7 @@ class ProviderEvent(Model):
     preflight: Preflight | None = None
     principal: str | None = None
     reason: str | None = None
+    release: dict[str, Any] | None = None
     result: str | None = None
     rule: str | None = None
     session: str | None = None
@@ -1825,6 +1837,7 @@ class WaitAnswer(Model):
         Field("expires_at", "expires_at", ("str",), True),
         Field("head", "head", ("str",), True),
         Field("id", "id", ("str",), True),
+        Field("outcome", "outcome", ("nullable", ("ref", "GateOutcome")), True),
         Field("pr", "pr", ("int",), True),
         Field("repo", "repo", ("str",), True),
         Field("state", "state", ("str",), True),
@@ -1842,6 +1855,7 @@ class WaitAnswer(Model):
     expires_at: str
     head: str
     id: str
+    outcome: GateOutcome | None
     pr: int
     repo: str
     state: str

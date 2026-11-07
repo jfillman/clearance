@@ -24,6 +24,13 @@ const (
 	AnnTree     = "clearance.hangar.io/tree"     // the tree digest it was rendered in
 	AnnTracking = "argocd.argoproj.io/tracking-id"
 	AnnRelease  = "hangar.io/release-id"
+	// LabelAppName and LabelAppEnv are the Glidepath app and environment names the tenant-onboarding ApplicationSet
+	// stamps on each Application (named <app>-<env>); changes are registered under them.
+	LabelAppName = "hangar.io/app"
+	LabelAppEnv  = "hangar.io/env"
+	// AnnStampRelease is the release id the CMP stamped on every object (G-ARGO-6); AnnRelease is what the chart
+	// renders onto the Rollout. The agent reads the stamp first.
+	AnnStampRelease = "clearance.hangar.io/release"
 
 	LabelProtected   = "clearance.hangar.io/protected" // namespace: the gate protects it
 	LabelActive      = "clearance.hangar.io/active"    // grant: the one the admission policy reads
@@ -105,6 +112,7 @@ type Resource struct {
 type Application struct {
 	Namespace string
 	Name      string
+	Labels    map[string]string
 	UID       string
 	Project   string
 	DestNS    string
@@ -135,3 +143,12 @@ func Terminal(phase string) bool {
 }
 
 func rawJSON(v any) json.RawMessage { b, _ := json.Marshal(v); return b }
+
+// GateApp is the app name a change is registered under (Glidepath's): the Application's hangar.io/app label, else its
+// name (an Application that is not tenant-onboarded is named for the app).
+func (a Application) GateApp() string {
+	if v := a.Labels[LabelAppName]; v != "" {
+		return v
+	}
+	return a.Name
+}
