@@ -56,8 +56,9 @@ spec:
     - name: rendered
       expression: "'clearance.hangar.io/rendered' in variables.ann ? variables.ann['clearance.hangar.io/rendered'] : ''"
     # G-ARGO-4's injected PreSync wait Job: no stamp, no grant entry. Exempt ONLY a batch/v1 Job labelled
-    # clearance.hangar.io/injected=wait, annotated as a PreSync hook, with exactly one container and no init
-    # containers, no volumes and no command override, whose image is exactly the pinned wait image below (a digest
+    # clearance.hangar.io/injected=wait, annotated as a PreSync hook, with exactly one container, no init
+    # containers, no command override, no host namespaces or privileged container, and no volume but the one
+    # projected service-account token with audience 'clearance' (what the CMP's Job mounts), whose image is exactly the pinned wait image below (a digest
     # reference; empty = no exemption). The label alone proves nothing: what bounds it is the image, a waiter that
     # long-polls Clearance and exits, and that only Argo's controller reaches this policy. Args and env can still be
     # set, which that image only reads. The agent's grant need not list it.
@@ -73,7 +74,19 @@ spec:
         has(object.spec.template.spec.containers[0].image) &&
         object.spec.template.spec.containers[0].image == 'registry.invalid/clearance-wait@sha256:0000000000000000000000000000000000000000000000000000000000000000' &&
         !has(object.spec.template.spec.containers[0].command) &&
-        !has(object.spec.template.spec.initContainers) && !has(object.spec.template.spec.volumes)
+        !has(object.spec.template.spec.initContainers) &&
+        (!has(object.spec.template.spec.hostNetwork) || !object.spec.template.spec.hostNetwork) &&
+        (!has(object.spec.template.spec.hostPID) || !object.spec.template.spec.hostPID) &&
+        (!has(object.spec.template.spec.containers[0].securityContext) ||
+         !has(object.spec.template.spec.containers[0].securityContext.privileged) ||
+         !object.spec.template.spec.containers[0].securityContext.privileged) &&
+        (!has(object.spec.template.spec.volumes) ||
+         (object.spec.template.spec.volumes.size() == 1 && has(object.spec.template.spec.volumes[0].projected) &&
+          has(object.spec.template.spec.volumes[0].projected.sources) &&
+          object.spec.template.spec.volumes[0].projected.sources.size() == 1 &&
+          has(object.spec.template.spec.volumes[0].projected.sources[0].serviceAccountToken) &&
+          has(object.spec.template.spec.volumes[0].projected.sources[0].serviceAccountToken.audience) &&
+          object.spec.template.spec.volumes[0].projected.sources[0].serviceAccountToken.audience == 'clearance'))
     - name: key
       expression: >-
         (has(object.apiVersion) && object.apiVersion.contains('/') ? object.apiVersion.split('/')[0] : '') + '/' +

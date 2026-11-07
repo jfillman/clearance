@@ -457,7 +457,7 @@ kube-apiserver); **not yet applied** anywhere. Apron renders them into an upper 
   control plane writes on its own and Argo never applies (`clearancegrants`, events, endpoints, endpointslices,
   leases); and Deny with no grant freezes the namespace's controllers (a ReplicaSet cannot create Pods) until a grant
   is active. That is the fail-closed outcome the design wants, but it is why Warn uses `Allow`.
-- **Envtest** (`providers/argocd/crd/test_admission.py`, CI `admission-policy`, 74 checks over both modes): admit (listed
+- **Envtest** (`providers/argocd/crd/test_admission.py`, CI `admission-policy`, 80 checks over both modes): admit (listed
   ConfigMap and Deployment, an update); refuse (unlisted, wrong hash on create and update, no stamp, `generateName`
   with no name, expired grant, grant with no status, two active grants, no active grant); not matched (another
   writer, another service account, an unprotected namespace, a labelled Namespace object, the `scale` subresource);
@@ -465,12 +465,13 @@ kube-apiserver); **not yet applied** anywhere. Apron renders them into an upper 
   CEL error in any response.
 - **The injected wait Job (G-ARGO-4).** The CMP adds an unstamped PreSync Job labelled
   `clearance.hangar.io/injected: wait`. The policy exempts only a `batch/v1` Job with that label, the
-  `argocd.argoproj.io/hook: PreSync` annotation, exactly one container, no init containers, no volumes, no `command`,
+  `argocd.argoproj.io/hook: PreSync` annotation, exactly one container, no init containers, no `command`, no host namespaces or privileged container, no volume but the one
+  projected service-account token with audience `clearance` (what the CMP's Job mounts),
   and an image **equal to the pinned wait image** (a digest reference rendered by Apron from
   `clearance.gate.waitImage`; empty means no exemption). The label alone bounds nothing: the pinned image does (a waiter
   that long-polls Clearance and exits), and only Argo's controller reaches the policy. It still needs an active grant
   to exist under Deny (the param resolves first). Envtest: admitted, another image refused, unlabelled refused, other
-  label value, no hook, and an added volume refused.
+  label value, no hook, an added volume, a token for another audience and the host network refused, and the Job as the CMP builds it admitted.
 - **Not checked by admission:** the stamp's content (CEL has no digest function), expiry by time (the agent's
   `status.valid`), the signature. Those stay the CMP's, the agent's and G-ARGO-3's.
 

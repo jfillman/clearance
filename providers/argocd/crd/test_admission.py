@@ -111,13 +111,19 @@ def deploy(name, rendered, ns="prot"):
 WAIT_IMAGE = "registry.invalid/clearance-wait@sha256:" + "0" * 64
 
 
-def wait_job(name, image=WAIT_IMAGE, label="wait", hook="PreSync", volumes=False, ns="prot"):
+def wait_job(name, image=WAIT_IMAGE, label="wait", hook="PreSync", volumes=False, token=None, ns="prot", host_network=False):
     md = {"name": name, "namespace": ns, "annotations": {"argocd.argoproj.io/hook": hook}}
     if label:
         md["labels"] = {"clearance.hangar.io/injected": label}
     spec = {"restartPolicy": "Never", "containers": [{"name": "wait", "image": image, "args": ["--id", "ch-1"]}]}
     if volumes:
         spec["volumes"] = [{"name": "v", "emptyDir": {}}]
+    if token:  # what the CMP's Job really mounts
+        spec["volumes"] = [{"name": "clearance-token", "projected": {"sources": [
+            {"serviceAccountToken": {"audience": token, "expirationSeconds": 3600, "path": "clearance"}}]}}]
+        spec["containers"][0]["volumeMounts"] = [{"name": "clearance-token", "mountPath": "/var/run/secrets/tokens"}]
+    if host_network:
+        spec["hostNetwork"] = True
     return {"apiVersion": "batch/v1", "kind": "Job", "metadata": md, "spec": {"template": {"spec": spec}}}
 
 
@@ -250,6 +256,12 @@ def run(deny):
         check("refuse: the label with a different value", False, sh(["create", "-f", "-"], wait_job("wait-4", label="x"), ARGO))
         check("refuse: the label and image without the PreSync hook annotation", False,
               sh(["create", "-f", "-"], wait_job("wait-5", hook="Sync"), ARGO))
+        check("admit: the Job as the CMP builds it (the audience-clearance token volume)", True,
+              sh(["create", "-f", "-"], wait_job("wait-8", token="clearance"), ARGO))
+        check("refuse: a projected token volume for another audience", False,
+              sh(["create", "-f", "-"], wait_job("wait-9", token="kubernetes.default"), ARGO))
+        check("refuse: the label and image on the host network", False,
+              sh(["create", "-f", "-"], wait_job("wait-10", host_network=True), ARGO))
         check("refuse: the label and image with a volume added", False,
               sh(["create", "-f", "-"], wait_job("wait-6", volumes=True), ARGO))
         check("not matched: the same labelled Job with another image by another writer", True,
