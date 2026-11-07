@@ -458,7 +458,7 @@ kube-apiserver); **not yet applied** anywhere. Apron renders them into an upper 
   control plane writes on its own and Argo never applies (`clearancegrants`, events, endpoints, endpointslices,
   leases); and Deny with no grant freezes the namespace's controllers (a ReplicaSet cannot create Pods) until a grant
   is active. That is the fail-closed outcome the design wants, but it is why Warn uses `Allow`.
-- **Envtest** (`providers/argocd/crd/test_admission.py`, CI `admission-policy`, 144 checks over both modes): admit (listed
+- **Envtest** (`providers/argocd/crd/test_admission.py`, CI `admission-policy`, 162 checks over both modes): admit (listed
   ConfigMap and Deployment, an update); refuse (unlisted, wrong hash on create and update, no stamp, `generateName`
   with no name, expired grant, grant with no status, two active grants, no active grant); not matched (another
   writer, another service account, an unprotected namespace, a labelled Namespace object, the `scale` subresource);
@@ -474,7 +474,9 @@ kube-apiserver); **not yet applied** anywhere. Apron renders them into an upper 
   The Job must have that label and the PreSync hook; one container on the pinned wait image (a digest reference
   Apron renders from `versions.clearance.waitImage`; empty means no exemption); `args` `[--change <id> --timeout
   <duration>]` (only the id and the duration vary); `env` exactly `CLEARANCE_URL=<the pinned core URL>` and
-  `CLEARANCE_TOKEN_FILE=/var/run/secrets/tokens/clearance`; `automountServiceAccountToken: false` and **no**
+  `CLEARANCE_TOKEN_FILE=/var/run/secrets/tokens/clearance`; every `securityContext` value pinned to the CMP's (pod: `runAsNonRoot: true`, user and group 65532, seccomp
+  `RuntimeDefault`; container: no privilege escalation, read-only root filesystem, `capabilities.drop: [ALL]`);
+  `automountServiceAccountToken: false` and **no**
   `serviceAccountName` (the CMP sets none, so the pod runs as the namespace's default account, and only the projected
   token with audience `clearance` is mounted); `hostAliases` exactly the pinned one (none when the pin is empty); one
   read-only mount of the one projected token volume. The waiter mounts a clearance token, so anything that could

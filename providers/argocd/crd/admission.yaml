@@ -96,8 +96,15 @@ spec:
         (!has(variables.waitpod.schedulerName) || variables.waitpod.schedulerName == 'default-scheduler') &&
         has(variables.waitpod.restartPolicy) && variables.waitpod.restartPolicy == 'Never' &&
         has(variables.waitpod.automountServiceAccountToken) && variables.waitpod.automountServiceAccountToken == false &&
-        (!has(variables.waitpod.securityContext) ||
-         variables.waitpod.securityContext.all(k, k in ['runAsNonRoot', 'runAsUser', 'runAsGroup', 'seccompProfile'])) &&
+        has(variables.waitpod.securityContext) &&
+        variables.waitpod.securityContext.all(k, k in ['runAsNonRoot', 'runAsUser', 'runAsGroup', 'seccompProfile']) &&
+        has(variables.waitpod.securityContext.runAsNonRoot) && variables.waitpod.securityContext.runAsNonRoot == true &&
+        has(variables.waitpod.securityContext.runAsUser) && variables.waitpod.securityContext.runAsUser == 65532 &&
+        has(variables.waitpod.securityContext.runAsGroup) && variables.waitpod.securityContext.runAsGroup == 65532 &&
+        has(variables.waitpod.securityContext.seccompProfile) &&
+        variables.waitpod.securityContext.seccompProfile.all(k, k in ['type']) &&
+        has(variables.waitpod.securityContext.seccompProfile.type) &&
+        variables.waitpod.securityContext.seccompProfile.type == 'RuntimeDefault' &&
         variables.waitctr.all(k, k in ['name', 'image', 'imagePullPolicy', 'args', 'env', 'securityContext', 'resources',
                                        'terminationMessagePolicy', 'terminationMessagePath', 'volumeMounts']) &&
         (!has(variables.waitctr.terminationMessagePath) || variables.waitctr.terminationMessagePath == '/dev/termination-log') &&
@@ -112,10 +119,17 @@ spec:
         variables.waitctr.env[0].value == 'http://clearance-core.invalid:8080' &&
         variables.waitctr.env[1].name == 'CLEARANCE_TOKEN_FILE' && has(variables.waitctr.env[1].value) &&
         variables.waitctr.env[1].value == '/var/run/secrets/tokens/clearance' &&
-        (!has(variables.waitctr.securityContext) ||
-         (variables.waitctr.securityContext.all(k, k in ['allowPrivilegeEscalation', 'readOnlyRootFilesystem', 'capabilities']) &&
-          (!has(variables.waitctr.securityContext.allowPrivilegeEscalation) || !variables.waitctr.securityContext.allowPrivilegeEscalation) &&
-          (!has(variables.waitctr.securityContext.capabilities) || !has(variables.waitctr.securityContext.capabilities.add)))) &&
+        has(variables.waitctr.securityContext) &&
+        variables.waitctr.securityContext.all(k, k in ['allowPrivilegeEscalation', 'readOnlyRootFilesystem', 'capabilities']) &&
+        has(variables.waitctr.securityContext.allowPrivilegeEscalation) &&
+        variables.waitctr.securityContext.allowPrivilegeEscalation == false &&
+        has(variables.waitctr.securityContext.readOnlyRootFilesystem) &&
+        variables.waitctr.securityContext.readOnlyRootFilesystem == true &&
+        has(variables.waitctr.securityContext.capabilities) &&
+        variables.waitctr.securityContext.capabilities.all(k, k in ['drop']) &&
+        has(variables.waitctr.securityContext.capabilities.drop) &&
+        variables.waitctr.securityContext.capabilities.drop == ['ALL'] &&
+        (!has(variables.waitctr.imagePullPolicy) || variables.waitctr.imagePullPolicy == 'IfNotPresent') &&
         (!has(variables.waitctr.volumeMounts) ||
          (variables.waitctr.volumeMounts.size() == 1 &&
           variables.waitctr.volumeMounts[0].all(k, k in ['name', 'mountPath', 'readOnly']) &&
