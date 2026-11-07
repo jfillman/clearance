@@ -110,6 +110,8 @@ runs:
         IN_AUDIENCE: ${{ inputs.audience }}
         IN_ARGS: ${{ inputs.args }}
       run: |
+        # IN_ARGS is a list of flags, split on purpose.
+        # shellcheck disable=SC2086
         set +e
         common=(--audience "$IN_AUDIENCE" --plan "$IN_PLAN")
         case "$IN_STEP" in
@@ -117,15 +119,12 @@ runs:
             hold=(--app "$IN_APP" --env "$IN_ENV" --backend "$IN_BACKEND" --state-key "$IN_STATE_KEY" \
               --workspace "$IN_WORKSPACE" --binary "$IN_BINARY")
             if [ -n "$IN_JSON" ]; then hold+=(--json "$IN_JSON"); fi
-            # shellcheck disable=SC2086 - IN_ARGS is a list of flags
             out=$(clearance hold "${common[@]}" "${hold[@]}" $IN_ARGS)
             ;;
           release)
-            # shellcheck disable=SC2086
             out=$(clearance release "${common[@]}" --clearance "$IN_CLEARANCE" $IN_ARGS)
             ;;
           report)
-            # shellcheck disable=SC2086
             out=$(clearance report "${common[@]}" --clearance "$IN_CLEARANCE" --apply-log "$IN_APPLY_LOG" $IN_ARGS)
             ;;
           *)
