@@ -77,3 +77,23 @@ func TestOnlyAClearedChangeTakesAnOutcome(t *testing.T) {
 		t.Errorf("unknown change: %v", rec["unattached"])
 	}
 }
+
+// A deploy.outcome naming a cleared terraform-plan change is recorded and marked: the plan's outcome goes through
+// POST /v1/clearances/{id}/outcome, and the signer must not attest it from this record.
+func TestAProviderOutcomeForATerraformPlanChangeIsNotAttached(t *testing.T) {
+	f := newGate(t)
+	out := f.register(t, "ci", tfChange(plan(nil, res("aws_vpc.lab", "aws_vpc", update, "/tags/Owner")), nil))
+	if out.State != "cleared" {
+		t.Fatal(out.State)
+	}
+	ev := map[string]any{"ts": "2026-11-07T00:59:00Z", "tool": "deploy.outcome", "boundary": "deployment", "app": out.App,
+		"destination": map[string]any{"environment": out.Env}, "target": "t", "principal": "p", "result": "applied",
+		"change": map[string]any{"id": out.ID}, "outcome": map[string]any{"applied": true}}
+	rec, err := f.svc.RecordOutcome(f.ctx, ev, evidence.Writer{Provider: evidence.Provider{Name: "p", Version: "1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u, _ := rec["unattached"].(string); !strings.Contains(u, "POST /v1/clearances/{id}/outcome") || f.get(t, out.ID).Outcome != nil {
+		t.Fatalf("unattached %q outcome %+v", u, f.get(t, out.ID).Outcome)
+	}
+}

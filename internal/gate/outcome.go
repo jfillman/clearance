@@ -109,6 +109,7 @@ func (s *Service) RecordOutcome(ctx context.Context, ev store.Event, wr evidence
 		case c == nil:
 			ev["unattached"] = "no such change: the outcome is recorded, not attached"
 		case c.Subject != nil && c.Subject.Kind == KindTerraformPlan:
+			ev["unattached"] = "terraform-plan outcomes go through POST /v1/clearances/{id}/outcome: the outcome is recorded, not attached"
 		case !outcomeIsFor(ev, c):
 			// A registered provider may report any change's id; only an outcome for the change's own destination
 			// attaches (and so reaches the attestation).
