@@ -26,6 +26,7 @@ jobs:
           go-version: "1.26.10"
       - run: helm lint charts/clearance --strict -f charts/clearance/ci/minimal-values.yaml
       - run: helm lint charts/clearance --strict -f charts/clearance/ci/full-values.yaml
+      - run: helm lint charts/clearance-argocd-agent --strict -f charts/clearance-argocd-agent/ci/minimal-values.yaml
       - name: render tests
         run: go test -v ./tools/charttest/
       - name: kubeconform (Kubernetes schemas, and the CRDs catalog for CNPG, ESO and Gateway API)

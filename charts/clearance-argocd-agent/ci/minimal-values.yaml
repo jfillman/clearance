@@ -1,0 +1,14 @@
+cluster: hangar-prod
+apiURL: http://clearance-api.hangar-dev.local
+coreURL: http://clearance.hangar-dev.local
+argocd:
+  namespace: argocd-apps
+  projects: [tenants]
+protectedNamespaces: [app-gate-api-prod]
+hostAliases:
+  - ip: 192.168.1.72
+    hostnames: [clearance.hangar-dev.local, clearance-api.hangar-dev.local]
+networkPolicy:
+  enabled: true
+  apiServerCIDRs: [10.96.0.1/32]
+  clearanceCIDRs: [192.168.1.72/32]
