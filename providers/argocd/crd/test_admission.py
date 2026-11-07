@@ -108,6 +108,19 @@ def deploy(name, rendered, ns="prot"):
                      "template": {"metadata": {"labels": {"a": "b"}}, "spec": {"containers": [{"name": "c", "image": "busybox"}]}}}}
 
 
+WAIT_IMAGE = "registry.invalid/clearance-wait@sha256:" + "0" * 64
+
+
+def wait_job(name, image=WAIT_IMAGE, label="wait", hook="PreSync", volumes=False, ns="prot"):
+    md = {"name": name, "namespace": ns, "annotations": {"argocd.argoproj.io/hook": hook}}
+    if label:
+        md["labels"] = {"clearance.hangar.io/injected": label}
+    spec = {"restartPolicy": "Never", "containers": [{"name": "wait", "image": image, "args": ["--id", "ch-1"]}]}
+    if volumes:
+        spec["volumes"] = [{"name": "v", "emptyDir": {}}]
+    return {"apiVersion": "batch/v1", "kind": "Job", "metadata": md, "spec": {"template": {"spec": spec}}}
+
+
 def grant(name, objects, active=True, ns="prot"):
     return {"apiVersion": "clearance.hangar.io/v1", "kind": "ClearanceGrant",
             "metadata": {"name": name, "namespace": ns, "labels": {"clearance.hangar.io/active": "true"} if active else {}},
@@ -226,6 +239,21 @@ def run(deny):
                  "metadata": {"name": "prot2", "labels": {"clearance.hangar.io/protected": "true"}}}, ARGO))
         check("not matched: the scale subresource as Argo", True,
               sh(["patch", "deployment", "web", "-n", "prot", "--subresource=scale", "--type=merge", "-p", '{"spec":{"replicas":2}}'], who=ARGO))
+
+        print(f"-- the injected PreSync wait Job ({mode})")
+        check("admit: the labelled Job with the pinned wait image, no stamp, no grant entry", True,
+              sh(["create", "-f", "-"], wait_job("wait-1"), ARGO))
+        check("refuse: a labelled Job with another image", False,
+              sh(["create", "-f", "-"], wait_job("wait-2", image="busybox"), ARGO), "no clearance.hangar.io/rendered annotation on batch/Job/wait-2")
+        check("refuse: an unlabelled Job with the wait image", False,
+              sh(["create", "-f", "-"], wait_job("wait-3", label=None), ARGO), "no clearance.hangar.io/rendered annotation")
+        check("refuse: the label with a different value", False, sh(["create", "-f", "-"], wait_job("wait-4", label="x"), ARGO))
+        check("refuse: the label and image without the PreSync hook annotation", False,
+              sh(["create", "-f", "-"], wait_job("wait-5", hook="Sync"), ARGO))
+        check("refuse: the label and image with a volume added", False,
+              sh(["create", "-f", "-"], wait_job("wait-6", volumes=True), ARGO))
+        check("not matched: the same labelled Job with another image by another writer", True,
+              sh(["create", "-f", "-"], wait_job("wait-7", image="busybox"), OTHER))
 
         print(f"-- expiry is the agent's: status.valid ({mode})")
         check("the agent marks the grant expired", True, sh(["patch", "clearancegrant", "g1", "-n", "prot", "--subresource=status",

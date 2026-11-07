@@ -55,19 +55,38 @@ spec:
       expression: "has(object.metadata.annotations) ? object.metadata.annotations : {}"
     - name: rendered
       expression: "'clearance.hangar.io/rendered' in variables.ann ? variables.ann['clearance.hangar.io/rendered'] : ''"
+    # G-ARGO-4's injected PreSync wait Job: no stamp, no grant entry. Exempt ONLY a batch/v1 Job labelled
+    # clearance.hangar.io/injected=wait, annotated as a PreSync hook, with exactly one container and no init
+    # containers, no volumes and no command override, whose image is exactly the pinned wait image below (a digest
+    # reference; empty = no exemption). The label alone proves nothing: what bounds it is the image, a waiter that
+    # long-polls Clearance and exits, and that only Argo's controller reaches this policy. Args and env can still be
+    # set, which that image only reads. The agent's grant need not list it.
+    - name: exempt
+      expression: >-
+        'registry.invalid/clearance-wait@sha256:0000000000000000000000000000000000000000000000000000000000000000' != '' &&
+        has(object.apiVersion) && object.apiVersion == 'batch/v1' && has(object.kind) && object.kind == 'Job' &&
+        has(object.metadata.labels) && 'clearance.hangar.io/injected' in object.metadata.labels &&
+        object.metadata.labels['clearance.hangar.io/injected'] == 'wait' &&
+        'argocd.argoproj.io/hook' in variables.ann && variables.ann['argocd.argoproj.io/hook'] == 'PreSync' &&
+        has(object.spec) && has(object.spec.template) && has(object.spec.template.spec) &&
+        has(object.spec.template.spec.containers) && object.spec.template.spec.containers.size() == 1 &&
+        has(object.spec.template.spec.containers[0].image) &&
+        object.spec.template.spec.containers[0].image == 'registry.invalid/clearance-wait@sha256:0000000000000000000000000000000000000000000000000000000000000000' &&
+        !has(object.spec.template.spec.containers[0].command) &&
+        !has(object.spec.template.spec.initContainers) && !has(object.spec.template.spec.volumes)
     - name: key
       expression: >-
         (has(object.apiVersion) && object.apiVersion.contains('/') ? object.apiVersion.split('/')[0] : '') + '/' +
         (has(object.kind) ? object.kind : '') + '/' + (has(object.metadata.name) ? object.metadata.name : '')
   validations:
-    - expression: "variables.rendered != ''"
+    - expression: "variables.exempt || variables.rendered != ''"
       messageExpression: "'no clearance.hangar.io/rendered annotation on ' + variables.key + ': it did not come from the Clearance plugin'"
-    - expression: "has(params.status) && has(params.status.valid) && params.status.valid"
+    - expression: "variables.exempt || (has(params.status) && has(params.status.valid) && params.status.valid)"
       messageExpression: "'grant ' + params.metadata.name + ' is not valid (expired or unverified)'"
     - expression: >-
-        has(params.spec.objects) && variables.key in params.spec.objects &&
+        variables.exempt || (has(params.spec.objects) && variables.key in params.spec.objects &&
         has(params.spec.objects[variables.key].rendered) &&
-        params.spec.objects[variables.key].rendered == variables.rendered
+        params.spec.objects[variables.key].rendered == variables.rendered)
       messageExpression: "'grant ' + params.metadata.name + ' does not list ' + variables.key + ' at ' + variables.rendered"
   auditAnnotations:
     - key: grant
