@@ -5,6 +5,7 @@ package gate_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -188,5 +189,44 @@ func TestASigningFailureIsRetriedAndNothingIsRecordedMeanwhile(t *testing.T) {
 	a.Drain(f.ctx)
 	if _, ok := f.attestation(t, c.ID); !ok {
 		t.Fatal("not retried")
+	}
+}
+
+// errTx fails the attestation lookup the way a broken store would.
+type errTx struct{ store.Tx }
+
+func (errTx) Attestation(context.Context, string) (store.Attestation, error) {
+	return store.Attestation{}, errors.New("the store could not be read")
+}
+
+type errStore struct{ store.Store }
+
+func (s errStore) Atomic(ctx context.Context, fn func(store.Tx) error) error {
+	return s.Store.Atomic(ctx, func(tx store.Tx) error { return fn(errTx{tx}) })
+}
+
+func TestAFailedAttestationLookupNeverOverwritesTheStoredBundle(t *testing.T) {
+	f, _ := withTokens(t)
+	a, _, _, _ := attestorFor(t, f)
+	c := f.register(t, "ci", tfChange(tagOnly, nil))
+	out, err := f.svc.Outcome(f.ctx, principals["ci"], c.ID, applied(planDigest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Drain(f.ctx)
+	before, ok := f.attestation(t, c.ID)
+	if !ok {
+		t.Fatal("not attested")
+	}
+	f.svc.Store = errStore{f.st}
+	_, err = f.svc.RecordAttestation(f.ctx, store.Attestation{ChangeID: c.ID, Digest: "sha256:other", Backend: "static",
+		OutcomeSeq: out.AuditSeq, Bundle: json.RawMessage(`{"other":true}`)})
+	if err == nil {
+		t.Fatal("a failed lookup was treated as no attestation")
+	}
+	f.svc.Store = f.st
+	after, _ := f.attestation(t, c.ID)
+	if after.Digest != before.Digest || len(f.records(t, "deploy.attestation")) != 1 {
+		t.Fatalf("overwritten: %+v", after)
 	}
 }

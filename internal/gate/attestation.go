@@ -2,6 +2,7 @@ package gate
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jfillman/clearance/internal/store"
@@ -28,9 +29,13 @@ func (s *Service) RecordAttestation(ctx context.Context, a store.Attestation) (s
 		if c == nil {
 			return gerr("DG-UNKNOWN", "no such change", "", 404)
 		}
-		if have, err := tx.Attestation(ctx, a.ChangeID); err == nil {
+		have, err := tx.Attestation(ctx, a.ChangeID)
+		if err == nil {
 			out = have
 			return nil
+		}
+		if !errors.Is(err, store.ErrNotFound) {
+			return err // never write over what could not be read
 		}
 		fields := map[string]any{"digest": a.Digest, "backend": a.Backend, "outcome_seq": a.OutcomeSeq}
 		if a.RekorLogIndex != nil {

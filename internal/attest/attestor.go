@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -40,7 +41,7 @@ type Attestor struct {
 }
 
 type item struct {
-	seq      int64
+	seqs     []int64 // every deploy.outcome seen for the change; the first that is attestable is attested
 	attempts int
 	next     time.Time
 }
@@ -66,8 +67,13 @@ func (a *Attestor) Notify(id string, seq int64) {
 		a.pending = map[string]*item{}
 		a.wake = make(chan struct{}, 1)
 	}
-	if _, ok := a.pending[id]; !ok { // the first outcome of a change is the one attested
-		a.pending[id] = &item{seq: seq}
+	it := a.pending[id]
+	if it == nil {
+		it = &item{}
+		a.pending[id] = it
+	}
+	if len(it.seqs) < 50 && !slices.Contains(it.seqs, seq) { // a not-applied outcome must not hide a later applied one
+		it.seqs = append(it.seqs, seq)
 	}
 	a.mu.Unlock()
 	select {
@@ -156,8 +162,9 @@ func (a *Attestor) Drain(ctx context.Context) {
 		}
 		a.mu.Lock()
 		it := a.pending[id]
+		seqs := slices.Clone(it.seqs)
 		a.mu.Unlock()
-		err := a.Process(ctx, id, it.seq)
+		err := a.processAny(ctx, id, seqs)
 		a.mu.Lock()
 		switch {
 		case err == nil, errors.Is(err, ErrNoAttestation):
@@ -177,6 +184,20 @@ func (a *Attestor) Drain(ctx context.Context) {
 		}
 		a.mu.Unlock()
 	}
+}
+
+// processAny tries each outcome seq in turn: the first one that is attestable is attested. ErrNoAttestation only when
+// none is.
+func (a *Attestor) processAny(ctx context.Context, id string, seqs []int64) error {
+	var last error = ErrNoAttestation
+	for _, seq := range seqs {
+		err := a.Process(ctx, id, seq)
+		if err == nil || !errors.Is(err, ErrNoAttestation) {
+			return err
+		}
+		last = err
+	}
+	return last
 }
 
 // Process attests change id's deploy.outcome record seq: build the statement, sign and log it, then store the bundle
