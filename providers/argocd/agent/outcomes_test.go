@@ -1,12 +1,18 @@
 package agent_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jfillman/clearance/internal/authn"
+	"github.com/jfillman/clearance/internal/evidence"
+	"github.com/jfillman/clearance/internal/gate"
+	"github.com/jfillman/clearance/internal/store"
+	"github.com/jfillman/clearance/internal/store/memory"
 	"github.com/jfillman/clearance/internal/token"
 	agent "github.com/jfillman/clearance/providers/argocd/agent"
 )
@@ -347,5 +353,62 @@ func TestTheReleaseStampIsReadBeforeTheChartsAnnotation(t *testing.T) {
 	r := w.core.of("deploy.outcome")[0].Record
 	if r.Release["id"] != "chain-9:hangar-prod/prod" || r.Change["release"] != nil {
 		t.Errorf("%+v", r)
+	}
+}
+
+// G-ARGO-6: the outcome of a realistic tenant-onboarded Application (named <app>-<env>, labelled hangar.io/app and
+// hangar.io/env) is for the change clearance-gate registered under the Glidepath app name, so the core attaches it.
+func TestAnOutcomeOfATenantOnboardedApplicationAttachesToItsChange(t *testing.T) {
+	ctx := context.Background()
+	tree := strings.Repeat("c", 64)
+	st := memory.New()
+	svc := gate.NewService(gate.Config{Verifiers: []string{"app-*-cicd/pipeline-runner"}}, st, func() time.Time { return t0 })
+	// the change as clearance-gate registers it: the Glidepath app name, the environment name, the cluster
+	body := map[string]any{"app": "gate-api", "env": "prod", "cluster": "hangar-prod", "repo": "jfillman/gitops-gate-api",
+		"pr": json.Number("7"), "head": strings.Repeat("a", 40), "base": strings.Repeat("b", 40), "proposer": "user:dana",
+		"proposerKind": "person", "owner": "group:default/team-gate", "protected": true, "treeDigest": tree,
+		"paths": []any{"hangar-prod/prod/release.yaml"}, "linesChanged": json.Number("4"), "objects": []any{},
+		"checks": map[string]any{"ci": "pass", "provenance": "not-agent", "render": "ok", "admission": "pass"}}
+	c, err := svc.Register(ctx, authn.Principal{ID: "app-gate-api-cicd/pipeline-runner"}, body)
+	if err != nil || c.State != "cleared" {
+		t.Fatalf("%+v %v", c, err)
+	}
+
+	w := newWorld(t)
+	w.kube.protect("app-gate-api-prod", map[string]string{agent.LabelEnvironment: "prod"})
+	d, _ := stamped(t, "Deployment", "gate-api", "app-gate-api-prod", "gate-api-prod", c.ID, tree)
+	w.kube.objs["app-gate-api-prod"] = []agent.ObjectDetail{d}
+	app := agent.Application{Namespace: "argocd-apps", Name: "gate-api-prod", UID: "uid-1", Project: "tenants",
+		Labels: map[string]string{agent.LabelAppName: "gate-api", agent.LabelAppEnv: "prod"}, DestNS: "app-gate-api-prod",
+		SyncState: "Synced", Health: "Healthy", Revisions: []string{"abc123"}, Op: succeeded("2026-11-07T12:00:00Z")}
+	req, err := w.a.OutcomeRecord(ctx, app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(req.Record)
+	ev := store.Event{"ts": "2026-11-07T12:00:01Z", "tool": "deploy.outcome", "boundary": "deployment", "principal": "p",
+		"decision": nil, "tier": nil, "task_id": nil, "session": nil, "parent": nil, "agent": nil, "rule": nil, "args_sha256": nil}
+	var fields map[string]any
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range fields {
+		ev[k] = v
+	}
+	if ev["app"] != "gate-api" {
+		t.Fatalf("the outcome names the Application, not the app: %v", ev["app"])
+	}
+	rec, err := svc.RecordOutcome(ctx, ev, evidence.Writer{Provider: evidence.Provider{Name: "argocd-agent", Version: "1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec["unattached"] != nil {
+		t.Fatalf("not attached: %v", rec["unattached"])
+	}
+	row, _ := st.Change(ctx, c.ID)
+	var got gate.Change
+	_ = json.Unmarshal(row.Record, &got)
+	if got.Outcome == nil || !got.Outcome.Matched || got.Outcome.Release != "chain-1:hangar-prod/prod" {
+		t.Fatalf("outcome: %+v", got.Outcome)
 	}
 }

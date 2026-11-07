@@ -197,10 +197,10 @@ func (a *Agent) OutcomeRecord(ctx context.Context, app Application) (*client.Rec
 	}
 	src := map[string]any{"provider": a.Provider(), "operation": OperationKey(app), "application": app.Namespace + "/" + app.Name}
 	req := &client.RecordRequest{Kind: "deploy.outcome", Record: client.ProviderEvent{
-		App:    client.String(app.Name),
+		App:    client.String(app.GateApp()), // the app a change is registered under, not the Application's <app>-<env> name
 		Target: client.String(fmt.Sprintf("%s/%s@%s", app.DestNS, app.Name, rev)),
 		Result: client.String(result),
-		Destination: map[string]any{"cluster": a.cfg.Cluster, "environment": a.environment(ctx, app.DestNS),
+		Destination: map[string]any{"cluster": a.cfg.Cluster, "environment": a.appEnvironment(ctx, app),
 			"application": app.Name, "namespace": app.DestNS},
 		Outcome: out, Source: src}}
 	if len(change_) > 0 {
@@ -212,6 +212,15 @@ func (a *Agent) OutcomeRecord(ctx context.Context, app Application) (*client.Rec
 			"digests": map[string]any{"sha256": trimSHA(tree)}}
 	}
 	return req, nil
+}
+
+// appEnvironment is the environment a change for app is registered under: the Application's hangar.io/env label (the
+// tenant-onboarding ApplicationSet stamps the same value into the CMP's PARAM_ENV), else the namespace's.
+func (a *Agent) appEnvironment(ctx context.Context, app Application) string {
+	if v := app.Labels[LabelAppEnv]; v != "" {
+		return v
+	}
+	return a.environment(ctx, app.DestNS)
 }
 
 func (a *Agent) environment(ctx context.Context, ns string) string {

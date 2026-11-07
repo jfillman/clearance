@@ -246,10 +246,11 @@ func (a *API) DeleteGrant(ctx context.Context, ns, name string) error {
 
 type appWire struct {
 	Metadata struct {
-		Namespace       string `json:"namespace"`
-		Name            string `json:"name"`
-		UID             string `json:"uid"`
-		ResourceVersion string `json:"resourceVersion"`
+		Namespace       string            `json:"namespace"`
+		Name            string            `json:"name"`
+		Labels          map[string]string `json:"labels"`
+		UID             string            `json:"uid"`
+		ResourceVersion string            `json:"resourceVersion"`
 	} `json:"metadata"`
 	Spec struct {
 		Project     string `json:"project"`
@@ -289,7 +290,7 @@ type appWire struct {
 }
 
 func (w appWire) app() Application {
-	a := Application{Namespace: w.Metadata.Namespace, Name: w.Metadata.Name, UID: w.Metadata.UID, Project: w.Spec.Project,
+	a := Application{Namespace: w.Metadata.Namespace, Name: w.Metadata.Name, Labels: w.Metadata.Labels, UID: w.Metadata.UID, Project: w.Spec.Project,
 		DestNS: w.Spec.Destination.Namespace, SyncState: w.Status.Sync.Status, Health: w.Status.Health.Status,
 		Revisions: w.Status.Sync.Revisions}
 	if len(a.Revisions) == 0 && w.Status.Sync.Revision != "" {

@@ -571,6 +571,7 @@ pull request, change, grant, outcome, attestation, release record, joined by ids
   checks the hash. `matched` is whether the applied digest is the cleared tree; a record with no digest is
   `matched: false`, with `digest` empty. Everything in it is the provider's claim; the core did not observe the target.
   A terraform-plan change keeps its own outcome route.
+- **Which app and environment.** Changes are registered under the Glidepath app and environment names (`gate-api`, `prod`). A tenant-onboarded Application is named `<app>-<env>` and carries `hangar.io/app` and `hangar.io/env` labels, so the agent reports its outcomes (and refused-sync exceptions) under those labels, falling back to the Application's name and the namespace's environment; the outcome attaches only when they equal the change's.
 - **The stamp.** The airframe chart renders `hangar.io/release-id` onto the Rollout, so that id is inside the tree and
   bound by the tree digest. An app with no Rollout has none, so the CMP now copies the release id to every object as
   `clearance.hangar.io/release`: the one the objects' `hangar.io/release-id` agree on, else `releaseTracking.releaseId`
