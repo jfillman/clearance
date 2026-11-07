@@ -9,14 +9,6 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
-## [0.33.0] - 2026-11-07
-
-### Fixed
-- **A terraform-plan change registered by a workflow can be released and reported by another job of that repository**
-  (G-TF-4; `gate.SameRepoWorkflow`; [docs/terraform-gate.md](docs/terraform-gate.md)). The plan job and the
-  environment job have different OIDC subjects, so `release` and `report` got 403. Same repository, still a verifier;
-  other change kinds stay exact-registrant.
-
 ### Added
 - **The release-record join (G-ARGO-6)** ([docs/gate.md](docs/gate.md#the-release-record-join-g-argo-6-built)). A
   `deploy.outcome` names its release in the record's own `release {id}` (`ProviderEvent.release`; `change.release.id`
@@ -33,12 +25,28 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 - G-ARGO-2: the `ClearanceGrant` CRD (`clearancegrants.clearance.hangar.io/v1`) and the admission policies
   `clearance-protected-writes` and `clearance-grant-writer` (`providers/argocd/crd/`), shipped in Warn mode, with an
   envtest suite (`test_admission.py`, CI job `admission-policy`). docs/gate.md "G-ARGO-2".
+- **The lab Terraform workflow** (G-TF-4, docs only; the workflow lives in jfillman/hangar-infra,
+  [docs/terraform-gate.md](docs/terraform-gate.md#the-lab-workflow-g-tf-4-draft)): `network/lab` plans on a pull
+  request and applies on merge through `terraform/action.yml`, behind the `lab` environment's Clearance protection rule.
 - **Terraform exception detection** (G-TF-5; `providers/terraform/detect`, `terraform-detector`;
   [docs/terraform-gate.md](docs/terraform-gate.md#exception-detection-g-tf-5-built-not-deployed)). A scheduled drift
   check (`terraform plan -detailed-exitcode`) and an untraced-apply check (S3 state versions against `deploy.outcome`,
   CloudTrail for the principal) file `deploy.exception` kind `drift` and `untraced-apply`. SigV4 over the standard
   library, no AWS SDK. The core's report check now accepts `destination.workspace` {backend, key, name} in place of
   cluster and environment, so a Terraform plan's exception is no longer refused (`internal/gate/exception.go`).
+- G-ARGO-2: the `ClearanceGrant` CRD (`clearancegrants.clearance.hangar.io/v1`) and the admission policies
+  `clearance-protected-writes` and `clearance-grant-writer` (`providers/argocd/crd/`), shipped in Warn mode, with an
+  envtest suite (`test_admission.py`, CI job `admission-policy`). docs/gate.md "G-ARGO-2".
+
+## [0.33.0] - 2026-11-07
+
+### Fixed
+- **A terraform-plan change registered by a workflow can be released and reported by another job of that repository**
+  (G-TF-4; `gate.SameRepoWorkflow`; [docs/terraform-gate.md](docs/terraform-gate.md)). The plan job and the
+  environment job have different OIDC subjects, so `release` and `report` got 403. Same repository, still a verifier;
+  other change kinds stay exact-registrant.
+
+### Added
 - **`objects[].op: "unchanged"`** on a change request: an object in the rendered tree that the diff does not touch. It
   is accepted, never tiered, and is in the token with `changed: false`, so Glidepath's clearance-gate can register every
   rendered object (grants need the whole tree). Glidepath sends it, so it needs a Clearance release with this first.

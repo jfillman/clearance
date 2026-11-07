@@ -1,8 +1,9 @@
 # The Terraform gate in plain CI (G-TF-3)
 
 Status: **Built** (`clearance hold`, `release` and `report`, `terraform/action.yml`), tested against `clearance core
---memory` with fixture plans. **Unverified** on a real workflow: the lab workflow that uses it is G-TF-4, and nothing
-in `jfillman/hangar-infra` calls it yet.
+--memory` with fixture plans. **Draft** on a real workflow: the lab workflow that uses it (G-TF-4) is
+[`network-lab.yaml` in jfillman/hangar-infra](https://github.com/jfillman/hangar-infra/pull/3), **Unverified** until its
+first real apply is cleared and matched.
 
 Three subcommands of the `clearance` binary put a saved Terraform plan behind the gate
 ([The terraform-plan subject](gate.md#the-terraform-plan-subject-g-tf-1), [Hold, release and
@@ -94,6 +95,18 @@ applied, re-hashed at that moment. Exit 0 means the outcome was recorded and mat
 Like `register/action.yml`, it builds the Go binary at its own ref. Outputs: `clearance` (the id), `result`, `state`.
 A holding exit (3) is not a failure of the `hold` step, and `release` then refuses it. CI lints the action
 (`terraform-action` job: metadata, shellcheck on every embedded script) and runs a `hold --dry-run` of a fixture plan.
+
+## The lab workflow (G-TF-4, Draft)
+
+`jfillman/hangar-infra` runs `network/lab` through this gate: a pull request plans and comments; a merge saves the plan
+and holds it (`--no-wait`) in a job with a read-only role, and an `apply` job in the GitHub environment `lab` (the
+Clearance App is its deployment protection rule) runs `release`, `terraform apply -json tfplan > apply.jsonl` and `report` (`apply-log: apply.jsonl`, run `if: always()` once release passed, so a failed apply is reported too). Both
+enforcement paths are exercised (GitHub will not start the job until Clearance clears; `release` stops a different plan
+file), and the apply role's trust policy names `repo:jfillman/hangar-infra:environment:lab`, so only that job holds
+credentials that can change the lab. Two things a workflow must do that the steps above do not show: the hold has to
+run in a job *before* the environment job (the App looks up the registered change when the deployment is requested), and
+`terraform show -json` is run by the workflow and passed as `json` so `hold` need not run inside an initialized
+directory. The repository needs `autopilot.githubWorkflows: ["repo:jfillman/hangar-infra:*"]` in the cluster's config.
 
 ## Exception detection (G-TF-5, Built, not deployed)
 
