@@ -359,8 +359,10 @@ type ProviderEvent struct {
 	Source      map[string]any `json:"source,omitempty"`
 	Destination map[string]any `json:"destination,omitempty"`
 	Change      map[string]any `json:"change,omitempty"`
-	Effect      map[string]any `json:"effect,omitempty"`
-	Outcome     map[string]any `json:"outcome,omitempty"`
+	// Release is {id}: the release a deploy.outcome belongs to (G-ARGO-6), copied into the change's attestation.
+	Release map[string]any `json:"release,omitempty"`
+	Effect  map[string]any `json:"effect,omitempty"`
+	Outcome map[string]any `json:"outcome,omitempty"`
 	// Exception is a deploy.exception's {kind, objects, addresses, actor, expected, observed, state, detected_at,
 	// detail}; Outage a deploy.degraded's {from, to} (docs/gate.md).
 	Exception map[string]any `json:"exception,omitempty"`
@@ -687,9 +689,14 @@ type ChangeOutcome struct {
 	Seq        int64  `json:"seq"`
 	Applied    bool   `json:"applied"`
 	Matched    bool   `json:"matched"`
-	PlanDigest string `json:"plan_digest"`
+	PlanDigest string `json:"plan_digest,omitempty"`
 	At         string `json:"at"`
 	Exception  *int64 `json:"exception,omitempty"`
+	// Digest, Release, Hash, Provider: a manifest change's outcome as its provider reported it (G-ARGO-6).
+	Digest   string `json:"digest,omitempty"`
+	Release  string `json:"release,omitempty"`
+	Hash     string `json:"hash,omitempty"`
+	Provider string `json:"provider,omitempty"`
 }
 
 // ChangeOutcomeResult is the outcome route's answer (gate.OutcomeResult).
@@ -798,20 +805,22 @@ type errorBody struct {
 
 // ClearanceAnswer is a change's state and its live clearance token (gate.ClearanceAnswer).
 type ClearanceAnswer struct {
-	ID         string     `json:"id"`
-	State      string     `json:"state"`
-	App        string     `json:"app"`
-	Env        string     `json:"env"`
-	Cluster    string     `json:"cluster"`
-	Repo       string     `json:"repo"`
-	PR         int64      `json:"pr"`
-	Head       string     `json:"head"`
-	TreeDigest string     `json:"tree_digest"`
-	Tier       int        `json:"tier"`
-	ClearedBy  *string    `json:"cleared_by"`
-	TaskID     *string    `json:"task_id"`
-	ExpiresAt  string     `json:"expires_at"`
-	Token      *TokenView `json:"token"`
+	ID         string  `json:"id"`
+	State      string  `json:"state"`
+	App        string  `json:"app"`
+	Env        string  `json:"env"`
+	Cluster    string  `json:"cluster"`
+	Repo       string  `json:"repo"`
+	PR         int64   `json:"pr"`
+	Head       string  `json:"head"`
+	TreeDigest string  `json:"tree_digest"`
+	Tier       int     `json:"tier"`
+	ClearedBy  *string `json:"cleared_by"`
+	TaskID     *string `json:"task_id"`
+	ExpiresAt  string  `json:"expires_at"`
+	// Outcome is what the deploy reported for the change (null before one did).
+	Outcome *ChangeOutcome `json:"outcome"`
+	Token   *TokenView     `json:"token"`
 }
 
 // WaitAnswer is the wait route's answer (server.WaitAnswer): the change and its token, and whether its state

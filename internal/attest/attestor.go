@@ -98,6 +98,9 @@ func (a *Attestor) NotifyRecord(rec store.Record) {
 	if tool, _ := rec["tool"].(string); tool != "deploy.outcome" {
 		return
 	}
+	if _, no := rec["unattached"]; no {
+		return // the gate recorded it without attaching it: the change was not cleared
+	}
 	id := mapStr(rec, "change", "id")
 	seq, ok := gate.SeqInt(rec["seq"])
 	if id == "" || !ok {

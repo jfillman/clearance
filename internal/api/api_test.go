@@ -250,11 +250,12 @@ var backends = []backend{
 			if err != nil {
 				t.Fatal(err)
 			}
+			// One critical section: no reader sees the records without their change rows.
+			m.mu.Lock()
 			for _, r := range recs {
 				r["assurance"] = "recorded-not-checkpointed"
-				m.appendRec(r)
+				m.recs = append(m.recs, r)
 			}
-			m.mu.Lock()
 			m.changes = append(m.changes, cs...)
 			m.mu.Unlock()
 		}))
@@ -310,8 +311,14 @@ var backends = []backend{
 		}
 		rd := openReader(t, dsn)
 		appenders.Store(Store(rd), appender(func(t *testing.T, evs []store.Event, cs []store.Change) {
-			seed(t, st, evs)
+			// One transaction, as the gate writes them: a stream that saw the records before the change rows
+			// would see a deploy event with no change, and skip it for a viewer who owns the change.
 			if err := st.Atomic(bg, func(tx store.Tx) error {
+				for _, e := range evs {
+					if _, err := tx.Append(bg, e, evidence.Core("test")); err != nil {
+						return err
+					}
+				}
 				for _, c := range cs {
 					if err := tx.PutChange(bg, c); err != nil {
 						return err

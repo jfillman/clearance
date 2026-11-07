@@ -16,6 +16,21 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   verifies the legacy root's attestations and the new Hangar PKI's through a cutover. The PEM form is unchanged.
 - **The Fulcio and Rekor URLs may be `http` for an in-cluster Service name** (`<svc>.<ns>.svc`, `.cluster.local`), beside
   https and loopback. The platform's Fulcio and Rekor serve plain HTTP inside the cluster; any other host stays https.
+- **The release-record join (G-ARGO-6)** ([docs/gate.md](docs/gate.md#the-release-record-join-g-argo-6-built)). A
+  `deploy.outcome` names its release in the record's own `release {id}` (`ProviderEvent.release`; `change.release.id`
+  is still accepted and copied), and the attestation's `predicate.release.id` reads either. The change's `outcome`
+  (record `seq` and `hash`, applied, matched, digest, release, provider) is set when the provider's outcome is recorded
+  and shows in `GET /v1/clearances/{id}` on the core and clearance-api (with the attestation and Rekor index). The Argo
+  CD agent sends `release {id}` and reads the CMP's new `clearance.hangar.io/release` stamp first; the CMP stamps it on
+  every object from the chart's `hangar.io/release-id` or the values' `releaseTracking.releaseId`. Wire change:
+  `plan_digest` is now omitted from a manifest change's outcome (it was never set there); the Python client is
+  regenerated.
+
+
+
+- G-ARGO-2: the `ClearanceGrant` CRD (`clearancegrants.clearance.hangar.io/v1`) and the admission policies
+  `clearance-protected-writes` and `clearance-grant-writer` (`providers/argocd/crd/`), shipped in Warn mode, with an
+  envtest suite (`test_admission.py`, CI job `admission-policy`). docs/gate.md "G-ARGO-2".
 - **The lab Terraform workflow** (G-TF-4, docs only; the workflow lives in jfillman/hangar-infra,
   [docs/terraform-gate.md](docs/terraform-gate.md#the-lab-workflow-g-tf-4-draft)): `network/lab` plans on a pull
   request and applies on merge through `terraform/action.yml`, behind the `lab` environment's Clearance protection rule.
