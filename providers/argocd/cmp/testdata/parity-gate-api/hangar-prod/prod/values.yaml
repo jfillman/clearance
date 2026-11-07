@@ -1,0 +1,10 @@
+appName: gate-api
+appType: app
+cluster: hangar-prod
+clusterType: upper
+envName: prod
+rollout:
+  replicas: 1
+  ports:
+    - name: http
+      containerPort: 8080

@@ -393,6 +393,8 @@ func testChanges(t *testing.T, open Opener) {
 		{"ForPR", ids(s.ChangesForPR(bg, "o/r", 1)), "c1 c3 "},
 		{"ForHead", ids(s.ChangesForHead(bg, "o/r", "h2")), "c2 c4 "},
 		{"Holding", ids(s.ChangesHolding(bg)), "c1 c3 "},
+		{"Cleared", ids(s.ChangesCleared(bg, "app", "prod")), "c2 c4 c5 c6 "},
+		{"Cleared other env", ids(s.ChangesCleared(bg, "app", "dev")), ""},
 		{"Undelivered", ids(s.ChangesUndelivered(bg)), "c2 c6 "},
 		{"ForPR none", ids(s.ChangesForPR(bg, "o/x", 1)), ""},
 	} {
