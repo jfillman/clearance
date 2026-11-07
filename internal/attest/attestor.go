@@ -167,9 +167,12 @@ func (a *Attestor) Drain(ctx context.Context) {
 		err := a.processAny(ctx, id, seqs)
 		a.mu.Lock()
 		switch {
-		case err == nil, errors.Is(err, ErrNoAttestation):
+		case err == nil:
 			delete(a.pending, id)
-			if err != nil {
+		case errors.Is(err, ErrNoAttestation):
+			// An outcome Notify added while this one was processed is not covered by this verdict: leave it queued.
+			if len(it.seqs) == len(seqs) {
+				delete(a.pending, id)
 				a.log().DebugContext(ctx, "attest: no attestation", "change", id, "reason", err.Error())
 			}
 		default:

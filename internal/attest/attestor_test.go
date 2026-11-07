@@ -127,3 +127,65 @@ func TestANotAppliedOutcomeDoesNotHideALaterAppliedOne(t *testing.T) {
 		t.Fatalf("%+v %v", res, err)
 	}
 }
+
+// notifyingStore calls hook once, on the first outcome record read: a Notify that lands while Drain is processing.
+type notifyingStore struct {
+	store.Store
+	hook func()
+}
+
+func (n *notifyingStore) Records(ctx context.Context, from int64, limit int) ([]store.Record, error) {
+	if h := n.hook; h != nil {
+		n.hook = nil
+		h()
+	}
+	return n.Store.Records(ctx, from, limit)
+}
+
+// An outcome notified while the drain is processing an earlier one is not dropped by that one's verdict.
+func TestAnOutcomeNotifiedDuringAProcessingIsNotLost(t *testing.T) {
+	ctx := context.Background()
+	mem := memory.New()
+	now := time.Date(2026, 11, 7, 1, 0, 0, 0, time.UTC)
+	svc := gate.NewService(gate.Config{}, mem, func() time.Time { return now })
+	k := newKeyless(t)
+	ns := &notifyingStore{Store: mem}
+	a := &attest.Attestor{Backend: k.b, Store: ns, Gate: svc, Issuer: "clearance", Clock: func() time.Time { return now }}
+	c := manifestChange()
+	raw, _ := json.Marshal(c)
+	var seqs []int64
+	err := mem.Atomic(ctx, func(tx store.Tx) error {
+		if err := tx.PutChange(ctx, store.Change{ID: c.ID, App: c.App, Env: c.Env, State: c.State, Repo: c.Repo, Head: c.Head,
+			PR: int(c.PR), ExpiresAt: now.Add(time.Hour), Record: raw}); err != nil {
+			return err
+		}
+		w := evidence.Writer{Provider: evidence.Provider{Name: "argocd-agent", Version: "1"}}
+		for _, applied := range []bool{false, true} {
+			ev := store.Event{"ts": "2026-11-07T00:59:00Z", "tool": "deploy.outcome", "boundary": "deployment", "app": c.App,
+				"target": "t", "principal": "hangar-prod/argocd/agent", "decision": nil, "tier": nil, "task_id": nil, "session": nil,
+				"parent": nil, "agent": nil, "rule": nil, "args_sha256": nil, "result": "r",
+				"change":  map[string]any{"id": c.ID, "tree": "sha256:" + treeRoot},
+				"outcome": map[string]any{"applied": applied, "digests": map[string]any{"sha256": treeRoot}, "finished_at": "2026-11-07T00:58:59Z"}}
+			r, err := tx.Append(ctx, ev, w)
+			if err != nil {
+				return err
+			}
+			n, _ := gate.SeqInt(r["seq"])
+			seqs = append(seqs, n)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Notify(c.ID, seqs[0]) // the not-applied one is queued; the applied one arrives while it is processed
+	ns.hook = func() { a.Notify(c.ID, seqs[1]) }
+	a.Drain(ctx)
+	if _, err := mem.Attestation(ctx, c.ID); err == nil {
+		t.Fatal("attested in the same pass: the interleaving did not happen")
+	}
+	a.Drain(ctx) // still queued: the applied outcome is attested now
+	if _, err := mem.Attestation(ctx, c.ID); err != nil || k.rekor.Logged() != 1 {
+		t.Fatalf("the later applied outcome was lost: %v, logged %d", err, k.rekor.Logged())
+	}
+}
