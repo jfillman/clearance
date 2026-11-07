@@ -14,7 +14,7 @@ platform, and imports nothing from them.
 
 **Built and deployed** (on hangar-dev since 2026-11-03). One Go module (`go.mod`), one static binary `clearance` with
 the subcommands `core` (the HTTP API: decisions, outcomes, provider records, the gate, provenance, the GitHub App),
-`api` (clearance-api, the read-only API), `chain verify`, `register`, `conformance`
+`api` (clearance-api, the read-only API), `attest verify`, `chain verify`, `register`, `conformance`
 ([docs/provider-protocol.md](docs/provider-protocol.md)) and `version`, plus the Go and Python clients (`client`,
 `clients/python`). Its contract is [`contract/clearance-core.json`](contract/clearance-core.json). See
 [docs/core.md](docs/core.md).

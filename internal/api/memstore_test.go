@@ -24,6 +24,7 @@ type memStore struct {
 	tokens  []store.Token
 	keys    []store.SigningKey
 	feeds   []store.Feed
+	atts    []store.Attestation
 	fail    error
 	mu      sync.RWMutex // the stream tests append while a stream reads (Head, EvidenceAfter, DeploysAfter)
 }
@@ -571,6 +572,16 @@ func (m *memStore) DeploysAfter(_ context.Context, after int64, limit int) ([]De
 		out = append(out, d)
 	}
 	return out, m.fail
+}
+
+func (m *memStore) Attestation(_ context.Context, id string) (*store.Attestation, error) {
+	for _, a := range m.atts {
+		if a.ChangeID == id {
+			a := a
+			return &a, m.fail
+		}
+	}
+	return nil, m.fail
 }
 
 func (m *memStore) Feed(_ context.Context, cluster string) (*store.Feed, error) {
