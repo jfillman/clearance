@@ -72,7 +72,9 @@ func (a *Attestor) Notify(id string, seq int64) {
 		it = &item{}
 		a.pending[id] = it
 	}
-	if len(it.seqs) < 50 && !slices.Contains(it.seqs, seq) { // a not-applied outcome must not hide a later applied one
+	// Every outcome of the change stays queued until it has been checked (an applied one must never be dropped for
+	// the count of earlier ones); Drain drops the ones it has found not attestable.
+	if !slices.Contains(it.seqs, seq) {
 		it.seqs = append(it.seqs, seq)
 	}
 	a.mu.Unlock()
@@ -174,6 +176,8 @@ func (a *Attestor) Drain(ctx context.Context) {
 			if len(it.seqs) == len(seqs) {
 				delete(a.pending, id)
 				a.log().DebugContext(ctx, "attest: no attestation", "change", id, "reason", err.Error())
+			} else { // forget the outcomes just checked; the newer ones stay
+				it.seqs = slices.DeleteFunc(it.seqs, func(n int64) bool { return slices.Contains(seqs, n) })
 			}
 		default:
 			it.attempts++
@@ -181,7 +185,7 @@ func (a *Attestor) Drain(ctx context.Context) {
 				delete(a.pending, id)
 				a.log().ErrorContext(ctx, "attest: giving up until the next start", "change", id, "error", err.Error())
 			} else {
-				it.next = a.now().Add(min(baseDelay<<it.attempts, maxDelay))
+				it.next = a.now().Add(min(baseDelay<<(it.attempts-1), maxDelay))
 				a.log().WarnContext(ctx, "attest: signing failed, will retry", "change", id, "attempt", it.attempts, "error", err.Error())
 			}
 		}
