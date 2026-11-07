@@ -16,6 +16,14 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   other change kinds stay exact-registrant.
 
 ### Added
+- **`objects[].op: "unchanged"`** on a change request: an object in the rendered tree that the diff does not touch. It
+  is accepted, never tiered, and is in the token with `changed: false`, so Glidepath's clearance-gate can register every
+  rendered object (grants need the whole tree). Glidepath sends it, so it needs a Clearance release with this first.
+- **The release workflow builds the Argo CD gate's images and the agent chart** (`.github/workflows/release.yaml`): on a
+  tag, `clearance-argocd-agent`, `clearance-cmp` and `clearance-wait` are built (linux/amd64 and linux/arm64, SBOM and
+  provenance), signed keyless and pushed to `ghcr.io/jfillman/<name>:vX.Y.Z`, and `charts/clearance-argocd-agent` is
+  packaged and pushed to `oci://ghcr.io/jfillman/charts` and signed; the Release notes list each digest. The agent
+  chart's default image tag is now `v<appVersion>`, matching the published tag.
 - **The change attestation signer (C-2)** (`internal/attest`, `cmd/clearance/attest.go`;
   [docs/core.md](docs/core.md#change-attestations)). After a deploy reports an applied outcome for a cleared change,
   the core signs an in-toto Statement v1 (predicate `https://clearance.hangarplatform.dev/change-attestation/v1`,
@@ -36,8 +44,7 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   tag (recording the peeled commit), hashes the tree with the manifest-tree digest, registers the change as a verifier
   and emits the manifests stamped `clearance.hangar.io/{rendered,tree,grant}` (cleared), with an injected PreSync Job
   (held for people), or fails the render (denied, outage hold). `clearance-wait` is the Job's image: it long-polls
-  `GET /v1/clearances/{id}/wait` and exits 0 on clear, non-zero on deny or timeout. Both have a Dockerfile; neither
-  is in a release workflow yet. Apron's `clearance.gate.enabled` wires them (off by default).
+  `GET /v1/clearances/{id}/wait` and exits 0 on clear, non-zero on deny or timeout. Both have a Dockerfile. Apron's `clearance.gate.enabled` wires them (off by default).
 - `POST /v1/clearances` with `pr: 0` and a bound manifest-tree digest answers the **cleared, unexpired change of the
   same app, environment, cluster and tree** and records nothing (Argo CD syncs the merge commit, not the PR head);
   otherwise it registers as before. The stores gain `ChangesCleared(app, env)`.

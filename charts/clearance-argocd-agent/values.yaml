@@ -1,7 +1,7 @@
 # Clearance's Argo CD gate agent. Install it on the protected cluster (hangar-prod), in its own namespace.
 image:
   repository: ghcr.io/jfillman/clearance-argocd-agent
-  # Empty: the chart's appVersion.
+  # Empty: v plus the chart's appVersion (the image's release tag).
   tag: ""
   pullPolicy: IfNotPresent
 imagePullSecrets: []

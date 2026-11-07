@@ -423,6 +423,8 @@ func TestTheChangeRequestSchemaMatchesTheParser(t *testing.T) {
 	bodies := map[string]map[string]any{
 		"manifest":                     change(map[string]any{"objects": imageBump}),
 		"manifest, minimal":            change(map[string]any{"base": nil, "proposerKind": nil, "protected": nil, "linesChanged": nil, "objects": nil, "checks": nil, "owner": nil, "paths": nil}),
+		"manifest, unchanged objects":  change(map[string]any{"objects": append(append([]any{}, imageBump...), obj("Secret", "db", "unchanged", nil, nil, "v1"))}),
+		"manifest, an unknown op":      change(map[string]any{"objects": objs(obj("Secret", "db", "bogus", nil, nil, "v1"))}),
 		"manifest without a tree":      change(map[string]any{"treeDigest": nil}),
 		"manifest without a cluster":   change(map[string]any{"cluster": nil}),
 		"manifest, bad head":           change(map[string]any{"head": "abc"}),
@@ -456,8 +458,8 @@ func TestTheChangeRequestSchemaMatchesTheParser(t *testing.T) {
 			accepted++
 		}
 	}
-	if accepted != 8 {
-		t.Errorf("%d of %d bodies accepted, want 8 (the comparison would be vacuous)", accepted, len(bodies))
+	if accepted != 9 {
+		t.Errorf("%d of %d bodies accepted, want 9 (the comparison would be vacuous)", accepted, len(bodies))
 	}
 }
 

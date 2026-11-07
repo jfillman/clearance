@@ -572,8 +572,12 @@ format, the claims, the key and the replay rules. In short:
 - `registerChange` takes an optional `taskId` (the run that proposed the change), kept on the change as `task_id`,
   carried in the token and on every `deploy.*` record's `task_id`.
 
+`objects[].op` may be `unchanged` (Built): an object in the rendered tree that the diff does not touch. It is kept on the
+change and in the token (`changed: false`) so a grant covers the whole tree, and it adds nothing to the tier. Glidepath's
+clearance-gate lists every rendered object this way.
+
 Not yet: admission on the grant (G-ARGO-2), the CMP that registers the whole rendered tree with unchanged objects
-marked (G-ARGO-4; today `objects` lists the objects the change touches, each `changed: true`), the PreSync wait
+marked (G-ARGO-4), the PreSync wait
 (G-ARGO-5), and the Terraform plan subject (G-TF-1, which adds `subjects.plan_digest`).
 
 ## Protected environments, the outage policy, states, exceptions and break-glass (C-6, Built)
