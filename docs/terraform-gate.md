@@ -93,7 +93,7 @@ A holding exit (3) is not a failure of the `hold` step, and `release` then refus
 
 `jfillman/hangar-infra` runs `network/lab` through this gate: a pull request plans and comments; a merge saves the plan
 and holds it (`--no-wait`) in a job with a read-only role, and an `apply` job in the GitHub environment `lab` (the
-Clearance App is its deployment protection rule) runs `release`, `terraform apply tfplan` and `report`. Both
+Clearance App is its deployment protection rule) runs `release`, `terraform apply -json tfplan > apply.jsonl` and `report` (`apply-log: apply.jsonl`, run `if: always()` once release passed, so a failed apply is reported too). Both
 enforcement paths are exercised (GitHub will not start the job until Clearance clears; `release` stops a different plan
 file), and the apply role's trust policy names `repo:jfillman/hangar-infra:environment:lab`, so only that job holds
 credentials that can change the lab. Two things a workflow must do that the steps above do not show: the hold has to
