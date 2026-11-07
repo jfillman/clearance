@@ -3,6 +3,7 @@ package attest_test
 import (
 	"context"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
@@ -142,6 +143,8 @@ func TestBuildOrdersAChainAndRefusesWhatIsNotOne(t *testing.T) {
 	root, rk := throwawayCA(t, "Throwaway Root", nil, nil, 1)
 	inter, _ := throwawayCA(t, "Throwaway Intermediate", root, rk, 0)
 	other, _ := throwawayCA(t, "Another Root", nil, nil, 1)
+	root2, rk2 := throwawayCA(t, "Absent Root", nil, nil, 1)
+	inter2, _ := throwawayCA(t, "Orphan Intermediate", root2, rk2, 0)
 	r := attesttest.NewRekor(t)
 	logs := []attest.BuildLog{{BaseURL: "http://rekor", PEM: r.KeyPEM}}
 
@@ -159,12 +162,12 @@ func TestBuildOrdersAChainAndRefusesWhatIsNotOne(t *testing.T) {
 		t.Fatal("the same inputs in another order gave other bytes")
 	}
 	for name, in := range map[string][]byte{
-		"an intermediate with no root": pemOf(inter),
-		"two unrelated roots":          pemOf(root, other),
-		"two self-signed roots":        pemOf(other, root, inter),
-		"a gap":                        pemOf(root, other, inter),
-		"not PEM":                      []byte("nope"),
-		"empty":                        nil,
+		"an intermediate with no root":                          pemOf(inter),
+		"two unrelated roots":                                   pemOf(root, other),
+		"two self-signed roots":                                 pemOf(other, root, inter),
+		"a real gap (an intermediate of a root not in the set)": pemOf(root, inter2),
+		"not PEM": []byte("nope"),
+		"empty":   nil,
 	} {
 		if _, err := attest.BuildTrustedRoot([]attest.BuildCA{{PEM: in}}, logs); err == nil {
 			t.Errorf("%s: built", name)
@@ -272,5 +275,41 @@ func TestTheCASubjectNamesTheRootNotTheIntermediate(t *testing.T) {
 	_ = json.Unmarshal(raw, &doc)
 	if got := doc.CertificateAuthorities[0].Subject["commonName"]; got != "Throwaway Root" {
 		t.Fatalf("subject %q", got)
+	}
+}
+
+func TestParseAcceptsAnEd25519CAChainButNeedsAnECDSARekorKey(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(7), Subject: pkix.Name{CommonName: "legacy-root"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true,
+		KeyUsage: x509.KeyUsageCertSign}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _ := x509.ParseCertificate(der)
+	r := attesttest.NewRekor(t)
+	raw, err := attest.BuildTrustedRoot([]attest.BuildCA{{PEM: pemOf(c)}}, []attest.BuildLog{{PEM: r.KeyPEM}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr, err := attest.ParseTrustedRoot(raw); err != nil || len(tr.CAs) != 1 {
+		t.Fatalf("an Ed25519 chain: %v", err)
+	}
+	var doc map[string]any
+	_ = json.Unmarshal(raw, &doc)
+	doc["tlogs"] = []any{}
+	noLogs, _ := json.Marshal(doc)
+	if _, err := attest.ParseTrustedRoot(noLogs); err == nil || !strings.Contains(err.Error(), "Rekor key") {
+		t.Fatalf("no Rekor key: %v", err)
+	}
+	// A log whose key is Ed25519 is skipped, so a document with only that is refused too.
+	edDER, _ := x509.MarshalPKIXPublicKey(pub)
+	doc["tlogs"] = []any{map[string]any{"baseUrl": "http://r", "hashAlgorithm": "SHA2_256",
+		"publicKey": map[string]any{"rawBytes": base64.StdEncoding.EncodeToString(edDER), "keyDetails": "PKIX_ED25519"},
+		"logId":     map[string]any{"keyId": "AAAA"}}}
+	edOnly, _ := json.Marshal(doc)
+	if _, err := attest.ParseTrustedRoot(edOnly); err == nil {
+		t.Fatal("an Ed25519-only Rekor key list was accepted")
 	}
 }

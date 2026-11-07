@@ -354,5 +354,9 @@ func ParseTrustedRoot(raw []byte) (*TrustedRoot, error) {
 	if len(tr.CAs) == 0 {
 		return nil, errors.New("the trusted root has no certificate authority")
 	}
+	// Certificate chains may be any key type (the legacy Fulcio root is Ed25519); a Rekor key must be ECDSA.
+	if len(tr.Logs) == 0 {
+		return nil, errors.New("the trusted root has no usable Rekor key (ECDSA P-256 or P-384)")
+	}
 	return tr, nil
 }
