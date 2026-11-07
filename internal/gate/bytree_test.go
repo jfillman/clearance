@@ -39,6 +39,10 @@ func TestAMergeCommitFindsTheClearedChangeByTree(t *testing.T) {
 	if env := f.register(t, "ci", pushed(map[string]any{"env": "dev"})); env.ID == cleared.ID {
 		t.Fatal("another environment found the change")
 	}
+	// the same tree from another repository is not covered by this repository's clearance
+	if other := f.register(t, "ci", pushed(map[string]any{"repo": "someone/else"})); other.ID == cleared.ID {
+		t.Fatal("a matching tree from another repository was answered with this repository's clearance")
+	}
 	// a PR registration is never answered by tree
 	if pr := f.register(t, "ci", change(map[string]any{"objects": imageBump, "pr": json.Number("8"), "head": strings.Repeat("7", 40)})); pr.ID == cleared.ID {
 		t.Fatal("a registration with a PR found a change by tree")
