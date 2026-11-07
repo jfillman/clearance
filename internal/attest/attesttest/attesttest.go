@@ -260,7 +260,9 @@ func (r *Rekor) serve(w http.ResponseWriter, req *http.Request) {
 	r.Entries = append(r.Entries, json.RawMessage(in.Spec.ProposedContent.Envelope))
 	r.mu.Unlock()
 	at := time.Now().Unix()
-	logID := sha256.Sum256(r.KeyPEM)
+	// Rekor v1's log id is the SHA-256 of the public key's DER, not of its PEM.
+	keyBlk, _ := pem.Decode(r.KeyPEM)
+	logID := sha256.Sum256(keyBlk.Bytes)
 	set, _ := json.Marshal(struct {
 		Body           string `json:"body"`
 		IntegratedTime int64  `json:"integratedTime"`

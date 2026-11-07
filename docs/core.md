@@ -18,7 +18,8 @@ session. It is one Go module, `github.com/jfillman/clearance`, built as one stat
 | Subcommand | What it does | Status |
 |---|---|---|
 | `clearance core` | Serves the core over HTTP (the API below) from the environment. `--memory` runs it on an in-memory store (tests and local runs; nothing is kept). `--insecure-dev-auth`, with `--memory` only, accepts `Bearer <principal>` as that principal and serves the chain at `GET /v1/dev/records` (below). `--listen` overrides `CLEARANCE_LISTEN`. `--max-clock-skew` overrides `CLEARANCE_MAX_CLOCK_SKEW`; `0` (off) is accepted only with `--memory`. SIGTERM shuts it down gracefully (20 s for requests in flight). | Built |
-| `clearance attest verify` | Verifies a change attestation bundle offline ([Change attestations](#change-attestations)): `--file` (the bundle, or `-` for stdin), `--subject <alg>:<hex>` (repeatable: digests the statement must name), and either `--key` (a static key's public half, PEM, or the core's JWKS) or `--trust-root`, `--identity`, `--issuer` and `--rekor-key` (keyless). Exit 0 verified, 1 not. | Built |
+| `clearance attest verify` | Verifies a change attestation bundle offline ([Change attestations](#change-attestations)): `--file` (the bundle, or `-` for stdin), `--subject <alg>:<hex>` (repeatable: digests the statement must name), and either `--key` (a static key's public half, PEM, or the core's JWKS) or `--trust-root`, `--identity`, `--issuer` and `--rekor-key` (keyless; `--trust-root` may be a Sigstore TrustedRoot JSON, which carries Rekor's keys, so no `--rekor-key`). Exit 0 verified, 1 not. | Built |
+| `clearance trust-root build` | Builds the Sigstore TrustedRoot JSON from public PEM chains and Rekor public keys, each with its validity window: `--fulcio <chain.pem>[,start=..,end=..,uri=..]` and `--rekor <key.pem>[,start=..,end=..,url=..]`, repeatable, `--out`. Checks each chain (one chain, ends self-signed) and orders it, so the same inputs give the same bytes. See [Trusted root](#trusted-root-c-2a). | Built |
 | `clearance chain verify` | Verifies an evidence chain from genesis, from a JSONL dump (`--file`, `-` for stdin) or a read-only Postgres connection (`--dsn`, default `$CLEARANCE_DSN`). `--anchor <count>:<head>` checks that a checkpoint taken elsewhere is still held, which catches truncation. | Built |
 | `clearance register` | A customer's CI registers what it deploys with the deployment gate (the diff of two rendered manifest directories), authenticated by the workflow's GitHub Actions OIDC token or `--token-file`. The flags of the Python command it replaced (v0.29.0 and before), except that `--paths-from-git` with a base is refused, because the binary does not shell out. The `register/action.yml` GitHub Action builds this binary at its own ref. Without it, the paths are the files that differ between `--before` and `--after`. | Built |
 | `clearance conformance` | `--provider <url> --role runtime\|deployment`: starts an in-memory core and a fake target, drives the provider through a fake call or a fake change, and proves hold, clear, release and an outcome whose digest matches the cleared subject, one PASS or FAIL line per rule ([provider-protocol.md](provider-protocol.md)). | Built (R-1f) |
@@ -427,6 +428,26 @@ issuer and Rekor's key, because a certificate that lives ten minutes proves noth
 **not** check Rekor's inclusion proof or checkpoint (the bundle keeps them); the signed entry timestamp is what it
 relies on. `cosign verify-blob-attestation`-style tools read the same bundle.
 
+### Trusted root (C-2a)
+
+`clearance trust-root build` writes the document verifiers read: a Sigstore TrustedRoot (`application/vnd.dev.sigstore.trustedroot+json;version=0.1`)
+with every Fulcio chain (intermediate first, root last) and every Rekor key, each with its `validFor` window. Cosign,
+Glidepath's verify tasks and `clearance attest verify --trust-root` all read it.
+
+```sh
+clearance trust-root build \
+  --fulcio hangar-fulcio-hangar-dev-chain.pem,start=2026-11-10T00:00:00Z \
+  --fulcio legacy-hangar-dev-fulcio-root.pem,end=2026-11-10T00:00:00Z \
+  --rekor rekor-hangar-dev.pub,start=2026-11-10T00:00:00Z --rekor rekor-hangar-dev-legacy.pub,end=2026-11-10T00:00:00Z \
+  --fulcio-uri http://fulcio-server.fulcio-system.svc --rekor-url http://rekor-server.rekor-system.svc --out trusted-root.json
+```
+
+With a TrustedRoot, `attest verify` takes the Rekor key from the entry's log id (the SHA-256 of the key's DER), requires
+the entry's signed time inside that key's window, and verifies the certificate against each chain whose window holds
+that time. A bundle signed under a retired root therefore verifies while its window was open and not after. Identity and
+issuer are still pinned. A chain root is trusted only as the self-signed certificate of its chain. Everything in the
+input is public material.
+
 ### What keyless needs from C-2a
 
 The keyless backend goes live when the Hangar signing platform provides all of these. Nothing here is in this repo.
@@ -437,7 +458,7 @@ The keyless backend goes live when the Hangar signing platform provides all of t
 | **OIDC issuer** | an issuer Fulcio trusts, configured in its `config.oidc-issuers`: the cluster's Kubernetes service account issuer (or the one that mints the core's token), with a type whose certificate identity is the token's **`sub`** (the core's proof of possession signs `sub`). The core's identity is `clearance-recorder@hangar-dev` (C-2a); verifiers pin it with `--identity` and the issuer with `--issuer` |
 | **OIDC audience** | the audience Fulcio's issuer config expects (`sigstore` by default). Chart `attestation.keyless.audience` sets the projected service account token's audience (mounted at `/var/run/clearance-attest/oidc-token`, 10 minutes, rotated by the kubelet); the core re-reads it per signing |
 | **Rekor** | the URL for `CLEARANCE_ATTEST_REKOR_URL` (chart `attestation.rekorUrl`): a Rekor v1 API (`POST /api/v1/log/entries`, `dsse` entries) |
-| **Trust root** | for verifiers: the Fulcio root and intermediate certificates (PEM, `--trust-root`) and **Rekor's public key** (PEM, `--rekor-key`). They are public and belong in the repo or the cluster's trust bundle, not in the core's config: the core does not verify its own bundles |
+| **Trust root** | for verifiers: the Fulcio root and intermediate certificates (PEM, `--trust-root`) and **Rekor's public key** (PEM, `--rekor-key`), or one [TrustedRoot JSON](#trusted-root-c-2a) holding both with their windows (`--trust-root`). They are public and belong in the repo or the cluster's trust bundle, not in the core's config: the core does not verify its own bundles |
 | **Network** | the core's NetworkPolicy egress to Fulcio and Rekor (chart `networkPolicy.extraEgress`) |
 | **Env and chart values** | `CLEARANCE_ATTEST_FULCIO_URL`, `CLEARANCE_ATTEST_REKOR_URL`, `CLEARANCE_ATTEST_OIDC_TOKEN_FILE` (set by the chart to the projected path); chart `attestation.keyless.fulcioUrl`, `attestation.keyless.audience`, `attestation.keyless.tokenExpirationSeconds`, `attestation.rekorUrl`. No Secret: the keyless backend holds no key |
 | **autopilot** | after a clearance release carries this, the autopilot version bump that pins it |

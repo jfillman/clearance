@@ -1,6 +1,7 @@
 package attest
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/sha256"
 	"crypto/x509"
@@ -35,6 +36,10 @@ type VerifyOptions struct {
 	Identity string
 	Issuer   string
 	RekorKey *ecdsa.PublicKey
+	// Trust is a Sigstore TrustedRoot (`clearance trust-root build`): every Fulcio chain and Rekor key with its
+	// window. It replaces Roots and RekorKey for a keyless bundle: the entry's log id picks the key, Rekor's signed
+	// time picks the chains, so a bundle signed under a retired root still verifies while the root was valid.
+	Trust *TrustedRoot
 }
 
 // Result is what a good bundle says.
@@ -157,7 +162,7 @@ func checkLog(entries []TlogEntry, env token.Envelope, payload []byte, key *ecds
 }
 
 func verifyKeyless(b *Bundle, env token.Envelope, payload, sig, digest []byte, opts VerifyOptions, res *Result) error {
-	if opts.Roots == nil || opts.Identity == "" || opts.Issuer == "" || opts.RekorKey == nil {
+	if opts.Trust == nil && (opts.Roots == nil || opts.RekorKey == nil) || opts.Identity == "" || opts.Issuer == "" {
 		return errors.New("attest: a keyless attestation needs the trust root, the expected identity and issuer, and Rekor's public key")
 	}
 	certs := b.VerificationMaterial.X509CertificateChain.Certificates
@@ -172,18 +177,24 @@ func verifyKeyless(b *Bundle, env token.Envelope, payload, sig, digest []byte, o
 		}
 		chain = append(chain, x)
 	}
-	if err := checkLog(b.VerificationMaterial.TlogEntries, env, payload, opts.RekorKey, res); err != nil {
-		return err
-	}
-	at, _ := parseInt(b.VerificationMaterial.TlogEntries[0].IntegratedTime)
-	inter := x509.NewCertPool()
-	for _, c := range chain[1:] {
-		inter.AddCert(c)
-	}
 	leaf := chain[0]
-	if _, err := leaf.Verify(x509.VerifyOptions{Roots: opts.Roots, Intermediates: inter,
-		CurrentTime: time.Unix(at, 0), KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning}}); err != nil {
-		return fmt.Errorf("attest: the certificate does not verify to the trust root at Rekor's time: %w", err)
+	if opts.Trust != nil {
+		if _, err := verifyUnderTrust(b, chain, env, payload, opts.Trust, res); err != nil {
+			return err
+		}
+	} else {
+		if err := checkLog(b.VerificationMaterial.TlogEntries, env, payload, opts.RekorKey, res); err != nil {
+			return err
+		}
+		at, _ := parseInt(b.VerificationMaterial.TlogEntries[0].IntegratedTime)
+		inter := x509.NewCertPool()
+		for _, c := range chain[1:] {
+			inter.AddCert(c)
+		}
+		if _, err := leaf.Verify(x509.VerifyOptions{Roots: opts.Roots, Intermediates: inter,
+			CurrentTime: time.Unix(at, 0), KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning}}); err != nil {
+			return fmt.Errorf("attest: the certificate does not verify to the trust root at Rekor's time: %w", err)
+		}
 	}
 	if got := certIssuer(leaf); got != opts.Issuer {
 		return fmt.Errorf("attest: the certificate's OIDC issuer is %q, want %q", got, opts.Issuer)
@@ -204,6 +215,62 @@ func verifyKeyless(b *Bundle, env token.Envelope, payload, sig, digest []byte, o
 	}
 	res.Identity, res.Issuer = opts.Identity, opts.Issuer
 	return nil
+}
+
+// verifyUnderTrust checks the Rekor entry against the trusted root's key for its log id, with the entry's signed
+// time inside that key's window, then the leaf against each Fulcio chain whose window holds that time. It returns the
+// signed integration time.
+func verifyUnderTrust(b *Bundle, chain []*x509.Certificate, env token.Envelope, payload []byte, tr *TrustedRoot, res *Result) (int64, error) {
+	entries := b.VerificationMaterial.TlogEntries
+	if len(entries) != 1 {
+		return 0, errors.New("attest: the bundle carries not exactly one Rekor entry")
+	}
+	var logErr error = errors.New("no Rekor key in the trusted root matches the entry's log id")
+	var at int64
+	for _, l := range tr.Logs {
+		if !bytes.Equal(l.LogID, entries[0].LogID.KeyID) {
+			continue
+		}
+		idx, t, err := verifySET(entries[0], env, payload, l.Key)
+		if err != nil {
+			logErr = fmt.Errorf("Rekor entry: %w", err)
+			continue
+		}
+		if !l.Window.Contains(time.Unix(t, 0)) {
+			logErr = fmt.Errorf("Rekor entry: signed at %s, outside the key's window", time.Unix(t, 0).UTC().Format(time.RFC3339))
+			continue
+		}
+		res.LogIndex, res.LogVerified, at, logErr = &idx, true, t, nil
+		break
+	}
+	if logErr != nil {
+		return 0, fmt.Errorf("attest: %w", logErr)
+	}
+	when := time.Unix(at, 0)
+	var last error = errors.New("no Fulcio chain in the trusted root was valid at Rekor's time")
+	for _, ca := range tr.CAs {
+		if !ca.Window.Contains(when) {
+			continue
+		}
+		roots, inter := x509.NewCertPool(), x509.NewCertPool()
+		for _, c := range ca.Chain {
+			if bytes.Equal(c.RawSubject, c.RawIssuer) {
+				roots.AddCert(c)
+			} else {
+				inter.AddCert(c)
+			}
+		}
+		for _, c := range chain[1:] {
+			inter.AddCert(c)
+		}
+		_, err := chain[0].Verify(x509.VerifyOptions{Roots: roots, Intermediates: inter, CurrentTime: when,
+			KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning}})
+		if err == nil {
+			return at, nil
+		}
+		last = err
+	}
+	return 0, fmt.Errorf("attest: the certificate does not verify to the trusted root at Rekor's time: %w", last)
 }
 
 func parseInt(s string) (int64, error) {
