@@ -217,6 +217,7 @@ type world struct {
 	tokens  []store.Token
 	keys    []store.SigningKey
 	feeds   []store.Feed
+	atts    []store.Attestation
 	raw     []map[string]any // stored rows written as they are (v0 fixtures), instead of events
 }
 
@@ -241,7 +242,7 @@ var backends = []backend{
 			}
 			m.recs = append(m.recs, c)
 		}
-		m.changes, m.defs, m.tokens, m.keys, m.feeds = w.changes, w.defs, w.tokens, w.keys, w.feeds
+		m.changes, m.defs, m.tokens, m.keys, m.feeds, m.atts = w.changes, w.defs, w.tokens, w.keys, w.feeds, w.atts
 		appenders.Store(Store(m), appender(func(t *testing.T, evs []store.Event, cs []store.Change) {
 			seed(t, st, evs)
 			n := int64(len(m.recs))
@@ -291,6 +292,11 @@ var backends = []backend{
 			}
 			for _, f := range w.feeds {
 				if err := tx.PutFeed(bg, f); err != nil {
+					return err
+				}
+			}
+			for _, a := range w.atts {
+				if err := tx.PutAttestation(bg, a); err != nil {
 					return err
 				}
 			}
@@ -512,7 +518,7 @@ func TestTheCommittedContractIsCurrent(t *testing.T) {
 	}
 	for _, id := range []string{"listEvidence", "getEvidence", "verifyEvidence", "countEvidence", "getPolicy",
 		"explainPolicy", "listReceipts", "listProvenance", "listClearances", "countClearances", "getClearance",
-		"getClearancePolicy", "listDefinitions", "getKeys", "getGrantFeed", "listInstallations", "streamEvents",
+		"getClearanceAttestation", "getClearancePolicy", "listDefinitions", "getKeys", "getGrantFeed", "listInstallations", "streamEvents",
 		"getContract"} {
 		if ops[id] == nil {
 			t.Errorf("the contract has no %s", id)

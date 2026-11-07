@@ -93,6 +93,18 @@ CREATE TABLE IF NOT EXISTS clearance_signing_keys (
   created_at timestamptz NOT NULL,
   retired_at timestamptz
 );
+CREATE TABLE IF NOT EXISTS clearance_attestations (
+  change_id       text        PRIMARY KEY,
+  digest          text        NOT NULL,
+  backend         text        NOT NULL,
+  key_id          text        NOT NULL,
+  rekor_log_index bigint,
+  rekor_uuid      text        NOT NULL,
+  outcome_seq     bigint      NOT NULL,
+  record_seq      bigint      NOT NULL,
+  created_at      timestamptz NOT NULL,
+  bundle          jsonb       NOT NULL
+);
 CREATE TABLE IF NOT EXISTS clearance_feeds (
   cluster    text        PRIMARY KEY,
   seq        bigint      NOT NULL,
@@ -574,6 +586,27 @@ func (t *tx) PutBreakglass(ctx context.Context, b store.Breakglass) error {
 	return nil
 }
 
+func (t *tx) PutAttestation(ctx context.Context, a store.Attestation) error {
+	if err := t.lock(); err != nil {
+		return err
+	}
+	defer t.mu.Unlock()
+	ctx, cancel := deadline(ctx, t.s.opt)
+	defer cancel()
+	_, err := t.tx.Exec(ctx, "INSERT INTO clearance_attestations (change_id, digest, backend, key_id, rekor_log_index, "+
+		"rekor_uuid, outcome_seq, record_seq, created_at, bundle) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) "+
+		"ON CONFLICT (change_id) DO UPDATE SET digest = EXCLUDED.digest, backend = EXCLUDED.backend, "+
+		"key_id = EXCLUDED.key_id, rekor_log_index = EXCLUDED.rekor_log_index, rekor_uuid = EXCLUDED.rekor_uuid, "+
+		"outcome_seq = EXCLUDED.outcome_seq, record_seq = EXCLUDED.record_seq, created_at = EXCLUDED.created_at, "+
+		"bundle = EXCLUDED.bundle",
+		a.ChangeID, a.Digest, a.Backend, a.KeyID, a.RekorLogIndex, a.RekorUUID, a.OutcomeSeq, a.RecordSeq, a.CreatedAt,
+		string(a.Bundle))
+	if err != nil {
+		return fmt.Errorf("pg: put attestation: %w", err)
+	}
+	return nil
+}
+
 func (t *tx) PutFeed(ctx context.Context, f store.Feed) error {
 	if err := t.lock(); err != nil {
 		return err
@@ -824,6 +857,19 @@ func (r *Reader) LiveTokens(ctx context.Context, cluster string, now time.Time, 
 	return liveTokens(ctx, r.pool, r.opt, cluster, now, limit)
 }
 
+func (r *Reader) Attestation(ctx context.Context, changeID string) (store.Attestation, error) {
+	return attestationOne(ctx, r.pool, r.opt, changeID)
+}
+
+func (t *tx) Attestation(ctx context.Context, changeID string) (store.Attestation, error) {
+	q, done, err := t.q()
+	if err != nil {
+		return store.Attestation{}, err
+	}
+	defer done()
+	return attestationOne(ctx, q, t.s.opt, changeID)
+}
+
 func (r *Reader) Feed(ctx context.Context, cluster string) (store.Feed, error) {
 	return feedOne(ctx, r.pool, r.opt, cluster)
 }
@@ -881,6 +927,35 @@ func liveTokens(ctx context.Context, q querier, opt Options, cluster string, now
 		out = append(out, tk)
 	}
 	return out, rows.Err()
+}
+
+// AttestationCols are clearance_attestations' columns in ScanAttestation's order.
+const AttestationCols = "change_id, digest, backend, key_id, rekor_log_index, rekor_uuid, outcome_seq, record_seq, created_at, bundle::text"
+
+// ScanAttestation scans one row of AttestationCols.
+func ScanAttestation(row pgx.Row) (store.Attestation, error) {
+	var a store.Attestation
+	var bundle string
+	if err := row.Scan(&a.ChangeID, &a.Digest, &a.Backend, &a.KeyID, &a.RekorLogIndex, &a.RekorUUID, &a.OutcomeSeq,
+		&a.RecordSeq, &a.CreatedAt, &bundle); err != nil {
+		return a, err
+	}
+	a.Bundle = []byte(bundle)
+	a.CreatedAt = a.CreatedAt.UTC()
+	return a, nil
+}
+
+func attestationOne(ctx context.Context, q querier, opt Options, changeID string) (store.Attestation, error) {
+	ctx, cancel := deadline(ctx, opt)
+	defer cancel()
+	a, err := ScanAttestation(q.QueryRow(ctx, "SELECT "+AttestationCols+" FROM clearance_attestations WHERE change_id = $1", changeID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.Attestation{}, store.ErrNotFound
+	}
+	if err != nil {
+		return store.Attestation{}, fmt.Errorf("pg: %w", err)
+	}
+	return a, nil
 }
 
 // FeedCols are clearance_feeds' columns in ScanFeed's order.

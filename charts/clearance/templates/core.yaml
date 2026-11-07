@@ -89,6 +89,23 @@ spec:
             - name: CLEARANCE_SIGNING_KMS
               value: {{ . | quote }}
             {{- end }}
+            {{- if and .Values.attestation.existingSecret .Values.attestation.keyless.fulcioUrl }}
+            {{- fail "attestation: set existingSecret (a static key, labs) or keyless.fulcioUrl (Fulcio), not both" }}
+            {{- end }}
+            {{- if .Values.attestation.existingSecret }}
+            - name: CLEARANCE_ATTEST_KEY_FILE
+              value: /etc/clearance/attest/{{ .Values.attestation.key }}
+            {{- end }}
+            {{- if .Values.attestation.keyless.fulcioUrl }}
+            - name: CLEARANCE_ATTEST_FULCIO_URL
+              value: {{ .Values.attestation.keyless.fulcioUrl | quote }}
+            - name: CLEARANCE_ATTEST_OIDC_TOKEN_FILE
+              value: /var/run/clearance-attest/oidc-token
+            {{- end }}
+            {{- with .Values.attestation.rekorUrl }}
+            - name: CLEARANCE_ATTEST_REKOR_URL
+              value: {{ . | quote }}
+            {{- end }}
             {{- with .Values.token.ttl }}
             - name: CLEARANCE_TOKEN_TTL
               value: {{ . | quote }}
@@ -132,6 +149,16 @@ spec:
               mountPath: /etc/clearance/signing
               readOnly: true
             {{- end }}
+            {{- if .Values.attestation.existingSecret }}
+            - name: attest-key
+              mountPath: /etc/clearance/attest
+              readOnly: true
+            {{- end }}
+            {{- if .Values.attestation.keyless.fulcioUrl }}
+            - name: attest-oidc-token
+              mountPath: /var/run/clearance-attest
+              readOnly: true
+            {{- end }}
             {{- with .Values.core.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -153,6 +180,23 @@ spec:
             defaultMode: 0400
             items:
               - {key: {{ .Values.signing.key | quote }}, path: {{ .Values.signing.key | quote }}}
+        {{- end }}
+        {{- if .Values.attestation.existingSecret }}
+        - name: attest-key
+          secret:
+            secretName: {{ .Values.attestation.existingSecret }}
+            defaultMode: 0400
+            items:
+              - {key: {{ .Values.attestation.key | quote }}, path: {{ .Values.attestation.key | quote }}}
+        {{- end }}
+        {{- if .Values.attestation.keyless.fulcioUrl }}
+        - name: attest-oidc-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: oidc-token
+                  audience: {{ .Values.attestation.keyless.audience | quote }}
+                  expirationSeconds: {{ .Values.attestation.keyless.tokenExpirationSeconds }}
         {{- end }}
         {{- with .Values.core.extraVolumes }}
         {{- toYaml . | nindent 8 }}
