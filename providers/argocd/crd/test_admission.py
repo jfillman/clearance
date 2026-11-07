@@ -181,7 +181,7 @@ def run(deny):
         time.sleep(2)
 
         print(f"-- ClearanceGrant: who writes it ({mode})")
-        g = grant("g1", {"/ConfigMap/app-cm": H1, "apps/Deployment/web": H2})
+        g = grant("g1", {"/ConfigMap/app-cm": H1, "apps/Deployment/web": H2, "/ConfigMap/later": H1})
         warn_w = None
         check("another user cannot create a grant", False, sh(["create", "-f", "-"], g, OTHER), "only the Clearance grant-sync agent")
         sh(["delete", "clearancegrant", "g1", "-n", "prot", "--ignore-not-found"])
@@ -206,8 +206,8 @@ def run(deny):
               sh(["patch", "configmap", "app-cm", "-n", "prot", "--type=merge", "-p", '{"data":{"k":"v2"}}'], who=ARGO))
         check("refuse: an object the grant does not list", False, sh(["create", "-f", "-"], cm("unlisted", H1), ARGO),
               "does not list /ConfigMap/unlisted")
-        check("refuse: a listed object at another hash", False, sh(["create", "-f", "-"], cm("app-cm2", H3), ARGO),
-              "does not list")
+        check("refuse: a listed name, not created yet, at another hash (create)", False,
+              sh(["create", "-f", "-"], cm("later", H3), ARGO), "does not list /ConfigMap/later at " + H3)
         check("refuse: a listed name with the wrong hash (update)", False,
               sh(["patch", "configmap", "app-cm", "-n", "prot", "--type=merge", "-p",
                   '{"metadata":{"annotations":{"clearance.hangar.io/rendered":"' + H3 + '"}}}'], who=ARGO), "at " + H3)
