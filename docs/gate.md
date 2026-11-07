@@ -1203,7 +1203,7 @@ registered from this release on (and for older ones once they are written again)
 ## Hold, release and outcome for a plan (G-TF-2, Built)
 
 Status: **Built** in the core (`internal/gate/outcome.go`, `terraform.go`, `request.go`); its caller is G-TF-3's
-`clearance hold`, `release` and `report` ([docs/terraform-gate.md](terraform-gate.md), Built); the lab workflow is G-TF-4.
+`clearance hold`, `release` and `report` ([docs/terraform-gate.md](terraform-gate.md), Built); the lab workflow is G-TF-4 ([terraform-gate.md](terraform-gate.md#the-lab-workflow-g-tf-4-draft), Draft).
 
 **Registration is idempotent by repository, workspace and plan.** A terraform-plan change's id is `ch-` and the first
 16 hex of sha256 over the JSON array `["terraform-plan", repo, backend, key, name, planDigest]`, not of
