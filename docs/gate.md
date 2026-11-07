@@ -670,13 +670,14 @@ app, environment and cluster (it superseded every holding pushed commit of the r
 ### Exceptions: `deploy.exception`
 
 A registered provider posts it through `POST /v1/records` (kind `deploy.exception`; principal, target, result,
-`exception` and `destination` {cluster, environment} required). The `exception` object:
+`exception` and `destination` required: {cluster, environment}, or for a Terraform plan, which has no cluster,
+{workspace: {backend, key, name}}, never both). The `exception` object:
 
 | `exception.kind` | Must carry | Coverage the core sets | Written by |
 | --- | --- | --- | --- |
 | `out-of-band` | `objects` [{apiVersion, kind, namespace, name, rendered?, grant?}] (at least one) | `out-of-band-detected` | the Argo agent (G-ARGO-3): objects with no grant, or a hash no grant lists |
-| `drift` | `addresses` or `objects` (at least one) | `observed-not-attributed` | G-TF-3's scheduled plan; live drift |
-| `untraced-apply` | `actor` (the principal behind the write) | `out-of-band-detected` | G-TF-3's state-backend watch (CloudTrail) |
+| `drift` | `addresses` or `objects` (at least one) | `observed-not-attributed` | G-TF-5's scheduled `terraform plan -detailed-exitcode` (**Built**); live drift |
+| `untraced-apply` | `actor` (the principal behind the write) | `out-of-band-detected` | G-TF-5's state-backend watch: S3 object versions and CloudTrail (**Built**) |
 | `digest-mismatch` | `expected`, `observed` and `change.id` | `out-of-band-detected` | G-TF-2's outcome route; the CMP's applied-tree check |
 
 Optional on every kind: `state` {backend, key, version}, `detected_at` (RFC 3339), `detail`. Unknown fields are
@@ -753,8 +754,10 @@ partial index `clearance_evidence_exceptions`. Filters: `tool`, `kind` (an excep
 
 ### Not yet
 
-- The providers that file these records: the Argo agent's exceptions and break-glass marker (G-ARGO-3), Terraform
-  drift and untraced-apply detection (G-TF-5). The change-bound outcome route that writes `digest-mismatch` itself is
+- The providers that file these records: the Argo agent's exceptions and break-glass marker (G-ARGO-3). Terraform
+  drift and untraced-apply detection is **Built** (G-TF-5, [terraform-gate.md](terraform-gate.md#exception-detection-g-tf-5-built-not-deployed)).
+  A report located by workspace is not tagged with a break-glass window (windows are per cluster and environment).
+  The change-bound outcome route that writes `digest-mismatch` itself is
   **Built** (G-TF-2, [below](#hold-release-and-outcome-for-a-plan-g-tf-2-built)): it writes the record in this
   shape and moves the change to `exception` with the same edge.
 - The packet itself (C-4, C-5) and its coverage statement (counts by coverage and degraded windows).

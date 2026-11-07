@@ -18,6 +18,12 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   other change kinds stay exact-registrant.
 
 ### Added
+- **Terraform exception detection** (G-TF-5; `providers/terraform/detect`, `terraform-detector`;
+  [docs/terraform-gate.md](docs/terraform-gate.md#exception-detection-g-tf-5-built-not-deployed)). A scheduled drift
+  check (`terraform plan -detailed-exitcode`) and an untraced-apply check (S3 state versions against `deploy.outcome`,
+  CloudTrail for the principal) file `deploy.exception` kind `drift` and `untraced-apply`. SigV4 over the standard
+  library, no AWS SDK. The core's report check now accepts `destination.workspace` {backend, key, name} in place of
+  cluster and environment, so a Terraform plan's exception is no longer refused (`internal/gate/exception.go`).
 - **`objects[].op: "unchanged"`** on a change request: an object in the rendered tree that the diff does not touch. It
   is accepted, never tiered, and is in the token with `changed: false`, so Glidepath's clearance-gate can register every
   rendered object (grants need the whole tree). Glidepath sends it, so it needs a Clearance release with this first.
