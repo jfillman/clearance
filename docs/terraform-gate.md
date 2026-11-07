@@ -36,6 +36,13 @@ clearance report  --plan tfplan --apply-log apply.jsonl --clearance <id>
   `deploy.exception` (`digest-mismatch`), revokes the token and exits 1.
 - **Identity** is the workflow's GitHub Actions OIDC token (the job needs `permissions: id-token: write`), as for
   `register`, or `--token-file` for a verifier's bearer token. The core accepts the token for its own repository only.
+  **Another job of the same repository may release and report.** A workflow holds the plan in one job (OIDC subject
+  `repo:o/r:ref:refs/heads/main`) and applies it in another, inside a GitHub environment (`repo:o/r:environment:lab`),
+  so the subjects differ. For a terraform-plan change registered by a GitHub Actions workflow, `GET
+  /v1/clearances/{id}`, its `/wait` and `POST /v1/clearances/{id}/outcome` accept any principal of the same repository
+  (the same `repo:<owner>/<repo>` prefix, matching the change's repository and the caller's own verified `repository`
+  claim) that is still a configured verifier (`CLEARANCE_VERIFIERS`, e.g. `github:repo:jfillman/hangar-infra:*`).
+  Every other kind of change keeps the exact-registrant rule. Status: **Built**.
 
 ## `clearance hold`
 

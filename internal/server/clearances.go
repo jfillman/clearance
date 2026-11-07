@@ -54,7 +54,7 @@ func (s *Server) readClearance(w http.ResponseWriter, r *http.Request) (*gate.Ch
 		writeError(w, http.StatusServiceUnavailable, "the store could not be read")
 		return nil, nil, false
 	}
-	registrant := c.RegisteredBy == p.ID && pycompat.MatchAny(p.ID, g.Config.Verifiers)
+	registrant := (c.RegisteredBy == p.ID && pycompat.MatchAny(p.ID, g.Config.Verifiers)) || g.SameRepoWorkflow(c, p)
 	if providerFor(s.opt.Providers, p.ID) == nil && !registrant {
 		writeError(w, http.StatusForbidden, p.ID+" is neither a registered provider nor the verifier that registered this change")
 		return nil, nil, false
