@@ -4,7 +4,7 @@ binaries: etcd + kube-apiserver, no cluster, no network). No keys, no tokens: us
 
     KUBEBUILDER_ASSETS=$(setup-envtest use 1.36.2 -p path) python3 providers/argocd/crd/test_admission.py
 
-Without KUBEBUILDER_ASSETS it prints "skipped" and exits 0. Runs the whole matrix twice: Deny (both fields flipped)
+Without KUBEBUILDER_ASSETS it prints "skipped" and exits 0 (exits 1 under CI=true). Runs the whole matrix twice: Deny (both fields flipped)
 and Warn (the shipped mode: every refusal becomes a warning, nothing is refused, no active grant is allowed).
 It also fails on any CEL evaluation error and checks the grant name reaches the API server's audit log.
 """
@@ -284,6 +284,9 @@ def run(deny):
 
 def main():
     if not os.environ.get("KUBEBUILDER_ASSETS"):
+        if os.environ.get("CI") == "true":  # a green CI run must have tested something
+            print("FAIL: KUBEBUILDER_ASSETS is not set under CI=true")
+            return 1
         print("skipped: KUBEBUILDER_ASSETS is not set (setup-envtest use 1.36.2 -p path)")
         return 0
     results = run(deny=True) + run(deny=False)

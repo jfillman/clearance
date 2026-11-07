@@ -93,5 +93,8 @@ jobs:
       - run: pip install pyyaml
       - run: go install sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.25.2
       - run: |
-          KUBEBUILDER_ASSETS="$($(go env GOPATH)/bin/setup-envtest use 1.36.2 -p path)" \
-            python3 providers/argocd/crd/test_admission.py
+          set -euo pipefail
+          assets="$($(go env GOPATH)/bin/setup-envtest use 1.36.2 -p path)"
+          test -n "$assets"
+          test -x "$assets/kube-apiserver"
+          KUBEBUILDER_ASSETS="$assets" python3 providers/argocd/crd/test_admission.py
