@@ -1,0 +1,222 @@
+# G-ARGO-2 (Built): the hard gate on a protected namespace, native ValidatingAdmissionPolicy (no webhook, in-process).
+# Shipped in WARN mode. The flip to Deny changes TWO fields on the first binding below, both together:
+#   validationActions: [Warn, Audit]     -> [Deny, Audit]
+#   parameterNotFoundAction: Allow       -> Deny
+# (Apron renders both from clearance.gate.enforce.) With no active grant a Deny binding refuses everything the
+# controller writes there; a missing param is a binding error, which Warn cannot soften, hence Allow while in Warn.
+#
+# Two policies:
+#   clearance-protected-writes  Argo CD's application-controller (and nobody else) may create or update an object in a
+#                               namespace labelled clearance.hangar.io/protected=true only if the object carries
+#                               clearance.hangar.io/rendered and the namespace's one active, valid ClearanceGrant
+#                               lists the object (<group>/<kind>/<name>) at exactly that hash.
+#   clearance-grant-writer      only the grant-sync agent's service account writes a ClearanceGrant or its status.
+#
+# Every matchConditions expression is has()-guarded: a CEL error in a match condition is a cluster-wide refusal under
+# failurePolicy Fail (hangar's 2026-10-29 lesson). The usernames below are the Hangar defaults; Apron renders them
+# from clearance.gate.argocdServiceAccount / agentServiceAccount.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: clearance-protected-writes
+  labels:
+    app.kubernetes.io/part-of: clearance
+spec:
+  failurePolicy: Fail
+  paramKind: {apiVersion: clearance.hangar.io/v1, kind: ClearanceGrant}
+  matchConstraints:
+    namespaceSelector:
+      matchLabels: {clearance.hangar.io/protected: "true"}
+    resourceRules:
+      # Namespaced main resources only: scope keeps cluster-scoped objects (a Namespace carrying the protected label
+      # itself is matched by namespaceSelector) out, where a namespaced param could not be resolved.
+      - apiGroups: ["*"]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: ["*"]
+        scope: Namespaced
+    # A Deny binding with no active grant refuses EVERY matched write in the namespace, whoever makes it: the API
+    # server resolves the param before it evaluates matchConditions (found by test_admission.py). So what the agent
+    # needs to bootstrap and what the control plane writes on its own, none of which Argo applies, is excluded.
+    excludeResourceRules:
+      - {apiGroups: ["clearance.hangar.io"], apiVersions: ["*"], operations: ["*"], resources: [clearancegrants, clearancegrants/status]}
+      - {apiGroups: [""], apiVersions: ["*"], operations: ["*"], resources: [events, endpoints]}
+      - {apiGroups: ["events.k8s.io"], apiVersions: ["*"], operations: ["*"], resources: [events]}
+      - {apiGroups: ["discovery.k8s.io"], apiVersions: ["*"], operations: ["*"], resources: [endpointslices]}
+      - {apiGroups: ["coordination.k8s.io"], apiVersions: ["*"], operations: ["*"], resources: [leases]}
+  matchConditions:
+    - name: argocd-application-controller-main-resource
+      expression: >-
+        has(request.userInfo) && has(request.userInfo.username) &&
+        request.userInfo.username == 'system:serviceaccount:argocd-apps:argocd-application-controller' &&
+        (!has(request.subResource) || request.subResource == '')
+  variables:
+    - name: ann
+      expression: "has(object.metadata.annotations) ? object.metadata.annotations : {}"
+    - name: rendered
+      expression: "'clearance.hangar.io/rendered' in variables.ann ? variables.ann['clearance.hangar.io/rendered'] : ''"
+    # G-ARGO-4's injected PreSync wait Job: no stamp, no grant entry. Exempt ONLY a batch/v1 Job that is EXACTLY what
+    # the CMP injects (providers/argocd/cmp/job.go), as an ALLOWLIST of fields: every Job, pod and container field the
+    # CMP does not set is refused (probes, lifecycle, dnsConfig, host namespaces, serviceAccountName, init containers,
+    # ...), except the values the API server defaults before admission (dnsPolicy ClusterFirst, schedulerName
+    # default-scheduler, completions/parallelism 1, suspend false, the generated selector, ...), each held to its default. The label clearance.hangar.io/injected=wait and the PreSync hook; one container on the
+    # pinned wait image (a digest reference; empty = no exemption); args [--change <id> --timeout <duration>]; env
+    # exactly CLEARANCE_URL=<the pinned core URL> and CLEARANCE_TOKEN_FILE=/var/run/secrets/tokens/clearance;
+    # automountServiceAccountToken false and no serviceAccountName (the CMP sets automount false and no service account;
+    # it never sets one); hostAliases exactly the pinned one (none when the pin is empty); the one mount and the one projected
+    # service-account token (audience 'clearance'). The waiter mounts a clearance token, so anything that could
+    # redirect it is refused. Only the change id and the timeout vary.
+    - name: waitjob
+      expression: "has(object.spec) ? dyn(object.spec) : dyn({})"
+    - name: waitpod
+      expression: >-
+        has(object.apiVersion) && object.apiVersion == 'batch/v1' && has(object.kind) && object.kind == 'Job' &&
+        has(object.metadata.labels) && 'clearance.hangar.io/injected' in object.metadata.labels &&
+        object.metadata.labels['clearance.hangar.io/injected'] == 'wait' &&
+        'argocd.argoproj.io/hook' in variables.ann && variables.ann['argocd.argoproj.io/hook'] == 'PreSync' &&
+        has(object.spec) && has(object.spec.template) && has(object.spec.template.spec) &&
+        has(object.spec.template.spec.containers) && object.spec.template.spec.containers.size() == 1
+        ? dyn(object.spec.template.spec) : dyn({})
+    - name: waitctr
+      expression: "has(variables.waitpod.containers) ? dyn(variables.waitpod.containers[0]) : dyn({})"
+    - name: exempt
+      expression: >-
+        'registry.invalid/clearance-wait@sha256:0000000000000000000000000000000000000000000000000000000000000000' != '' &&
+        has(variables.waitpod.containers) &&
+        variables.waitjob.all(k, k in ['backoffLimit', 'activeDeadlineSeconds', 'template', 'completions', 'parallelism',
+                                       'completionMode', 'suspend', 'podReplacementPolicy', 'selector', 'manualSelector']) &&
+        (!has(variables.waitjob.completions) || variables.waitjob.completions == 1) &&
+        (!has(variables.waitjob.parallelism) || variables.waitjob.parallelism == 1) &&
+        (!has(variables.waitjob.suspend) || variables.waitjob.suspend == false) &&
+        (!has(variables.waitjob.manualSelector) || variables.waitjob.manualSelector == false) &&
+        (!has(variables.waitjob.completionMode) || variables.waitjob.completionMode == 'NonIndexed') &&
+        variables.waitpod.all(k, k in ['restartPolicy', 'automountServiceAccountToken', 'securityContext', 'containers',
+                                       'volumes', 'hostAliases', 'dnsPolicy', 'schedulerName', 'terminationGracePeriodSeconds']) &&
+        (!has(variables.waitpod.dnsPolicy) || variables.waitpod.dnsPolicy == 'ClusterFirst') &&
+        (!has(variables.waitpod.schedulerName) || variables.waitpod.schedulerName == 'default-scheduler') &&
+        has(variables.waitpod.restartPolicy) && variables.waitpod.restartPolicy == 'Never' &&
+        has(variables.waitpod.automountServiceAccountToken) && variables.waitpod.automountServiceAccountToken == false &&
+        has(variables.waitpod.securityContext) &&
+        variables.waitpod.securityContext.all(k, k in ['runAsNonRoot', 'runAsUser', 'runAsGroup', 'seccompProfile']) &&
+        has(variables.waitpod.securityContext.runAsNonRoot) && variables.waitpod.securityContext.runAsNonRoot == true &&
+        has(variables.waitpod.securityContext.runAsUser) && variables.waitpod.securityContext.runAsUser == 65532 &&
+        has(variables.waitpod.securityContext.runAsGroup) && variables.waitpod.securityContext.runAsGroup == 65532 &&
+        has(variables.waitpod.securityContext.seccompProfile) &&
+        variables.waitpod.securityContext.seccompProfile.all(k, k in ['type']) &&
+        has(variables.waitpod.securityContext.seccompProfile.type) &&
+        variables.waitpod.securityContext.seccompProfile.type == 'RuntimeDefault' &&
+        variables.waitctr.all(k, k in ['name', 'image', 'imagePullPolicy', 'args', 'env', 'securityContext', 'resources',
+                                       'terminationMessagePolicy', 'terminationMessagePath', 'volumeMounts']) &&
+        (!has(variables.waitctr.terminationMessagePath) || variables.waitctr.terminationMessagePath == '/dev/termination-log') &&
+        has(variables.waitctr.image) &&
+        variables.waitctr.image == 'registry.invalid/clearance-wait@sha256:0000000000000000000000000000000000000000000000000000000000000000' &&
+        has(variables.waitctr.args) && variables.waitctr.args.size() == 4 &&
+        variables.waitctr.args[0] == '--change' && variables.waitctr.args[2] == '--timeout' &&
+        variables.waitctr.args[1].matches('^[A-Za-z0-9_.-]{1,80}$') && variables.waitctr.args[3].matches('^[0-9hms.]{1,20}$') &&
+        has(variables.waitctr.env) && variables.waitctr.env.size() == 2 &&
+        variables.waitctr.env.all(e, e.all(k, k in ['name', 'value'])) &&
+        variables.waitctr.env[0].name == 'CLEARANCE_URL' && has(variables.waitctr.env[0].value) &&
+        variables.waitctr.env[0].value == 'http://clearance-core.invalid:8080' &&
+        variables.waitctr.env[1].name == 'CLEARANCE_TOKEN_FILE' && has(variables.waitctr.env[1].value) &&
+        variables.waitctr.env[1].value == '/var/run/secrets/tokens/clearance' &&
+        has(variables.waitctr.securityContext) &&
+        variables.waitctr.securityContext.all(k, k in ['allowPrivilegeEscalation', 'readOnlyRootFilesystem', 'capabilities']) &&
+        has(variables.waitctr.securityContext.allowPrivilegeEscalation) &&
+        variables.waitctr.securityContext.allowPrivilegeEscalation == false &&
+        has(variables.waitctr.securityContext.readOnlyRootFilesystem) &&
+        variables.waitctr.securityContext.readOnlyRootFilesystem == true &&
+        has(variables.waitctr.securityContext.capabilities) &&
+        variables.waitctr.securityContext.capabilities.all(k, k in ['drop']) &&
+        has(variables.waitctr.securityContext.capabilities.drop) &&
+        variables.waitctr.securityContext.capabilities.drop == ['ALL'] &&
+        (!has(variables.waitctr.imagePullPolicy) || variables.waitctr.imagePullPolicy == 'IfNotPresent') &&
+        (!has(variables.waitctr.volumeMounts) ||
+         (variables.waitctr.volumeMounts.size() == 1 &&
+          variables.waitctr.volumeMounts[0].all(k, k in ['name', 'mountPath', 'readOnly']) &&
+          variables.waitctr.volumeMounts[0].name == 'clearance-token' &&
+          variables.waitctr.volumeMounts[0].mountPath == '/var/run/secrets/tokens' &&
+          has(variables.waitctr.volumeMounts[0].readOnly) && variables.waitctr.volumeMounts[0].readOnly)) &&
+        ('' == '' ? !has(variables.waitpod.hostAliases) :
+         (has(variables.waitpod.hostAliases) && variables.waitpod.hostAliases.size() == 1 &&
+          variables.waitpod.hostAliases[0].all(k, k in ['ip', 'hostnames']) &&
+          has(variables.waitpod.hostAliases[0].ip) && has(variables.waitpod.hostAliases[0].hostnames) &&
+          variables.waitpod.hostAliases[0].ip + '=' + variables.waitpod.hostAliases[0].hostnames.join(',') == '')) &&
+        (!has(variables.waitpod.volumes) ||
+         (variables.waitpod.volumes.size() == 1 && variables.waitpod.volumes[0].all(k, k in ['name', 'projected']) &&
+          variables.waitpod.volumes[0].name == 'clearance-token' && has(variables.waitpod.volumes[0].projected) &&
+          variables.waitpod.volumes[0].projected.all(k, k in ['sources', 'defaultMode']) &&
+          (!has(variables.waitpod.volumes[0].projected.defaultMode) || variables.waitpod.volumes[0].projected.defaultMode == 420) &&
+          has(variables.waitpod.volumes[0].projected.sources) &&
+          variables.waitpod.volumes[0].projected.sources.size() == 1 &&
+          variables.waitpod.volumes[0].projected.sources[0].all(k, k in ['serviceAccountToken']) &&
+          has(variables.waitpod.volumes[0].projected.sources[0].serviceAccountToken) &&
+          variables.waitpod.volumes[0].projected.sources[0].serviceAccountToken.all(k, k in ['audience', 'expirationSeconds', 'path']) &&
+          has(variables.waitpod.volumes[0].projected.sources[0].serviceAccountToken.audience) &&
+          variables.waitpod.volumes[0].projected.sources[0].serviceAccountToken.audience == 'clearance' &&
+          (!has(variables.waitpod.volumes[0].projected.sources[0].serviceAccountToken.path) ||
+           variables.waitpod.volumes[0].projected.sources[0].serviceAccountToken.path == 'clearance')))
+    - name: key
+      expression: >-
+        (has(object.apiVersion) && object.apiVersion.contains('/') ? object.apiVersion.split('/')[0] : '') + '/' +
+        (has(object.kind) ? object.kind : '') + '/' + (has(object.metadata.name) ? object.metadata.name : '')
+  validations:
+    - expression: "variables.exempt || variables.rendered != ''"
+      messageExpression: "'no clearance.hangar.io/rendered annotation on ' + variables.key + ': it did not come from the Clearance plugin'"
+    - expression: "variables.exempt || (has(params.status) && has(params.status.valid) && params.status.valid)"
+      messageExpression: "'grant ' + params.metadata.name + ' is not valid (expired or unverified)'"
+    - expression: >-
+        variables.exempt || (has(params.spec.objects) && variables.key in params.spec.objects &&
+        has(params.spec.objects[variables.key].rendered) &&
+        params.spec.objects[variables.key].rendered == variables.rendered)
+      messageExpression: "'grant ' + params.metadata.name + ' does not list ' + variables.key + ' at ' + variables.rendered"
+  auditAnnotations:
+    - key: grant
+      valueExpression: "string(params.metadata.name)"
+---
+# One binding. paramRef by selector with no namespace: the grant is read from the admitted object's own namespace, and
+# the agent labels exactly one grant per protected namespace active (every selected grant must pass).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: clearance-protected-writes
+  labels:
+    app.kubernetes.io/part-of: clearance
+spec:
+  policyName: clearance-protected-writes
+  validationActions: [Warn, Audit]
+  paramRef:
+    selector:
+      matchLabels: {clearance.hangar.io/active: "true"}
+    parameterNotFoundAction: Allow
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: clearance-grant-writer
+  labels:
+    app.kubernetes.io/part-of: clearance
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["clearance.hangar.io"]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: [clearancegrants, clearancegrants/status]
+  # No DELETE: the namespace controller deletes grants with their namespace and must not be refused.
+  matchConditions:
+    - name: has-user
+      expression: "has(request.userInfo) && has(request.userInfo.username)"
+  validations:
+    - expression: "request.userInfo.username == 'system:serviceaccount:clearance-system:clearance-argocd-agent'"
+      messageExpression: "'only the Clearance grant-sync agent writes ClearanceGrants, not ' + request.userInfo.username"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: clearance-grant-writer
+  labels:
+    app.kubernetes.io/part-of: clearance
+spec:
+  policyName: clearance-grant-writer
+  validationActions: [Warn, Audit]   # [Deny, Audit] with the first binding
