@@ -79,3 +79,41 @@ jobs:
           after: ${{ runner.temp }}/after
           args: --check ci=pass --dry-run
       - run: test -n "${{ steps.register.outputs.result }}" && command -v clearance
+  # The Terraform gate action (terraform/action.yml) is linted and run: its metadata parses, every composite step names
+  # a shell, shellcheck passes on each embedded script, and a dry run of the hold step validates the request the
+  # gate would get from a fixture plan, stopping before an OIDC token is fetched or Clearance is called.
+  terraform-action:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint terraform/action.yml
+        run: |
+          python3 - <<'PY'
+          import subprocess, sys, yaml
+          a = yaml.safe_load(open("terraform/action.yml"))
+          assert a["name"] and a["description"] and a["runs"]["using"] == "composite"
+          for k in ("step", "url", "plan"):
+              assert a["inputs"][k]["required"] is True, k
+          bad = 0
+          for i, st in enumerate(a["runs"]["steps"]):
+              if "run" in st:
+                  assert st.get("shell") == "bash", st
+                  r = subprocess.run(["shellcheck", "-s", "bash", "-"], input=st["run"], text=True)
+                  bad += r.returncode
+          sys.exit(1 if bad else 0)
+          PY
+      - run: printf 'the saved plan' > "$RUNNER_TEMP/tfplan"
+      - id: hold
+        uses: ./terraform
+        with:
+          step: hold
+          url: http://clearance.invalid
+          plan: ${{ runner.temp }}/tfplan
+          json: internal/tfplan/testdata/update.json
+          app: probe
+          env: lab
+          backend: s3
+          state-key: network/lab/terraform.tfstate
+          args: --check ci=pass --dry-run
+      - run: |
+          test -n "${{ steps.hold.outputs.result }}" && command -v clearance

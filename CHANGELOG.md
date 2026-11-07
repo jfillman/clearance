@@ -24,6 +24,14 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 - Config `CLEARANCE_ATTEST_KEY_FILE`, `CLEARANCE_ATTEST_FULCIO_URL`, `CLEARANCE_ATTEST_REKOR_URL`,
   `CLEARANCE_ATTEST_OIDC_TOKEN_FILE`; chart `attestation.*`.
 
+- **The plain-CI Terraform adapter (G-TF-3)** (`cmd/clearance/terraform.go`, `internal/tfplan`, `terraform/action.yml`;
+  [docs/terraform-gate.md](docs/terraform-gate.md)). `clearance hold` computes a terraform-plan subject locally (plan,
+  redacted plan JSON and variable-set digests, resources, summary; no secret value and no plan upload), registers it
+  and waits (exit 0 cleared, 3 holding, 1 denied, 2 usage); `clearance release` proves the plan file is the cleared
+  digest before the apply; `clearance report` posts `terraform apply -json`'s outcome to
+  `POST /v1/clearances/{id}/outcome`. The composite action `jfillman/clearance/terraform` runs the three steps and
+  is linted in CI.
+
 ## [0.32.0] - 2026-11-04
 
 ### Added
