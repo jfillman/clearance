@@ -182,7 +182,6 @@ def run(deny):
 
         print(f"-- ClearanceGrant: who writes it ({mode})")
         g = grant("g1", {"/ConfigMap/app-cm": H1, "apps/Deployment/web": H2, "/ConfigMap/later": H1})
-        warn_w = None
         check("another user cannot create a grant", False, sh(["create", "-f", "-"], g, OTHER), "only the Clearance grant-sync agent")
         sh(["delete", "clearancegrant", "g1", "-n", "prot", "--ignore-not-found"])
         check("an admin cannot create a grant either", False, sh(["create", "-f", "-"], g), "only the Clearance grant-sync agent")
