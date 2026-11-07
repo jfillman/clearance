@@ -1,0 +1,1 @@
+{"appName":"gate-api","cluster":"hangar-prod","envName":"prod","namespace":{"labels":{"hangar.io/managed-secrets":"true"}},"serviceNamespacePattern":"{type}-{app}-{env}"}

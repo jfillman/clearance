@@ -1,0 +1,12 @@
+# The Argo CD Config Management Plugin (G-ARGO-4), baked into the sidecar image at
+# /home/argocd/cmp-server/config/plugin.yaml. An Application opts in with spec.source.plugin.name: clearance (no
+# `discover`: nothing is picked up by file name, and `version` is left out so the name is exactly `clearance`).
+# The plugin's parameters are set by the tenant-onboarding ApplicationSet; see docs/gate.md, "The Argo CD plugin".
+apiVersion: argoproj.io/v1alpha1
+kind: ConfigManagementPlugin
+metadata:
+  name: clearance
+spec:
+  generate:
+    command: [/usr/local/bin/clearance-cmp]
+  preserveFileMode: false

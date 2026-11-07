@@ -1208,3 +1208,183 @@ digest-mismatch". A GitHub deployment of it is then rejected. A matched outcome 
 token live until its horizon. A second outcome is `DG-STATE` either way (the change has an outcome, and a mismatched
 one is no longer cleared). The core writes this exception itself, so it is not checked by `gate.CheckReport` and is
 not tagged with a break-glass window: a plan names no cluster.
+
+## The Argo CD plugin and the PreSync wait (G-ARGO-4 and G-ARGO-5, Built; not deployed)
+
+Status: **Built** in `providers/argocd/cmp` and `providers/argocd/wait`, with unit tests and a parity test against a
+recorded gate-api render; the lookup it needs is in the core (`gate.Service.clearedByTree`). **Unverified** on a
+cluster: nothing here has run inside Argo CD yet (the steps are [at the end](#checking-it-on-hangar-prod-steps-for-the-manager)).
+Apron's half (the sidecar and the ApplicationSet's plugin source, off by default) is `clearance.gate.enabled` in
+[apron](https://github.com/jfillman/apron) `README.md`. The shape is the Phase 2 design pass's (D26, (a) above): the
+plugin replaces the Helm source.
+
+### What `generate` does
+
+`providers/argocd/cmp` is the `clearance-cmp` binary, run by Argo CD's CMP server in a sidecar of argocd-apps'
+repo-server (`plugin.yaml`; an Application opts in with `spec.source.plugin.name: clearance`). For one Application:
+
+1. **Render.** The chart is fetched at its pinned tag (`git clone --depth 1 --branch <tag>`) and the peeled commit is
+   recorded, not the tag. Then `helm template <Application name> <chart> --namespace <destination>` with the
+   gitops repository's value files (a missing one is skipped) and the platform-injected values last (`valuesJson`,
+   what the Helm source's `valuesObject` was). A kustomize directory (`kustomizeDir`, the tenant's `configmap/`) is
+   rendered with `kustomize build` beside it. The release name is the Application and the namespace is the destination.
+2. **Canonicalise and hash.** Objects are read and hashed exactly as [The manifest-tree digest](#the-manifest-tree-digest-built)
+   defines it (the same `internal/gate/render` code `clearance register` uses), after the destination namespace is
+   set on every namespaced object that lacks one (Argo CD adds it on apply; the agent must be able to reproduce the
+   stamp). Cluster-scoped kinds are a fixed list plus any kind named `Cluster*` plus the Application's
+   `clusterScopedKinds` parameter (a plugin cannot ask the cluster's discovery).
+3. **Cache.** A cleared tree is remembered for two minutes (per app, environment, cluster and tree) so a refresh of an
+   unchanged render does not call the core.
+4. **Register.** `POST /v1/clearances` as a verifier, the object shape the `clearance-gate` Tekton task posts, for a
+   pushed commit: `pr: 0`, `head` the commit Argo CD syncs (`ARGOCD_APP_REVISION`), `repo` the gitops repository,
+   `proposer: system:argocd-cmp`, every object `added` (there is no base render to diff), checks `ci`, `provenance`
+   and `admission` unknown and `render` ok. A tree nobody has cleared is therefore never cleared by policy at tier 1
+   (its checks are missing): it holds for people. The core answers with the **cleared change for the same app,
+   environment, cluster and tree** when there is one (below), and otherwise registers a new one.
+
+### The three outcomes
+
+| The change is | The plugin | Argo CD shows |
+| --- | --- | --- |
+| `cleared` | emits every object stamped with `clearance.hangar.io/rendered` (the object's hash, bare hex), `clearance.hangar.io/tree` (the tree root) and `clearance.hangar.io/grant` (the change id) | a normal sync |
+| `holding` | emits the objects stamped `rendered` and `tree` (no `grant`) **plus a PreSync Job**, `clearance-awaiting-approval`, carrying the change id | the sync waits at "PreSync: clearance awaiting approval" until a person clears it; the next render, now cleared, adds the grant annotation |
+| `denied` (tier 3 policy, a person), `expired`, `superseded`, `exception`, `degraded`; or the core unreachable with no cleared allow-and-record entry (an outage hold); or a render that fails | exits 1 with the reason on stderr | `ComparisonError` on the Application; nothing syncs |
+
+The outage policy is C-6's: while the core is unreachable a tree that was cleared (within its own expiry) and whose
+tier's action is `allow-and-record` is served from the cache; anything else holds, because an unknown tier is never
+allowed. **Not built:** posting the `deploy.degraded` record for what was let through during an outage (the plugin
+keeps no outbox).
+
+The stamp is a content hash, not a secret; admission (G-ARGO-2's policy) matches it against the namespace's
+`ClearanceGrant`. The plugin never trusts a `grant` annotation a tenant's chart wrote: it is replaced or removed. The three gate annotations a chart wrote are also removed before hashing (and an annotations map left empty), exactly as the agent (G-ARGO-3) strips them from a last-applied configuration, so `rendered` is `render.ObjectDigest` of what the agent recomputes (`TestTheStampIsWhatTheAgentRecomputesFromLastApplied`).
+
+### The lookup by tree (core)
+
+Argo CD syncs the merge commit, not the PR head the `clearance-gate` check registered, so `POST /v1/clearances`
+with `pr: 0` and a bound manifest-tree digest first looks for a **cleared, unexpired change of the same app,
+environment, cluster and tree** and answers it, recording nothing; otherwise the registration proceeds as before (a
+new change, superseding older pushed commits of the same app, environment and cluster). A registration with a PR is
+never answered by tree. One consequence for the existing rule that a new pushed head supersedes the older ones: a
+push whose tree is already cleared no longer supersedes anything (the same tree is the same change). Memory and
+Postgres stores gain `ChangesCleared(app, env)`.
+
+### The PreSync wait
+
+`providers/argocd/wait` is `clearance-wait`, the injected Job's container (distroless, nonroot, no shell). It reads
+the change (`GET /v1/clearances/{id}`), then long-polls the generic wait route (`GET /v1/clearances/{id}/wait?state=holding`,
+30 s at a time, C-10) until the state moves:
+
+| Exit | When |
+| --- | --- |
+| 0 | `cleared` |
+| 1 | `denied`, `expired`, `superseded` or any other state that will not clear; or the core refused the call (403, 404: not retried) |
+| 2 | still `holding` after `--timeout` (default 24 h; the Job's `activeDeadlineSeconds` is that plus 5 minutes) |
+| 3 | a usage error |
+
+An unreachable core (5xx, timeout) is retried until the deadline, never read as a decision. The last line is also the
+container's termination message (`clearance awaiting approval: ...`, `clearance denied: ...`), which is what Argo CD
+history and `kubectl describe` show for the hook. The Job runs as uid 65532 with a read-only root filesystem, mounts a
+projected service-account token (audience `clearance`) and nothing else, and is deleted on success
+(`BeforeHookCreation,HookSucceeded`).
+
+**It is not a control.** `argocd app sync --strategy apply` skips hooks, and so skips the wait; the sync still meets
+admission, which refuses every object the namespace's grant does not list. The wait makes the sync readable and
+keeps Argo CD from applying while a person is deciding; admission is what refuses.
+
+### Parameters and settings
+
+The tenant-onboarding ApplicationSet sets the plugin's parameters (all strings; Argo CD gives them to the plugin as
+`PARAM_<NAME>`): `app`, `env`, `cluster`, `chartRepo`, `chartRevision`, `chartPath`, `valueFiles` (comma-separated,
+paths in the gitops repo), `valuesJson`, `kustomizeDir`, and optionally `clusterScopedKinds`. The sidecar's
+environment: `CLEARANCE_URL`, `CLEARANCE_TOKEN_FILE` (default `/var/run/secrets/tokens/clearance`, read on every call),
+`CLEARANCE_WAIT_IMAGE`, `CLEARANCE_WAIT_HOST_ALIAS` (`ip=host`, for the Job's pod when the core is on another cluster),
+`CLEARANCE_WAIT_SERVICE_ACCOUNT`, `CLEARANCE_WAIT_TIMEOUT`, `CLEARANCE_CMP_CACHE_DIR`, `CLEARANCE_CMP_CACHE_TTL`.
+Paths and the chart tag are validated (relative, no `..`, no leading `-`). The sidecar's `git` and `helm` run with a
+bare environment, so the clearance token is not in their reach.
+
+Images: `providers/argocd/cmp/Dockerfile` (alpine with git, helm and kustomize pinned and checksum-verified, the static
+binary, `plugin.yaml`; uid 999) and `providers/argocd/wait/Dockerfile` (distroless static). Both build from the
+repository root; neither is in a release workflow yet.
+
+### Parity with the Tekton check, and what is not yet the same
+
+`providers/argocd/cmp/testdata/parity-gate-api` holds gate-api's `hangar-prod/prod` values, a recorded `helm template`
+(airframe v0.3.168) and the digests Glidepath's own Python code (`tekton_digest.py`, verbatim from the task) computes
+for it. `TestParityWithTheTektonGateRender` holds the plugin's tree and all six object hashes to them. Three
+differences remain, none in this repository to close:
+
+1. **The release name.** The Tekton task renders with `helm template "${APP_NAME}"` (`gate-api`); Argo CD, and the
+   plugin, use the Application's name (`gate-api-prod`), and the chart stamps `app.kubernetes.io/instance` from it.
+   The trees differ (`TestTheTektonTaskTodayRendersADifferentTree` pins this). Until the task renders with
+   `<app>-<env>`, a PR's clearance is not found by tree at sync time. G-ARGO-8 (glidepath `clearance-gate` task).
+2. **The platform values.** The ApplicationSet gives the chart `observability` (namespace, instrumentation, runtime);
+   the task's injected values do not. A tenant with those set renders differently in the two. Same fix.
+3. **Only the diff is registered.** A PR registration lists the changed objects; `ClearanceGrant.spec.objects` is to
+   hold every object of the cleared tree. The plugin's own registration lists all of them (every object is `added`),
+   so a tree first seen by the plugin is complete; a tree the Tekton task cleared is not, and the grant's other
+   objects need the full list (G-ARGO-2/3/6: the grant feed or a `GET` for the tree's objects).
+
+Not built: `release.id` on the registration (the request has no such field until C-10's release work lands; the plugin
+could read it from the Rollout's `hangar.io/release-id`), an OCI chart (the chart is a git repository), a private
+chart repository's credential, and `--include-crds` and cluster capabilities (`KUBE_VERSION`, `--api-versions`) on
+the render, which Argo CD's own Helm passes and the Tekton task does not.
+
+### Wiring for the manager (hangar-prod to hangar-dev; D29)
+
+The code does none of this; each line is a change to a values file or a manifest.
+
+**Core and clearance-api (hangar-dev, apron values):**
+
+| What | Value |
+| --- | --- |
+| `CLEARANCE_FOREIGN_SERVICE_ACCOUNTS` (core) | `argocd-apps/argocd-apps-repo-server` (the plugin's identity: `hangar-prod/argocd-apps/argocd-apps-repo-server`); and the wait Job's account (below) |
+| `CLEARANCE_VERIFIERS` | `hangar-prod/argocd-apps/argocd-apps-repo-server`: the plugin registers changes (`POST /v1/clearances`) |
+| `CLEARANCE_PROVIDERS` | one entry for the wait Job, e.g. `argocd-wait`, principals `hangar-prod/app-*/default` and `hangar-prod/infra-*/default` (the Job runs in the destination namespace as its default account unless `CLEARANCE_WAIT_SERVICE_ACCOUNT` names another), **no kinds**: the wait route admits a registered provider or the verifier that registered the change, and a Job pod is neither the repo-server nor listed. Confirm a provider with no kinds is accepted, else a read-only variant is a core change |
+| route allowlist (HTTPRoute `clearance-github-webhook`) | `Exact /v1/clearances` (POST, already reaching the core) and **`PathPrefix /v1/clearances/`** for `GET /v1/clearances/{id}` and `/wait` |
+
+**hangar-prod (apron, `clearance.gate`, and the repo-server and tenant namespaces):**
+
+| What | Value |
+| --- | --- |
+| cluster.yaml | `clearance.gate.enabled: true`, `clearance.gate.url: http://clearance.hangar-dev.local`, `clearance.gate.hostAlias: 192.168.1.72=clearance.hangar-dev.local`, `clearance.protectedEnvironments: [hangar-prod/prod]`, `versions.clearance.cmpImage` and `waitImage` by digest |
+| repo-server pod | a hostAlias `192.168.1.72 clearance.hangar-dev.local` (the sidecar shares the pod's) and an egress NetworkPolicy to 192.168.1.72:80 |
+| tenant namespaces (`app-*-prod`) | egress for the wait Job's pod to 192.168.1.72:80 (the hostAlias is set on the Job by `CLEARANCE_WAIT_HOST_ALIAS`) |
+| admission (G-ARGO-2's policy) | exempt Jobs labelled `clearance.hangar.io/injected: wait` from "no stamp, refused": the injected Job is not in the tree and carries no grant entry; without the exemption the PreSync hook is refused |
+| the images | `clearance-cmp` and `clearance-wait` published and pinned (a release workflow step, not in this change) |
+
+### Checking it on hangar-prod (steps for the manager)
+
+Prerequisites: the wiring above applied, the images published, hangar-dev's core on a release with this change, a
+protected tenant (gate-api, `hangar-prod/prod`) whose Application has become `plugin: clearance` (the ApplicationSet
+regenerates it). Nothing below mutates hangar-prod beyond what Argo CD itself does; run reads from the laptop.
+
+1. **The sidecar is up and registered.** `kubectl -n argocd-apps get pod -l app.kubernetes.io/name=argocd-apps-repo-server`
+   shows the extra container `clearance-cmp` ready; `kubectl -n argocd-apps logs <pod> -c clearance-cmp` shows the
+   plugin server listening. The Application `app-gate-api-prod-cicd/gate-api-prod` (or its name in `argocd-apps`)
+   has `spec.sources[0].plugin.name: clearance` and no other generating source.
+2. **Tier 1 syncs with annotations.** Land a release PR for gate-api that only bumps the image on
+   `hangar-prod/prod/release.yaml`; the `clearance-gate` check clears it by policy (tier 1). Merge it. On the next
+   refresh `argocd app get gate-api-prod` shows the new revision, and a render from the plugin logged
+   `rendered 6 objects, tree <12 hex>`. Expect **Synced**, then:
+   `kubectl -n app-gate-api-prod get rollout,svc,sa,networkpolicy -o json | jq '.items[].metadata.annotations | with_entries(select(.key|startswith("clearance.hangar.io/")))'`
+   shows `rendered`, `tree` and `grant` on every object, `grant` equal to the PR's change id
+   (`GET /v1/clearances/<id>` on clearance-api: `state: cleared`, `tree_digest` equal to the annotation). This needs the
+   release-name fix (parity item 1); until then the plugin registers the tree itself and the sync **holds** (step 3's
+   shape): that outcome is the finding.
+3. **Held for people (tier 2).** Merge a change that edits replicas. The Application syncs: PreSync Job
+   `clearance-awaiting-approval` runs (`kubectl -n app-gate-api-prod get job,pod`), history reads
+   "PreSync: clearance awaiting approval"; clear the change in Tower (or `POST /v1/clearances/<id>/clear` as a
+   delegate); the Job exits 0, the sync proceeds, the next render adds `grant`.
+4. **Tier 3 denial is a ComparisonError.** Open a change that puts a Secret reference or RBAC object into the
+   tree with a `clearance.yaml` that loosens the baseline (`DG-POLICY`, denied by policy), merge it, and
+   `argocd app get gate-api-prod` shows **ComparisonError** with `change ch-... is denied (tier 3): DG-POLICY ...;
+   nothing syncs`, and no object of the Application changed (`kubectl get ... -o jsonpath='{.metadata.resourceVersion}'`
+   before and after). A tier 3 change held for two people is not a denial: it waits like step 3. Revert the commit
+   afterwards.
+5. **Outage hold.** (Optional, hangar-dev's core only: `kubectl scale` on hangar-dev is fine, hangar-prod is not
+   touched.) Scale `clearance-core` to 0 on hangar-dev; a refresh of an unchanged, cleared tree keeps its sync
+   (served from the cache while its tier is allow-and-record) and a changed tree shows ComparisonError
+   `clearance outage hold`. Scale it back.
+6. **Skipping the wait.** On a held change, `argocd app sync gate-api-prod --strategy apply` skips the hook and
+   applies the manifests: with G-ARGO-2's admission enforcing, the apply is refused for want of a grant (Warn mode:
+   logged). This is the documented bypass the admission policy backstops.

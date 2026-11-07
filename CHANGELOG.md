@@ -10,6 +10,17 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 ## [Unreleased]
 
 ### Added
+- **The Argo CD plugin and the PreSync wait** (G-ARGO-4, G-ARGO-5; `providers/argocd/cmp`, `providers/argocd/wait`;
+  [docs/gate.md](docs/gate.md#the-argo-cd-plugin-and-the-presync-wait-g-argo-4-and-g-argo-5-built-not-deployed)).
+  `clearance-cmp` is a Config Management Plugin sidecar for argocd-apps' repo-server: it renders the chart at its pinned
+  tag (recording the peeled commit), hashes the tree with the manifest-tree digest, registers the change as a verifier
+  and emits the manifests stamped `clearance.hangar.io/{rendered,tree,grant}` (cleared), with an injected PreSync Job
+  (held for people), or fails the render (denied, outage hold). `clearance-wait` is the Job's image: it long-polls
+  `GET /v1/clearances/{id}/wait` and exits 0 on clear, non-zero on deny or timeout. Both have a Dockerfile; neither
+  is in a release workflow yet. Apron's `clearance.gate.enabled` wires them (off by default).
+- `POST /v1/clearances` with `pr: 0` and a bound manifest-tree digest answers the **cleared, unexpired change of the
+  same app, environment, cluster and tree** and records nothing (Argo CD syncs the merge commit, not the PR head);
+  otherwise it registers as before. The stores gain `ChangesCleared(app, env)`.
 - **The Argo CD agent** (`providers/argocd/agent`, G-ARGO-3; [docs/gate.md](docs/gate.md#the-argo-cd-agent-g-argo-3-built)):
   one controller on the protected cluster. Grant sync (every 30 s: verifies the signed grant feed and each token,
   writes `ClearanceGrant`s, one active per namespace, expires them through `status.valid`), outcomes (watches
@@ -27,6 +38,10 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   digest before the apply; `clearance report` posts `terraform apply -json`'s outcome to
   `POST /v1/clearances/{id}/outcome`. The composite action `jfillman/clearance/terraform` runs the three steps and
   is linted in CI.
+
+### Changed
+- A pushed commit (`pr: 0`) whose tree an earlier change already cleared no longer supersedes that change: the same
+  tree is the same change. A push of a new tree supersedes as before.
 
 ## [0.32.0] - 2026-11-04
 
