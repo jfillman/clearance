@@ -166,7 +166,10 @@ func judge(o ObjectDetail, idx map[string]map[string]bool) *finding {
 	}
 	if o.LastApplied != "" {
 		h, err := ContentHash(o.LastApplied)
-		if err == nil && h != stamp {
+		if err != nil { // unreadable last-applied evidence is not evidence of a match
+			return &finding{o, ReasonContent, "the last-applied configuration cannot be read: " + truncate(err.Error(), 200)}
+		}
+		if h != stamp {
 			return &finding{o, ReasonContent, fmt.Sprintf("the last-applied configuration hashes to %s, the stamp says %s",
 				short(h), short(stamp))}
 		}
@@ -292,8 +295,12 @@ func (a *Agent) reportRefusedSync(ctx context.Context, app Application, opKey st
 	for _, r := range op.Resources {
 		if refusal(r.Message) {
 			o := map[string]any{"kind": r.Kind, "name": r.Name}
-			if r.Group == "" {
-				o["apiVersion"] = "v1"
+			switch {
+			case r.Version == "":
+			case r.Group == "":
+				o["apiVersion"] = r.Version
+			default:
+				o["apiVersion"] = r.Group + "/" + r.Version
 			}
 			if r.Namespace != "" {
 				o["namespace"] = r.Namespace

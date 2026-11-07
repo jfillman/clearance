@@ -124,7 +124,7 @@ func TestARefusedSync(t *testing.T) {
 	w.kube.protect("app-a", nil)
 	msg := `admission webhook: deployments.apps "web" is forbidden: ValidatingAdmissionPolicy 'clearance-grant' with binding 'clearance-grant' denied request: grant does not list apps/Deployment/web`
 	app := webApp(&agent.Operation{Phase: "Failed", StartedAt: "2026-11-07T12:00:00Z", Message: "one or more objects failed to apply",
-		Resources: []agent.SyncResource{{Group: "apps", Kind: "Deployment", Namespace: "app-a", Name: "web", Status: "SyncFailed", Message: msg},
+		Resources: []agent.SyncResource{{Group: "apps", Version: "v1", Kind: "Deployment", Namespace: "app-a", Name: "web", Status: "SyncFailed", Message: msg},
 			{Kind: "ConfigMap", Namespace: "app-a", Name: "cfg", Status: "Synced", Message: "configmap/cfg configured"}}})
 	for i := 0; i < 2; i++ {
 		if err := w.a.HandleApplication(bg, app); err != nil {
@@ -140,7 +140,7 @@ func TestARefusedSync(t *testing.T) {
 	}
 	x := ex[0].Record
 	objs := x.Exception["objects"].([]map[string]any)
-	if *x.Result != agent.ReasonRefused || x.Exception["kind"] != "out-of-band" || len(objs) != 1 || objs[0]["name"] != "web" ||
+	if *x.Result != agent.ReasonRefused || x.Exception["kind"] != "out-of-band" || len(objs) != 1 || objs[0]["name"] != "web" || objs[0]["apiVersion"] != "apps/v1" ||
 		!strings.Contains(x.Exception["detail"].(string), "ValidatingAdmissionPolicy") {
 		t.Errorf("exception: %+v", x)
 	}
@@ -297,5 +297,21 @@ func TestContentHashIgnoresArgosAndTheStamps(t *testing.T) {
 	h3, _ := agent.ContentHash(strings.Replace(annotated, `,"keep":"me"`, "", 1))
 	if h1 != h3 || h1 == h2 || len(h1) != 64 {
 		t.Errorf("hashes %s %s %s", h1, h2, h3)
+	}
+}
+
+func TestUnreadableLastAppliedIsAFinding(t *testing.T) {
+	w := newWorld(t)
+	w.kube.protect("app-a", nil)
+	d, dHash := stamped(t, "Deployment", "web", "app-a", "web", ch2, hex("c"))
+	w.feeds.claims = []token.Claims{claim(w.feeds, ch2, "app-a", t0, deploy("web", dHash))}
+	w.feeds.publish()
+	if err := w.sync(); err != nil {
+		t.Fatal(err)
+	}
+	d.LastApplied = "{not json"
+	w.kube.objs["app-a"] = []agent.ObjectDetail{d}
+	if err := w.a.ScanExceptions(bg); err != nil || len(w.core.of("deploy.exception")) != 1 {
+		t.Fatalf("%v %v", err, w.core.of("deploy.exception"))
 	}
 }

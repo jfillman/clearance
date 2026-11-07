@@ -130,7 +130,7 @@ type Operation struct {
 
 // SyncResource is one syncResult.resources entry.
 type SyncResource struct {
-	Group, Kind, Namespace, Name, Status, Message string
+	Group, Version, Kind, Namespace, Name, Status, Message string
 }
 
 // Terminal says whether an operation phase is final.

@@ -257,6 +257,7 @@ type appWire struct {
 				Revisions []string `json:"revisions"`
 				Resources []struct {
 					Group     string `json:"group"`
+					Version   string `json:"version"`
 					Kind      string `json:"kind"`
 					Namespace string `json:"namespace"`
 					Name      string `json:"name"`
@@ -283,7 +284,7 @@ func (w appWire) app() Application {
 				op.Revisions = []string{r.Revision}
 			}
 			for _, x := range r.Resources {
-				op.Resources = append(op.Resources, SyncResource{x.Group, x.Kind, x.Namespace, x.Name, x.Status, x.Message})
+				op.Resources = append(op.Resources, SyncResource{x.Group, x.Version, x.Kind, x.Namespace, x.Name, x.Status, x.Message})
 			}
 		}
 		a.Op = op
