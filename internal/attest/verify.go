@@ -162,8 +162,14 @@ func checkLog(entries []TlogEntry, env token.Envelope, payload []byte, key *ecds
 }
 
 func verifyKeyless(b *Bundle, env token.Envelope, payload, sig, digest []byte, opts VerifyOptions, res *Result) error {
-	if opts.Trust == nil && (opts.Roots == nil || opts.RekorKey == nil) || opts.Identity == "" || opts.Issuer == "" {
-		return errors.New("attest: a keyless attestation needs the trust root, the expected identity and issuer, and Rekor's public key")
+	if opts.Trust == nil && opts.Roots == nil {
+		return errors.New("attest: a keyless attestation needs a trust root (a trusted-root.json, or Fulcio's certificates with Rekor's public key)")
+	}
+	if opts.Trust == nil && opts.RekorKey == nil {
+		return errors.New("attest: a keyless attestation with a PEM trust root needs Rekor's public key (a trusted-root.json carries it)")
+	}
+	if opts.Identity == "" || opts.Issuer == "" {
+		return errors.New("attest: a keyless attestation needs the expected identity and issuer")
 	}
 	certs := b.VerificationMaterial.X509CertificateChain.Certificates
 	if len(certs) == 0 || len(certs) > 8 {
