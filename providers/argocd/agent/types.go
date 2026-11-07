@@ -38,17 +38,14 @@ const (
 // agent's version in source.provider.
 const ProviderName = "argocd-agent"
 
-// GrantObject is one object a grant lists. Rendered is the hash the CMP stamps on it.
+// GrantObject is one object a grant lists: the hash the CMP stamps on it, and whether the change touches it.
 type GrantObject struct {
-	Group    string `json:"group"`
-	Kind     string `json:"kind"`
-	Name     string `json:"name"`
 	Rendered string `json:"rendered"`
 	Changed  bool   `json:"changed"`
 }
 
-// GrantKey is how a grant indexes an object: <group>/<kind>/<name> (the admission policy builds the same key from
-// the admitted object; a core object has an empty group).
+// GrantKey is how a grant keys an object: <group>/<kind>/<name> (the admission policy builds the same key from the
+// admitted object; a core object has an empty group). The namespace is the grant's own.
 func GrantKey(group, kind, name string) string { return group + "/" + kind + "/" + name }
 
 // GrantSpec is the ClearanceGrant spec the agent writes (the CRD is G-ARGO-2's).
@@ -62,8 +59,7 @@ type GrantSpec struct {
 		ID   string `json:"id"`
 		Tier int    `json:"tier"`
 	} `json:"clearance"`
-	Objects []GrantObject     `json:"objects"`
-	Index   map[string]string `json:"index"`
+	Objects map[string]GrantObject `json:"objects"`
 }
 
 // Grant is a ClearanceGrant: namespaced, with the agent's status.valid.

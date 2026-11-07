@@ -36,7 +36,7 @@ argocd:
 protectedNamespaces: []
 
 # The ClearanceGrant CRD's group/version (G-ARGO-2).
-grantAPI: clearance.hangar.io/v1alpha1
+grantAPI: clearance.hangar.io/v1
 
 grantInterval: 30s
 scanInterval: 1m

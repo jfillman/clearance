@@ -172,7 +172,7 @@ func TestConformanceAgainstFakeArgo(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := w.grant("app-a", ch2)
-	if !g.Active() || g.Spec.Index["apps/Deployment/web"] != dHash {
+	if !g.Active() || g.Spec.Objects["apps/Deployment/web"].Rendered != dHash {
 		t.Fatalf("grant: %+v", g)
 	}
 

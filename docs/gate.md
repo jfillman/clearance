@@ -830,7 +830,7 @@ every request. Provider identity `argocd-agent/<version>` is in `source.provider
 
 | Loop | Every | Does |
 | --- | --- | --- |
-| **Grant sync** | 30 s | `GET /v1/keys` (cached 5 min, refetched on an unknown key id), `GET /v1/grant-feeds/<cluster>`; verifies the feed (signature, issuer, cluster, freshness, seq within its epoch), that the tokens beside it are exactly its entries, and each token (signature, expiry, cluster); then writes one `ClearanceGrant` per cleared change and **protected** namespace (a namespace labelled `clearance.hangar.io/protected=true`; objects in another namespace are not granted), lists every object of the tree (`spec.objects`, and `spec.index` keyed `<group>/<kind>/<name>`, an empty group for core kinds), labels exactly the newest cleared grant of a namespace `clearance.hangar.io/active=true`, sets `status.valid`, and deletes the grants no entry names |
+| **Grant sync** | 30 s | `GET /v1/keys` (cached 5 min, refetched on an unknown key id), `GET /v1/grant-feeds/<cluster>`; verifies the feed (signature, issuer, cluster, freshness, seq within its epoch), that the tokens beside it are exactly its entries, and each token (signature, expiry, cluster); then writes one `ClearanceGrant` (`clearance.hangar.io/v1`) per cleared change and namespace its objects name, whether or not the namespace is labelled protected yet; `spec.objects` is every object of the tree keyed `<group>/<kind>/<name>` (an empty group for core kinds) to `{rendered, changed}`; labels exactly the newest cleared grant of a namespace `clearance.hangar.io/active=true`; sets `status.valid` (with `reason`, `checkedAt`); and deletes the grants no entry names |
 | **Outcomes** | a watch | Lists and watches Applications in the Argo CD namespace whose project is protected; for each finished operation (`Succeeded`, `Failed`, `Error`) posts one `deploy.outcome` keyed by `<Application UID>@<operation startedAt>` (`source.operation`), carrying the sync phase, `observed_revision` and `revisions`, health and sync status, and the applied tree digest (`outcome.digests.sha256`, `change.tree`), `change.id` and `change.release.id` read from the `clearance.hangar.io/tree`, `/grant` and `hangar.io/release-id` stamps of the live objects Argo tracks to the Application (`mixed_stamps: true` and no digest when they disagree) |
 | **Exceptions** | 60 s | For every object of the scanned kinds in a protected namespace (not those a controller owns, nor `kube-root-ca.crt` and the `default` service account): no `clearance.hangar.io/rendered` stamp; a stamp no valid grant of the namespace lists for that object; or, when Argo CD's client-side apply left `last-applied-configuration`, content whose hash (without the tracking id and the gate's annotations) is not the stamp. Posts `deploy.exception` (`out-of-band`; `result` says which) once per finding, one record per namespace, reason and writer (the newest field manager); a finding that goes away is forgotten and reported again if it returns. A failed sync whose message is the admission policy's refusal (`ValidatingAdmissionPolicy` or `clearance.hangar.io` in the operation or a resource message) is reported once per operation with `result` "sync refused by the admission policy" |
 
@@ -840,9 +840,21 @@ seq it had. Every pass it also expires, on its own clock, the grants whose `spec
 false` and the active label removed, the grant kept for the record. The agent never creates, updates or deletes a
 workload, and its RBAC cannot (list on the scanned kinds, no Secret).
 
-**Exactly one active grant.** Every selected grant must pass (G-ARGO-1 (c)), so the agent deactivates a grant before it
-activates the next: a namespace is never under two active grants, and may be under none for a moment, which the policy
-refuses (`parameterNotFoundAction: Deny`) and Argo CD retries.
+**Namespace invariants** (G-ARGO-2: with a Deny binding the API server resolves `paramRef` before `matchConditions`, so a
+protected namespace with no active, valid grant refuses every matched write; a second active grant is refused). The
+agent keeps them, and the tests hold it to them (`TestGrantSync`, `TestARotationThatFailsKeepsTheActiveGrant`):
+
+1. **The grant comes before the label.** The agent writes a namespace's grant whether or not the namespace is labelled
+   `clearance.hangar.io/protected=true`. An operator labels a namespace protected only after
+   `kubectl get clearancegrants -n <ns> -l clearance.hangar.io/active=true` shows one with `status.valid` true; the agent
+   never labels namespaces.
+2. **Exactly one active grant per namespace; rotation in a fixed order.** Write the new grant (not active), mark it
+   valid, then per namespace deactivate the old and at once activate the new, two consecutive calls with nothing
+   between. A namespace is under two active grants never, and under none only between those two calls (the policy
+   refuses writes there and Argo CD retries). If the new grant cannot be written or validated, the old stays active.
+3. **Only revocation and expiry leave a namespace with none.** A grant whose token left the feed (revoked, superseded) is
+   deleted and one past `spec.expiresAt` is marked invalid and deactivated: that is the gate closing, by design, and the
+   namespace refuses until the next clearance.
 
 **Break-glass.** The agent reads `GET /v1/breakglass?cluster=<c>` (it is a registered provider). It reports exceptions
 inside a window like any other, names the window in `exception.detail`, and the core tags the record with it
@@ -856,8 +868,8 @@ that de-duplicates by `source.operation`; **descoped**: the core-side de-duplica
 and the state write posts that one outcome twice; both carry the same `source.operation`.
 
 **What the CMP and the CRD must agree with** (G-ARGO-2, G-ARGO-4; the agent holds them to nothing it cannot check):
-the grant's group, version and plural (`--grant-api`, default `clearance.hangar.io/v1alpha1`); `spec` as `subject`,
-`expiresAt`, `clearance`, `objects`, `index`; the active label; the stamps' names above; and that a stamp has the
+the CRD G-ARGO-2 defines (`--grant-api`, default `clearance.hangar.io/v1`, `providers/argocd/crd`): `spec` as `subject`,
+`expiresAt`, `clearance`, `objects` (a map); the active label; the stamps' names above; and that a stamp has the
 value of the token's `objects[].rendered` for the object, which is the object's `render.ObjectDigest` (a `sha256:`
 prefix is accepted when comparing, but the grant lists the token's value as it is, and admission compares it to the
 stamp literally).
@@ -866,7 +878,7 @@ stamp literally).
 
 | Where | Value |
 | --- | --- |
-| `clearance-core` `CLEARANCE_FOREIGN_SERVICE_ACCOUNTS` | add `clearance-system/clearance-argocd-agent` |
+| `clearance-core` `CLEARANCE_FOREIGN_SERVICE_ACCOUNTS` | add `clearance-system/clearance-argocd-agent` (the service account G-ARGO-2 settled on; Argo's is `argocd-apps/argocd-application-controller`) |
 | `clearance-api` `CLEARANCE_FOREIGN_SERVICE_ACCOUNTS` | add `clearance-system/clearance-argocd-agent` |
 | `clearance-api` `api.feedReaders` | `{principal: hangar-prod/clearance-system/clearance-argocd-agent, cluster: hangar-prod}` |
 | `CLEARANCE_PROVIDERS` | `argocd-agent`, principal `hangar-prod/clearance-system/clearance-argocd-agent`, `kinds: [deploy.outcome, deploy.exception]` |

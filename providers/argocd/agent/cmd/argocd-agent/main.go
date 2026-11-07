@@ -56,7 +56,7 @@ func run() error {
 		argoNS    = fs.String("argocd-namespace", env("ARGOCD_NAMESPACE", "argocd"), "where the Applications live")
 		projects  = fs.String("projects", env("CLEARANCE_PROTECTED_PROJECTS", ""), "the protected Argo CD projects, comma-separated (* for all)")
 		stateNS   = fs.String("state-namespace", env("POD_NAMESPACE", ""), "the namespace of the agent's state ConfigMap")
-		grantGV   = fs.String("grant-api", env("CLEARANCE_GRANT_API", "clearance.hangar.io/v1alpha1"), "the ClearanceGrant CRD's group/version")
+		grantGV   = fs.String("grant-api", env("CLEARANCE_GRANT_API", "clearance.hangar.io/v1"), "the ClearanceGrant CRD's group/version")
 		grantEvry = fs.Duration("grant-interval", 30*time.Second, "grant sync interval")
 		scanEvry  = fs.Duration("scan-interval", time.Minute, "exception scan interval")
 		repost    = fs.Bool("repost-on-start", false, "post each Application's last operation again on start (the core does not de-duplicate yet)")

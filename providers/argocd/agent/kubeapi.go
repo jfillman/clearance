@@ -25,8 +25,8 @@ type GrantAPI struct {
 	Group, Version, Plural string
 }
 
-// DefaultGrantAPI is clearance.hangar.io/v1alpha1 clearancegrants.
-var DefaultGrantAPI = GrantAPI{"clearance.hangar.io", "v1alpha1", "clearancegrants"}
+// DefaultGrantAPI is clearance.hangar.io/v1 clearancegrants.
+var DefaultGrantAPI = GrantAPI{"clearance.hangar.io", "v1", "clearancegrants"}
 
 // API is the REST implementation of Kube over the in-cluster service account.
 type API struct {
@@ -211,8 +211,9 @@ func (a *API) ApplyGrant(ctx context.Context, g Grant) error {
 }
 
 // SetGrantValid implements Kube.
-func (a *API) SetGrantValid(ctx context.Context, ns, name string, valid bool) error {
-	return a.call(ctx, "PATCH", a.grantPath(ns, name)+"/status", merge, map[string]any{"status": map[string]any{"valid": valid}}, nil)
+func (a *API) SetGrantValid(ctx context.Context, ns, name string, valid bool, reason string, at time.Time) error {
+	return a.call(ctx, "PATCH", a.grantPath(ns, name)+"/status", merge, map[string]any{"status": map[string]any{
+		"valid": valid, "reason": truncate(reason, 250), "checkedAt": at.UTC().Format(time.RFC3339)}}, nil)
 }
 
 // DeleteGrant implements Kube.

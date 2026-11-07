@@ -48,7 +48,9 @@ func TestGrantSync(t *testing.T) {
 	if err := w.sync(); err != nil {
 		t.Fatal(err)
 	}
-	if len(w.kube.grants) != 2 {
+	// A grant is written for a namespace that is not (yet) labelled protected: the operator labels a namespace only once
+	// its grant is active, so the label never lands on a namespace that would freeze.
+	if len(w.kube.grants) != 3 || !w.grant("elsewhere", ch3).Active() {
 		t.Fatalf("grants: %v", keysOf(w.kube.grants))
 	}
 	g1, g2 := w.grant("app-a", ch1), w.grant("app-a", ch2)
@@ -58,8 +60,8 @@ func TestGrantSync(t *testing.T) {
 	if g2.Valid == nil || !*g2.Valid || g1.Valid == nil || !*g1.Valid {
 		t.Errorf("status.valid is the agent's: %v %v", g1.Valid, g2.Valid)
 	}
-	if g2.Spec.Index["apps/Deployment/web"] != hex("c") || g2.Spec.Index["/ConfigMap/cfg"] != hex("b") ||
-		len(g2.Spec.Objects) != 2 || g2.Spec.Subject.Tree != hex("c") || g2.Spec.Clearance.ID != ch2 ||
+	if g2.Spec.Objects["apps/Deployment/web"] != (agent.GrantObject{Rendered: hex("c"), Changed: true}) ||
+		g2.Spec.Objects["/ConfigMap/cfg"] != (agent.GrantObject{Rendered: hex("b")}) || len(g2.Spec.Objects) != 2 || g2.Spec.Subject.Tree != hex("c") || g2.Spec.Clearance.ID != ch2 ||
 		g2.Spec.ExpiresAt != t0.Add(-time.Minute+15*time.Minute).Format(time.RFC3339) {
 		t.Errorf("spec: %+v", g2.Spec)
 	}
@@ -74,6 +76,7 @@ func TestGrantSync(t *testing.T) {
 	// ch-1 leaves the feed (superseded, revoked) and a newer change arrives: the old grant goes, the active label moves,
 	// and the fake kube fails the test if a namespace ever holds two active grants.
 	w.clock.add(time.Minute)
+	w.kube.log = nil
 	w.feeds.claims = []token.Claims{w.feeds.claims[1], claim(w.feeds, ch4, "app-a", w.clock.now(), deploy("web", hex("e")), cmap("cfg", hex("b")))}
 	w.feeds.publish()
 	if err := w.sync(); err != nil {
@@ -84,6 +87,19 @@ func TestGrantSync(t *testing.T) {
 	}
 	if w.grant("app-a", ch2).Active() || !w.grant("app-a", ch4).Active() {
 		t.Error("the active label moves to the newest")
+	}
+	// The rotation order: the new grant is written (not active) and valid before the old one is deactivated, and the
+	// old one is deactivated and the new one activated back to back (no other call between them).
+	var ns []string
+	for _, l := range w.kube.log {
+		if strings.Contains(l, "app-a") {
+			ns = append(ns, l)
+		}
+	}
+	wantOrder := []string{"apply app-a/" + ch4 + " active=false", "valid app-a/" + ch4 + " true",
+		"apply app-a/" + ch2 + " active=false", "apply app-a/" + ch4 + " active=true"}
+	if strings.Join(ns[:4], ";") != strings.Join(wantOrder, ";") {
+		t.Errorf("rotation order:\n%v\nwant\n%v", ns, wantOrder)
 	}
 	// An empty feed removes every grant.
 	w.feeds.claims = nil
@@ -206,5 +222,30 @@ func TestEpochAndSeqSurviveARestart(t *testing.T) {
 	w.feeds.publishAt("epoch-one", 9, "hangar-prod", w.feeds.signer) // the old database's feed is another epoch: taken (its exp bounds it)
 	if err := w.sync(); err != nil {
 		t.Fatalf("another epoch: %v", err)
+	}
+}
+
+// A new grant that cannot be written leaves the old one active: the namespace is never left without one because a
+// rotation failed.
+func TestARotationThatFailsKeepsTheActiveGrant(t *testing.T) {
+	w := newWorld(t)
+	w.kube.protect("app-a", nil)
+	w.feeds.claims = []token.Claims{claim(w.feeds, ch1, "app-a", t0.Add(-time.Minute), deploy("web", hex("a")))}
+	w.feeds.publish()
+	if err := w.sync(); err != nil || !w.grant("app-a", ch1).Active() {
+		t.Fatal(err)
+	}
+	w.feeds.claims = append(w.feeds.claims, claim(w.feeds, ch2, "app-a", t0, deploy("web", hex("c"))))
+	w.feeds.publish()
+	w.kube.failName = map[string]bool{ch2: true}
+	if err := w.sync(); err == nil {
+		t.Fatal("the failed write is an error")
+	}
+	if !w.grant("app-a", ch1).Active() {
+		t.Error("the old grant lost its label though the new one is not in place")
+	}
+	w.kube.failName = nil
+	if err := w.sync(); err != nil || w.grant("app-a", ch1).Active() || !w.grant("app-a", ch2).Active() {
+		t.Errorf("recovery: %v", err)
 	}
 }

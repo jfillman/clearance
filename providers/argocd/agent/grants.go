@@ -149,20 +149,16 @@ func (a *Agent) fetchAndApply(ctx context.Context) error {
 	if err := a.remember(ctx, v.feed); err != nil {
 		return fmt.Errorf("saving the feed's epoch and seq: %w", err)
 	}
-	protected, err := a.kube.ProtectedNamespaces(ctx)
-	if err != nil {
-		return fmt.Errorf("listing the protected namespaces: %w", err)
-	}
 	have, err := a.kube.ListGrants(ctx)
 	if err != nil {
 		return fmt.Errorf("listing the grants: %w", err)
 	}
-	return a.reconcile(ctx, desiredGrants(v.claims, protected, a.now()), have)
+	return a.reconcile(ctx, desiredGrants(v.claims, a.now()), have)
 }
 
 // desiredGrants is one grant per cleared change and protected namespace it names, listing the change's objects in
 // that namespace; the newest cleared grant of a namespace is the active one (the admission policy reads exactly one).
-func desiredGrants(claims []*token.Claims, protected map[string]map[string]string, now time.Time) []Grant {
+func desiredGrants(claims []*token.Claims, now time.Time) []Grant {
 	type cand struct {
 		g       Grant
 		decided string
@@ -177,28 +173,19 @@ func desiredGrants(claims []*token.Claims, protected map[string]map[string]strin
 			}
 		}
 		for ns, objs := range byNS {
-			if _, ok := protected[ns]; !ok {
-				continue // the gate does not protect this namespace: a grant there would mean nothing
-			}
 			g := Grant{Namespace: ns, Name: c.Subject, Labels: map[string]string{LabelManagedBy: ManagedBy,
 				LabelChange: c.Subject, LabelApp: c.Target.App}}
 			g.Spec.Subject.Commit, g.Spec.Subject.Tree = c.Subjects.Commit, c.Subjects.TreeRoot
 			g.Spec.ExpiresAt = time.Unix(c.Expires, 0).UTC().Format(time.RFC3339)
 			g.Spec.Clearance.ID, g.Spec.Clearance.Tier = c.Clearance.ID, c.Tier
-			g.Spec.Index = map[string]string{}
+			g.Spec.Objects = map[string]GrantObject{}
 			for _, o := range objs {
 				group, _, _ := strings.Cut(o.APIVersion, "/")
 				if !strings.Contains(o.APIVersion, "/") {
 					group = ""
 				}
-				g.Spec.Objects = append(g.Spec.Objects, GrantObject{Group: group, Kind: o.Kind, Name: o.Name,
-					Rendered: o.Rendered, Changed: o.Changed})
-				g.Spec.Index[GrantKey(group, o.Kind, o.Name)] = o.Rendered
+				g.Spec.Objects[GrantKey(group, o.Kind, o.Name)] = GrantObject{Rendered: o.Rendered, Changed: o.Changed}
 			}
-			sort.Slice(g.Spec.Objects, func(i, j int) bool {
-				a, b := g.Spec.Objects[i], g.Spec.Objects[j]
-				return GrantKey(a.Group, a.Kind, a.Name) < GrantKey(b.Group, b.Kind, b.Name)
-			})
 			all = append(all, cand{g, c.Clearance.DecidedAt, c.IssuedAt})
 		}
 	}
@@ -234,10 +221,21 @@ func expiryAfter(expiresAt string, now time.Time) bool {
 
 func gkey(g Grant) string { return g.Namespace + "/" + g.Name }
 
-// reconcile makes the cluster's grants the desired ones: deactivate what loses the active label, create and update,
-// mark valid, then delete the grants no entry names. Deactivating first means a namespace is never briefly under two
-// active grants (every selected grant must pass); it can be briefly under none, which the policy refuses (fail
-// closed) and Argo CD retries.
+// reconcile makes the cluster's grants the desired ones, in an order that protects the namespaces (the admission
+// policy refuses every matched write in a protected namespace that has no active, valid grant, and a second active
+// grant is refused):
+//
+//  1. write every desired grant, a new one without the active label, and an existing active one that stays active as
+//     it is; nothing is deactivated yet;
+//  2. mark each one valid (status.valid), so that it is ready before it is activated;
+//  3. per namespace, deactivate the grant that loses the label and at once activate the one that gains it: the only
+//     moment a namespace has no active grant is between these two consecutive calls, and the policy refuses writes
+//     there (Argo CD retries). A namespace whose new grant could not be written or validated keeps its old active
+//     grant: the flip is skipped;
+//  4. delete the grants no entry names (revoked, superseded, or out of the feed).
+//
+// Grants are written for namespaces whether or not they are labelled protected yet: an operator labels a namespace
+// only once its grant is active (docs/gate.md), so the label never lands on a namespace without one.
 func (a *Agent) reconcile(ctx context.Context, want, have []Grant) error {
 	haveBy := map[string]Grant{}
 	for _, g := range have {
@@ -248,45 +246,75 @@ func (a *Agent) reconcile(ctx context.Context, want, have []Grant) error {
 		wantBy[gkey(g)] = g
 	}
 	var errs []error
-	step := func(what string, g Grant, err error) {
+	failed := map[string]bool{} // namespaces whose desired grants are not all in place
+	step := func(what string, g Grant, err error) bool {
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s grant %s: %w", what, gkey(g), err))
+			failed[g.Namespace] = true
+		}
+		return err == nil
+	}
+	pending := map[string]bool{} // namespaces with a winner still to activate
+	for _, w := range want {
+		if h := haveBy[gkey(w)]; w.Active() && !h.Active() {
+			pending[w.Namespace] = true
 		}
 	}
-	for _, h := range have { // 1. deactivate what is no longer the active grant of its namespace
-		w, ok := wantBy[gkey(h)]
-		if !h.Active() || (ok && w.Active()) {
+	for _, w := range want { // 1. write; a grant that is active stays active until its replacement is ready
+		h, ok := haveBy[gkey(w)]
+		hold := w
+		hold.Labels = map[string]string{}
+		for k, v := range w.Labels {
+			hold.Labels[k] = v
+		}
+		delete(hold.Labels, LabelActive)
+		if ok && h.Active() && (w.Active() || pending[w.Namespace]) {
+			hold.Labels[LabelActive] = "true"
+		}
+		if ok && reflect.DeepEqual(h.Spec, w.Spec) && sameLabels(h.Labels, hold.Labels) {
 			continue
 		}
-		if ok {
-			if err := a.kube.ApplyGrant(ctx, w); err != nil {
-				step("deactivating", w, err)
+		if step("writing", w, a.kube.ApplyGrant(ctx, hold)) {
+			a.log.Info("grant written", "grant", gkey(w), "active", hold.Active())
+			haveBy[gkey(w)] = Grant{Namespace: w.Namespace, Name: w.Name, Labels: hold.Labels, Spec: w.Spec, Valid: h.Valid}
+		}
+	}
+	for _, w := range want { // 2. valid
+		if h := haveBy[gkey(w)]; (h.Valid == nil || !*h.Valid) && expiryAfter(w.Spec.ExpiresAt, a.now()) {
+			if step("validating", w, a.kube.SetGrantValid(ctx, w.Namespace, w.Name, true, "verified against the signed grant feed", a.now())) {
+				h.Valid = new(bool)
+				*h.Valid = true
+				haveBy[gkey(w)] = h
+			}
+		}
+	}
+	for _, w := range want { // 3. flip: out, then in, per namespace
+		if failed[w.Namespace] || !w.Active() || haveBy[gkey(w)].Active() {
+			continue
+		}
+		for _, h := range have {
+			if h.Namespace != w.Namespace || !h.Active() || gkey(h) == gkey(w) {
 				continue
 			}
-			haveBy[gkey(w)] = Grant{Namespace: w.Namespace, Name: w.Name, Labels: w.Labels, Spec: w.Spec, Valid: h.Valid}
+			if old, ok := wantBy[gkey(h)]; ok {
+				if !step("deactivating", old, a.kube.ApplyGrant(ctx, old)) {
+					break
+				}
+			} else {
+				delete(h.Labels, LabelActive)
+				if !step("deactivating", h, a.kube.ApplyGrant(ctx, h)) {
+					break
+				}
+			}
+		}
+		if failed[w.Namespace] {
 			continue
 		}
-		delete(h.Labels, LabelActive)
-		step("deactivating", h, a.kube.ApplyGrant(ctx, h))
-	}
-	for _, w := range want { // 2. create, update
-		h, ok := haveBy[gkey(w)]
-		if ok && reflect.DeepEqual(h.Spec, w.Spec) && sameLabels(h.Labels, w.Labels) {
-			continue
-		}
-		if err := a.kube.ApplyGrant(ctx, w); err != nil {
-			step("writing", w, err)
-			continue
-		}
-		a.log.Info("grant written", "grant", gkey(w), "active", w.Active())
-		haveBy[gkey(w)] = Grant{Namespace: w.Namespace, Name: w.Name, Labels: w.Labels, Spec: w.Spec, Valid: h.Valid}
-	}
-	for _, w := range want { // 3. valid
-		if h := haveBy[gkey(w)]; (h.Valid == nil || !*h.Valid) && expiryAfter(w.Spec.ExpiresAt, a.now()) {
-			step("validating", w, a.kube.SetGrantValid(ctx, w.Namespace, w.Name, true))
+		if step("activating", w, a.kube.ApplyGrant(ctx, w)) {
+			a.log.Info("grant activated", "grant", gkey(w))
 		}
 	}
-	for _, h := range have { // 4. remove: no entry names it (revoked, superseded, or its token left the feed)
+	for _, h := range have { // 4. remove: no entry names it
 		if _, ok := wantBy[gkey(h)]; !ok {
 			if err := a.kube.DeleteGrant(ctx, h.Namespace, h.Name); err != nil {
 				step("removing", h, err)
@@ -323,7 +351,7 @@ func (a *Agent) expireGrants(ctx context.Context) error {
 			continue
 		}
 		if g.Valid == nil || *g.Valid {
-			if err := a.kube.SetGrantValid(ctx, g.Namespace, g.Name, false); err != nil {
+			if err := a.kube.SetGrantValid(ctx, g.Namespace, g.Name, false, "expired", a.now()); err != nil {
 				errs = append(errs, fmt.Errorf("expiring grant %s: %w", gkey(g), err))
 				continue
 			}

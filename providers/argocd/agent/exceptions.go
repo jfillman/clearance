@@ -142,11 +142,11 @@ func grantIndex(grants []Grant, ns string, now time.Time) (map[string]map[string
 		if app == "" || g.Active() {
 			app = g.Labels[LabelApp]
 		}
-		for k, h := range g.Spec.Index {
+		for k, o := range g.Spec.Objects {
 			if idx[k] == nil {
 				idx[k] = map[string]bool{}
 			}
-			idx[k][trimSHA(h)] = true
+			idx[k][trimSHA(o.Rendered)] = true
 		}
 	}
 	return idx, app

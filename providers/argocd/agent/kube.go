@@ -1,6 +1,9 @@
 package agent
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Kube is the cluster the agent runs on, as far as it reaches it. kubeapi.go is the REST implementation (in-cluster,
 // no client library); the tests use an in-memory one, which is the fake Argo CD too.
@@ -13,7 +16,7 @@ type Kube interface {
 	// ApplyGrant creates the grant or replaces its spec and labels. It never touches status.
 	ApplyGrant(ctx context.Context, g Grant) error
 	// SetGrantValid writes the grant's status.valid (the status subresource: only the agent has it).
-	SetGrantValid(ctx context.Context, namespace, name string, valid bool) error
+	SetGrantValid(ctx context.Context, namespace, name string, valid bool, reason string, at time.Time) error
 	DeleteGrant(ctx context.Context, namespace, name string) error
 
 	// ListApplications and WatchApplications read the Applications in the Argo CD namespace. A watch starts after

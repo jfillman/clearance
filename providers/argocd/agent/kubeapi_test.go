@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	agent "github.com/jfillman/clearance/providers/argocd/agent"
 )
@@ -67,10 +68,10 @@ func TestKubeAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(bodies[len(bodies)-1], `"clearance.hangar.io/active":null`) ||
-		!strings.HasPrefix(calls[len(calls)-1], "PATCH /apis/clearance.hangar.io/v1alpha1/namespaces/app-a/clearancegrants/"+ch2) {
+		!strings.HasPrefix(calls[len(calls)-1], "PATCH /apis/clearance.hangar.io/v1/namespaces/app-a/clearancegrants/"+ch2) {
 		t.Errorf("patch: %v %v", calls, bodies)
 	}
-	if err := k.SetGrantValid(bg, "app-a", ch2, false); err != nil ||
+	if err := k.SetGrantValid(bg, "app-a", ch2, false, "expired", time.Now()); err != nil ||
 		!strings.HasSuffix(calls[len(calls)-1], "/clearancegrants/"+ch2+"/status") || !strings.Contains(bodies[len(bodies)-1], `"valid":false`) {
 		t.Errorf("status: %v %v", err, calls)
 	}

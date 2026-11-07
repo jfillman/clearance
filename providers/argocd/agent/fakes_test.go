@@ -52,6 +52,8 @@ type fakeKube struct {
 	grantOps int
 	workOps  int // anything that would touch a workload: must stay 0
 	failList bool
+	log      []string        // grant operations, in order
+	failName map[string]bool // ApplyGrant of these grant names fails
 }
 
 func newKube(t *testing.T) *fakeKube {
@@ -112,6 +114,10 @@ func (k *fakeKube) ApplyGrant(_ context.Context, g agent.Grant) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.grantOps++
+	if k.failName[g.Name] {
+		return errors.New("apply refused")
+	}
+	k.log = append(k.log, fmt.Sprintf("apply %s/%s active=%v", g.Namespace, g.Name, g.Active()))
 	key := g.Namespace + "/" + g.Name
 	n := cp(g)
 	if old, ok := k.grants[key]; ok {
@@ -121,10 +127,11 @@ func (k *fakeKube) ApplyGrant(_ context.Context, g agent.Grant) error {
 	k.checkActive()
 	return nil
 }
-func (k *fakeKube) SetGrantValid(_ context.Context, ns, name string, v bool) error {
+func (k *fakeKube) SetGrantValid(_ context.Context, ns, name string, v bool, _ string, _ time.Time) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.grantOps++
+	k.log = append(k.log, fmt.Sprintf("valid %s/%s %v", ns, name, v))
 	g := k.grants[ns+"/"+name]
 	g.Valid = &v
 	k.grants[ns+"/"+name] = g
