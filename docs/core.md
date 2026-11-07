@@ -18,6 +18,7 @@ session. It is one Go module, `github.com/jfillman/clearance`, built as one stat
 | Subcommand | What it does | Status |
 |---|---|---|
 | `clearance core` | Serves the core over HTTP (the API below) from the environment. `--memory` runs it on an in-memory store (tests and local runs; nothing is kept). `--insecure-dev-auth`, with `--memory` only, accepts `Bearer <principal>` as that principal and serves the chain at `GET /v1/dev/records` (below). `--listen` overrides `CLEARANCE_LISTEN`. `--max-clock-skew` overrides `CLEARANCE_MAX_CLOCK_SKEW`; `0` (off) is accepted only with `--memory`. SIGTERM shuts it down gracefully (20 s for requests in flight). | Built |
+| `clearance attest verify` | Verifies a change attestation bundle offline ([Change attestations](#change-attestations)): `--file` (the bundle, or `-` for stdin), `--subject <alg>:<hex>` (repeatable: digests the statement must name), and either `--key` (a static key's public half, PEM, or the core's JWKS) or `--trust-root`, `--identity`, `--issuer` and `--rekor-key` (keyless). Exit 0 verified, 1 not. | Built |
 | `clearance chain verify` | Verifies an evidence chain from genesis, from a JSONL dump (`--file`, `-` for stdin) or a read-only Postgres connection (`--dsn`, default `$CLEARANCE_DSN`). `--anchor <count>:<head>` checks that a checkpoint taken elsewhere is still held, which catches truncation. | Built |
 | `clearance register` | A customer's CI registers what it deploys with the deployment gate (the diff of two rendered manifest directories), authenticated by the workflow's GitHub Actions OIDC token or `--token-file`. The flags of the Python command it replaced (v0.29.0 and before), except that `--paths-from-git` with a base is refused, because the binary does not shell out. The `register/action.yml` GitHub Action builds this binary at its own ref. Without it, the paths are the files that differ between `--before` and `--after`. | Built |
 | `clearance conformance` | `--provider <url> --role runtime\|deployment`: starts an in-memory core and a fake target, drives the provider through a fake call or a fake change, and proves hold, clear, release and an outcome whose digest matches the cleared subject, one PASS or FAIL line per rule ([provider-protocol.md](provider-protocol.md)). | Built (R-1f) |
@@ -188,6 +189,10 @@ product-neutral default (`internal/vocab`).
 | `CLEARANCE_GATE_OUTSIDE_GROUPS` | The gate baseline's outside groups (group refs). | none |
 | `CLEARANCE_GATE_OWNER_FALLBACK` | The owner group of a change nobody names an owner for, when there is no outside group. | none |
 | `CLEARANCE_V0_PROVIDER` | `name/version` that rows written before providers were recorded are projected with. | `unrecorded/unrecorded` |
+| `CLEARANCE_ATTEST_KEY_FILE` | Change attestations, **static** backend (tests, labs): a PEM ECDSA P-256 private key, read once at start. Never with `CLEARANCE_ATTEST_FULCIO_URL`. | unset |
+| `CLEARANCE_ATTEST_FULCIO_URL` | Change attestations, **keyless** backend: the Fulcio base URL (https; http only for loopback). Needs `CLEARANCE_ATTEST_REKOR_URL`. | unset |
+| `CLEARANCE_ATTEST_REKOR_URL` | The Rekor v1 log: required with Fulcio, optional with a static key (unlogged without). | unset |
+| `CLEARANCE_ATTEST_OIDC_TOKEN_FILE` | Keyless: the core's OIDC identity token, re-read on every signing and never cached. | `/var/run/clearance/attest-oidc-token` |
 | `CLEARANCE_AI_COAUTHORS` | Comma-separated matchers, `<email>` or `Name <email>` (case-insensitive), on the `Co-Authored-By`, `Assisted-by` and `Generated-by` trailers an AI coding agent outside Clearance leaves. A PR with no record and no other agent signal whose head commit carries one is `unattested`, a warning that never fails a check ([provenance-app.md](provenance-app.md#ai-co-author-trailers-agent-unattested-built)). `none` turns it off. | Claude Code, OpenAI Codex, Copilot CLI, Cursor, aider (by email) |
 
 The source of truth is the package documentation of `internal/core`, `internal/bundles`, `internal/vocab` and
@@ -339,6 +344,103 @@ uneven. The signature code is the standard library's (`crypto/ecdsa`); there is 
   not built: the core refuses to start with it set. The interface it implements is `token.Signer` (`KeyID()`,
   `Public()`, `Sign(ctx, sha256 digest) -> DER`), which is what the KMS signing APIs above take and return; the
   token code does not change for it. A hosted Clearance (C-13) needs it.
+
+## Change attestations
+
+**Status: Built** (C-2), **tested against fakes**. The static backend and the whole path (outcome, statement, DSSE,
+Rekor, the record, the bundle, offline verify) run in tests against a fake Rekor and a fake Fulcio. The keyless backend
+has **not** run against a real Fulcio or Rekor: it waits for the Hangar signing PKI and the core's OIDC identity
+(C-2a, [below](#what-keyless-needs-from-c-2a)). Unverified live: the Fulcio v2 request shape and Rekor v1's `dsse` entry,
+which are written from their published APIs.
+
+After a deploy provider reports a change's outcome, the core signs an **in-toto Statement v1** about the change and
+keeps it with the change. Anyone with the bundle, the trust root and the change's digests can check, offline, that
+Clearance cleared this change and a deploy applied it.
+
+**When.** One attestation per change, for the first `deploy.outcome` that *applied* what was cleared:
+
+- from a provider's `POST /v1/records` (an Argo CD agent's sync), or
+- from `POST /v1/clearances/{id}/outcome` (a terraform apply that matched).
+
+**When not.** A change gets **no attestation** when it was never cleared; when its outcome says nothing was applied
+(`applied` false: an approved change that never synced); when the applied digest is not the cleared one (that is a
+`deploy.exception`, and the change leaves `cleared`); or when it is in `exception` or `denied`. Nothing is recorded
+for these. An outcome with no digest is attested with `matched: null` and a limitation that says so.
+
+**Where.** The signer is the core's `internal/attest`, never a provider or a CMP. A provider's POST is answered
+before signing starts: the outcome is queued after its commit and signed off the request path, retried with a
+doubling delay (5 s to 5 min, 12 attempts) when Fulcio or Rekor is down (a bundle already signed and logged whose storing failed is kept in memory and stored on the retry, not signed and logged again; a restart between the log and the store costs one extra Rekor entry), and found again after a restart (the core
+looks back over the last 2000 records for outcomes with no attestation). A signing failure never fails or delays an
+outcome.
+
+**The statement.** `_type` `https://in-toto.io/Statement/v1`; `predicateType`
+`https://clearance.hangarplatform.dev/change-attestation/v1`; the schema is
+[`schemas/change-attestation.schema.json`](../schemas/change-attestation.schema.json).
+
+| Part | Carries |
+|---|---|
+| `subject[0]` | the cleared binding: `manifest-tree:<repo>/<app>/<env>` with the tree root's `sha256`, or `terraform-plan:<repo>/<app>/<env>` with the plan's |
+| `subject[...]` | `commit:<repo>` with `gitCommit`; each image the change names **with a digest** (`<ref without digest>`, `sha256`) |
+| `predicate.clearance` | `id`, `cleared_by` (`policy` or `people`), `decided_at` |
+| `predicate.target`, `tier` | cluster, env, app; the tier |
+| `predicate.policy` | `ref`, `version`, `engine`, `verdict`, `bundle`: the policy the change was decided under, the same group the `deploy.*` records carry |
+| `predicate.approvals` | each approval: IdP `sub` and `iss`, `person`, `via`, `role`, `at` |
+| `predicate.provenance` | `level` (confirmed-agent, probable-agent, confirmed-human, unknown), the check, the proposer, the agent and task |
+| `predicate.cleared` | what the clearance bound: kind, repo, PR, commit, base, tree root or plan digest, images (the clearance token's subjects) |
+| `predicate.outcome` | the `deploy.outcome` it rests on: `seq`, `provider`, `applied` (always true), `matched` (the applied digest is the cleared one; null when none was reported), `digest`, `observed_revision`, `at` |
+| `predicate.release` | `id`, when the outcome record names a release (copied, not interpreted) |
+| `predicate.coverage` | the outcome record's coverage |
+| `predicate.limitations` | what this does **not** establish; never empty. Always: it attests the decision and the provider's own recorded outcome, not the live state of the target after the deploy, and the core did not observe the target. Added: a non-verified coverage, an outcome with no digest, images with no digest |
+
+**Signing.** The statement is the payload of a DSSE envelope (`payloadType` `application/vnd.in-toto+json`, the PAE
+and ES256 signature of [the clearance token](#the-clearance-token), one signing path), stored in a **Sigstore bundle**
+(`application/vnd.dev.sigstore.bundle+json;version=0.2`) with its verification material. Postgres keeps the bundle
+(`clearance_attestations`, one row per change) and so does the memory store. The backend is an interface
+(`attest.Backend`); config selects it:
+
+| Backend | Selected by | What it does |
+|---|---|---|
+| **keyless** | `CLEARANCE_ATTEST_FULCIO_URL` + `CLEARANCE_ATTEST_REKOR_URL` | per attestation: an ephemeral P-256 key (memory only, never stored), a proof of possession over the OIDC token's `sub`, Fulcio's short-lived certificate for it, the signature, a Rekor `dsse` entry (verifier: the certificate), the key discarded. The bundle carries the certificate chain and the Rekor entry |
+| **static** | `CLEARANCE_ATTEST_KEY_FILE` (+ optional `CLEARANCE_ATTEST_REKOR_URL`) | a key file mounted like the clearance token's (`internal/token.LoadKeyFile`), for tests and labs. The bundle names the key by its RFC 7638 thumbprint (`kid`); Rekor entries are optional |
+| off | neither set | attestations are not made and `GET /readyz` says so: `"attestation": {"enabled": false, "detail": "off: set ..."}`. Nothing else changes. Both set, or Fulcio without Rekor, stops the start |
+
+`/readyz` reports `attestation: {enabled, backend, detail}`; off is not unready.
+
+**The record.** The signer appends **`deploy.attestation`** to the chain (principal `policy`, `boundary: deployment`,
+the change named): `attestation: {digest, backend, outcome_seq, rekor_log_index, rekor_uuid, key_id}`. `digest` is
+`sha256:` of the DSSE envelope as `attest.EnvelopeDigest` serializes it (`payloadType`, `payload`, `signatures`), so the
+chain ties the stored bundle to the moment the core signed it. The record and the stored bundle commit in one
+transaction.
+
+**Reading it** (clearance-api, same visibility as the change):
+
+- `GET /v1/clearances/{id}` adds `attestation`: `{digest, backend, key_id, rekor_log_index, rekor_uuid, outcome_seq,
+  record_seq, created_at}`, or `null`.
+- `GET /v1/clearances/{id}/attestation` is the bundle (404 until the change has one).
+
+**Verifying.** `clearance attest verify` checks, offline: the payload type; the signature (static: a key in `--key`;
+keyless: the leaf certificate chains to `--trust-root` at **Rekor's integrated time**, with `--identity` as its SAN and
+`--issuer` as its OIDC issuer extension); Rekor's signed entry timestamp against `--rekor-key`, and that the entry
+logs this payload and signature; the statement's shape (the predicate is closed: unknown fields are refused); and
+each `--subject` among the statement's subjects. A keyless bundle is refused without a trust root, an identity, an
+issuer and Rekor's key, because a certificate that lives ten minutes proves nothing without the log's time. It does
+**not** check Rekor's inclusion proof or checkpoint (the bundle keeps them); the signed entry timestamp is what it
+relies on. `cosign verify-blob-attestation`-style tools read the same bundle.
+
+### What keyless needs from C-2a
+
+The keyless backend goes live when the Hangar signing platform provides all of these. Nothing here is in this repo.
+
+| Need | Detail |
+|---|---|
+| **Fulcio** | the URL for `CLEARANCE_ATTEST_FULCIO_URL` (chart `attestation.keyless.fulcioUrl`): the "Hangar Fulcio `<cluster>`" whose CA is ECDSA P-256, signed by the root from the owner's key ceremony. The core calls `POST <url>/api/v2/signingCert`; the Fulcio must serve v2 and issue code-signing certificates |
+| **OIDC issuer** | an issuer Fulcio trusts, configured in its `config.oidc-issuers`: the cluster's Kubernetes service account issuer (or the one that mints the core's token), with a type whose certificate identity is the token's **`sub`** (the core's proof of possession signs `sub`). The core's identity is `clearance-recorder@hangar-dev` (C-2a); verifiers pin it with `--identity` and the issuer with `--issuer` |
+| **OIDC audience** | the audience Fulcio's issuer config expects (`sigstore` by default). Chart `attestation.keyless.audience` sets the projected service account token's audience (mounted at `/var/run/clearance-attest/oidc-token`, 10 minutes, rotated by the kubelet); the core re-reads it per signing |
+| **Rekor** | the URL for `CLEARANCE_ATTEST_REKOR_URL` (chart `attestation.rekorUrl`): a Rekor v1 API (`POST /api/v1/log/entries`, `dsse` entries) |
+| **Trust root** | for verifiers: the Fulcio root and intermediate certificates (PEM, `--trust-root`) and **Rekor's public key** (PEM, `--rekor-key`). They are public and belong in the repo or the cluster's trust bundle, not in the core's config: the core does not verify its own bundles |
+| **Network** | the core's NetworkPolicy egress to Fulcio and Rekor (chart `networkPolicy.extraEgress`) |
+| **Env and chart values** | `CLEARANCE_ATTEST_FULCIO_URL`, `CLEARANCE_ATTEST_REKOR_URL`, `CLEARANCE_ATTEST_OIDC_TOKEN_FILE` (set by the chart to the projected path); chart `attestation.keyless.fulcioUrl`, `attestation.keyless.audience`, `attestation.keyless.tokenExpirationSeconds`, `attestation.rekorUrl`. No Secret: the keyless backend holds no key |
+| **autopilot** | after a clearance release carries this, the autopilot version bump that pins it |
 
 ## The decision engine (`internal/decide`)
 

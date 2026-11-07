@@ -49,6 +49,13 @@
 //	CLEARANCE_TOKEN_TTL           each token's life, a Go duration (default 15m, 1m to 24h, at least four expiry
 //	                              intervals); tokens are re-issued at half-life while their change stays cleared
 //	CLEARANCE_TOKEN_ISSUER        the tokens' iss, which verifiers check (default clearance)
+//	CLEARANCE_ATTEST_KEY_FILE     change attestations, static backend (tests, labs): a PEM ECDSA P-256 private key
+//	CLEARANCE_ATTEST_FULCIO_URL   change attestations, keyless backend: the Fulcio URL (needs CLEARANCE_ATTEST_REKOR_URL)
+//	CLEARANCE_ATTEST_REKOR_URL    the Rekor URL: required with Fulcio, optional with a key
+//	CLEARANCE_ATTEST_OIDC_TOKEN_FILE
+//	                              keyless: the core's OIDC identity token, re-read per signing
+//	                              (default /var/run/clearance/attest-oidc-token)
+//	                              Neither a key nor Fulcio: attestations are off, and /readyz says so (docs/core.md)
 //
 // and the authenticator's (authn.EnvVars: CLEARANCE_AUDIENCE, CLEARANCE_OIDC_*, CLEARANCE_FOREIGN_*,
 // CLEARANCE_GITHUB_OIDC_*), and the deployment's vocabulary (vocab.EnvVars).
@@ -69,6 +76,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jfillman/clearance/internal/attest"
 	"github.com/jfillman/clearance/internal/authn"
 	"github.com/jfillman/clearance/internal/bundles"
 	"github.com/jfillman/clearance/internal/decide"
@@ -124,6 +132,8 @@ type Config struct {
 	Signer      token.Signer
 	TokenTTL    time.Duration
 	TokenIssuer string
+	// Attest signs change attestations after a deploy.outcome (C-2); nil: attestations are off (/readyz says so).
+	Attest attest.Backend
 }
 
 // FromEnv reads Config from getenv, the authenticator included (authn.FromEnv).
@@ -241,6 +251,9 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	if cfg.TokenTTL, err = ParseTokenTTL(get("CLEARANCE_TOKEN_TTL", ""), cfg.ExpireEvery); err != nil {
 		return cfg, fmt.Errorf("CLEARANCE_TOKEN_TTL: %w", err)
 	}
+	if cfg.Attest, err = attest.FromEnv(getenv); err != nil {
+		return cfg, err
+	}
 	cfg.TokenIssuer = get("CLEARANCE_TOKEN_ISSUER", gate.DefaultTokenIssuer)
 	if len(cfg.TokenIssuer) > 200 || strings.ContainsAny(cfg.TokenIssuer, " \t\r\n") {
 		return cfg, errors.New("CLEARANCE_TOKEN_ISSUER is at most 200 characters, without spaces")
@@ -321,16 +334,18 @@ func list(v string) []string {
 
 // Core is the wired core: what Run serves. Build it with Build; tests serve Server.Handler() themselves.
 type Core struct {
-	Config  Config
-	Store   store.Store
-	Engine  *decide.Engine
-	Gate    *gate.Service
-	Server  *server.Server
-	App     *githubapp.App
-	clock   func() time.Time
-	log     *slog.Logger
-	closeFn func()
-	once    sync.Once
+	Config Config
+	Store  store.Store
+	Engine *decide.Engine
+	Gate   *gate.Service
+	Server *server.Server
+	App    *githubapp.App
+	// Attestor signs change attestations (nil: attestations are off).
+	Attestor *attest.Attestor
+	clock    func() time.Time
+	log      *slog.Logger
+	closeFn  func()
+	once     sync.Once
 }
 
 // Build opens the store (memory or Postgres, verified from genesis), loads the policy (a rule that does not compile
@@ -456,7 +471,18 @@ func (c *Core) wire(ctx context.Context) error {
 		c.App = app
 		g.OnAnswered = append(g.OnAnswered, app.Poke)
 	}
-	srv, err := server.New(ctx, server.Options{Store: c.Store, Engine: c.Engine, Auth: cfg.Auth,
+	status := server.Attestation{Detail: attest.Off}
+	var onOutcome func(store.Record)
+	switch {
+	case cfg.Attest != nil && cfg.Gate.Off:
+		status.Detail = "off: the deployment gate is off, so there are no changes to attest"
+	case cfg.Attest != nil:
+		c.Attestor = &attest.Attestor{Backend: cfg.Attest, Store: c.Store, Gate: g, Issuer: cfg.TokenIssuer, Clock: c.clock, Log: c.log}
+		g.OnOutcome = c.Attestor.Notify
+		onOutcome = c.Attestor.NotifyRecord
+		status = server.Attestation{Enabled: true, Backend: cfg.Attest.Name()}
+	}
+	srv, err := server.New(ctx, server.Options{OnOutcome: onOutcome, Attestation: status, Store: c.Store, Engine: c.Engine, Auth: cfg.Auth,
 		Providers: cfg.Providers, Version: cfg.Version, Clock: c.clock, Log: c.log, MaxClockSkew: cfg.MaxClockSkew,
 		DevRecords:      cfg.DevRecords,
 		Definitions:     &definitions.Service{Registry: reg, Store: c.Store, Clock: c.clock, Writer: writer},
@@ -495,6 +521,14 @@ func (c *Core) Loops(ctx context.Context) {
 	done := make(chan struct{})
 	if c.App != nil {
 		go func() { c.App.Run(ctx); done <- struct{}{} }()
+	}
+	if c.Attestor != nil {
+		attested := make(chan struct{})
+		go func() { c.Attestor.Run(ctx); close(attested) }()
+		defer func() { <-attested }()
+		c.log.InfoContext(ctx, "attest: signing change attestations", "backend", c.Attestor.Backend.Name())
+	} else {
+		c.log.InfoContext(ctx, "attest: change attestations are off")
 	}
 	// A degraded policy bundle loads once its source answers (bundles.Watch); the gate and records never wait on it.
 	watched := make(chan struct{})

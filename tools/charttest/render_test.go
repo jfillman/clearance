@@ -260,6 +260,8 @@ func TestFullCoversEveryCoreVariable(t *testing.T) {
 	}
 	core := find(objs, "Deployment", "t-clearance-core")
 	e := env(container(t, core))
+	// A static attestation key and Fulcio are alternatives (the chart refuses both): full sets Fulcio.
+	delete(names, "CLEARANCE_ATTEST_KEY_FILE")
 	for n := range names {
 		if _, ok := e[n]; !ok {
 			t.Errorf("CLEARANCE core variable %s has no chart value (not set by ci/full-values.yaml)", n)
@@ -416,6 +418,7 @@ func TestRefused(t *testing.T) {
 		"protected env shape":              {[]string{"--set", "database.existingSecret=x", "--set", "gate.protectedEnvironments[0]=prod"}, `is not <cluster>/<env>`},
 		"bad digest":                       {[]string{"--set", "database.existingSecret=x", "--set", "image.digest=latest"}, "image.digest is sha256"},
 		"route without parent":             {[]string{"--set", "database.existingSecret=x", "--set", "httpRoutes.core.enabled=true"}, "parentRefs is required"},
+		"attestation both backends":        {[]string{"--set", "database.existingSecret=x", "--set", "attestation.existingSecret=k", "--set", "attestation.keyless.fulcioUrl=https://f"}, "not both"},
 		"eso without store":                {[]string{"--set", "database.existingSecret=x", "--set", "externalSecrets.enabled=true"}, "secretStoreRef.name is required"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -427,6 +430,43 @@ func TestRefused(t *testing.T) {
 				t.Fatalf("refused with %q; want %q", out, tc.want)
 			}
 		})
+	}
+}
+
+// Change attestations (C-2): off by default; keyless projects the core's OIDC token for the core alone; a static key
+// is an existing Secret mounted for the core alone.
+func TestAttestationBackendsAreTheCoresAlone(t *testing.T) {
+	has := func(o obj, name string) bool {
+		for _, v := range get(o, "spec", "template", "spec", "volumes").([]any) {
+			if get(v, "name") == name {
+				return true
+			}
+		}
+		return false
+	}
+	off := render(t, "-f", valuesFile("full-values.yaml"), "--set", "attestation.keyless.fulcioUrl=", "--set", "attestation.rekorUrl=")
+	for k := range env(container(t, find(off, "Deployment", "t-clearance-core"))) {
+		if strings.HasPrefix(k, "CLEARANCE_ATTEST_") {
+			t.Errorf("attestations off, but %s is set", k)
+		}
+	}
+	kl := render(t, "-f", valuesFile("full-values.yaml"), "--set", "attestation.keyless.fulcioUrl=https://fulcio.example",
+		"--set", "attestation.rekorUrl=https://rekor.example")
+	core, api := find(kl, "Deployment", "t-clearance-core"), find(kl, "Deployment", "t-clearance-api")
+	e := env(container(t, core))
+	if e["CLEARANCE_ATTEST_FULCIO_URL"] != "https://fulcio.example" || e["CLEARANCE_ATTEST_REKOR_URL"] != "https://rekor.example" ||
+		e["CLEARANCE_ATTEST_OIDC_TOKEN_FILE"] != "/var/run/clearance-attest/oidc-token" || !has(core, "attest-oidc-token") || has(api, "attest-oidc-token") {
+		t.Errorf("keyless: env %v", e)
+	}
+	for _, v := range get(core, "spec", "template", "spec", "volumes").([]any) {
+		if get(v, "name") == "attest-oidc-token" && get(v, "projected", "sources", 0, "serviceAccountToken", "audience") != "sigstore" {
+			t.Errorf("the OIDC token's audience: %v", v)
+		}
+	}
+	st := render(t, "-f", valuesFile("full-values.yaml"), "--set", "attestation.keyless.fulcioUrl=", "--set", "attestation.existingSecret=attest-key")
+	core, api = find(st, "Deployment", "t-clearance-core"), find(st, "Deployment", "t-clearance-api")
+	if e := env(container(t, core)); e["CLEARANCE_ATTEST_KEY_FILE"] != "/etc/clearance/attest/attest-key.pem" || !has(core, "attest-key") || has(api, "attest-key") {
+		t.Errorf("static: env %v", e)
 	}
 }
 

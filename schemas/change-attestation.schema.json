@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clearance.hangarplatform.dev/schemas/change-attestation/v1.json",
+  "title": "clearance.change-attestation/v1",
+  "description": "The in-toto Statement v1 the core signs after a deploy reports an applied outcome for a cleared change (docs/core.md, Change attestations). It travels as the payload of a DSSE envelope (payloadType application/vnd.in-toto+json) inside a Sigstore bundle. predicateType is https://clearance.hangarplatform.dev/change-attestation/v1. internal/attest decodes the same shape strictly (unknown fields refused).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["_type", "subject", "predicateType", "predicate"],
+  "properties": {
+    "_type": {"const": "https://in-toto.io/Statement/v1"},
+    "predicateType": {"const": "https://clearance.hangarplatform.dev/change-attestation/v1"},
+    "subject": {
+      "description": "What the attestation is about. The first subject is the cleared binding: the manifest-tree root (name manifest-tree:<repo>/<app>/<env>) or the saved plan (terraform-plan:<repo>/<app>/<env>), digest sha256. Then the commit (name commit:<repo>, digest gitCommit) and each image that carries a digest (name = the reference without the digest, digest sha256).",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "digest"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "digest": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]+$"}
+          }
+        }
+      }
+    },
+    "predicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["clearance", "target", "tier", "policy", "approvals", "provenance", "cleared", "outcome", "coverage", "limitations"],
+      "properties": {
+        "clearance": {
+          "description": "The decision: the change id, who cleared it (policy or people) and when.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "cleared_by", "decided_at"],
+          "properties": {
+            "id": {"type": "string", "minLength": 1},
+            "cleared_by": {"enum": ["policy", "people"]},
+            "decided_at": {"type": "string"}
+          }
+        },
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cluster", "env", "app"],
+          "properties": {
+            "cluster": {"type": "string"},
+            "env": {"type": "string"},
+            "app": {"type": "string"}
+          }
+        },
+        "tier": {"type": "integer", "minimum": 0, "maximum": 3},
+        "policy": {
+          "description": "The policy the change was decided under (the deploy.* records' policy group).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ref", "version", "engine", "verdict"],
+          "properties": {
+            "ref": {"type": "string"},
+            "version": {"type": "string"},
+            "engine": {"type": "string"},
+            "verdict": {"type": "string"},
+            "bundle": {"type": "string"}
+          }
+        },
+        "approvals": {
+          "description": "The people who approved, as the IdP identified them when they did.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["sub", "iss", "person", "role", "at"],
+            "properties": {
+              "sub": {"type": "string"},
+              "iss": {"type": "string"},
+              "person": {"type": "string"},
+              "via": {"type": "string"},
+              "role": {"type": "string"},
+              "at": {"type": "string"}
+            }
+          }
+        },
+        "provenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["level", "proposer", "proposer_kind"],
+          "properties": {
+            "level": {"enum": ["confirmed-agent", "probable-agent", "confirmed-human", "unknown"]},
+            "check": {"type": "string"},
+            "proposer": {"type": "string"},
+            "proposer_kind": {"type": "string"},
+            "agent": {"type": "string"},
+            "task_id": {"type": "string"}
+          }
+        },
+        "cleared": {
+          "description": "What the clearance bound (the clearance token's subjects).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "repo", "pr", "commit", "images"],
+          "properties": {
+            "kind": {"enum": ["manifest-tree", "terraform-plan"]},
+            "repo": {"type": "string"},
+            "pr": {"type": "integer"},
+            "commit": {"type": "string"},
+            "base": {"type": "string"},
+            "tree_root": {"type": "string"},
+            "plan_digest": {"type": "string"},
+            "images": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        "outcome": {
+          "description": "The deploy.outcome record the attestation rests on. An attestation exists only for an outcome that applied and did not contradict the clearance, so applied is always true; matched is null when the provider reported no digest of what it applied.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["seq", "provider", "applied", "matched", "at"],
+          "properties": {
+            "seq": {"type": "integer", "minimum": 0},
+            "provider": {"type": "string"},
+            "applied": {"const": true},
+            "matched": {"type": ["boolean", "null"]},
+            "digest": {"type": "string"},
+            "observed_revision": {"type": "string"},
+            "at": {"type": "string"}
+          }
+        },
+        "release": {
+          "description": "The release the deploy.outcome named, when it named one.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id"],
+          "properties": {"id": {"type": "string", "minLength": 1}}
+        },
+        "coverage": {
+          "description": "The outcome record's coverage: authorized-and-verified, observed-not-attributed, out-of-band-detected or coverage-unavailable (docs/evidence.md); unspecified when the record has none.",
+          "type": "string"
+        },
+        "limitations": {
+          "description": "What the attestation does not establish. Never empty.",
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string"}
+        }
+      }
+    }
+  }
+}

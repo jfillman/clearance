@@ -342,6 +342,9 @@ func (s *Server) records(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "the record could not be recorded")
 		return
 	}
+	if body.Kind == "deploy.outcome" && s.opt.OnOutcome != nil {
+		s.opt.OnOutcome(rec)
+	}
 	writeJSON(w, http.StatusOK, refOf(rec))
 }
 
