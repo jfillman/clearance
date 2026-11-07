@@ -10,6 +10,9 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 ## [Unreleased]
 
 ### Added
+- **`objects[].op: "unchanged"`** on a change request: an object in the rendered tree that the diff does not touch. It
+  is accepted, never tiered, and is in the token with `changed: false`, so Glidepath's clearance-gate can register every
+  rendered object (grants need the whole tree). Glidepath sends it, so it needs a Clearance release with this first.
 - **The release workflow builds the Argo CD gate's images and the agent chart** (`.github/workflows/release.yaml`): on a
   tag, `clearance-argocd-agent`, `clearance-cmp` and `clearance-wait` are built (linux/amd64 and linux/arm64, SBOM and
   provenance), signed keyless and pushed to `ghcr.io/jfillman/<name>:vX.Y.Z`, and `charts/clearance-argocd-agent` is

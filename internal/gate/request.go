@@ -235,7 +235,7 @@ func ParseRequest(v any) (ChangeRequest, error) {
 		}
 		opS, _ := op.(string)
 		if !slices.Contains(ops, opS) {
-			return r, bad("objects[].op is added, changed or removed")
+			return r, bad("objects[].op is added, changed, removed or unchanged")
 		}
 		fields, okf := listOfStrings(o, "fields", func(s string) bool { return strings.HasPrefix(s, "/") })
 		if !okf || len(fields) > MaxFields {
