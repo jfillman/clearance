@@ -1,0 +1,145 @@
+# Clearance Terraform gate: hold, release and report a saved Terraform plan (docs/terraform-gate.md). Three steps of
+# one workflow, `step: hold` after `terraform plan -out`, `step: release` just before `terraform apply`, and
+# `step: report` after it. The calling job needs `permissions: id-token: write` (Clearance accepts the workflow's own
+# OIDC token, for its own repository only). The plan file never leaves the runner: only digests, resource addresses
+# and attribute names are sent. The action never runs `terraform apply`.
+name: Clearance Terraform gate
+description: Hold a saved Terraform plan for Clearance's gate, prove it is the cleared plan before the apply, and report the apply's outcome.
+inputs:
+  step:
+    description: hold, release or report
+    required: true
+  url:
+    description: Clearance's gateway URL
+    required: true
+  plan:
+    description: The saved plan file (terraform plan -out=tfplan)
+    required: true
+  clearance:
+    description: The change's id (the `clearance` output of the hold step); required for release and report
+    required: false
+    default: ""
+  app:
+    description: hold - the application's name in Clearance
+    required: false
+    default: ""
+  env:
+    description: hold - the environment's name
+    required: false
+    default: ""
+  backend:
+    description: hold - the state backend's type, for example s3
+    required: false
+    default: ""
+  state-key:
+    description: hold - the state key, for example network/lab/terraform.tfstate
+    required: false
+    default: ""
+  workspace:
+    description: hold - the Terraform workspace's name
+    required: false
+    default: default
+  binary:
+    description: hold - terraform or tofu (it must be on the PATH to run `show -json`)
+    required: false
+    default: terraform
+  json:
+    description: hold - the plan's `terraform show -json` output (default - run it)
+    required: false
+    default: ""
+  apply-log:
+    description: report - the `terraform apply -json` output, one JSON object per line
+    required: false
+    default: ""
+  audience:
+    description: The OIDC token's audience Clearance expects
+    required: false
+    default: clearance
+  args:
+    description: Further flags for the step (for example --check ci=pass --owner group:default/team-infra --no-wait --dry-run)
+    required: false
+    default: ""
+outputs:
+  clearance:
+    description: "hold - the change's id"
+    value: ${{ steps.run.outputs.clearance }}
+  result:
+    description: "The first line the step printed (hold - the id, state and tier)"
+    value: ${{ steps.run.outputs.result }}
+  state:
+    description: "hold - cleared or holding"
+    value: ${{ steps.run.outputs.state }}
+runs:
+  using: composite
+  steps:
+    # The Go `clearance` binary, built from this action's own checkout (github.action_path is the action's ref, so the
+    # binary is exactly the ref the workflow pinned).
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: ${{ github.action_path }}/../go.mod
+        cache-dependency-path: ${{ github.action_path }}/../go.sum
+    - name: Build clearance at this action's ref
+      shell: bash
+      env:
+        SRC: ${{ github.action_path }}/..
+        ACTION_REF: ${{ github.action_ref }}
+      run: |
+        set -euo pipefail
+        bin="$RUNNER_TEMP/clearance-terraform/bin"
+        mkdir -p "$bin"
+        (cd "$SRC" && CGO_ENABLED=0 GOFLAGS=-mod=readonly go build -trimpath \
+          -ldflags "-s -w -X main.version=${ACTION_REF:-dev}" -o "$bin/clearance" ./cmd/clearance)
+        echo "$bin" >> "$GITHUB_PATH"
+        "$bin/clearance" version
+    - name: Run the step
+      id: run
+      shell: bash
+      env:
+        CLEARANCE_URL: ${{ inputs.url }}
+        IN_STEP: ${{ inputs.step }}
+        IN_PLAN: ${{ inputs.plan }}
+        IN_CLEARANCE: ${{ inputs.clearance }}
+        IN_APP: ${{ inputs.app }}
+        IN_ENV: ${{ inputs.env }}
+        IN_BACKEND: ${{ inputs.backend }}
+        IN_STATE_KEY: ${{ inputs.state-key }}
+        IN_WORKSPACE: ${{ inputs.workspace }}
+        IN_BINARY: ${{ inputs.binary }}
+        IN_JSON: ${{ inputs.json }}
+        IN_APPLY_LOG: ${{ inputs.apply-log }}
+        IN_AUDIENCE: ${{ inputs.audience }}
+        IN_ARGS: ${{ inputs.args }}
+      run: |
+        # IN_ARGS is a list of flags, split on purpose.
+        # shellcheck disable=SC2086
+        set +e
+        common=(--audience "$IN_AUDIENCE" --plan "$IN_PLAN")
+        case "$IN_STEP" in
+          hold)
+            hold=(--app "$IN_APP" --env "$IN_ENV" --backend "$IN_BACKEND" --state-key "$IN_STATE_KEY" \
+              --workspace "$IN_WORKSPACE" --binary "$IN_BINARY")
+            if [ -n "$IN_JSON" ]; then hold+=(--json "$IN_JSON"); fi
+            out=$(clearance hold "${common[@]}" "${hold[@]}" $IN_ARGS)
+            ;;
+          release)
+            out=$(clearance release "${common[@]}" --clearance "$IN_CLEARANCE" $IN_ARGS)
+            ;;
+          report)
+            out=$(clearance report "${common[@]}" --clearance "$IN_CLEARANCE" --apply-log "$IN_APPLY_LOG" $IN_ARGS)
+            ;;
+          *)
+            echo "step is hold, release or report, not '$IN_STEP'" >&2
+            exit 2
+            ;;
+        esac
+        code=$?
+        echo "$out"
+        first=$(echo "$out" | head -1)
+        echo "result=$first" >> "$GITHUB_OUTPUT"
+        if [ "$IN_STEP" = hold ]; then
+          echo "clearance=$(echo "$first" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "state=$(echo "$first" | cut -d' ' -f2)" >> "$GITHUB_OUTPUT"
+        fi
+        # 3 = still holding (--no-wait or a wait timeout): not a failure of the step; the release step refuses it.
+        if [ "$code" -eq 3 ]; then exit 0; fi
+        exit $code
