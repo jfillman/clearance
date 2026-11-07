@@ -1,0 +1,64 @@
+{
+ "format_version": "1.2",
+ "terraform_version": "1.9.8",
+ "variables": {
+  "region": {
+   "value": "us-east-1"
+  },
+  "db_password": {
+   "value": "hunter2-SECRET"
+  }
+ },
+ "planned_values": {
+  "root_module": {}
+ },
+ "configuration": {
+  "provider_config": {
+   "aws": {
+    "name": "aws",
+    "full_name": "registry.terraform.io/hashicorp/aws"
+   }
+  },
+  "root_module": {
+   "variables": {
+    "region": {
+     "default": "us-east-1"
+    },
+    "db_password": {
+     "sensitive": true
+    }
+   }
+  }
+ },
+ "resource_changes": [
+  {
+   "address": "aws_vpc.lab",
+   "mode": "managed",
+   "type": "aws_vpc",
+   "name": "lab",
+   "provider_name": "registry.terraform.io/hashicorp/aws",
+   "change": {
+    "actions": [
+     "update"
+    ],
+    "before": {
+     "cidr": "10.0.0.0/16",
+     "tags": {
+      "Owner": "a",
+      "Env": "lab"
+     }
+    },
+    "after": {
+     "cidr": "10.0.0.0/16",
+     "tags": {
+      "Owner": "b",
+      "Env": "lab"
+     }
+    },
+    "after_unknown": {
+     "tags_all": true
+    }
+   }
+  }
+ ]
+}

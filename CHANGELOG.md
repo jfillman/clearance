@@ -14,6 +14,13 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 - G-ARGO-2: the `ClearanceGrant` CRD (`clearancegrants.clearance.hangar.io/v1`) and the admission policies
   `clearance-protected-writes` and `clearance-grant-writer` (`providers/argocd/crd/`), shipped in Warn mode, with an
   envtest suite (`test_admission.py`, CI job `admission-policy`). docs/gate.md "G-ARGO-2".
+- **The plain-CI Terraform adapter (G-TF-3)** (`cmd/clearance/terraform.go`, `internal/tfplan`, `terraform/action.yml`;
+  [docs/terraform-gate.md](docs/terraform-gate.md)). `clearance hold` computes a terraform-plan subject locally (plan,
+  redacted plan JSON and variable-set digests, resources, summary; no secret value and no plan upload), registers it
+  and waits (exit 0 cleared, 3 holding, 1 denied, 2 usage); `clearance release` proves the plan file is the cleared
+  digest before the apply; `clearance report` posts `terraform apply -json`'s outcome to
+  `POST /v1/clearances/{id}/outcome`. The composite action `jfillman/clearance/terraform` runs the three steps and
+  is linted in CI.
 
 ## [0.32.0] - 2026-11-04
 

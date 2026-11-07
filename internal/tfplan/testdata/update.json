@@ -1,0 +1,81 @@
+{
+ "format_version": "1.2",
+ "terraform_version": "1.9.8",
+ "variables": {
+  "region": {
+   "value": "us-east-1"
+  },
+  "db_password": {
+   "value": "hunter2-SECRET"
+  }
+ },
+ "planned_values": {
+  "root_module": {}
+ },
+ "configuration": {
+  "provider_config": {
+   "aws": {
+    "name": "aws",
+    "full_name": "registry.terraform.io/hashicorp/aws"
+   }
+  },
+  "root_module": {
+   "variables": {
+    "region": {
+     "default": "us-east-1"
+    },
+    "db_password": {
+     "sensitive": true
+    }
+   }
+  }
+ },
+ "resource_changes": [
+  {
+   "address": "aws_instance.web",
+   "mode": "managed",
+   "type": "aws_instance",
+   "name": "web",
+   "provider_name": "registry.terraform.io/hashicorp/aws",
+   "change": {
+    "actions": [
+     "update"
+    ],
+    "before": {
+     "ami": "ami-1",
+     "instance_type": "t3.small",
+     "tags": {
+      "Owner": "a"
+     }
+    },
+    "after": {
+     "ami": "ami-1",
+     "instance_type": "t3.large",
+     "tags": {
+      "Owner": "a"
+     }
+    },
+    "after_unknown": {}
+   }
+  },
+  {
+   "address": "aws_vpc.lab",
+   "mode": "managed",
+   "type": "aws_vpc",
+   "name": "lab",
+   "provider_name": "registry.terraform.io/hashicorp/aws",
+   "change": {
+    "actions": [
+     "no-op"
+    ],
+    "before": {
+     "cidr": "10.0.0.0/16"
+    },
+    "after": {
+     "cidr": "10.0.0.0/16"
+    },
+    "after_unknown": {}
+   }
+  }
+ ]
+}
