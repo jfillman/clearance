@@ -9,6 +9,8 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-11-07
+
 ### Added
 - **`clearance trust-root build`** (C-2a; [docs/core.md](docs/core.md#trusted-root-c-2a), Built): a Sigstore TrustedRoot JSON
   from public Fulcio chains and Rekor keys, each with a validity window. **`clearance attest verify --trust-root`
@@ -25,9 +27,6 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   every object from the chart's `hangar.io/release-id` or the values' `releaseTracking.releaseId`. Wire change:
   `plan_digest` is now omitted from a manifest change's outcome (it was never set there); the Python client is
   regenerated.
-
-
-
 - G-ARGO-2: the `ClearanceGrant` CRD (`clearancegrants.clearance.hangar.io/v1`) and the admission policies
   `clearance-protected-writes` and `clearance-grant-writer` (`providers/argocd/crd/`), shipped in Warn mode, with an
   envtest suite (`test_admission.py`, CI job `admission-policy`). docs/gate.md "G-ARGO-2".
@@ -40,9 +39,6 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   CloudTrail for the principal) file `deploy.exception` kind `drift` and `untraced-apply`. SigV4 over the standard
   library, no AWS SDK. The core's report check now accepts `destination.workspace` {backend, key, name} in place of
   cluster and environment, so a Terraform plan's exception is no longer refused (`internal/gate/exception.go`).
-- G-ARGO-2: the `ClearanceGrant` CRD (`clearancegrants.clearance.hangar.io/v1`) and the admission policies
-  `clearance-protected-writes` and `clearance-grant-writer` (`providers/argocd/crd/`), shipped in Warn mode, with an
-  envtest suite (`test_admission.py`, CI job `admission-policy`). docs/gate.md "G-ARGO-2".
 
 ## [0.33.0] - 2026-11-07
 
@@ -748,7 +744,8 @@ What the Autopilot gateway needs of the core before the hangar-dev cutover (R-3e
   scope, narrow-only limits, CEL policy, sessions, the hash-chained audit log and the gateway; the Hangar pack's
   `glidepath.*` and `airframe.*` tools over glidepath-api and a GET-only Kubernetes adapter.
 
-[Unreleased]: https://github.com/jfillman/clearance/compare/v0.33.0...HEAD
+[Unreleased]: https://github.com/jfillman/clearance/compare/v0.34.0...HEAD
+[0.34.0]: https://github.com/jfillman/clearance/compare/v0.33.0...v0.34.0
 [0.33.0]: https://github.com/jfillman/clearance/compare/v0.32.0...v0.33.0
 [0.32.0]: https://github.com/jfillman/clearance/compare/v0.31.1...v0.32.0
 [0.31.1]: https://github.com/jfillman/clearance/compare/v0.31.0...v0.31.1
