@@ -1,0 +1,99 @@
+{{- if not .Values.cluster }}{{ fail "cluster is required (the protected cluster's name)" }}{{ end }}
+{{- if not .Values.apiURL }}{{ fail "apiURL is required (clearance-api)" }}{{ end }}
+{{- if not .Values.coreURL }}{{ fail "coreURL is required (the core)" }}{{ end }}
+{{- if not .Values.argocd.projects }}{{ fail "argocd.projects is required (the protected Argo CD projects, or [\"*\"])" }}{{ end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agent.fullname" . }}
+  labels: {{- include "agent.labels" . | nindent 4 }}
+spec:
+  # One agent: two would each post the same outcome and exception.
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {{- include "agent.selector" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "agent.selector" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.hostAliases }}
+      hostAliases: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: agent
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --cluster={{ .Values.cluster }}
+            - --environment={{ .Values.environment }}
+            - --api-url={{ .Values.apiURL }}
+            - --core-url={{ .Values.coreURL }}
+            - --issuer={{ .Values.issuer }}
+            - --argocd-namespace={{ .Values.argocd.namespace }}
+            - --projects={{ join "," .Values.argocd.projects }}
+            - --grant-api={{ .Values.grantAPI }}
+            - --grant-interval={{ .Values.grantInterval }}
+            - --scan-interval={{ .Values.scanInterval }}
+          env:
+            - name: POD_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - {name: clearance-token, mountPath: /var/run/secrets/tokens, readOnly: true}
+      volumes:
+        # The agent's whole credential: a short-lived token bound to the audience the core checks, rotated by the
+        # kubelet and read fresh for each request. Nothing is stored.
+        - name: clearance-token
+          projected:
+            sources:
+              - serviceAccountToken: {path: clearance, audience: {{ .Values.tokenAudience }}, expirationSeconds: 3600}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+{{- if .Values.networkPolicy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "agent.fullname" . }}
+  labels: {{- include "agent.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "agent.selector" . | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    - to: [{namespaceSelector: {}}]
+      ports: [{port: 53, protocol: UDP}, {port: 53, protocol: TCP}]
+    - to:
+        {{- range .Values.networkPolicy.apiServerCIDRs }}
+        - ipBlock: {cidr: {{ . }}}
+        {{- end }}
+      ports: [{port: 443, protocol: TCP}, {port: 6443, protocol: TCP}]
+    - to:
+        {{- range .Values.networkPolicy.clearanceCIDRs }}
+        - ipBlock: {cidr: {{ . }}}
+        {{- end }}
+      ports:
+        {{- range .Values.networkPolicy.clearancePorts }}
+        - {port: {{ . }}, protocol: TCP}
+        {{- end }}
+{{- end }}
