@@ -164,7 +164,8 @@
             "enum": [
               "added",
               "changed",
-              "removed"
+              "removed",
+              "unchanged"
             ]
           },
           "fields": {
