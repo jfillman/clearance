@@ -248,7 +248,11 @@ func ParseKeys(raw []byte) (token.KeySet, error) {
 	}
 	pub, err := x509.ParsePKIXPublicKey(blk.Bytes)
 	if err != nil {
-		return nil, fmt.Errorf("attest: the public key: %w", err)
+		cert, cerr := x509.ParseCertificate(blk.Bytes) // a certificate: its public key
+		if cerr != nil {
+			return nil, fmt.Errorf("attest: neither a public key nor a certificate: %w", err)
+		}
+		pub = cert.PublicKey
 	}
 	ec, ok := pub.(*ecdsa.PublicKey)
 	if !ok {

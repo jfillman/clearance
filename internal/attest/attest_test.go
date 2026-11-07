@@ -285,3 +285,18 @@ func TestConfigFromEnv(t *testing.T) {
 		t.Fatalf("%v %v", b, err)
 	}
 }
+
+func TestParseKeysTakesACertificate(t *testing.T) {
+	f := attesttest.NewFulcio(t)
+	ks, err := attest.ParseKeys(f.RootPEM)
+	if err != nil || len(ks) != 1 {
+		t.Fatalf("%v %v", ks, err)
+	}
+	want, _ := token.KeyID(f.Root.PublicKey.(*ecdsa.PublicKey))
+	if _, ok := ks[want]; !ok {
+		t.Fatalf("the certificate's key is not in the set: %v", ks)
+	}
+	if _, err := attest.ParseKeys([]byte("-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n")); err == nil {
+		t.Fatal("a bad certificate parsed")
+	}
+}
