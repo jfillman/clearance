@@ -10,14 +10,18 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 ## [Unreleased]
 
 ### Added
+- **The release workflow builds the Argo CD gate's images and the agent chart** (`.github/workflows/release.yaml`): on a
+  tag, `clearance-argocd-agent`, `clearance-cmp` and `clearance-wait` are built (linux/amd64 and linux/arm64, SBOM and
+  provenance), signed keyless and pushed to `ghcr.io/jfillman/<name>:vX.Y.Z`, and `charts/clearance-argocd-agent` is
+  packaged and pushed to `oci://ghcr.io/jfillman/charts` and signed; the Release notes list each digest. The agent
+  chart's default image tag is now `v<appVersion>`, matching the published tag.
 - **The Argo CD plugin and the PreSync wait** (G-ARGO-4, G-ARGO-5; `providers/argocd/cmp`, `providers/argocd/wait`;
   [docs/gate.md](docs/gate.md#the-argo-cd-plugin-and-the-presync-wait-g-argo-4-and-g-argo-5-built-not-deployed)).
   `clearance-cmp` is a Config Management Plugin sidecar for argocd-apps' repo-server: it renders the chart at its pinned
   tag (recording the peeled commit), hashes the tree with the manifest-tree digest, registers the change as a verifier
   and emits the manifests stamped `clearance.hangar.io/{rendered,tree,grant}` (cleared), with an injected PreSync Job
   (held for people), or fails the render (denied, outage hold). `clearance-wait` is the Job's image: it long-polls
-  `GET /v1/clearances/{id}/wait` and exits 0 on clear, non-zero on deny or timeout. Both have a Dockerfile; neither
-  is in a release workflow yet. Apron's `clearance.gate.enabled` wires them (off by default).
+  `GET /v1/clearances/{id}/wait` and exits 0 on clear, non-zero on deny or timeout. Both have a Dockerfile. Apron's `clearance.gate.enabled` wires them (off by default).
 - `POST /v1/clearances` with `pr: 0` and a bound manifest-tree digest answers the **cleared, unexpired change of the
   same app, environment, cluster and tree** and records nothing (Argo CD syncs the merge commit, not the PR head);
   otherwise it registers as before. The stores gain `ChangesCleared(app, env)`.
