@@ -111,6 +111,7 @@ func Render(ctx context.Context, run Exec, cfg Config, srcDir string) (*Rendered
 
 // releaseFromValues is releaseTracking.releaseId of the value files (the last file that sets it wins, as Helm merges
 // them): the release id for an app whose chart renders no hangar.io/release-id (no Rollout). "" when none sets one.
+// Not part of the rendered objects, so the tree digest does not bind it: the stamp built from it is only claimed.
 func releaseFromValues(cfg Config, srcDir string) string {
 	id := ""
 	for _, f := range cfg.ValueFiles {

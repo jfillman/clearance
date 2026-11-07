@@ -103,3 +103,13 @@ func TestAReleaseOnARecordIsCheckedAndOnlyOnAnOutcome(t *testing.T) {
 	post("deploy.exception", map[string]any{"principal": "p", "target": "t", "result": "r", "release": map[string]any{"id": "r1"}}).
 		want(t, 400, "release is a deploy.outcome field")
 }
+
+// An outcome whose objects carried no grant names no change id (the agent sends change {tree}): it is still recorded.
+func TestAnOutcomeWithNoChangeIdIsStillRecorded(t *testing.T) {
+	f := memFixture(t)
+	for _, chg := range []map[string]any{{"tree": "sha256:" + strings.Repeat("c", 64)}, {"id": "not-a-change-id"}} {
+		f.do("POST", "/v1/records", argo, map[string]any{"provider": "argo-gate", "kind": "deploy.outcome",
+			"record": map[string]any{"app": "gate-api", "target": "t", "outcome": map[string]any{"applied": true}, "change": chg,
+				"release": map[string]any{"id": "r1"}}}).want(t, 200, "")
+	}
+}

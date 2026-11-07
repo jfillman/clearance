@@ -88,9 +88,11 @@ type Outcome struct {
 // terraform-plan change takes its outcome through POST /v1/clearances/{id}/outcome, not here. Judging the outcome
 // (an exception for a mismatch) is the provider's report to make; the attestation signer is notified by the caller.
 func (s *Service) RecordOutcome(ctx context.Context, ev store.Event, wr evidence.Writer) (store.Record, error) {
+	// An outcome whose change names no valid id (the agent sends change {tree} for objects that carry no grant) is
+	// still recorded: the id is only needed to set a change's outcome.
 	id, err := changeRef(ev)
 	if err != nil {
-		return nil, err
+		id = ""
 	}
 	var out store.Record
 	err = s.op(ctx, func(tx store.Tx, w *writer) error {

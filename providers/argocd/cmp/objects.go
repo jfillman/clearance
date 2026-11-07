@@ -22,8 +22,10 @@ const (
 	AnnGrant    = "clearance.hangar.io/grant"    // the clearance id; only on a cleared change's objects
 	// AnnRelease is the release id the tree carries (G-ARGO-6), copied to every object so the agent can put it on the
 	// deploy.outcome whatever kinds the app has: from the objects' own hangar.io/release-id (the airframe chart
-	// renders it onto the Rollout), else releaseTracking.releaseId of the values. Both are inside the tree, so the
-	// tree digest binds the value; the stamp only makes it findable. A gate annotation: never hashed.
+	// renders it onto the Rollout), else releaseTracking.releaseId of the value files. The chart's annotation is part
+	// of the rendered objects, so the tree digest binds it; the value-file fallback is not rendered output, so the
+	// digest does not bind it: it is only claimed, like every other field of the outcome. A gate annotation: never
+	// hashed.
 	AnnRelease = "clearance.hangar.io/release"
 	// AnnChartRelease is what the chart writes (Hangar's vocabulary: docs/gate.md, "The release-record join").
 	AnnChartRelease = "hangar.io/release-id"

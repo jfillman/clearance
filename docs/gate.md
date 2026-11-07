@@ -513,10 +513,10 @@ pull request, change, grant, outcome, attestation, release record, joined by ids
   checks the hash. `matched` is whether the applied digest is the cleared tree; a record with no digest is
   `matched: false`, with `digest` empty. Everything in it is the provider's claim; the core did not observe the target.
   A terraform-plan change keeps its own outcome route.
-- **The stamp.** The airframe chart renders `hangar.io/release-id` onto the Rollout, so the id is inside the tree and
+- **The stamp.** The airframe chart renders `hangar.io/release-id` onto the Rollout, so that id is inside the tree and
   bound by the tree digest. An app with no Rollout has none, so the CMP now copies the release id to every object as
   `clearance.hangar.io/release`: the one the objects' `hangar.io/release-id` agree on, else `releaseTracking.releaseId`
-  of the value files. Two objects naming different releases get no stamp. It is a gate annotation: never hashed, removed
+  of the value files (not rendered output, so the digest does not bind that fallback: it is claimed). Two objects naming different releases get no stamp. It is a gate annotation: never hashed, removed
   before the agent recomputes an object's digest, and a tenant-written one is replaced or removed, never trusted. The
   agent reads the stamp first, then `hangar.io/release-id`; objects that disagree report no release and
   `mixed_stamps`.
