@@ -62,8 +62,8 @@ spec:
     # default-scheduler, completions/parallelism 1, suspend false, the generated selector, ...), each held to its default. The label clearance.hangar.io/injected=wait and the PreSync hook; one container on the
     # pinned wait image (a digest reference; empty = no exemption); args [--change <id> --timeout <duration>]; env
     # exactly CLEARANCE_URL=<the pinned core URL> and CLEARANCE_TOKEN_FILE=/var/run/secrets/tokens/clearance;
-    # automountServiceAccountToken false and no serviceAccountName (the CMP sets neither a service account nor any
-    # automount); hostAliases exactly the pinned one (none when the pin is empty); the one mount and the one projected
+    # automountServiceAccountToken false and no serviceAccountName (the CMP sets automount false and no service account;
+    # it never sets one); hostAliases exactly the pinned one (none when the pin is empty); the one mount and the one projected
     # service-account token (audience 'clearance'). The waiter mounts a clearance token, so anything that could
     # redirect it is refused. Only the change id and the timeout vary.
     - name: waitjob
