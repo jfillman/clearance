@@ -206,8 +206,26 @@ func (a *API) ApplyGrant(ctx context.Context, g Grant) error {
 	for k, v := range g.Labels {
 		labels[k] = v
 	}
+	// A merge patch only adds and replaces keys: spec.objects keys the new spec lacks are sent as null, so the stored
+	// map ends up exactly the token's objects.
+	var cur grantWire
+	if err := a.call(ctx, "GET", a.grantPath(g.Namespace, g.Name), "", nil, &cur); err != nil {
+		return err
+	}
+	spec := map[string]any{}
+	_ = json.Unmarshal(rawJSON(g.Spec), &spec)
+	objs, _ := spec["objects"].(map[string]any)
+	if objs == nil {
+		objs = map[string]any{}
+		spec["objects"] = objs
+	}
+	for k := range cur.Spec.Objects {
+		if _, ok := g.Spec.Objects[k]; !ok {
+			objs[k] = nil
+		}
+	}
 	return a.call(ctx, "PATCH", a.grantPath(g.Namespace, g.Name), merge,
-		map[string]any{"metadata": map[string]any{"labels": labels}, "spec": g.Spec}, nil)
+		map[string]any{"metadata": map[string]any{"labels": labels}, "spec": spec}, nil)
 }
 
 // SetGrantValid implements Kube.

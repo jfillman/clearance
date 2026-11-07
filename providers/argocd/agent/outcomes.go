@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -118,20 +117,23 @@ func stampOf(objs []ObjectDetail, ann string) (v string, mixed bool) {
 	return v, false
 }
 
-func releaseOf(objs []ObjectDetail) string {
-	ids := []string{}
+// releaseOf is the release id every stamped object agrees on; mixed when two objects name different ones (no id is
+// then reported: the objects are not one release).
+func releaseOf(objs []ObjectDetail) (id string, mixed bool) {
 	for _, o := range objs {
-		if v := o.Annotations[AnnRelease]; v != "" {
-			ids = append(ids, v)
-		} else if v := o.Labels[AnnRelease]; v != "" {
-			ids = append(ids, v)
+		v := o.Annotations[AnnRelease]
+		if v == "" {
+			v = o.Labels[AnnRelease]
 		}
+		if v == "" {
+			continue
+		}
+		if id != "" && id != v {
+			return "", true
+		}
+		id = v
 	}
-	sort.Strings(ids)
-	if len(ids) == 0 {
-		return ""
-	}
-	return ids[0]
+	return id, false
 }
 
 func trimSHA(s string) string { return strings.TrimPrefix(s, "sha256:") }
@@ -181,7 +183,11 @@ func (a *Agent) OutcomeRecord(ctx context.Context, app Application) (*client.Rec
 	if tree != "" {
 		change_["tree"] = "sha256:" + trimSHA(tree)
 	}
-	if rel := releaseOf(objs); rel != "" {
+	rel, mixedRel := releaseOf(objs)
+	if mixedRel {
+		out["mixed_stamps"] = true
+	}
+	if rel != "" {
 		change_["release"] = map[string]any{"id": rel}
 	}
 	src := map[string]any{"provider": a.Provider(), "operation": OperationKey(app), "application": app.Namespace + "/" + app.Name}

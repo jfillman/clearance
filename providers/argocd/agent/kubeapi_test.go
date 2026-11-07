@@ -34,6 +34,8 @@ func TestKubeAPI(t *testing.T) {
 		case r.Method == "POST" && strings.HasSuffix(p, "/clearancegrants"):
 			w.WriteHeader(409)
 			_, _ = w.Write([]byte(`{"reason":"AlreadyExists"}`))
+		case r.Method == "GET" && strings.HasSuffix(p, "/clearancegrants/"+ch2):
+			_, _ = w.Write([]byte(`{"spec":{"objects":{"apps/Deployment/web":{"rendered":"x"},"/ConfigMap/gone":{"rendered":"y"}}}}`))
 		case r.Method == "PATCH":
 			_, _ = w.Write([]byte(`{}`))
 		case strings.HasSuffix(p, "/namespaces"):
@@ -64,8 +66,12 @@ func TestKubeAPI(t *testing.T) {
 		t.Fatalf("namespaces: %v %v", ns, err)
 	}
 	g := agent.Grant{Namespace: "app-a", Name: ch2, Labels: map[string]string{agent.LabelManagedBy: agent.ManagedBy}}
+	g.Spec.Objects = map[string]agent.GrantObject{"apps/Deployment/web": {Rendered: "z"}}
 	if err := k.ApplyGrant(bg, g); err != nil { // POST conflicts, so it patches; the active label is cleared with null
 		t.Fatal(err)
+	}
+	if !strings.Contains(bodies[len(bodies)-1], `"/ConfigMap/gone":null`) || strings.Contains(bodies[len(bodies)-1], `"apps/Deployment/web":null`) {
+		t.Errorf("an object the update drops is removed with null, one it keeps is not: %s", bodies[len(bodies)-1])
 	}
 	if !strings.Contains(bodies[len(bodies)-1], `"clearance.hangar.io/active":null`) ||
 		!strings.HasPrefix(calls[len(calls)-1], "PATCH /apis/clearance.hangar.io/v1/namespaces/app-a/clearancegrants/"+ch2) {

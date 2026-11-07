@@ -315,3 +315,19 @@ func TestUnreadableLastAppliedIsAFinding(t *testing.T) {
 		t.Fatalf("%v %v", err, w.core.of("deploy.exception"))
 	}
 }
+
+func TestMixedReleaseIsNotReportedAsOne(t *testing.T) {
+	w := newWorld(t)
+	w.kube.protect("app-a", nil)
+	d, _ := stamped(t, "Deployment", "web", "app-a", "web", ch2, hex("c"))
+	c, _ := stamped(t, "ConfigMap", "cfg", "app-a", "web", ch2, hex("c"))
+	c.Annotations[agent.AnnRelease] = "chain-2:hangar-prod/prod"
+	w.kube.objs["app-a"] = []agent.ObjectDetail{d, c}
+	if err := w.a.HandleApplication(bg, webApp(succeeded("2026-11-07T12:00:00Z"))); err != nil {
+		t.Fatal(err)
+	}
+	r := w.core.of("deploy.outcome")[0].Record
+	if r.Change["release"] != nil || r.Outcome["mixed_stamps"] != true {
+		t.Errorf("%+v", r)
+	}
+}
