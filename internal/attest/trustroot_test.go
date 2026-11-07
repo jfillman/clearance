@@ -160,6 +160,7 @@ func TestBuildOrdersAChainAndRefusesWhatIsNotOne(t *testing.T) {
 	for name, in := range map[string][]byte{
 		"an intermediate with no root": pemOf(inter),
 		"two unrelated roots":          pemOf(root, other),
+		"two self-signed roots":        pemOf(other, root, inter),
 		"a gap":                        pemOf(root, other, inter),
 		"not PEM":                      []byte("nope"),
 		"empty":                        nil,
@@ -167,6 +168,18 @@ func TestBuildOrdersAChainAndRefusesWhatIsNotOne(t *testing.T) {
 		if _, err := attest.BuildTrustedRoot([]attest.BuildCA{{PEM: in}}, logs); err == nil {
 			t.Errorf("%s: built", name)
 		}
+	}
+	// A window that ends before it starts is refused at build time, for a chain and for a key, and a chain's default
+	// start is the root's, so an end before the root existed is refused too.
+	later, earlier := time.Now().Add(time.Hour), time.Now().Add(-time.Hour)
+	if _, err := attest.BuildTrustedRoot([]attest.BuildCA{{PEM: pemOf(root), Window: attest.Window{Start: later, End: earlier}}}, logs); err == nil {
+		t.Error("an inverted chain window: built")
+	}
+	if _, err := attest.BuildTrustedRoot([]attest.BuildCA{{PEM: pemOf(root), Window: attest.Window{End: root.NotBefore.Add(-time.Hour)}}}, logs); err == nil {
+		t.Error("a chain window ending before the root exists: built")
+	}
+	if _, err := attest.BuildTrustedRoot([]attest.BuildCA{{PEM: pemOf(root)}}, []attest.BuildLog{{PEM: r.KeyPEM, Window: attest.Window{Start: later, End: earlier}}}); err == nil {
+		t.Error("an inverted key window: built")
 	}
 	if _, err := attest.BuildTrustedRoot(nil, logs); err == nil {
 		t.Error("no chain: built")

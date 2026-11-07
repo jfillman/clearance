@@ -63,6 +63,14 @@ type BuildLog struct {
 	Window  Window
 }
 
+// check refuses a window that ends before it starts: the document would not parse back.
+func (w Window) check() error {
+	if !w.Start.IsZero() && !w.End.IsZero() && w.End.Before(w.Start) {
+		return errors.New("the window ends before it starts")
+	}
+	return nil
+}
+
 type jWindow struct {
 	Start string `json:"start,omitempty"`
 	End   string `json:"end,omitempty"`
@@ -158,12 +166,12 @@ func BuildTrustedRoot(cas []BuildCA, logs []BuildLog) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("trust root: fulcio chain %d: %w", i+1, err)
 		}
-		if _, err := c.Window.json().window(); err != nil {
-			return nil, fmt.Errorf("trust root: fulcio chain %d: %w", i+1, err)
-		}
 		w := c.Window
 		if w.Start.IsZero() {
-			w.Start = chain[0].NotBefore // never trusted before its own certificate exists
+			w.Start = chain[len(chain)-1].NotBefore // never trusted before the root exists
+		}
+		if err := w.check(); err != nil {
+			return nil, fmt.Errorf("trust root: fulcio chain %d: %w", i+1, err)
 		}
 		var j jCA
 		j.Subject = map[string]string{"commonName": chain[0].Subject.CommonName}
@@ -190,6 +198,9 @@ func BuildTrustedRoot(cas []BuildCA, logs []BuildLog) ([]byte, error) {
 		w := l.Window
 		if w.Start.IsZero() {
 			w.Start = time.Unix(0, 0) // cosign and sigstore-go always read a start; open means the beginning of time
+		}
+		if err := w.check(); err != nil {
+			return nil, fmt.Errorf("trust root: rekor key %d: %w", i+1, err)
 		}
 		var j jLog
 		j.BaseURL, j.HashAlgorithm = l.BaseURL, "SHA2_256"
@@ -249,19 +260,19 @@ func orderChain(raw []byte) ([]*x509.Certificate, error) {
 	remaining := certs
 	// Start from the self-signed root and walk down to the certificate nothing else in the set issued.
 	var root *x509.Certificate
+	rootAt := -1
 	for i, c := range remaining {
 		if bytes.Equal(c.RawSubject, c.RawIssuer) && c.CheckSignatureFrom(c) == nil {
 			if root != nil {
 				return nil, errors.New("more than one self-signed certificate")
 			}
-			root = c
-			remaining = append(append([]*x509.Certificate{}, remaining[:i]...), remaining[i+1:]...)
-			break
+			root, rootAt = c, i
 		}
 	}
 	if root == nil {
 		return nil, errors.New("no self-signed root in the chain")
 	}
+	remaining = append(append([]*x509.Certificate{}, remaining[:rootAt]...), remaining[rootAt+1:]...)
 	chain = []*x509.Certificate{root}
 	for len(remaining) > 0 {
 		found := -1
