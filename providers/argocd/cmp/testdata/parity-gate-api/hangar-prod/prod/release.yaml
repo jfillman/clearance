@@ -1,0 +1,9 @@
+# machine-owned: written by open-release-pr.yaml (D9/AF-5) - do not hand-edit
+release:
+  image:
+    repository: ghcr.io/jfillman/gate-api
+    tag: 2.0.1-35185f9
+releaseTracking:
+  cluster: hangar-prod
+  appNamespace: app-gate-api-cicd
+  releaseId: d41d51f7-e16c-4df6-934e-1952b5723e99:hangar-prod/prod

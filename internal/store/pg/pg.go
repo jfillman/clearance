@@ -714,6 +714,15 @@ func (t *tx) ChangesForHead(ctx context.Context, repo, head string) ([]store.Cha
 	return changes(ctx, q, t.s.opt, "repo = $1 AND head = $2", nil, repo, head)
 }
 
+func (t *tx) ChangesCleared(ctx context.Context, app, env string) ([]store.Change, error) {
+	q, done, err := t.q()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	return changes(ctx, q, t.s.opt, "app = $1 AND env = $2 AND state = 'cleared'", nil, app, env)
+}
+
 func (t *tx) ChangesHolding(ctx context.Context) ([]store.Change, error) {
 	q, done, err := t.q()
 	if err != nil {
@@ -787,6 +796,10 @@ func (r *Reader) ChangesForPR(ctx context.Context, repo string, pr int) ([]store
 
 func (r *Reader) ChangesForHead(ctx context.Context, repo, head string) ([]store.Change, error) {
 	return changes(ctx, r.pool, r.opt, "repo = $1 AND head = $2", nil, repo, head)
+}
+
+func (r *Reader) ChangesCleared(ctx context.Context, app, env string) ([]store.Change, error) {
+	return changes(ctx, r.pool, r.opt, "app = $1 AND env = $2 AND state = 'cleared'", nil, app, env)
 }
 
 func (r *Reader) ChangesHolding(ctx context.Context) ([]store.Change, error) {

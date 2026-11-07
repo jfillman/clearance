@@ -1,0 +1,11 @@
+{
+ "objects": {
+  "argoproj.io/v1alpha1/Rollout/app-gate-api-prod/gate-api": "99727991bde4f2ff55b9d7fa271665b895b20ed9d0cb447b30cd4bd061f27513",
+  "catalog.hangar.io/v1alpha1/RolloutWatch/app-gate-api-prod/gate-api": "71d6e3221780fa95056c3da32a44f12de5e90dfae623b230981957f0dadffcdc",
+  "networking.k8s.io/v1/NetworkPolicy/app-gate-api-prod/gate-api": "c36753e9b5648efaf84352dec185a88a5fde597f290640097bf26bdb1504e368",
+  "v1/Namespace//app-gate-api-prod": "c7c68b2b77db4416247bfcabbcb45351a57f04c08f5ad85c347f0be0269bcd16",
+  "v1/Service/app-gate-api-prod/gate-api": "68b1bc12fd07ca186bc1626adb02bbfbddddc6d4338f185360b3dcd6ad097783",
+  "v1/ServiceAccount/app-gate-api-prod/gate-api": "ebf6c4708d4197392f84a65ac5bbd760610c47ec88250d4a29fda0196f04472f"
+ },
+ "tree": "6e5524ca8f8fe7cfd78d1711b15e27e3cd3e25252dec86c5dafc636a8168b3c3"
+}

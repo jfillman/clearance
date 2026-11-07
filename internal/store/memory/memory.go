@@ -569,6 +569,14 @@ func (t *tx) ChangesForHead(ctx context.Context, repo, head string) ([]store.Cha
 	return t.changesWhere(func(c store.Change) bool { return c.Repo == repo && c.Head == head })
 }
 
+func (s *Store) ChangesCleared(ctx context.Context, app, env string) ([]store.Change, error) {
+	return s.changesWhere(func(c store.Change) bool { return c.App == app && c.Env == env && c.State == "cleared" })
+}
+
+func (t *tx) ChangesCleared(ctx context.Context, app, env string) ([]store.Change, error) {
+	return t.changesWhere(func(c store.Change) bool { return c.App == app && c.Env == env && c.State == "cleared" })
+}
+
 func (s *Store) ChangesHolding(ctx context.Context) ([]store.Change, error) {
 	return s.changesWhere(func(c store.Change) bool { return c.State == "holding" })
 }

@@ -148,6 +148,9 @@ type Reader interface {
 	Change(ctx context.Context, id string) (Change, error)
 	ChangesForPR(ctx context.Context, repo string, pr int) ([]Change, error)
 	ChangesForHead(ctx context.Context, repo, head string) ([]Change, error)
+	// ChangesCleared are the app's changes to env in state cleared (G-ARGO-4: the Argo CD plugin finds a cleared
+	// change by app, environment and tree digest, since Argo syncs the merge commit, not the PR head).
+	ChangesCleared(ctx context.Context, app, env string) ([]Change, error)
 	ChangesHolding(ctx context.Context) ([]Change, error)
 	// ChangesUndelivered are the changes with a deployment whose delivered is false (github_app.py retries them).
 	ChangesUndelivered(ctx context.Context) ([]Change, error)
