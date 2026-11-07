@@ -10,6 +10,9 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 ## [Unreleased]
 
 ### Added
+- **The lab Terraform workflow** (G-TF-4, docs only; the workflow lives in jfillman/hangar-infra,
+  [docs/terraform-gate.md](docs/terraform-gate.md#the-lab-workflow-g-tf-4-draft)): `network/lab` plans on a pull
+  request and applies on merge through `terraform/action.yml`, behind the `lab` environment's Clearance protection rule.
 - **The Argo CD plugin and the PreSync wait** (G-ARGO-4, G-ARGO-5; `providers/argocd/cmp`, `providers/argocd/wait`;
   [docs/gate.md](docs/gate.md#the-argo-cd-plugin-and-the-presync-wait-g-argo-4-and-g-argo-5-built-not-deployed)).
   `clearance-cmp` is a Config Management Plugin sidecar for argocd-apps' repo-server: it renders the chart at its pinned
