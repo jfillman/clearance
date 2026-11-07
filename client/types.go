@@ -776,6 +776,15 @@ type Ready struct {
 	Head   int64     `json:"head"`
 	// Degraded names the policy bundles whose sources could not be read (the core stays ready).
 	Degraded []string `json:"degraded,omitempty"`
+	// Attestation is the change attestation signer's status (C-2): whether it runs, with which backend, or why it is off.
+	Attestation Attestation `json:"attestation"`
+}
+
+// Attestation is the change attestation signer's status in GET /readyz.
+type Attestation struct {
+	Enabled bool   `json:"enabled"`
+	Backend string `json:"backend,omitempty"`
+	Detail  string `json:"detail,omitempty"`
 }
 
 // errorBody is every refusal's body: {"error"} and, from the gate, rule and hint.

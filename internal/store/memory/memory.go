@@ -35,6 +35,7 @@ type Store struct {
 	tokens  map[string]store.Token
 	keys    map[string]store.SigningKey
 	feeds   map[string]store.Feed
+	atts    map[string]store.Attestation
 	glass   map[string]store.Breakglass
 	closed  bool
 }
@@ -50,7 +51,7 @@ var ErrTxDone = errors.New("memory: transaction is finished")
 // New returns an empty store.
 func New() *Store {
 	return &Store{head: evidence.Start, changes: map[string]store.Change{}, tokens: map[string]store.Token{},
-		keys: map[string]store.SigningKey{}, feeds: map[string]store.Feed{}, glass: map[string]store.Breakglass{}}
+		keys: map[string]store.SigningKey{}, feeds: map[string]store.Feed{}, atts: map[string]store.Attestation{}, glass: map[string]store.Breakglass{}}
 }
 
 // Load returns a store holding an existing chain, verified from genesis like store/pg's Open.
@@ -92,7 +93,7 @@ func (s *Store) Atomic(ctx context.Context, fn func(tx store.Tx) error) (err err
 		return ErrClosed
 	}
 	t := &tx{s: s, head: head, changes: map[string]store.Change{}, tokens: map[string]store.Token{},
-		feeds: map[string]store.Feed{}, glass: map[string]store.Breakglass{}}
+		feeds: map[string]store.Feed{}, atts: map[string]store.Attestation{}, glass: map[string]store.Breakglass{}}
 	defer func() {
 		t.mu.Lock()
 		t.done = true
@@ -120,6 +121,9 @@ func (s *Store) Atomic(ctx context.Context, fn func(tx store.Tx) error) (err err
 	for c, f := range t.feeds {
 		s.feeds[c] = f
 	}
+	for id, a := range t.atts {
+		s.atts[id] = a
+	}
 	for id, b := range t.glass {
 		s.glass[id] = b
 	}
@@ -140,6 +144,7 @@ type tx struct {
 	defs    *[]store.Definition
 	tokens  map[string]store.Token
 	feeds   map[string]store.Feed
+	atts    map[string]store.Attestation
 	keys    map[string]store.SigningKey // nil: unchanged
 	glass   map[string]store.Breakglass
 }
@@ -316,6 +321,7 @@ type view struct {
 	tokens  map[string]store.Token
 	keys    map[string]store.SigningKey
 	feeds   map[string]store.Feed
+	atts    map[string]store.Attestation
 	glass   map[string]store.Breakglass
 }
 
@@ -337,8 +343,12 @@ func (s *Store) view() (view, error) {
 	for k, v := range s.feeds {
 		feeds[k] = v
 	}
+	atts := make(map[string]store.Attestation, len(s.atts))
+	for k, v := range s.atts {
+		atts[k] = v
+	}
 	return view{head: s.head, records: s.records[:len(s.records):len(s.records)], changes: maps(s.changes), defs: s.defs,
-		tokens: tokens, keys: s.keys, feeds: feeds, glass: glass}, nil
+		tokens: tokens, keys: s.keys, feeds: feeds, atts: atts, glass: glass}, nil
 }
 
 func maps(m map[string]store.Change) map[string]store.Change {
@@ -371,6 +381,9 @@ func (t *tx) view() (view, error) {
 	}
 	for c, f := range t.feeds {
 		v.feeds[c] = f
+	}
+	for id, a := range t.atts {
+		v.atts[id] = a
 	}
 	for id, b := range t.glass {
 		v.glass[id] = b
@@ -897,4 +910,49 @@ func (v view) breakglassOpen() []store.Breakglass {
 		return out[i].ID < out[j].ID
 	})
 	return out
+}
+
+func (t *tx) PutAttestation(ctx context.Context, a store.Attestation) error {
+	if err := t.lock(); err != nil {
+		return err
+	}
+	defer t.mu.Unlock()
+	if a.ChangeID == "" || a.Digest == "" || !json.Valid(a.Bundle) {
+		return errors.New("memory: an attestation needs a change id, a digest and a JSON bundle")
+	}
+	t.atts[a.ChangeID] = cloneAttestation(a)
+	return nil
+}
+
+func cloneAttestation(a store.Attestation) store.Attestation {
+	a.Bundle = bytes.Clone(a.Bundle)
+	if a.RekorLogIndex != nil {
+		n := *a.RekorLogIndex
+		a.RekorLogIndex = &n
+	}
+	return a
+}
+
+func (s *Store) Attestation(ctx context.Context, changeID string) (store.Attestation, error) {
+	v, err := s.view()
+	if err != nil {
+		return store.Attestation{}, err
+	}
+	return v.attestation(changeID)
+}
+
+func (t *tx) Attestation(ctx context.Context, changeID string) (store.Attestation, error) {
+	v, err := t.view()
+	if err != nil {
+		return store.Attestation{}, err
+	}
+	return v.attestation(changeID)
+}
+
+func (v view) attestation(id string) (store.Attestation, error) {
+	a, ok := v.atts[id]
+	if !ok {
+		return store.Attestation{}, store.ErrNotFound
+	}
+	return cloneAttestation(a), nil
 }

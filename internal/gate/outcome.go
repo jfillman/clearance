@@ -214,6 +214,9 @@ func (s *Service) Outcome(ctx context.Context, p authn.Principal, changeID strin
 		out = OutcomeResult{c.View(), matched, seq, exc}
 		return nil
 	})
+	if err == nil && out.Matched && out.Change != nil && s.OnOutcome != nil {
+		s.OnOutcome(changeID, out.AuditSeq)
+	}
 	return out, err
 }
 

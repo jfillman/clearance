@@ -127,6 +127,25 @@ signing:
   # CLEARANCE_SIGNING_KMS: a KMS key reference (awskms:///<key arn>, gcpkms://projects/.../cryptoKeyVersions/1,
   # hashivault://<key>). Reserved for the KMS signer, which is not built yet: the core refuses to start with it set.
   kms: ""
+# Change attestations (C-2): after a deploy reports an applied outcome, the core signs an in-toto statement about the
+# change (DSSE, logged in Rekor) and keeps it. Off unless one backend below is set; /readyz says which (attestation).
+# Either keyless (the deployment's: Fulcio issues a short-lived certificate for the core's OIDC identity) or a static
+# key (a lab's), never both. The signer runs in the core only.
+attestation:
+  # Static key (labs, tests): an existing Secret holding a PEM ECDSA P-256 private key, mounted read-only for the core
+  # at /etc/clearance/attest/<key> (CLEARANCE_ATTEST_KEY_FILE). The chart never creates it.
+  existingSecret: ""
+  key: attest-key.pem
+  # CLEARANCE_ATTEST_REKOR_URL: the Rekor log. Required with keyless; with a static key, optional (unlogged without).
+  rekorUrl: ""
+  keyless:
+    # CLEARANCE_ATTEST_FULCIO_URL: the Hangar Fulcio (C-2a). Setting it turns the keyless backend on and projects the
+    # core's service account token at /var/run/clearance-attest/oidc-token (CLEARANCE_ATTEST_OIDC_TOKEN_FILE).
+    fulcioUrl: ""
+    # The projected token's audience: what the Fulcio's OIDC issuer config for this cluster expects (sigstore is
+    # Fulcio's default).
+    audience: sigstore
+    tokenExpirationSeconds: 600
 token:
   # CLEARANCE_TOKEN_TTL: each token's life, a Go duration (empty: 15m; 1m to 24h, at least 4 x gate.expireSeconds).
   ttl: ""

@@ -12,6 +12,8 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -188,6 +190,8 @@ func openStream(t *testing.T, url, token, lastID string) (*http.Response, <-chan
 	}
 	t.Cleanup(func() { res.Body.Close() })
 	out := make(chan sse, 256)
+	opened := &atomic.Bool{}
+	streamOpened.Store((<-chan sse)(out), opened)
 	go func() {
 		defer close(out)
 		sc := bufio.NewScanner(res.Body)
@@ -196,6 +200,8 @@ func openStream(t *testing.T, url, token, lastID string) (*http.Response, <-chan
 		for sc.Scan() {
 			line := sc.Text()
 			switch {
+			case line == ": clearance stream": // the preamble: the handler has its cursor
+				opened.Store(true)
 			case line == "":
 				if cur.event != "" {
 					out <- cur
@@ -211,6 +217,30 @@ func openStream(t *testing.T, url, token, lastID string) (*http.Response, <-chan
 		}
 	}()
 	return res, out
+}
+
+// streamOpened maps a stream's channel to whether its preamble arrived.
+var streamOpened sync.Map
+
+func streamsOpen(chs ...<-chan sse) bool {
+	for _, ch := range chs {
+		o, ok := streamOpened.Load(ch)
+		if !ok || !o.(*atomic.Bool).Load() {
+			return false
+		}
+	}
+	return true
+}
+
+// waitFor polls cond until it holds, failing after 5 s.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(2 * time.Millisecond) {
+		if cond() {
+			return
+		}
+	}
+	t.Fatalf("timed out waiting for %s", what)
 }
 
 func next(t *testing.T, ch <-chan sse) sse {
@@ -257,7 +287,13 @@ func TestTheStream(t *testing.T) {
 		// From the head: a feed reader (clearance events of its cluster only) and erin (team-gate: the gate-api change).
 		_, feed := openStream(t, srv.URL+"/v1/stream", "sync", "")
 		_, erin := openStream(t, srv.URL+"/v1/stream", "erin", "")
-		time.Sleep(100 * time.Millisecond) // both streams are open at the head before the writes
+		// Both streams are open at the head before the writes: each has sent its preamble (its cursor is set), and
+		// the hub has seen the store's head, so a later write moves it.
+		waitFor(t, "the streams to open at the head", func() bool {
+			head, err := h.srv.opt.Store.Head(bg)
+			hub, _ := h.srv.hub.state()
+			return err == nil && hub == head && streamsOpen(feed, erin)
+		})
 		mine := onCluster(change("c-9", "gate-api", "cleared", "group:default/team-gate", 1, "2026-10-30T12:40:00Z", nil), "hangar-prod")
 		theirs := onCluster(change("c-8", "other-app", "cleared", "group:default/team-other", 1, "2026-10-30T12:40:00Z", nil), "other-cluster")
 		appendTo(t, []store.Event{deployEvent("deploy.clear", theirs, "other-cluster", "cleared"),
