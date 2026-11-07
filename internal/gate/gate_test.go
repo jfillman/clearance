@@ -153,6 +153,19 @@ func TestAnImageBumpWithGreenChecksIsTier1(t *testing.T) {
 	}
 }
 
+// Objects listed as unchanged (the whole rendered tree, so a grant covers it) add no risk: a Secret or a Rollout
+// that is only in the tree, not in the diff, does not raise the tier of an image bump.
+func TestUnchangedObjectsAreAcceptedAndNeverTiered(t *testing.T) {
+	unchanged := objs(obj("Secret", "db", "unchanged", nil, nil, "v1"), obj("Rollout", "gate-api", "unchanged", nil, nil, "argoproj.io/v1alpha1"))
+	c := mustClassify(t, change(map[string]any{"objects": append(append([]any{}, imageBump...), unchanged...)}), baseline)
+	if c.Tier != 1 || c.Decision != "clear" {
+		t.Fatal(c)
+	}
+	if _, err := gate.ParseRequest(change(map[string]any{"objects": objs(obj("Secret", "db", "bogus", nil, nil, "v1"))})); err == nil {
+		t.Fatal("an unknown op is still refused")
+	}
+}
+
 // An unattested provenance verdict (agent work outside Clearance) is a warning: the tier and the decision are the
 // ones not-agent gets, for a manifest change and a plan alike (user decision 2026-11-04).
 func TestAnUnattestedProvenanceChangesNoTier(t *testing.T) {

@@ -735,3 +735,34 @@ func TestAPreC6ChangeIsHeldToTheBaseline(t *testing.T) {
 		t.Fatal(op)
 	}
 }
+
+// A Terraform plan has no cluster: a report about one names destination.workspace {backend, key, name} (G-TF-5).
+func TestReportLocatedByWorkspace(t *testing.T) {
+	f := newGate(t)
+	ws := func() map[string]any {
+		return map[string]any{"workspace": map[string]any{"backend": "s3", "key": "prod/network.tfstate", "name": "default"}}
+	}
+	plan := func(dest map[string]any) store.Event {
+		ev := exceptionOf(f, "drift", "")
+		ev["destination"] = dest
+		return ev
+	}
+	rec := f.report(t, plan(ws()))
+	if rec["coverage"] != "observed-not-attributed" {
+		t.Fatal(rec["coverage"])
+	}
+	// the gitops path is unchanged: cluster and environment are still required
+	for _, d := range []map[string]any{
+		{"cluster": "hangar-prod"}, {"environment": "prod"}, {},
+		{"workspace": map[string]any{"backend": "s3", "key": "k"}},                                  // no name
+		{"workspace": map[string]any{"backend": "s3", "key": "k", "name": "default", "extra": "x"}}, // unknown field
+		{"workspace": map[string]any{"backend": "S3", "key": "k", "name": "default"}},               // bad backend
+		{"workspace": ws()["workspace"], "cluster": "hangar-prod", "environment": "prod"},           // both
+	} {
+		var br *gate.BadReport
+		if _, err := f.svc.Report(f.ctx, plan(d), argoWriter); !errors.As(err, &br) {
+			t.Fatalf("%v: %v", d, err)
+		}
+	}
+	f.report(t, exceptionOf(f, "drift", "")) // cluster + environment, as before
+}

@@ -9,6 +9,8 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-11-07
+
 ### Fixed
 - **A terraform-plan change registered by a workflow can be released and reported by another job of that repository**
   (G-TF-4; `gate.SameRepoWorkflow`; [docs/terraform-gate.md](docs/terraform-gate.md)). The plan job and the
@@ -25,6 +27,21 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   every object from the chart's `hangar.io/release-id` or the values' `releaseTracking.releaseId`. Wire change:
   `plan_digest` is now omitted from a manifest change's outcome (it was never set there); the Python client is
   regenerated.
+
+- **Terraform exception detection** (G-TF-5; `providers/terraform/detect`, `terraform-detector`;
+  [docs/terraform-gate.md](docs/terraform-gate.md#exception-detection-g-tf-5-built-not-deployed)). A scheduled drift
+  check (`terraform plan -detailed-exitcode`) and an untraced-apply check (S3 state versions against `deploy.outcome`,
+  CloudTrail for the principal) file `deploy.exception` kind `drift` and `untraced-apply`. SigV4 over the standard
+  library, no AWS SDK. The core's report check now accepts `destination.workspace` {backend, key, name} in place of
+  cluster and environment, so a Terraform plan's exception is no longer refused (`internal/gate/exception.go`).
+- **`objects[].op: "unchanged"`** on a change request: an object in the rendered tree that the diff does not touch. It
+  is accepted, never tiered, and is in the token with `changed: false`, so Glidepath's clearance-gate can register every
+  rendered object (grants need the whole tree). Glidepath sends it, so it needs a Clearance release with this first.
+- **The release workflow builds the Argo CD gate's images and the agent chart** (`.github/workflows/release.yaml`): on a
+  tag, `clearance-argocd-agent`, `clearance-cmp` and `clearance-wait` are built (linux/amd64 and linux/arm64, SBOM and
+  provenance), signed keyless and pushed to `ghcr.io/jfillman/<name>:vX.Y.Z`, and `charts/clearance-argocd-agent` is
+  packaged and pushed to `oci://ghcr.io/jfillman/charts` and signed; the Release notes list each digest. The agent
+  chart's default image tag is now `v<appVersion>`, matching the published tag.
 - **The change attestation signer (C-2)** (`internal/attest`, `cmd/clearance/attest.go`;
   [docs/core.md](docs/core.md#change-attestations)). After a deploy reports an applied outcome for a cleared change,
   the core signs an in-toto Statement v1 (predicate `https://clearance.hangarplatform.dev/change-attestation/v1`,
@@ -45,8 +62,7 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   tag (recording the peeled commit), hashes the tree with the manifest-tree digest, registers the change as a verifier
   and emits the manifests stamped `clearance.hangar.io/{rendered,tree,grant}` (cleared), with an injected PreSync Job
   (held for people), or fails the render (denied, outage hold). `clearance-wait` is the Job's image: it long-polls
-  `GET /v1/clearances/{id}/wait` and exits 0 on clear, non-zero on deny or timeout. Both have a Dockerfile; neither
-  is in a release workflow yet. Apron's `clearance.gate.enabled` wires them (off by default).
+  `GET /v1/clearances/{id}/wait` and exits 0 on clear, non-zero on deny or timeout. Both have a Dockerfile. Apron's `clearance.gate.enabled` wires them (off by default).
 - `POST /v1/clearances` with `pr: 0` and a bound manifest-tree digest answers the **cleared, unexpired change of the
   same app, environment, cluster and tree** and records nothing (Argo CD syncs the merge commit, not the PR head);
   otherwise it registers as before. The stores gain `ChangesCleared(app, env)`.
@@ -713,7 +729,8 @@ What the Autopilot gateway needs of the core before the hangar-dev cutover (R-3e
   scope, narrow-only limits, CEL policy, sessions, the hash-chained audit log and the gateway; the Hangar pack's
   `glidepath.*` and `airframe.*` tools over glidepath-api and a GET-only Kubernetes adapter.
 
-[Unreleased]: https://github.com/jfillman/clearance/compare/v0.32.0...HEAD
+[Unreleased]: https://github.com/jfillman/clearance/compare/v0.33.0...HEAD
+[0.33.0]: https://github.com/jfillman/clearance/compare/v0.32.0...v0.33.0
 [0.32.0]: https://github.com/jfillman/clearance/compare/v0.31.1...v0.32.0
 [0.31.1]: https://github.com/jfillman/clearance/compare/v0.31.0...v0.31.1
 [0.31.0]: https://github.com/jfillman/clearance/compare/v0.30.0...v0.31.0
