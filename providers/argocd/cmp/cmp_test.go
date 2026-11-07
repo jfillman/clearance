@@ -679,3 +679,22 @@ func agentContentHash(t *testing.T, o map[string]any) string {
 	}
 	return ""
 }
+
+// The Helm source the plugin replaces had ignoreMissingValueFiles: an app with no base.yaml or release.yaml yet
+// still renders. The plugin skips every absent value file (the injected values stay), and the ApplicationSet lists
+// all three paths for it (apron tests/run.sh, "gate on: ... skips").
+func TestAppWithNoValueFilesYetStillRenders(t *testing.T) {
+	e := newEnv(t) // e.src is empty: none of the three files exists
+	e.core.answer = &client.Change{ID: "ch-c", State: "cleared", Tier: 1, ExpiresAt: e.now.Add(time.Hour).Format(time.RFC3339Nano)}
+	if _, _, err := e.generate(t); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range e.exec.calls[2] {
+		if strings.HasSuffix(a, "base.yaml") || strings.HasSuffix(a, "release.yaml") || strings.HasSuffix(a, "values.yaml") {
+			t.Fatalf("an absent value file was passed to helm: %v", e.exec.calls[2])
+		}
+	}
+	if last := e.exec.calls[2][len(e.exec.calls[2])-1]; !strings.HasSuffix(last, "injected.json") {
+		t.Fatalf("the injected values are still passed: %v", e.exec.calls[2])
+	}
+}
