@@ -190,3 +190,18 @@ func TestParseTrustedRootRefusesWhatIsWrong(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckURLAcceptsHTTPOnlyForLoopbackAndInClusterServices(t *testing.T) {
+	for _, ok := range []string{"https://fulcio.example.com", "http://127.0.0.1:5555", "http://localhost:8080",
+		"http://fulcio-server.fulcio-system.svc", "http://rekor-server.rekor-system.svc:80", "http://a.b.svc.cluster.local/x"} {
+		if _, err := attest.CheckURL("u", ok); err != nil {
+			t.Errorf("%s: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"http://fulcio.example.com", "http://evil.svc.example.com", "http://svc", "http://.svc",
+		"http://a.b.c.svc", "http://fulcio.svc", "http://u:p@a.b.svc", "ftp://a.b.svc", "http://10.0.0.1"} {
+		if _, err := attest.CheckURL("u", bad); err == nil {
+			t.Errorf("%s: accepted", bad)
+		}
+	}
+}

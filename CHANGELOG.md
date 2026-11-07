@@ -14,6 +14,8 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   from public Fulcio chains and Rekor keys, each with a validity window. **`clearance attest verify --trust-root`
   accepts it** (Rekor's key comes from the document, picked by the entry's log id and its signed time), so one trust root
   verifies the legacy root's attestations and the new Hangar PKI's through a cutover. The PEM form is unchanged.
+- **The Fulcio and Rekor URLs may be `http` for an in-cluster Service name** (`<svc>.<ns>.svc`, `.cluster.local`), beside
+  https and loopback. The platform's Fulcio and Rekor serve plain HTTP inside the cluster; any other host stays https.
 
 ## [0.33.0] - 2026-11-07
 
