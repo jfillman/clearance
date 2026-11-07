@@ -769,11 +769,13 @@ over
 
 ```json
 {"_type": "clearance.grant-feed/v1", "iss": "clearance", "cluster": "hangar-prod",
- "seq": 41, "iat": 1762200000, "exp": 1762200300, "records_seq": 1093,
+ "epoch": "<hex: the hash of the chain's first record>", "seq": 41, "iat": 1762200000, "exp": 1762200300, "records_seq": 1093,
  "entries": [{"change_id": "ch-...", "nonce": "...", "exp": 1762200800, "payload_sha256": "<hex>"}]}
 ```
 
-- `seq`: the cluster's feed number, one more than the feed it replaces, never reused.
+- `epoch`: names the database `seq` counts in, the hash of the evidence chain's first record (no two databases share
+  it; a rebuilt or restored one has another). A reader keeps it beside the highest `seq` it accepted.
+- `seq`: the cluster's feed number within the epoch, one more than the feed it replaces, never reused.
 - `iat`, `exp`: NumericDate; `exp` is `iat` + 5 minutes (`gate.FeedTTL`; a feed may claim at most 15).
 - `records_seq`: the evidence chain's last seq when it was signed; every `deploy.*` record at or below it is reflected.
 - `entries`: every token live on the cluster at `iat`, by `change_id` ascending (at most 2000). `payload_sha256` is the
@@ -793,9 +795,10 @@ envelope and the tokens it lists side by side; clearance-api serves it as it is 
 let them expire on their own `exp`):
 
 1. Keys: `GET /v1/keys` (cache it up to its `max-age`; refetch on an unknown keyid).
-2. `token.VerifyFeed(feed, keys, {Issuer, Cluster: <its own>, MinSeq: <the highest seq it accepted>})`: the
-   signature, strict decoding, the issuer, this cluster (`ErrFeedCluster`), `seq` not below the last accepted
-   (`ErrFeedReplay`; the same seq is the same feed read again), and fresh (`exp`, with 30 s leeway).
+2. `token.VerifyFeed(feed, keys, {Issuer, Cluster: <its own>, MinSeq: <the highest seq it accepted>, Epoch: <the
+   epoch that seq belongs to>})`: the signature, strict decoding, the issuer, this cluster (`ErrFeedCluster`), `seq`
+   not below the last accepted **of the same epoch** (`ErrFeedReplay`; the same seq is the same feed read again; a
+   new epoch is a rebuilt core and starts at 1), and fresh (`exp`, with 30 s leeway).
 3. `feed.Match(tokens)`: the tokens beside it are exactly the entries, each the issuance named
    (`ErrFeedIncomplete` otherwise).
 4. Each token: `token.Verify` with `Expect{Cluster}` (signature, expiry, binding). No nonce check is needed: the
@@ -803,8 +806,12 @@ let them expire on their own `exp`):
 5. Then create or update a ClearanceGrant per entry, delete the grants no entry names, and remember `seq`.
 
 A reader that persists its `MinSeq` survives restarts; one that does not accepts any fresh feed after a restart,
-which is still bounded by `exp`. A restored or rebuilt core database starts `seq` again at 1: grant-sync then refuses
-every feed until an operator resets its remembered seq (by design: a rolled-back database is exactly a replay).
+which is still bounded by `exp`. A restored or rebuilt core database starts `seq` again at 1 **with a new `epoch`**
+(since G-ARGO-3): the agent takes the new epoch from seq 1 without an operator resetting anything, and still refuses
+the same epoch's lower seq. What an epoch cannot tell is a rolled-back database that keeps its first record from a
+rebuilt one that does not exist yet: a restored backup has its old epoch and a lower seq, which is refused until it
+passes the stored seq. A feed older than the agent's last (another epoch, signed earlier) is bounded only by its `exp`
+(5 minutes).
 
 **Faster than 30 s.** `GET /v1/stream` gives a feed reader the clearance events of its clusters as they are
 recorded; it is a cue to re-read the feed, never a substitute for it.
@@ -813,6 +820,89 @@ recorded; it is a cue to re-read the feed, never a substitute for it.
 `GET /v1/clearances/{change_id}/wait?state=&timeout=` ([core.md](core.md#the-api)) holds the call until the change
 leaves the state the caller knows, or up to 60 s, and answers the state and the token. It is the same for every
 subject kind.
+
+## The Argo CD agent (G-ARGO-3, Built)
+
+Status: **Built**; tested against a fake Argo CD (`providers/argocd/agent`, `go test`), **Unverified** on hangar-prod
+(the proof is prepared below). One controller on the protected cluster, one replica, three loops. It holds no key and
+decides nothing; its credential is the pod's projected service-account token (audience `clearance`), read fresh for
+every request. Provider identity `argocd-agent/<version>` is in `source.provider` of every record it posts.
+
+| Loop | Every | Does |
+| --- | --- | --- |
+| **Grant sync** | 30 s | `GET /v1/keys` (cached 5 min, refetched on an unknown key id), `GET /v1/grant-feeds/<cluster>`; verifies the feed (signature, issuer, cluster, freshness, seq within its epoch), that the tokens beside it are exactly its entries, and each token (signature, expiry, cluster); then writes one `ClearanceGrant` (`clearance.hangar.io/v1`) per cleared change and namespace its objects name, whether or not the namespace is labelled protected yet; `spec.objects` is every object of the tree keyed `<group>/<kind>/<name>` (an empty group for core kinds) to `{rendered, changed}`; labels exactly the newest cleared grant of a namespace `clearance.hangar.io/active=true`; sets `status.valid` (with `reason`, `checkedAt`); and deletes the grants no entry names |
+| **Outcomes** | a watch | Lists and watches Applications in the Argo CD namespace whose project is protected; for each finished operation (`Succeeded`, `Failed`, `Error`) posts one `deploy.outcome` keyed by `<Application UID>@<operation startedAt>` (`source.operation`), carrying the sync phase, `observed_revision` and `revisions`, health and sync status, and the applied tree digest (`outcome.digests.sha256`, `change.tree`), `change.id` and `change.release.id` read from the `clearance.hangar.io/tree`, `/grant` and `hangar.io/release-id` stamps of the live objects Argo tracks to the Application (`mixed_stamps: true` and no digest when they disagree) |
+| **Exceptions** | 60 s | For every object of the scanned kinds in a protected namespace (not those a controller owns, nor `kube-root-ca.crt` and the `default` service account): no `clearance.hangar.io/rendered` stamp; a stamp no valid grant of the namespace lists for that object; or, when Argo CD's client-side apply left `last-applied-configuration`, content whose hash (without the tracking id and the gate's annotations) is not the stamp. Posts `deploy.exception` (`out-of-band`; `result` says which) once per finding, one record per namespace, reason and writer (the newest field manager); a finding that goes away is forgotten and reported again if it returns. A failed sync whose message is the admission policy's refusal (`ValidatingAdmissionPolicy` or `clearance.hangar.io` in the operation or a resource message) is reported once per operation with `result` "sync refused by the admission policy" |
+
+**Fail closed.** With clearance-api unreachable, or a feed that fails any check (older seq in the same epoch, another
+cluster, unknown key, stale, a token withheld or added, no epoch), the agent changes no grant, and keeps the epoch and
+seq it had. Every pass it also expires, on its own clock, the grants whose `spec.expiresAt` has passed: `status.valid:
+false` and the active label removed, the grant kept for the record. The agent never creates, updates or deletes a
+workload, and its RBAC cannot (list on the scanned kinds, no Secret).
+
+**Namespace invariants** (G-ARGO-2: with a Deny binding the API server resolves `paramRef` before `matchConditions`, so a
+protected namespace with no active, valid grant refuses every matched write; a second active grant is refused). The
+agent keeps them, and the tests hold it to them (`TestGrantSync`, `TestARotationThatFailsKeepsTheActiveGrant`):
+
+1. **The grant comes before the label.** The agent writes a namespace's grant whether or not the namespace is labelled
+   `clearance.hangar.io/protected=true`. An operator labels a namespace protected only after
+   `kubectl get clearancegrants -n <ns> -l clearance.hangar.io/active=true` shows one with `status.valid` true; the agent
+   never labels namespaces.
+2. **Exactly one active grant per namespace; rotation in a fixed order.** Write the new grant (not active), mark it
+   valid, then per namespace deactivate the old and at once activate the new, two consecutive calls with nothing
+   between. A namespace is under two active grants never, and under none only between those two calls (the policy
+   refuses writes there and Argo CD retries). If the new grant cannot be written or validated, the old stays active.
+3. **Only revocation and expiry leave a namespace with none.** A grant whose token left the feed (revoked, superseded) is
+   deleted and one past `spec.expiresAt` is marked invalid and deactivated: that is the gate closing, by design, and the
+   namespace refuses until the next clearance.
+
+**Break-glass.** The agent reads `GET /v1/breakglass?cluster=<c>` (it is a registered provider). It reports exceptions
+inside a window like any other, names the window in `exception.detail`, and the core tags the record with it
+(`breakglass`, verified). Break-glass does not silence the scan: a change in the glass is still an exception.
+
+**The outcome's key and the core.** The design says the core answers a repeated outcome idempotently. It does not yet:
+`POST /v1/records` appends. The agent therefore keeps what it posted in its state ConfigMap
+(`clearance-argocd-agent-state`: the feed epoch and seq, the last operation posted per Application, the exceptions
+reported), writes it only after the core answered, and a restart does not repost (`--repost-on-start` does, for a core
+that de-duplicates by `source.operation`; **descoped**: the core-side de-duplication). A crash between the core's answer
+and the state write posts that one outcome twice; both carry the same `source.operation`.
+
+**What the CMP and the CRD must agree with** (G-ARGO-2, G-ARGO-4; the agent holds them to nothing it cannot check):
+the CRD G-ARGO-2 defines (`--grant-api`, default `clearance.hangar.io/v1`, `providers/argocd/crd`): `spec` as `subject`,
+`expiresAt`, `clearance`, `objects` (a map); the active label; the stamps' names above; and that a stamp has the
+value of the token's `objects[].rendered` for the object, which is the object's `render.ObjectDigest` (a `sha256:`
+prefix is accepted when comparing, but the grant lists the token's value as it is, and admission compares it to the
+stamp literally).
+
+**Deploying it** (apron values the manager wires; hangar-dev):
+
+| Where | Value |
+| --- | --- |
+| `clearance-core` `CLEARANCE_FOREIGN_SERVICE_ACCOUNTS` | add `clearance-system/clearance-argocd-agent` (the service account G-ARGO-2 settled on; Argo's is `argocd-apps/argocd-application-controller`) |
+| `clearance-api` `CLEARANCE_FOREIGN_SERVICE_ACCOUNTS` | add `clearance-system/clearance-argocd-agent` |
+| `clearance-api` `api.feedReaders` | `{principal: hangar-prod/clearance-system/clearance-argocd-agent, cluster: hangar-prod}` |
+| `CLEARANCE_PROVIDERS` | `argocd-agent`, principal `hangar-prod/clearance-system/clearance-argocd-agent`, `kinds: [deploy.outcome, deploy.exception]` |
+| HTTPRoute | `Exact /v1/records`, `/v1/breakglass` on the core's host; `/v1/keys` and `/v1/grant-feeds/*` on clearance-api's |
+
+On hangar-prod: the chart `charts/clearance-argocd-agent` (values: `cluster`, `apiURL`, `coreURL`, `argocd.namespace`,
+`argocd.projects`, `protectedNamespaces`, `hostAliases`, `networkPolicy`), the image `ghcr.io/jfillman/clearance-argocd-agent`.
+
+**Proof on hangar-prod** (Unverified until run; the manager runs it, with the agent deployed, the namespace
+`app-<x>-prod` labelled `clearance.hangar.io/protected=true`, G-ARGO-2's CRD and policy installed):
+
+1. `kubectl -n clearance-system logs deploy/clearance-argocd-agent` shows a feed accepted, no `refused`.
+2. Clear a change for the app (a tier 0/1 PR merged, or `clearance register` then clear). On hangar-prod within 30 s
+   (plus the feed's re-sign): `kubectl get clearancegrants -A -l app.kubernetes.io/managed-by=clearance-argocd-agent
+   -L clearance.hangar.io/active` lists `<change id>` active, `status.valid` true. Record the time of the clear
+   (`GET /v1/clearances/<id>`, `decided_at`) and of the grant (`creationTimestamp`).
+3. Argo CD syncs the app (the CMP stamps); after the operation finishes, `GET /v1/evidence?tool=deploy.outcome` (as an
+   auditor) shows a record whose `source.provider` is `argocd-agent/<version>`, `outcome.phase` `Succeeded`,
+   `outcome.digests.sha256` equal to the change's `tree_digest`, and `change.id` the change.
+4. `kubectl -n app-<x>-prod create configmap by-hand --from-literal=a=b` (a writer that is not Argo CD). Within the scan
+   interval (60 s) `GET /v1/exceptions` shows a `deploy.exception`, `result` "no grant annotation", object
+   `v1/ConfigMap/by-hand`, `coverage: out-of-band-detected`. `kubectl delete configmap by-hand` afterwards.
+5. Fail closed: scale the core's route down or block the agent's egress; the agent logs `grants stay as they are`,
+   no grant changes, no workload restarts; restore, and it recovers on the next tick.
 
 ## The Go core (R-1c, Built, deployed on hangar-dev 2026-11-03)
 
