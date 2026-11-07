@@ -10,6 +10,20 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 ## [Unreleased]
 
 ### Added
+- **The change attestation signer (C-2)** (`internal/attest`, `cmd/clearance/attest.go`;
+  [docs/core.md](docs/core.md#change-attestations)). After a deploy reports an applied outcome for a cleared change,
+  the core signs an in-toto Statement v1 (predicate `https://clearance.hangarplatform.dev/change-attestation/v1`,
+  [schema](schemas/change-attestation.schema.json)) in a DSSE envelope, logs it in Rekor, appends `deploy.attestation`
+  with the envelope digest and keeps the Sigstore bundle (new table `clearance_attestations`). No attestation for an
+  approved change that never synced, a mismatched apply, or a change never cleared. Backends: keyless (Fulcio + Rekor;
+  tested against fakes, not yet against a real Fulcio) and static key (`CLEARANCE_ATTEST_KEY_FILE`, labs). With neither
+  configured attestations are off and `/readyz` says so (`attestation`).
+- clearance-api: `GET /v1/clearances/{id}` adds `attestation`; `GET /v1/clearances/{id}/attestation` is the bundle.
+- `clearance attest verify`: checks a bundle offline (signature, certificate chain and identity, Rekor's signed entry
+  timestamp, subjects).
+- Config `CLEARANCE_ATTEST_KEY_FILE`, `CLEARANCE_ATTEST_FULCIO_URL`, `CLEARANCE_ATTEST_REKOR_URL`,
+  `CLEARANCE_ATTEST_OIDC_TOKEN_FILE`; chart `attestation.*`.
+
 - **The Argo CD agent** (`providers/argocd/agent`, G-ARGO-3; [docs/gate.md](docs/gate.md#the-argo-cd-agent-g-argo-3-built)):
   one controller on the protected cluster. Grant sync (every 30 s: verifies the signed grant feed and each token,
   writes `ClearanceGrant`s, one active per namespace, expires them through `status.valid`), outcomes (watches

@@ -48,6 +48,7 @@ func Run(t *testing.T, open Opener) {
 		{"Tokens", testTokens},
 		{"SigningKeys", testSigningKeys},
 		{"Feeds", testFeeds},
+		{"Attestations", testAttestations},
 		{"Breakglass", testBreakglass},
 		{"Concurrent", testConcurrent},
 		{"CancelledContext", testCancelled},
@@ -763,6 +764,53 @@ func testFeeds(t *testing.T, open Opener) {
 	cs, err := s.FeedClusters(bg)
 	if err != nil || strings.Join(cs, ",") != "prod-1,prod-2,prod-3" {
 		t.Fatalf("FeedClusters = %v, %v", cs, err)
+	}
+}
+
+func testAttestations(t *testing.T, open Opener) {
+	s := open(t, nil)
+	t0 := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	if _, err := s.Attestation(bg, "c1"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Attestation before any: %v", err)
+	}
+	idx := int64(41)
+	a := store.Attestation{ChangeID: "c1", Digest: "sha256:aa", Backend: "keyless", RekorLogIndex: &idx, RekorUUID: "u1",
+		OutcomeSeq: 7, RecordSeq: 8, CreatedAt: t0, Bundle: json.RawMessage(`{"mediaType":"x"}`)}
+	// A rolled-back transaction leaves nothing; a committed one is read back, inside the transaction too.
+	_ = s.Atomic(bg, func(tx store.Tx) error {
+		if err := tx.PutAttestation(bg, a); err != nil {
+			t.Fatal(err)
+		}
+		return errors.New("roll back")
+	})
+	if _, err := s.Attestation(bg, "c1"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a rolled-back attestation: %v", err)
+	}
+	if err := s.Atomic(bg, func(tx store.Tx) error {
+		if err := tx.PutAttestation(bg, a); err != nil {
+			return err
+		}
+		got, err := tx.Attestation(bg, "c1")
+		if err != nil || got.Digest != "sha256:aa" {
+			t.Errorf("tx.Attestation = %+v, %v", got, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Attestation(bg, "c1")
+	if err != nil || got.Digest != "sha256:aa" || got.Backend != "keyless" || got.RekorLogIndex == nil || *got.RekorLogIndex != 41 ||
+		got.RekorUUID != "u1" || got.OutcomeSeq != 7 || got.RecordSeq != 8 || !got.CreatedAt.Equal(t0) || !strings.Contains(string(got.Bundle), "mediaType") {
+		t.Fatalf("Attestation = %+v, %v", got, err)
+	}
+	// No Rekor entry: a nil index reads back nil.
+	b := store.Attestation{ChangeID: "c2", Digest: "sha256:bb", Backend: "static", KeyID: "k", OutcomeSeq: 1, RecordSeq: 2,
+		CreatedAt: t0, Bundle: json.RawMessage(`{}`)}
+	if err := s.Atomic(bg, func(tx store.Tx) error { return tx.PutAttestation(bg, b) }); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.Attestation(bg, "c2"); err != nil || got.RekorLogIndex != nil || got.KeyID != "k" {
+		t.Fatalf("Attestation c2 = %+v, %v", got, err)
 	}
 }
 

@@ -1,6 +1,249 @@
 {
   "components": {
     "schemas": {
+      "AttestBundle": {
+        "properties": {
+          "dsseEnvelope": {
+            "$ref": "#/components/schemas/TokenEnvelope"
+          },
+          "mediaType": {
+            "type": "string"
+          },
+          "verificationMaterial": {
+            "$ref": "#/components/schemas/AttestMaterial"
+          }
+        },
+        "required": [
+          "dsseEnvelope",
+          "mediaType",
+          "verificationMaterial"
+        ],
+        "type": "object"
+      },
+      "AttestCertChain": {
+        "properties": {
+          "certificates": {
+            "items": {
+              "$ref": "#/components/schemas/AttestRawBytes"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "certificates"
+        ],
+        "type": "object"
+      },
+      "AttestInclProof": {
+        "properties": {
+          "checkpoint": {},
+          "hashes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "logIndex": {
+            "type": "string"
+          },
+          "rootHash": {
+            "type": "string"
+          },
+          "treeSize": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AttestKeyHint": {
+        "properties": {
+          "hint": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "hint"
+        ],
+        "type": "object"
+      },
+      "AttestKindVersion": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "version"
+        ],
+        "type": "object"
+      },
+      "AttestLogID": {
+        "properties": {
+          "keyId": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "keyId"
+        ],
+        "type": "object"
+      },
+      "AttestMaterial": {
+        "properties": {
+          "publicKey": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AttestKeyHint"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tlogEntries": {
+            "items": {
+              "$ref": "#/components/schemas/AttestTlogEntry"
+            },
+            "type": "array"
+          },
+          "x509CertificateChain": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AttestCertChain"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "AttestPromise": {
+        "properties": {
+          "signedEntryTimestamp": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "signedEntryTimestamp"
+        ],
+        "type": "object"
+      },
+      "AttestRawBytes": {
+        "properties": {
+          "rawBytes": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "rawBytes"
+        ],
+        "type": "object"
+      },
+      "AttestTlogEntry": {
+        "properties": {
+          "canonicalizedBody": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "inclusionPromise": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AttestPromise"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "inclusionProof": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AttestInclProof"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "integratedTime": {
+            "type": "string"
+          },
+          "kindVersion": {
+            "$ref": "#/components/schemas/AttestKindVersion"
+          },
+          "logId": {
+            "$ref": "#/components/schemas/AttestLogID"
+          },
+          "logIndex": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "canonicalizedBody",
+          "integratedTime",
+          "kindVersion",
+          "logId",
+          "logIndex"
+        ],
+        "type": "object"
+      },
+      "AttestationView": {
+        "properties": {
+          "backend": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "key_id": {
+            "type": "string"
+          },
+          "outcome_seq": {
+            "type": "integer"
+          },
+          "record_seq": {
+            "type": "integer"
+          },
+          "rekor_log_index": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "rekor_uuid": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "backend",
+          "created_at",
+          "digest",
+          "outcome_seq",
+          "record_seq",
+          "rekor_log_index"
+        ],
+        "type": "object"
+      },
       "ClearanceView": {
         "properties": {
           "admission": {
@@ -27,6 +270,16 @@
               "$ref": "#/components/schemas/GateApproval"
             },
             "type": "array"
+          },
+          "attestation": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AttestationView"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "base": {
             "type": "string"
@@ -238,6 +491,7 @@
           "agent",
           "app",
           "approvals",
+          "attestation",
           "base",
           "checks",
           "cleared_by",
@@ -2578,6 +2832,85 @@
           }
         ],
         "summary": "One change: the objects and paths it touches, every reason for its tier, the requirement, the approvals, the checks as last reported, and its live clearance token (null when it has none)",
+        "x-clearance-roles": [
+          "person",
+          "delegate",
+          "auditor",
+          "feed"
+        ]
+      }
+    },
+    "/v1/clearances/{id}/attestation": {
+      "get": {
+        "operationId": "getClearanceAttestation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttestBundle"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The change's signed attestation (C-2) as a Sigstore bundle: the DSSE envelope of an in-toto statement (predicate https://clearance.hangarplatform.dev/change-attestation/v1) and the certificate and Rekor entry that verify it. `clearance attest verify` checks it offline. 404 until a deploy reports an applied outcome",
         "x-clearance-roles": [
           "person",
           "delegate",

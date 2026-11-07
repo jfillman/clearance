@@ -72,6 +72,19 @@ type SigningKey struct {
 	RetiredAt *time.Time
 }
 
+// Attestation is one row of clearance_attestations (C-2): the signed change attestation of a change whose deploy
+// reported an outcome. One per change. Digest is "sha256:<hex>" of the DSSE envelope (attest.EnvelopeDigest); Bundle
+// is the Sigstore bundle (DSSE envelope plus verification material) GET /v1/clearances/{id}/attestation serves.
+// RekorLogIndex is nil when the backend logged nothing (a lab key with no Rekor).
+type Attestation struct {
+	ChangeID, Digest, Backend, KeyID string
+	RekorLogIndex                    *int64
+	RekorUUID                        string
+	OutcomeSeq, RecordSeq            int64 // the deploy.outcome it attests; the deploy.attestation record that carries its digest
+	CreatedAt                        time.Time
+	Bundle                           json.RawMessage
+}
+
 // Breakglass is one row of clearance_breakglass (C-6): a break-glass window an admin opened. Record is the gate's
 // view of it (gate.Breakglass) as jsonb; the other fields are its indexed columns. State is open or closed.
 type Breakglass struct {
@@ -117,6 +130,8 @@ type Tx interface {
 	UseSigningKey(ctx context.Context, k SigningKey, now time.Time) error
 	// PutBreakglass writes a break-glass window (an upsert by id).
 	PutBreakglass(ctx context.Context, b Breakglass) error
+	// PutAttestation writes the change's attestation (an upsert by change id).
+	PutAttestation(ctx context.Context, a Attestation) error
 }
 
 // Reader is what both a Tx and the store outside a transaction can read.
@@ -148,6 +163,8 @@ type Reader interface {
 	LiveTokens(ctx context.Context, cluster string, now time.Time, limit int) ([]Token, error)
 	// Feed is the cluster's signed grant feed (ErrNotFound when none was signed).
 	Feed(ctx context.Context, cluster string) (Feed, error)
+	// Attestation is the change's attestation (ErrNotFound when it has none).
+	Attestation(ctx context.Context, changeID string) (Attestation, error)
 	// Breakglass is one break-glass window (ErrNotFound when there is none).
 	Breakglass(ctx context.Context, id string) (Breakglass, error)
 	// BreakglassOpen are the windows still open (not yet reconciled), soonest expiry first.

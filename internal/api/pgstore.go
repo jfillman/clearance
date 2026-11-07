@@ -480,6 +480,17 @@ func (s *PG) DeploysAfter(ctx context.Context, after int64, limit int) ([]Deploy
 	return out, rows.Err()
 }
 
+func (s *PG) Attestation(ctx context.Context, changeID string) (*store.Attestation, error) {
+	a, err := s.R.Attestation(ctx, changeID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
 func (s *PG) Feed(ctx context.Context, cluster string) (*store.Feed, error) {
 	f, err := s.R.Feed(ctx, cluster)
 	if errors.Is(err, store.ErrNotFound) {

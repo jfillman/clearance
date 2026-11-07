@@ -1,6 +1,23 @@
 {
   "components": {
     "schemas": {
+      "Attestation": {
+        "properties": {
+          "backend": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "type": "object"
+      },
       "BreakglassList": {
         "properties": {
           "items": {
@@ -2408,6 +2425,9 @@
       },
       "Ready": {
         "properties": {
+          "attestation": {
+            "$ref": "#/components/schemas/Attestation"
+          },
           "degraded": {
             "items": {
               "type": "string"
@@ -2428,6 +2448,7 @@
           }
         },
         "required": [
+          "attestation",
           "head",
           "ok",
           "policy"
