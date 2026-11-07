@@ -9,6 +9,12 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Added
+
+- G-ARGO-2: the `ClearanceGrant` CRD (`clearancegrants.clearance.hangar.io/v1`) and the admission policies
+  `clearance-protected-writes` and `clearance-grant-writer` (`providers/argocd/crd/`), shipped in Warn mode, with an
+  envtest suite (`test_admission.py`, CI job `admission-policy`). docs/gate.md "G-ARGO-2".
+
 ## [0.32.0] - 2026-11-04
 
 ### Added
