@@ -28,6 +28,11 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   `plan_digest` is now omitted from a manifest change's outcome (it was never set there); the Python client is
   regenerated.
 
+
+
+- G-ARGO-2: the `ClearanceGrant` CRD (`clearancegrants.clearance.hangar.io/v1`) and the admission policies
+  `clearance-protected-writes` and `clearance-grant-writer` (`providers/argocd/crd/`), shipped in Warn mode, with an
+  envtest suite (`test_admission.py`, CI job `admission-policy`). docs/gate.md "G-ARGO-2".
 - **Terraform exception detection** (G-TF-5; `providers/terraform/detect`, `terraform-detector`;
   [docs/terraform-gate.md](docs/terraform-gate.md#exception-detection-g-tf-5-built-not-deployed)). A scheduled drift
   check (`terraform plan -detailed-exitcode`) and an untraced-apply check (S3 state versions against `deploy.outcome`,

@@ -1,0 +1,78 @@
+# ClearanceGrant (G-ARGO-2, Built): Clearance's decision that one rendered tree may land in one protected namespace,
+# published to the cluster by the grant-sync agent (G-ARGO-3) from the signed grant feed (C-10). Namespaced, in the
+# protected namespace it covers. Only the agent's service account writes it (policy clearance-grant-writer), and only
+# the agent writes status.valid, which is how expiry reaches admission: Kubernetes CEL in admission has no clock.
+#
+# docs/gate.md "Phase 2 design pass" (c) and "G-ARGO-2: the grant and the admission policy" say how it is used.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: clearancegrants.clearance.hangar.io
+  labels:
+    app.kubernetes.io/part-of: clearance
+spec:
+  group: clearance.hangar.io
+  names: {kind: ClearanceGrant, listKind: ClearanceGrantList, plural: clearancegrants, singular: clearancegrant, shortNames: [cgrant]}
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - {name: Clearance, type: string, jsonPath: .spec.clearance.id}
+        - {name: Tier, type: integer, jsonPath: .spec.clearance.tier}
+        - {name: Valid, type: boolean, jsonPath: .status.valid}
+        - {name: Expires, type: string, jsonPath: .spec.expiresAt}
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [subject, objects, expiresAt]
+              properties:
+                subject:
+                  type: object
+                  description: What the grant binds to. tree is the manifest-tree digest root (docs/gate.md, 64 hex digits).
+                  required: [tree]
+                  properties:
+                    commit: {type: string, maxLength: 64}
+                    tree: {type: string, minLength: 64, maxLength: 71}
+                objects:
+                  type: object
+                  description: >-
+                    EVERY object of the cleared tree, keyed "<group>/<kind>/<name>" (the core group is empty:
+                    "/ConfigMap/app"), each with the hash the CMP stamps in clearance.hangar.io/rendered. A map, so
+                    admission's lookup costs the same whatever the size; the namespace is the grant's own.
+                  maxProperties: 2000
+                  additionalProperties:
+                    type: object
+                    required: [rendered]
+                    properties:
+                      rendered: {type: string, minLength: 1, maxLength: 80}
+                      changed: {type: boolean, description: "In the diff this grant clears (display only; unchanged objects stay admitted)."}
+                expiresAt: {type: string, format: date-time, description: "The agent enforces it (status.valid); admission never reads it."}
+                clearance:
+                  type: object
+                  properties:
+                    id: {type: string, maxLength: 64}
+                    tier: {type: integer, minimum: 0, maximum: 3}
+                    policy:
+                      type: object
+                      properties:
+                        name: {type: string, maxLength: 253}
+                        version: {type: string, maxLength: 64}
+                signature:
+                  type: string
+                  maxLength: 65536
+                  description: The signed grant (DSSE envelope of the clearance token) the agent verified; informational, admission does not read it.
+            status:
+              type: object
+              properties:
+                valid:
+                  type: boolean
+                  description: Written by the agent only. true = verified against the feed and not expired. Admission checks it.
+                reason: {type: string, maxLength: 256}
+                checkedAt: {type: string, format: date-time}

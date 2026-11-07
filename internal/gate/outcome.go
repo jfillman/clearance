@@ -132,7 +132,13 @@ func (s *Service) RecordOutcome(ctx context.Context, ev store.Event, wr evidence
 		rel, _ := ev["release"].(map[string]any)
 		relID, _ := rel["id"].(string)
 		hash, _ := rec["hash"].(string)
-		prov, _ := rec["provider"].(string)
+		prov := "" // the envelope's provider is {name, version}
+		switch pv := rec["provider"].(type) {
+		case map[string]any:
+			prov, _ = pv["name"].(string)
+		case string:
+			prov = pv
+		}
 		at := pycompat.ISO(w.now)
 		c.Outcome = &Outcome{Seq: seq, Applied: applied, Matched: digest != "" && digest == strings.TrimPrefix(c.TreeDigest, "sha256:"),
 			At: at, Digest: digest, Release: relID, Hash: hash, Provider: prov}

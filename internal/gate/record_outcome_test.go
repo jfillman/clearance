@@ -54,4 +54,7 @@ func TestOnlyAClearedChangeTakesAnOutcome(t *testing.T) {
 	if rec := post(cleared.ID); rec["unattached"] != nil || f.get(t, cleared.ID).Outcome == nil {
 		t.Errorf("a cleared change takes its outcome: %v", rec["unattached"])
 	}
+	if got := f.get(t, cleared.ID).Outcome.Provider; got != "argocd-agent" {
+		t.Errorf("the outcome's provider is the envelope's name: %q", got)
+	}
 }
