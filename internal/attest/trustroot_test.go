@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"math/big"
@@ -216,5 +217,60 @@ func TestCheckURLAcceptsHTTPOnlyForLoopbackAndInClusterServices(t *testing.T) {
 		if _, err := attest.CheckURL("u", bad); err == nil {
 			t.Errorf("%s: accepted", bad)
 		}
+	}
+}
+
+// A certificate whose subject equals its issuer is not a root unless it really signed itself: a forged "self-issued"
+// copy of the genuine root's name and key, signed by another key, must not become a trust anchor.
+func TestAForgedSelfIssuedCertIsNotATrustAnchor(t *testing.T) {
+	k := newKeyless(t)
+	raw := signBundle(t, k)
+	good, err := attest.BuildTrustedRoot([]attest.BuildCA{{PEM: k.fulcio.RootPEM}}, []attest.BuildLog{{PEM: k.rekor.KeyPEM}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := attest.Verify(raw, trustOpts(good, t)); err != nil {
+		t.Fatal(err)
+	}
+	real := k.fulcio.Root
+	other, otherKey := throwawayCA(t, "x", nil, nil, 1)
+	_ = other
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(99), Subject: real.Subject, NotBefore: real.NotBefore, NotAfter: real.NotAfter,
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+	parent := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: real.Subject, NotBefore: real.NotBefore, NotAfter: real.NotAfter,
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, parent, real.PublicKey, otherKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged, _ := x509.ParseCertificate(der)
+	if string(forged.RawSubject) != string(forged.RawIssuer) || forged.CheckSignatureFrom(forged) == nil {
+		t.Fatal("the forgery is not a bad self-issued certificate")
+	}
+	var doc map[string]any
+	_ = json.Unmarshal(good, &doc)
+	cas := doc["certificateAuthorities"].([]any)
+	certs := cas[0].(map[string]any)["certChain"].(map[string]any)["certificates"].([]any)
+	certs[0].(map[string]any)["rawBytes"] = base64.StdEncoding.EncodeToString(forged.Raw)
+	bad, _ := json.Marshal(doc)
+	if _, err := attest.Verify(raw, trustOpts(bad, t)); err == nil {
+		t.Fatal("a forged self-issued certificate was accepted as a root")
+	}
+}
+
+func TestTheCASubjectNamesTheRootNotTheIntermediate(t *testing.T) {
+	root, rk := throwawayCA(t, "Throwaway Root", nil, nil, 1)
+	inter, _ := throwawayCA(t, "Throwaway Intermediate", root, rk, 0)
+	r := attesttest.NewRekor(t)
+	raw, err := attest.BuildTrustedRoot([]attest.BuildCA{{PEM: pemOf(inter, root)}}, []attest.BuildLog{{PEM: r.KeyPEM}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		CertificateAuthorities []struct{ Subject map[string]string }
+	}
+	_ = json.Unmarshal(raw, &doc)
+	if got := doc.CertificateAuthorities[0].Subject["commonName"]; got != "Throwaway Root" {
+		t.Fatalf("subject %q", got)
 	}
 }

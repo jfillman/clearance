@@ -174,9 +174,11 @@ func BuildTrustedRoot(cas []BuildCA, logs []BuildLog) ([]byte, error) {
 			return nil, fmt.Errorf("trust root: fulcio chain %d: %w", i+1, err)
 		}
 		var j jCA
-		j.Subject = map[string]string{"commonName": chain[0].Subject.CommonName}
-		if len(chain[0].Subject.Organization) > 0 {
-			j.Subject["organization"] = chain[0].Subject.Organization[0]
+		// The CA is named by its trust anchor, the root (last): for a lone root that is what cosign trusted-root create writes.
+		anchor := chain[len(chain)-1]
+		j.Subject = map[string]string{"commonName": anchor.Subject.CommonName}
+		if len(anchor.Subject.Organization) > 0 {
+			j.Subject["organization"] = anchor.Subject.Organization[0]
 		}
 		j.URI = c.URI
 		for _, cert := range chain {

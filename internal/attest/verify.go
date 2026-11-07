@@ -254,7 +254,7 @@ func verifyUnderTrust(b *Bundle, chain []*x509.Certificate, env token.Envelope, 
 		}
 		roots, inter := x509.NewCertPool(), x509.NewCertPool()
 		for _, c := range ca.Chain {
-			if bytes.Equal(c.RawSubject, c.RawIssuer) {
+			if bytes.Equal(c.RawSubject, c.RawIssuer) && c.CheckSignatureFrom(c) == nil {
 				roots.AddCert(c)
 			} else {
 				inter.AddCert(c)
