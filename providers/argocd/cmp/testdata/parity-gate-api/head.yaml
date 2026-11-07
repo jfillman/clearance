@@ -1,0 +1,197 @@
+---
+# Source: airframe-application/templates/namespace/namespace.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: app-gate-api-prod
+  labels:
+    app.kubernetes.io/name: gate-api
+    app.kubernetes.io/instance: gate-api-prod
+    app.kubernetes.io/version: "2.0.1-35185f9"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: gate-api
+    helm.sh/chart: airframe-application-0.3.0
+    hangar.io/component: application
+    hangar.io/app: gate-api
+    hangar.io/env: prod
+    hangar.io/cluster: hangar-prod
+    hangar.io/managed-secrets: "true"
+---
+# Source: airframe-application/templates/networking/networkpolicy.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gate-api
+  namespace: app-gate-api-prod
+  labels:
+    app.kubernetes.io/name: gate-api
+    app.kubernetes.io/instance: gate-api-prod
+    app.kubernetes.io/version: "2.0.1-35185f9"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: gate-api
+    helm.sh/chart: airframe-application-0.3.0
+    hangar.io/component: application
+    hangar.io/app: gate-api
+    hangar.io/env: prod
+    hangar.io/cluster: hangar-prod
+    hangar.io/subcomponent: networking
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector: {}
+---
+# Source: airframe-application/templates/workload/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gate-api
+  namespace: app-gate-api-prod
+  labels:
+    app.kubernetes.io/name: gate-api
+    app.kubernetes.io/instance: gate-api-prod
+    app.kubernetes.io/version: "2.0.1-35185f9"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: gate-api
+    helm.sh/chart: airframe-application-0.3.0
+    hangar.io/component: application
+    hangar.io/app: gate-api
+    hangar.io/env: prod
+    hangar.io/cluster: hangar-prod
+    hangar.io/subcomponent: workload
+imagePullSecrets:
+  - name: registry-credentials
+---
+# Source: airframe-application/templates/workload/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: gate-api
+  namespace: app-gate-api-prod
+  labels:
+    app.kubernetes.io/name: gate-api
+    app.kubernetes.io/instance: gate-api-prod
+    app.kubernetes.io/version: "2.0.1-35185f9"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: gate-api
+    helm.sh/chart: airframe-application-0.3.0
+    hangar.io/component: application
+    hangar.io/app: gate-api
+    hangar.io/env: prod
+    hangar.io/cluster: hangar-prod
+    hangar.io/subcomponent: workload
+spec:
+  selector:
+    app.kubernetes.io/name: gate-api
+    app.kubernetes.io/instance: gate-api-prod
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+# Source: airframe-application/templates/workload/rollout.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: gate-api
+  namespace: app-gate-api-prod
+  labels:
+    app.kubernetes.io/name: gate-api
+    app.kubernetes.io/instance: gate-api-prod
+    app.kubernetes.io/version: "2.0.1-35185f9"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: gate-api
+    helm.sh/chart: airframe-application-0.3.0
+    hangar.io/component: application
+    hangar.io/app: gate-api
+    hangar.io/env: prod
+    hangar.io/cluster: hangar-prod
+    hangar.io/subcomponent: workload
+    hangar.io/release-tracked: "true"
+  annotations:
+    hangar.io/release-id: "d41d51f7-e16c-4df6-934e-1952b5723e99:hangar-prod/prod"
+    hangar.io/app-namespace: "app-gate-api-cicd"
+spec:
+  replicas: 1
+  rollbackWindow:
+    revisions: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gate-api
+      app.kubernetes.io/instance: gate-api-prod
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gate-api
+        app.kubernetes.io/instance: gate-api-prod
+        app.kubernetes.io/version: "2.0.1-35185f9"
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: gate-api
+        helm.sh/chart: airframe-application-0.3.0
+        hangar.io/component: application
+        hangar.io/app: gate-api
+        hangar.io/env: prod
+        hangar.io/cluster: hangar-prod
+    spec:
+      containers:
+      - image: ghcr.io/jfillman/gate-api:2.0.1-35185f9
+        livenessProbe:
+          httpGet:
+            path: /
+            port: http
+        name: gate-api
+        ports:
+        - containerPort: 8080
+          name: http
+        readinessProbe:
+          httpGet:
+            path: /
+            port: http
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+      securityContext:
+        fsGroup: 65532
+        runAsGroup: 65532
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: gate-api
+  strategy:
+    canary:
+      steps:
+        - setWeight: 100
+---
+# Source: airframe-application/templates/attached/rolloutwatch.yaml
+apiVersion: catalog.hangar.io/v1alpha1
+kind: RolloutWatch
+metadata:
+  name: gate-api
+  namespace: app-gate-api-prod
+  labels:
+    app.kubernetes.io/name: gate-api
+    app.kubernetes.io/instance: gate-api-prod
+    app.kubernetes.io/version: "2.0.1-35185f9"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: gate-api
+    helm.sh/chart: airframe-application-0.3.0
+    hangar.io/component: application
+    hangar.io/app: gate-api
+    hangar.io/env: prod
+    hangar.io/cluster: hangar-prod
+    hangar.io/subcomponent: attached-rollout-watch
+  annotations:
+    # Tower's catalog type for platform-made XRs. Set here because RolloutWatch is the one XR this chart,
+    # not an xr-requests commit, creates.
+    terasky.backstage.io/component-type: platform
+spec:
+  environmentRef:
+    name: gate-api-hangar-prod-prod
+  appName: gate-api
+  cluster: hangar-prod
+  env: prod

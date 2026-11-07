@@ -284,6 +284,12 @@ func (s *Service) Register(ctx context.Context, p authn.Principal, body any) (*C
 	}
 	var out *Change
 	err = s.op(ctx, func(tx store.Tx, w *writer) error {
+		if c, err := s.clearedByTree(ctx, tx, req); err != nil {
+			return err
+		} else if c != nil {
+			out = c
+			return nil
+		}
 		existing, err := load(ctx, tx, req.ID())
 		if err != nil {
 			return err
@@ -385,6 +391,30 @@ func (s *Service) Register(ctx context.Context, p authn.Principal, body any) (*C
 		return nil, err
 	}
 	return out.View(), nil
+}
+
+// clearedByTree is G-ARGO-4's lookup: a registration without a pull request (pr 0: Argo CD syncs the merge commit
+// on main, which is no PR head) for a bound manifest tree answers the live cleared change for the same app,
+// environment, cluster, repository and tree, if there is one, and registers nothing. The tree is what a grant binds to, so the
+// commit and the PR the change was cleared under do not matter. Otherwise nil: the registration is evaluated as a
+// new change (an uncovered tree is held for people unless its checks and tier let policy clear it).
+func (s *Service) clearedByTree(ctx context.Context, r store.Reader, req ChangeRequest) (*Change, error) {
+	if req.PR != 0 || req.Kind() != KindManifestTree || Unbound(req.TreeDigest) {
+		return nil, nil
+	}
+	cleared, err := loadAll(r.ChangesCleared(ctx, req.App, req.Env))
+	if err != nil {
+		return nil, err
+	}
+	now := s.now()
+	for i := len(cleared) - 1; i >= 0; i-- { // newest first
+		c := cleared[i]
+		if (c.Subject == nil || c.Subject.Kind == KindManifestTree) && c.Cluster == req.Cluster && c.Repo == req.Repo && bareHex(c.TreeDigest) == bareHex(req.TreeDigest) &&
+			c.ExpiresAt.After(now) {
+			return c.View(), nil
+		}
+	}
+	return nil, nil
 }
 
 func (s *Service) definitionProblems(req ChangeRequest) []review.Problem {

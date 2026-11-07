@@ -213,14 +213,15 @@ func TestANewHeadRevokesTheTokenAndTheOldOneIsAReplay(t *testing.T) {
 	if _, err := token.Verify(f.ctx, old.Envelope, ks, o); !errors.Is(err, token.ErrDigestMismatch) {
 		t.Fatal(err)
 	}
-	// A pushed commit (pr 0) revokes only the same app, environment and cluster's tokens.
-	a := f.register(t, "ci", change(map[string]any{"objects": imageBump, "pr": json.Number("0"), "head": strings.Repeat("1", 40)}))
+	// A pushed commit (pr 0) revokes only the same app, environment and cluster's tokens. (Each push renders a
+	// different tree: a push of an already-cleared tree is answered by that change, G-ARGO-4, and supersedes nothing.)
+	a := f.register(t, "ci", change(map[string]any{"objects": imageBump, "pr": json.Number("0"), "head": strings.Repeat("1", 40), "treeDigest": strings.Repeat("a1", 32)}))
 	b := f.register(t, "ci", change(map[string]any{"objects": imageBump, "pr": json.Number("0"), "head": strings.Repeat("2", 40),
-		"app": "other-app"}))
+		"app": "other-app", "treeDigest": strings.Repeat("a2", 32)}))
 	if f.token(t, a.ID).RevokedAt != nil || f.token(t, b.ID).RevokedAt != nil {
 		t.Fatal("another app's push revoked a token")
 	}
-	f.register(t, "ci", change(map[string]any{"objects": imageBump, "pr": json.Number("0"), "head": strings.Repeat("3", 40)}))
+	f.register(t, "ci", change(map[string]any{"objects": imageBump, "pr": json.Number("0"), "head": strings.Repeat("3", 40), "treeDigest": strings.Repeat("a3", 32)}))
 	if f.token(t, a.ID).RevokedAt == nil || f.token(t, b.ID).RevokedAt != nil {
 		t.Fatal("a push for the same app did not revoke its older token (or revoked another's)")
 	}
