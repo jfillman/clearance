@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -102,6 +103,9 @@ func Canonicalize(rendered []byte, destination string, extraCluster []string) (*
 		k := keyOf(o)
 		if _, ok := t.Hashes[k]; !ok {
 			return nil, fmt.Errorf("%s/%s %q reads differently as YAML 1.1 (the hash) and YAML 1.2 (Argo CD): refusing to stamp it", k[0], k[1], k[3])
+		}
+		if !sameValue(t.Set[k].Value, o) {
+			return nil, fmt.Errorf("%s/%s %q reads differently as YAML 1.1 (the hash) and YAML 1.2 (Argo CD), say `yes`, `1:30` or a date: refusing to stamp it", k[0], k[1], k[3])
 		}
 		t.Emitted, t.Keys = append(t.Emitted, o), append(t.Keys, k)
 	}
@@ -213,4 +217,20 @@ func WriteStream(w io.Writer, objs []map[string]any) error {
 		}
 	}
 	return nil
+}
+
+// sameValue is whether two readings of one object are the same document: through JSON, so that 1 and 1.0 agree
+// (the hash and Kubernetes both see a number) but `yes` (true to PyYAML, a string to Argo CD's reader), an
+// unquoted `1:30` or a date do not. The stamp is the hash of the PyYAML reading, so the emitted object must be it.
+func sameValue(hashed, emitted any) bool {
+	ja, err1 := json.Marshal(hashed)
+	jb, err2 := json.Marshal(emitted)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	var va, vb any
+	if json.Unmarshal(ja, &va) != nil || json.Unmarshal(jb, &vb) != nil {
+		return false
+	}
+	return reflect.DeepEqual(va, vb)
 }

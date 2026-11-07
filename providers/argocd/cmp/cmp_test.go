@@ -454,6 +454,22 @@ metadata: {name: dest}
 	}
 }
 
+// Two YAML readers read a few scalars differently (PyYAML, which the hash follows: `yes` is true; Argo CD's, which
+// applies the object: `yes` is a string). A stamp on such an object would be the hash of a different object.
+func TestAnObjectTheTwoYAMLReadersReadDifferentlyIsRefused(t *testing.T) {
+	for name, scalar := range map[string]string{"yes": "yes", "sexagesimal": "1:30", "date": "2001-01-01"} {
+		doc := "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: a}\ndata: {k: " + scalar + "}\n"
+		if _, err := Canonicalize([]byte(doc), "dest", nil); err == nil || !strings.Contains(err.Error(), "reads differently") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// the same value written the same way by both is fine, and so is a number written 1.0
+	ok := "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: a}\ndata: {k: 'yes', n: \"1:30\"}\nx: [1.0, 0.5, 3, true, null]\n"
+	if _, err := Canonicalize([]byte(ok), "dest", nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAListIsFlattenedAndStampsAreRefreshedNotStacked(t *testing.T) {
 	tree, err := Canonicalize([]byte(`
 apiVersion: v1
