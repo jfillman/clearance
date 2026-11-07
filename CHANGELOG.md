@@ -10,6 +10,10 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 ## [Unreleased]
 
 ### Added
+
+- G-ARGO-2: the `ClearanceGrant` CRD (`clearancegrants.clearance.hangar.io/v1`) and the admission policies
+  `clearance-protected-writes` and `clearance-grant-writer` (`providers/argocd/crd/`), shipped in Warn mode, with an
+  envtest suite (`test_admission.py`, CI job `admission-policy`). docs/gate.md "G-ARGO-2".
 - **The Argo CD agent** (`providers/argocd/agent`, G-ARGO-3; [docs/gate.md](docs/gate.md#the-argo-cd-agent-g-argo-3-built)):
   one controller on the protected cluster. Grant sync (every 30 s: verifies the signed grant feed and each token,
   writes `ClearanceGrant`s, one active per namespace, expires them through `status.valid`), outcomes (watches
