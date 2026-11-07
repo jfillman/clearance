@@ -36,7 +36,8 @@ func attestVerify(_ context.Context, args []string, stdout, stderr io.Writer) in
 	fs.Var(&subjects, "subject", "a digest the statement must name as a subject, <alg>:<hex> (sha256:..., gitCommit:...); repeatable")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "usage: clearance attest verify [--file <bundle>] [--subject sha256:<hex>]... "+
-			"(--key <pem|jwks> | --trust-root <pem|trusted-root.json> --identity <id> --issuer <url> [--rekor-key <pem>])")
+			"(--key <pem|jwks> | --trust-root <pem|trusted-root.json> --identity <id> --issuer <url> [--rekor-key <pem>])\n"+
+			"  --rekor-key is required with a PEM --trust-root, and refused with a trusted-root.json (which carries Rekor's keys)")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {

@@ -428,6 +428,63 @@ public issuer `https://hangarplatform.dev/oidc/hangar-prod` (`CLEARANCE_FOREIGN_
   core (new epoch: start again at 1) from a replay (same epoch, lower seq: refuse) without an operator resetting its
   stored seq.
 
+### G-ARGO-2: the grant and the admission policy (Built)
+
+Status: **Built** (manifests in [`providers/argocd/crd/`](../providers/argocd/crd/), tested against a real
+kube-apiserver); **not yet applied** anywhere. Apron renders them into an upper cluster
+(`56-clearance-gate/`, `clearance.gate.enabled`), in Warn until `clearance.gate.enforce`.
+
+- **`ClearanceGrant`** (`clearancegrants.clearance.hangar.io/v1`, namespaced in the protected namespace):
+  `spec.subject` (`commit`, `tree`: the [manifest-tree digest](#the-manifest-tree-digest-built) root),
+  `spec.objects` (a **map** keyed `<group>/<kind>/<name>`, core group empty, each `{rendered, changed}`: every object of the
+  tree, not only the diff), `spec.expiresAt`, `spec.clearance` (`id`, `tier`, `policy.name`/`version`), `spec.signature`
+  (the signed grant the agent verified; admission does not read it), and `status.valid` (with `reason`, `checkedAt`), a
+  status subresource. This follows D27, not the card's `objects[]` list.
+- **`clearance-protected-writes`** (ValidatingAdmissionPolicy, `paramKind: ClearanceGrant`) matches CREATE and UPDATE
+  of namespaced main resources in namespaces labelled `clearance.hangar.io/protected=true`, and only when the writer is
+  `system:serviceaccount:argocd-apps:argocd-application-controller` (every `matchConditions` term `has()`-guarded). It
+  requires the object's `clearance.hangar.io/rendered` stamp, the namespace's active grant to be `status.valid`, and
+  the grant to list the object's key at exactly that stamp. `auditAnnotations` carries `grant: <name>`. **One**
+  binding, `paramRef` by selector `clearance.hangar.io/active=true` with no namespace: the grant is read from the
+  object's own namespace, and the agent keeps exactly one active per namespace.
+- **`clearance-grant-writer`** admits CREATE and UPDATE (and `/status`) of a ClearanceGrant only from
+  `system:serviceaccount:clearance-system:clearance-argocd-agent`. DELETE is left alone so a namespace can be deleted.
+- **Warn to Deny** flips two fields together on the first binding: `validationActions` `[Warn, Audit]` to `[Deny, Audit]`
+  and `parameterNotFoundAction` `Allow` to `Deny`; the grant-writer binding follows `validationActions`.
+- **Found while testing: a Deny binding with no active grant refuses every matched write in the namespace, from any
+  user,** because the API server resolves the param before it evaluates `matchConditions`. The spike saw this only
+  for Argo. Consequences: the agent must always leave one active grant on a protected namespace (the order is: create
+  the grant, then label the namespace protected); the policy excludes what the agent needs to bootstrap and what the
+  control plane writes on its own and Argo never applies (`clearancegrants`, events, endpoints, endpointslices,
+  leases); and Deny with no grant freezes the namespace's controllers (a ReplicaSet cannot create Pods) until a grant
+  is active. That is the fail-closed outcome the design wants, but it is why Warn uses `Allow`.
+- **Envtest** (`providers/argocd/crd/test_admission.py`, CI `admission-policy`, 162 checks over both modes): admit (listed
+  ConfigMap and Deployment, an update); refuse (unlisted, wrong hash on create and update, no stamp, `generateName`
+  with no name, expired grant, grant with no status, two active grants, no active grant); not matched (another
+  writer, another service account, an unprotected namespace, a labelled Namespace object, the `scale` subresource);
+  grant writes (agent only, status included, the CRD's schema); the audit annotation in the API server's audit log; no
+  CEL error in any response.
+- **The injected wait Job (G-ARGO-4).** The CMP adds an unstamped PreSync Job labelled
+  `clearance.hangar.io/injected: wait`. The policy exempts only a Job that is **exactly what the CMP builds**
+  (`providers/argocd/cmp/job.go`), as an **allowlist of fields**: any Job, pod or container field the CMP does not set
+  is refused (probes, `lifecycle`, `dnsConfig`, `serviceAccountName`, `nodeName`, tolerations, init containers, host
+  namespaces, ports, sysctls, `ttlSecondsAfterFinished`, ...), except the values the API server defaults before
+  admission (`dnsPolicy: ClusterFirst`, `schedulerName: default-scheduler`, completions and parallelism 1, `suspend: false`,
+  the generated selector, `terminationMessagePath`, the projected volume's `defaultMode`), each held to its default.
+  The Job must have that label and the PreSync hook; one container on the pinned wait image (a digest reference
+  Apron renders from `versions.clearance.waitImage`; empty means no exemption); `args` `[--change <id> --timeout
+  <duration>]` (only the id and the duration vary); `env` exactly `CLEARANCE_URL=<the pinned core URL>` and
+  `CLEARANCE_TOKEN_FILE=/var/run/secrets/tokens/clearance`; every `securityContext` value pinned to the CMP's (pod: `runAsNonRoot: true`, user and group 65532, seccomp
+  `RuntimeDefault`; container: no privilege escalation, read-only root filesystem, `capabilities.drop: [ALL]`);
+  `automountServiceAccountToken: false` and **no**
+  `serviceAccountName` (the CMP sets none, so the pod runs as the namespace's default account, and only the projected
+  token with audience `clearance` is mounted); `hostAliases` exactly the pinned one (none when the pin is empty); one
+  read-only mount of the one projected token volume. The waiter mounts a clearance token, so anything that could
+  redirect it is refused. It still needs an active grant to exist under Deny (the param resolves first). Envtest: the CMP's
+  Job is admitted; about 40 deviations (listed in `test_admission.py`) are each refused by the policy.
+- **Not checked by admission:** the stamp's content (CEL has no digest function), expiry by time (the agent's
+  `status.valid`), the signature. Those stay the CMP's, the agent's and G-ARGO-3's.
+
 ### Release records and the Clearance record (decided 2026-11-03)
 
 The owner's decision (hangar D25): **Clearance's signed record is the authority for what was cleared and what
@@ -1146,7 +1203,7 @@ registered from this release on (and for older ones once they are written again)
 ## Hold, release and outcome for a plan (G-TF-2, Built)
 
 Status: **Built** in the core (`internal/gate/outcome.go`, `terraform.go`, `request.go`); its caller is G-TF-3's
-`clearance hold`, `release` and `report` ([docs/terraform-gate.md](terraform-gate.md), Built); the lab workflow is G-TF-4.
+`clearance hold`, `release` and `report` ([docs/terraform-gate.md](terraform-gate.md), Built); the lab workflow is G-TF-4 ([terraform-gate.md](terraform-gate.md#the-lab-workflow-g-tf-4-draft), Draft).
 
 **Registration is idempotent by repository, workspace and plan.** A terraform-plan change's id is `ch-` and the first
 16 hex of sha256 over the JSON array `["terraform-plan", repo, backend, key, name, planDigest]`, not of
