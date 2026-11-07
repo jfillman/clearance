@@ -81,13 +81,32 @@ func shortText(v any) (string, bool) {
 	return s, ok && s != "" && len(s) <= maxReportText
 }
 
-// where is the report's destination: cluster and environment, both required.
+// where is the report's destination: cluster and environment, both required. A terraform-plan change has no
+// cluster, so a report about one names destination.workspace {backend, key, name} instead (the subject's workspace,
+// G-TF-1); cluster is then the workspace's one-line name (Workspace.Ref) and env is its name. A destination carries
+// one or the other, never both.
 func where(ev store.Event) (cluster, env string, err error) {
 	d, _ := ev["destination"].(map[string]any)
+	if w, present := d["workspace"]; present {
+		if d["cluster"] != nil || d["environment"] != nil {
+			return "", "", badReport("a %s record's destination is a cluster and environment, or a workspace, not both", ev["tool"])
+		}
+		m, ok := w.(map[string]any)
+		if !ok || unknownKey(m, workspaceKeys) != "" {
+			return "", "", badReport("destination.workspace is {backend, key, name}")
+		}
+		backend, _ := m["backend"].(string)
+		key, _ := m["key"].(string)
+		name, _ := m["name"].(string)
+		if !backendRx.MatchString(backend) || !printable(key, 1024) || !workspaceRx.MatchString(name) {
+			return "", "", badReport("destination.workspace is {backend, key, name}: a backend type, the state key and the workspace name")
+		}
+		return Workspace{backend, key, name}.Ref(), name, nil
+	}
 	cluster, _ = d["cluster"].(string)
 	env, _ = d["environment"].(string)
 	if !nameRx.MatchString(cluster) || !nameRx.MatchString(env) {
-		return "", "", badReport("a %s record names its destination: {cluster, environment}", ev["tool"])
+		return "", "", badReport("a %s record names its destination: {cluster, environment}, or for a Terraform plan {workspace: {backend, key, name}}", ev["tool"])
 	}
 	return cluster, env, nil
 }

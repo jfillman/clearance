@@ -186,6 +186,9 @@ func Classify(req ChangeRequest, baseline Policy, tools review.Registry, problem
 		return classifyPlan(req, pol, reasons), nil
 	}
 	for _, ch := range req.Objects {
+		if ch.Op == "unchanged" { // listed so a grant covers the whole rendered tree; it adds no risk to the diff
+			continue
+		}
 		reasons = append(reasons, objectTier(ch, pol))
 	}
 	tier := maxTier(reasons)
