@@ -179,34 +179,82 @@ func walkDiff(path string, before, after, unknown any, set map[string]bool) {
 	}
 }
 
-// keepKeys are the plan JSON's structural keys whose whole subtree holds no value (names, types, actions, versions).
-var keepKeys = map[string]bool{"format_version": true, "terraform_version": true, "address": true, "previous_address": true,
-	"type": true, "mode": true, "name": true, "provider_name": true, "provider_config_key": true, "module_address": true,
-	"actions": true, "action_reason": true, "replace_paths": true, "full_name": true, "version_constraint": true}
-
 const redacted = "(redacted)"
 
-// redact keeps a document's shape and structural keys and replaces every other scalar: the redacted plan JSON.
-func redact(v any, keep bool) any {
+// redactValues keeps a document's shape and replaces every scalar: attribute data, whatever its key is called.
+func redactValues(v any) any {
 	switch x := v.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(x))
 		for k, e := range x {
-			out[k] = redact(e, keep || keepKeys[k])
+			out[k] = redactValues(e)
 		}
 		return out
 	case []any:
 		out := make([]any, len(x))
 		for i, e := range x {
-			out[i] = redact(e, keep)
+			out[i] = redactValues(e)
 		}
 		return out
-	default:
-		if keep {
-			return x
-		}
-		return redacted
 	}
+	return redacted
+}
+
+// keepResource and keepChange are the structural keys kept at one position, a resource_changes[] entry and its change, and
+// by position only: an attribute called `name` or `type` is data and redacted.
+var keepResource = map[string]bool{"address": true, "previous_address": true, "type": true, "mode": true, "name": true,
+	"provider_name": true, "module_address": true, "action_reason": true}
+var keepChange = map[string]bool{"actions": true, "replace_paths": true}
+
+// redact is the redacted plan JSON: the plan's versions and each resource change's address, type, mode, name,
+// provider, action reason, actions and replace paths, kept at those positions only; every other scalar, in the
+// attributes, planned values, prior state, variables, configuration and outputs, is replaced by "(redacted)".
+func redact(doc map[string]any) map[string]any {
+	out := make(map[string]any, len(doc))
+	for k, v := range doc {
+		switch k {
+		case "format_version", "terraform_version":
+			out[k] = v
+		case "resource_changes":
+			rcs, _ := v.([]any)
+			list := make([]any, len(rcs))
+			for i, raw := range rcs {
+				list[i] = redactResource(raw)
+			}
+			out[k] = list
+		default:
+			out[k] = redactValues(v)
+		}
+	}
+	return out
+}
+
+func redactResource(raw any) any {
+	rc, ok := raw.(map[string]any)
+	if !ok {
+		return redactValues(raw)
+	}
+	out := make(map[string]any, len(rc))
+	for k, v := range rc {
+		switch {
+		case keepResource[k]:
+			out[k] = v
+		case k == "change":
+			ch, _ := v.(map[string]any)
+			c := make(map[string]any, len(ch))
+			for ck, cv := range ch {
+				if keepChange[ck] {
+					c[ck] = cv
+				} else {
+					c[ck] = redactValues(cv)
+				}
+			}
+			out[k] = c
+		default:
+			out[k] = redactValues(v)
+		}
+	}
+	return out
 }
 
 func canonical(v any) ([]byte, error) {
@@ -225,11 +273,11 @@ func Redacted(planJSON []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return canonical(redact(doc, false))
+	return canonical(redact(doc))
 }
 
 func redactedDigest(doc map[string]any) (string, error) {
-	b, err := canonical(redact(doc, false))
+	b, err := canonical(redact(doc))
 	if err != nil {
 		return "", err
 	}

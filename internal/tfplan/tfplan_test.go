@@ -14,7 +14,8 @@ import (
 var ws = gate.Workspace{Backend: "s3", Key: "network/lab/terraform.tfstate", Name: "default"}
 
 // The secrets the fixtures hold: a sensitive variable and a sensitive attribute value.
-var secrets = []string{"hunter2-SECRET", "attr-SECRET-value"}
+// Attributes named like the plan's structural keys are data too.
+var secrets = []string{"hunter2-SECRET", "attr-SECRET-value", "attr-NAME-value", "attr-TYPE-value", "attr-ADDR-value"}
 
 func load(t *testing.T, name string, o Options) (*Subject, []byte) {
 	t.Helper()

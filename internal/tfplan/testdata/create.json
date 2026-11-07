@@ -47,7 +47,10 @@
      "password": "attr-SECRET-value",
      "tags": {
       "Owner": "net"
-     }
+     },
+     "name": "attr-NAME-value",
+     "type": "attr-TYPE-value",
+     "address": "attr-ADDR-value"
     },
     "after_unknown": {
      "id": true
