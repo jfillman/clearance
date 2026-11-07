@@ -1,0 +1,110 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.serviceAccount.name }}
+  labels: {{- include "agent.labels" . | nindent 4 }}
+automountServiceAccountToken: true
+---
+# Cluster-wide: which namespaces are protected, and the grants (the agent's own CRD).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "agent.fullname" . }}
+  labels: {{- include "agent.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [list]
+  - apiGroups: [{{ (split "/" .Values.grantAPI)._0 | quote }}]
+    resources: [clearancegrants]
+    verbs: [get, list, create, patch, delete]
+  - apiGroups: [{{ (split "/" .Values.grantAPI)._0 | quote }}]
+    resources: [clearancegrants/status]
+    verbs: [get, patch, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "agent.fullname" . }}
+  labels: {{- include "agent.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ include "agent.fullname" . }}}
+subjects:
+  - {kind: ServiceAccount, name: {{ .Values.serviceAccount.name }}, namespace: {{ .Release.Namespace }}}
+---
+# The agent's own state (the feed epoch and seq, the outcomes and exceptions it reported).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "agent.fullname" . }}-state
+  labels: {{- include "agent.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "agent.fullname" . }}-state
+  labels: {{- include "agent.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "agent.fullname" . }}-state}
+subjects:
+  - {kind: ServiceAccount, name: {{ .Values.serviceAccount.name }}, namespace: {{ .Release.Namespace }}}
+---
+# Argo CD's Applications: read and watch only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "agent.fullname" . }}-applications
+  namespace: {{ .Values.argocd.namespace }}
+  labels: {{- include "agent.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [argoproj.io]
+    resources: [applications]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "agent.fullname" . }}-applications
+  namespace: {{ .Values.argocd.namespace }}
+  labels: {{- include "agent.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "agent.fullname" . }}-applications}
+subjects:
+  - {kind: ServiceAccount, name: {{ .Values.serviceAccount.name }}, namespace: {{ .Release.Namespace }}}
+{{- range .Values.protectedNamespaces }}
+---
+# Read the workloads of a protected namespace (the exception scan, the outcome's stamps). No Secret, no write.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "agent.fullname" $ }}-scan
+  namespace: {{ . }}
+  labels: {{- include "agent.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [services, configmaps, serviceaccounts]
+    verbs: [list]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, daemonsets]
+    verbs: [list]
+  - apiGroups: [batch]
+    resources: [cronjobs, jobs]
+    verbs: [list]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies, ingresses]
+    verbs: [list]
+  - apiGroups: [argoproj.io]
+    resources: [rollouts]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "agent.fullname" $ }}-scan
+  namespace: {{ . }}
+  labels: {{- include "agent.labels" $ | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "agent.fullname" $ }}-scan}
+subjects:
+  - {kind: ServiceAccount, name: {{ $.Values.serviceAccount.name }}, namespace: {{ $.Release.Namespace }}}
+{{- end }}

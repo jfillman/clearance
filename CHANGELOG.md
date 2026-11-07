@@ -24,6 +24,16 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 - Config `CLEARANCE_ATTEST_KEY_FILE`, `CLEARANCE_ATTEST_FULCIO_URL`, `CLEARANCE_ATTEST_REKOR_URL`,
   `CLEARANCE_ATTEST_OIDC_TOKEN_FILE`; chart `attestation.*`.
 
+- **The Argo CD agent** (`providers/argocd/agent`, G-ARGO-3; [docs/gate.md](docs/gate.md#the-argo-cd-agent-g-argo-3-built)):
+  one controller on the protected cluster. Grant sync (every 30 s: verifies the signed grant feed and each token,
+  writes `ClearanceGrant`s, one active per namespace, expires them through `status.valid`), outcomes (watches
+  Applications, posts `deploy.outcome` per operation with the applied tree digest from the stamps), exceptions (posts
+  `deploy.exception` for objects with no grant annotation, a hash no grant lists, or content that differs from its
+  stamp, and for a sync the admission policy refused). Own image (`providers/argocd/agent/Dockerfile`) and chart
+  (`charts/clearance-argocd-agent`). Fails closed; touches no workload.
+- The grant feed carries an **`epoch`** (the hash of the chain's first record), and `token.FeedOptions.Epoch` applies
+  `MinSeq` within one epoch: a rebuilt core starts again at seq 1 without an operator resetting readers; the same
+  epoch's lower seq is still `ErrFeedReplay`. Additive: a reader that ignores `epoch` behaves as before.
 - **The plain-CI Terraform adapter (G-TF-3)** (`cmd/clearance/terraform.go`, `internal/tfplan`, `terraform/action.yml`;
   [docs/terraform-gate.md](docs/terraform-gate.md)). `clearance hold` computes a terraform-plan subject locally (plan,
   redacted plan JSON and variable-set digests, resources, summary; no secret value and no plan upload), registers it
