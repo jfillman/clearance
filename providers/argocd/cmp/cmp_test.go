@@ -15,6 +15,7 @@ import (
 	"github.com/jfillman/clearance/internal/authn"
 	"github.com/jfillman/clearance/internal/definitions/deftest"
 	"github.com/jfillman/clearance/internal/gate"
+	"github.com/jfillman/clearance/internal/gate/render"
 	"github.com/jfillman/clearance/internal/pycompat"
 	"github.com/jfillman/clearance/internal/store/memory"
 	"github.com/jfillman/clearance/internal/vocab"
@@ -629,4 +630,52 @@ func TestParseConfig(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
+}
+
+// The agent (G-ARGO-3) checks a live object by hashing its last-applied configuration: Argo CD's tracking id and the
+// gate's three annotations removed (an empty annotations map deleted), then render.ObjectDigest. That must equal the
+// stamp, for objects with and without annotations of their own, and even when a chart wrote a gate annotation.
+func TestTheStampIsWhatTheAgentRecomputesFromLastApplied(t *testing.T) {
+	doc := "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: plain}\ndata: {a: b}\n---\n" +
+		"apiVersion: v1\nkind: ConfigMap\nmetadata: {name: own, annotations: {team: x, clearance.hangar.io/grant: forged}}\ndata: {a: b}\n---\n" +
+		"apiVersion: v1\nkind: Secret\nmetadata: {name: s, annotations: {clearance.hangar.io/rendered: forged}}\n"
+	tree, err := Canonicalize([]byte(doc), "dest", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree.Stamp("ch-1")
+	for _, o := range tree.Emitted {
+		raw, _ := json.Marshal(o) // what Argo CD records as last-applied, plus its tracking id
+		var live map[string]any
+		_ = json.Unmarshal(raw, &live)
+		md := live["metadata"].(map[string]any)
+		md["annotations"].(map[string]any)["argocd.argoproj.io/tracking-id"] = "app:v1/ConfigMap:dest/x"
+		got := agentContentHash(t, live)
+		if got != ann(o)[AnnRendered] {
+			t.Errorf("%v: the agent computes %s, the stamp is %v", keyOf(o), got, ann(o)[AnnRendered])
+		}
+	}
+}
+
+// agentContentHash is providers/argocd/agent.ContentHash (G-ARGO-3), reproduced: that package is on another branch.
+func agentContentHash(t *testing.T, o map[string]any) string {
+	t.Helper()
+	md := o["metadata"].(map[string]any)
+	if a, ok := md["annotations"].(map[string]any); ok {
+		for _, k := range []string{"argocd.argoproj.io/tracking-id", AnnRendered, AnnGrant, AnnTree} {
+			delete(a, k)
+		}
+		if len(a) == 0 {
+			delete(md, "annotations")
+		}
+	}
+	raw, _ := json.Marshal(o)
+	set := render.Set{}
+	if err := render.Add(set, raw); err != nil || len(set) != 1 {
+		t.Fatal(err, len(set))
+	}
+	for _, d := range set {
+		return render.ObjectDigest(d)
+	}
+	return ""
 }

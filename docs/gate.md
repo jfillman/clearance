@@ -1166,7 +1166,7 @@ allowed. **Not built:** posting the `deploy.degraded` record for what was let th
 keeps no outbox).
 
 The stamp is a content hash, not a secret; admission (G-ARGO-2's policy) matches it against the namespace's
-`ClearanceGrant`. The plugin never trusts a `grant` annotation a tenant's chart wrote: it is replaced or removed.
+`ClearanceGrant`. The plugin never trusts a `grant` annotation a tenant's chart wrote: it is replaced or removed. The three gate annotations a chart wrote are also removed before hashing (and an annotations map left empty), exactly as the agent (G-ARGO-3) strips them from a last-applied configuration, so `rendered` is `render.ObjectDigest` of what the agent recomputes (`TestTheStampIsWhatTheAgentRecomputesFromLastApplied`).
 
 ### The lookup by tree (core)
 

@@ -80,6 +80,7 @@ func Canonicalize(rendered []byte, destination string, extraCluster []string) (*
 	}
 	withNS := render.Set{}
 	for k, d := range set {
+		stripGate(asMap(d.Value))
 		if k[2] == "" && !isClusterScoped(k[1], extraCluster) {
 			k[2] = destination
 			if md, ok := asMap(d.Value)["metadata"].(map[string]any); ok {
@@ -137,6 +138,7 @@ func parseEmit(data []byte, destination string, extraCluster []string) ([]map[st
 		if m["kind"] == nil || m["apiVersion"] == nil || md == nil || md["name"] == nil || md["name"] == "" {
 			return
 		}
+		stripGate(m)
 		if ns, _ := md["namespace"].(string); ns == "" {
 			if kind, _ := m["kind"].(string); !isClusterScoped(kind, extraCluster) {
 				md["namespace"] = destination
@@ -233,4 +235,21 @@ func sameValue(hashed, emitted any) bool {
 		return false
 	}
 	return reflect.DeepEqual(va, vb)
+}
+
+// stripGate removes the gate's own annotations from an object before it is hashed, and an annotations map that is
+// then empty. The agent hashes a live object's last-applied configuration the same way (it strips these three and
+// Argo CD's tracking id, deleting an empty map), so the stamp and the agent's check agree whatever a chart wrote.
+func stripGate(o map[string]any) {
+	md := asMap(o["metadata"])
+	ann, ok := md["annotations"].(map[string]any)
+	if !ok {
+		return
+	}
+	for _, k := range []string{AnnRendered, AnnGrant, AnnTree} {
+		delete(ann, k)
+	}
+	if len(ann) == 0 {
+		delete(md, "annotations")
+	}
 }
