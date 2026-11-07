@@ -944,8 +944,8 @@ is `CLEARANCE_GATE_UNBOUND_TREE` (chart `gate.unboundTree`):
 ## The terraform-plan subject (G-TF-1)
 
 Status: **Built** in the core (classification, the request and the record); the hold, release and outcome on the
-core API are G-TF-2's (next section, Built). **Not built**: anything that produces a plan subject. The CLI and CI
-step that post it (G-TF-3) and detection of applies that went around the gate (G-TF-5) come next; nothing in
+core API are G-TF-2's (next section, Built). The CLI and CI step that post it are G-TF-3
+([docs/terraform-gate.md](terraform-gate.md), Built); detection of applies that went around the gate (G-TF-5) come next; nothing in
 Glidepath or the lab's `jfillman/hangar-infra` posts one yet.
 
 A change's **subject** is what it binds to. Beside the Kubernetes object diff (kind `manifest-tree`, described by
@@ -1047,8 +1047,8 @@ registered from this release on (and for older ones once they are written again)
 
 ## Hold, release and outcome for a plan (G-TF-2, Built)
 
-Status: **Built** in the core (`internal/gate/outcome.go`, `terraform.go`, `request.go`); no caller yet. The CLI that
-holds, releases and reports (`clearance hold`, `release`, `report`) is G-TF-3; the lab workflow is G-TF-4.
+Status: **Built** in the core (`internal/gate/outcome.go`, `terraform.go`, `request.go`); its caller is G-TF-3's
+`clearance hold`, `release` and `report` ([docs/terraform-gate.md](terraform-gate.md), Built); the lab workflow is G-TF-4.
 
 **Registration is idempotent by repository, workspace and plan.** A terraform-plan change's id is `ch-` and the first
 16 hex of sha256 over the JSON array `["terraform-plan", repo, backend, key, name, planDigest]`, not of

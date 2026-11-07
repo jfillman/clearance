@@ -1,0 +1,58 @@
+{
+ "format_version": "1.2",
+ "terraform_version": "1.9.8",
+ "variables": {
+  "region": {
+   "value": "us-east-1"
+  },
+  "db_password": {
+   "value": "hunter2-SECRET"
+  }
+ },
+ "planned_values": {
+  "root_module": {}
+ },
+ "configuration": {
+  "provider_config": {
+   "aws": {
+    "name": "aws",
+    "full_name": "registry.terraform.io/hashicorp/aws"
+   }
+  },
+  "root_module": {
+   "variables": {
+    "region": {
+     "default": "us-east-1"
+    },
+    "db_password": {
+     "sensitive": true
+    }
+   }
+  }
+ },
+ "resource_changes": [
+  {
+   "address": "aws_db_instance.main",
+   "mode": "managed",
+   "type": "aws_db_instance",
+   "name": "main",
+   "provider_name": "registry.terraform.io/hashicorp/aws",
+   "change": {
+    "actions": [
+     "delete",
+     "create"
+    ],
+    "before": {
+     "engine": "pg",
+     "password": "attr-SECRET-value"
+    },
+    "after": {
+     "engine": "pg",
+     "password": "attr-SECRET-value2"
+    },
+    "after_unknown": {}
+   },
+   "action_reason": "replace_because_cannot_update"
+  }
+ ]
+}

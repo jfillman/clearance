@@ -21,6 +21,13 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 - `POST /v1/clearances` with `pr: 0` and a bound manifest-tree digest answers the **cleared, unexpired change of the
   same app, environment, cluster and tree** and records nothing (Argo CD syncs the merge commit, not the PR head);
   otherwise it registers as before. The stores gain `ChangesCleared(app, env)`.
+- **The plain-CI Terraform adapter (G-TF-3)** (`cmd/clearance/terraform.go`, `internal/tfplan`, `terraform/action.yml`;
+  [docs/terraform-gate.md](docs/terraform-gate.md)). `clearance hold` computes a terraform-plan subject locally (plan,
+  redacted plan JSON and variable-set digests, resources, summary; no secret value and no plan upload), registers it
+  and waits (exit 0 cleared, 3 holding, 1 denied, 2 usage); `clearance release` proves the plan file is the cleared
+  digest before the apply; `clearance report` posts `terraform apply -json`'s outcome to
+  `POST /v1/clearances/{id}/outcome`. The composite action `jfillman/clearance/terraform` runs the three steps and
+  is linted in CI.
 
 ### Changed
 - A pushed commit (`pr: 0`) whose tree an earlier change already cleared no longer supersedes that change: the same

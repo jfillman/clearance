@@ -102,8 +102,16 @@ func Wait(ctx context.Context, core Core, o Options) (int, string) {
 				return ExitFailed, "clearance awaiting approval: interrupted"
 			}
 			continue
+		case errors.Is(err, client.ErrToken):
+			return ExitFailed, fmt.Sprintf("clearance awaiting approval: no token to call the core with (the projected clearance token): %v", err)
+		case errors.Is(err, client.ErrBadResponse):
+			return ExitFailed, fmt.Sprintf("clearance awaiting approval: the core's answer for %s was unreadable: %v", o.ChangeID, err)
 		default:
-			return ExitFailed, fmt.Sprintf("clearance awaiting approval: the core refused the wait for %s: %v", o.ChangeID, err)
+			var api *client.APIError
+			if errors.As(err, &api) {
+				return ExitFailed, fmt.Sprintf("clearance awaiting approval: the core refused the wait for %s: %v", o.ChangeID, err)
+			}
+			return ExitFailed, fmt.Sprintf("clearance awaiting approval: the wait for %s failed: %v", o.ChangeID, err)
 		}
 		if ans.State != state {
 			logf("change %s (%s/%s, tier %d) is %s", ans.ID, ans.App, ans.Env, ans.Tier, ans.State)

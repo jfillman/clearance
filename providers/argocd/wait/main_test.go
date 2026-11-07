@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -180,5 +181,24 @@ func TestACoreRefusalExitsNonZeroWithoutRetrying(t *testing.T) {
 	code, msg, _ := run(t, f, Options{})
 	if code != ExitFailed || !strings.Contains(msg, "refused") || len(f.calls) != 1 {
 		t.Fatal(code, msg, f.calls)
+	}
+}
+
+func TestATokenOrResponseFailureIsNotCalledARefusal(t *testing.T) {
+	f := newFake("holding")
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	noToken := client.TokenFunc(func(context.Context) (string, error) { return "", os.ErrNotExist })
+	c, _ := client.New(client.Options{BaseURL: srv.URL, Token: noToken, Timeout: time.Second})
+	code, msg := Wait(context.Background(), c, Options{ChangeID: "ch-1", Timeout: time.Minute, Poll: time.Second})
+	if code != ExitFailed || strings.Contains(msg, "refused") || !strings.Contains(msg, "no token") {
+		t.Fatal(code, msg)
+	}
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("not json")) }))
+	defer bad.Close()
+	c, _ = client.New(client.Options{BaseURL: bad.URL, Token: client.StaticToken("t"), Timeout: time.Second})
+	code, msg = Wait(context.Background(), c, Options{ChangeID: "ch-1", Timeout: time.Minute, Poll: time.Second})
+	if code != ExitFailed || strings.Contains(msg, "refused") || !strings.Contains(msg, "unreadable") {
+		t.Fatal(code, msg)
 	}
 }
