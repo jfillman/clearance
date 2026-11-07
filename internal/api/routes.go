@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/jfillman/clearance/internal/attest"
 	"github.com/jfillman/clearance/internal/gate"
 	"github.com/jfillman/clearance/internal/token"
 )
@@ -57,10 +58,26 @@ type ChangePage struct {
 	Next  *string           `json:"next"`
 }
 
-// ClearanceView is one change with its live clearance token beside it (null when it has none).
+// ClearanceView is one change with its live clearance token beside it (null when it has none) and its signed
+// attestation (C-2; null until a deploy reports an applied outcome).
 type ClearanceView struct {
 	gate.Change
-	Token *gate.TokenView `json:"token"`
+	Token       *gate.TokenView  `json:"token"`
+	Attestation *AttestationView `json:"attestation"`
+}
+
+// AttestationView is the reference to a change's attestation: the envelope's digest (the one the deploy.attestation
+// record carries), where Rekor logged it, and the records it ties together. The bundle itself is GET
+// /v1/clearances/{id}/attestation.
+type AttestationView struct {
+	Digest        string `json:"digest"`
+	Backend       string `json:"backend"` // keyless | static
+	KeyID         string `json:"key_id,omitempty"`
+	RekorLogIndex *int64 `json:"rekor_log_index"`
+	RekorUUID     string `json:"rekor_uuid,omitempty"`
+	OutcomeSeq    int64  `json:"outcome_seq"`
+	RecordSeq     int64  `json:"record_seq"`
+	CreatedAt     string `json:"created_at"`
 }
 
 // ListedChange is a list item: the stored change, and its token in the grant feed (cluster and state=cleared).
@@ -155,6 +172,12 @@ var routeTable = []Route{
 		Summary: "One change: the objects and paths it touches, every reason for its tier, the requirement, the " +
 			"approvals, the checks as last reported, and its live clearance token (null when it has none)",
 		Response: ClearanceView{}, Errors: []int{401, 403, 404, 503}, serve: (*Server).getClearance},
+	{OperationID: "getClearanceAttestation", Method: "GET", Path: "/v1/clearances/{id}/attestation", Roles: FeedRoles,
+		Params: []string{},
+		Summary: "The change's signed attestation (C-2) as a Sigstore bundle: the DSSE envelope of an in-toto statement " +
+			"(predicate " + attest.PredicateType + ") and the certificate and Rekor entry that verify it. " +
+			"`clearance attest verify` checks it offline. 404 until a deploy reports an applied outcome",
+		Response: attest.Bundle{}, Errors: []int{401, 403, 404, 503}, serve: (*Server).getAttestation},
 	{OperationID: "getClearancePolicy", Method: "GET", Path: "/v1/clearance-policy", Roles: PersonRoles,
 		Params: []string{},
 		Summary: "The deployment gate's baseline policy: the tier table, the people each tier needs, the outside " +

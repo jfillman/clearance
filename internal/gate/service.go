@@ -84,6 +84,9 @@ type Service struct {
 	// OnAnswered is called (non-blocking, after the commit) when a waiting GitHub deployment got its answer: the
 	// GitHub App's delivery poke.
 	OnAnswered []func()
+	// OnOutcome is called (after the commit, never inside the transaction) with a change's id and the seq of the
+	// deploy.outcome record just written for it: the attestation signer's trigger (C-2). nil: none.
+	OnOutcome func(changeID string, seq int64)
 	// Tokens issues the clearance token on deploy.clear (C-1); nil: no tokens (a deployment without a signing key).
 	Tokens *Tokens
 

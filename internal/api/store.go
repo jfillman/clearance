@@ -117,6 +117,8 @@ type Store interface {
 	Definitions(ctx context.Context) ([]store.Definition, error)
 	// Tokens are the live tokens (not revoked, not expired at now) of the changes ids, by change id.
 	Tokens(ctx context.Context, ids []string, now time.Time) (map[string]store.Token, error)
+	// Attestation is the change's signed attestation (C-2), nil when it has none.
+	Attestation(ctx context.Context, changeID string) (*store.Attestation, error)
 	// SigningKeys are the token verification keys in use or retired after since (clearance_signing_keys).
 	SigningKeys(ctx context.Context, since time.Time) ([]store.SigningKey, error)
 	// Ping answers when the database does.

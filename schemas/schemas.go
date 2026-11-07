@@ -14,3 +14,9 @@ var EvidenceV1 []byte
 //
 //go:embed change-request.schema.json
 var ChangeRequestV1 []byte
+
+// ChangeAttestationV1 is schemas/change-attestation.schema.json: the in-toto statement the attestation signer (C-2)
+// signs, whose predicate type is https://clearance.hangarplatform.dev/change-attestation/v1.
+//
+//go:embed change-attestation.schema.json
+var ChangeAttestationV1 []byte
