@@ -55,38 +55,59 @@ spec:
       expression: "has(object.metadata.annotations) ? object.metadata.annotations : {}"
     - name: rendered
       expression: "'clearance.hangar.io/rendered' in variables.ann ? variables.ann['clearance.hangar.io/rendered'] : ''"
-    # G-ARGO-4's injected PreSync wait Job: no stamp, no grant entry. Exempt ONLY a batch/v1 Job labelled
-    # clearance.hangar.io/injected=wait, annotated as a PreSync hook, with exactly one container, no init
-    # containers, no command override, no host namespaces or privileged container, and no volume but the one
-    # projected service-account token with audience 'clearance' (what the CMP's Job mounts), whose image is exactly the pinned wait image below (a digest
-    # reference; empty = no exemption). The label alone proves nothing: what bounds it is the image, a waiter that
-    # long-polls Clearance and exits, and that only Argo's controller reaches this policy. Args and env can still be
-    # set, which that image only reads. The agent's grant need not list it.
-    - name: exempt
+    # G-ARGO-4's injected PreSync wait Job: no stamp, no grant entry. Exempt ONLY a batch/v1 Job that is EXACTLY what
+    # the CMP injects (providers/argocd/cmp/job.go): the label clearance.hangar.io/injected=wait, the PreSync hook,
+    # one container on the pinned wait image (a digest reference; empty = no exemption), no command, args
+    # [--change <id> --timeout <duration>], env exactly CLEARANCE_URL=<the pinned core URL> and
+    # CLEARANCE_TOKEN_FILE=/var/run/secrets/tokens/clearance, no envFrom, no init containers, no host namespace
+    # (network, PID, IPC), no privileged container, hostAliases exactly the pinned one (none when the pin is empty),
+    # and no volume but the one projected service-account token with audience 'clearance'. The label alone proves
+    # nothing; the image would let an attacker point the waiter (and the token it mounts) at their own URL, so the
+    # URL and the alias are pinned too. Only the change id and the timeout vary.
+    - name: waitpod
       expression: >-
-        'registry.invalid/clearance-wait@sha256:0000000000000000000000000000000000000000000000000000000000000000' != '' &&
         has(object.apiVersion) && object.apiVersion == 'batch/v1' && has(object.kind) && object.kind == 'Job' &&
         has(object.metadata.labels) && 'clearance.hangar.io/injected' in object.metadata.labels &&
         object.metadata.labels['clearance.hangar.io/injected'] == 'wait' &&
         'argocd.argoproj.io/hook' in variables.ann && variables.ann['argocd.argoproj.io/hook'] == 'PreSync' &&
         has(object.spec) && has(object.spec.template) && has(object.spec.template.spec) &&
-        has(object.spec.template.spec.containers) && object.spec.template.spec.containers.size() == 1 &&
-        has(object.spec.template.spec.containers[0].image) &&
-        object.spec.template.spec.containers[0].image == 'registry.invalid/clearance-wait@sha256:0000000000000000000000000000000000000000000000000000000000000000' &&
-        !has(object.spec.template.spec.containers[0].command) &&
-        !has(object.spec.template.spec.initContainers) &&
-        (!has(object.spec.template.spec.hostNetwork) || !object.spec.template.spec.hostNetwork) &&
-        (!has(object.spec.template.spec.hostPID) || !object.spec.template.spec.hostPID) &&
-        (!has(object.spec.template.spec.containers[0].securityContext) ||
-         !has(object.spec.template.spec.containers[0].securityContext.privileged) ||
-         !object.spec.template.spec.containers[0].securityContext.privileged) &&
-        (!has(object.spec.template.spec.volumes) ||
-         (object.spec.template.spec.volumes.size() == 1 && has(object.spec.template.spec.volumes[0].projected) &&
-          has(object.spec.template.spec.volumes[0].projected.sources) &&
-          object.spec.template.spec.volumes[0].projected.sources.size() == 1 &&
-          has(object.spec.template.spec.volumes[0].projected.sources[0].serviceAccountToken) &&
-          has(object.spec.template.spec.volumes[0].projected.sources[0].serviceAccountToken.audience) &&
-          object.spec.template.spec.volumes[0].projected.sources[0].serviceAccountToken.audience == 'clearance'))
+        has(object.spec.template.spec.containers) && object.spec.template.spec.containers.size() == 1
+        ? dyn(object.spec.template.spec) : dyn({})
+    - name: waitctr
+      expression: "has(variables.waitpod.containers) ? dyn(variables.waitpod.containers[0]) : dyn({})"
+    - name: exempt
+      expression: >-
+        'registry.invalid/clearance-wait@sha256:0000000000000000000000000000000000000000000000000000000000000000' != '' &&
+        has(variables.waitpod.containers) &&
+        has(variables.waitctr.image) &&
+        variables.waitctr.image == 'registry.invalid/clearance-wait@sha256:0000000000000000000000000000000000000000000000000000000000000000' &&
+        !has(variables.waitctr.command) && !has(variables.waitctr.envFrom) &&
+        has(variables.waitctr.args) && variables.waitctr.args.size() == 4 &&
+        variables.waitctr.args[0] == '--change' && variables.waitctr.args[2] == '--timeout' &&
+        variables.waitctr.args[1].matches('^[A-Za-z0-9_.-]{1,80}$') && variables.waitctr.args[3].matches('^[0-9hms.]{1,20}$') &&
+        has(variables.waitctr.env) && variables.waitctr.env.size() == 2 &&
+        variables.waitctr.env[0].name == 'CLEARANCE_URL' && has(variables.waitctr.env[0].value) &&
+        variables.waitctr.env[0].value == 'http://clearance-core.invalid:8080' &&
+        variables.waitctr.env[1].name == 'CLEARANCE_TOKEN_FILE' && has(variables.waitctr.env[1].value) &&
+        variables.waitctr.env[1].value == '/var/run/secrets/tokens/clearance' &&
+        (!has(variables.waitctr.securityContext) || !has(variables.waitctr.securityContext.privileged) ||
+         !variables.waitctr.securityContext.privileged) &&
+        !has(variables.waitpod.initContainers) &&
+        (!has(variables.waitpod.hostNetwork) || !variables.waitpod.hostNetwork) &&
+        (!has(variables.waitpod.hostPID) || !variables.waitpod.hostPID) &&
+        (!has(variables.waitpod.hostIPC) || !variables.waitpod.hostIPC) &&
+        ('' == '' ? !has(variables.waitpod.hostAliases) :
+         (has(variables.waitpod.hostAliases) && variables.waitpod.hostAliases.size() == 1 &&
+          has(variables.waitpod.hostAliases[0].ip) && has(variables.waitpod.hostAliases[0].hostnames) &&
+          variables.waitpod.hostAliases[0].ip + '=' + variables.waitpod.hostAliases[0].hostnames.join(',') == ''))
+        &&
+        (!has(variables.waitpod.volumes) ||
+         (variables.waitpod.volumes.size() == 1 && has(variables.waitpod.volumes[0].projected) &&
+          has(variables.waitpod.volumes[0].projected.sources) &&
+          variables.waitpod.volumes[0].projected.sources.size() == 1 &&
+          has(variables.waitpod.volumes[0].projected.sources[0].serviceAccountToken) &&
+          has(variables.waitpod.volumes[0].projected.sources[0].serviceAccountToken.audience) &&
+          variables.waitpod.volumes[0].projected.sources[0].serviceAccountToken.audience == 'clearance'))
     - name: key
       expression: >-
         (has(object.apiVersion) && object.apiVersion.contains('/') ? object.apiVersion.split('/')[0] : '') + '/' +

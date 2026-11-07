@@ -62,7 +62,7 @@ class Apiserver:
                                             "--service-account-key-file", d / "sa.pub",
                                             "--service-account-signing-key-file", d / "sa.key",
                                             "--token-auth-file", d / "tokens.csv", "--authorization-mode", "RBAC",
-                                            "--audit-policy-file", d / "audit-policy.yaml", "--audit-log-path", self.audit,
+                                            "--allow-privileged=true", "--audit-policy-file", d / "audit-policy.yaml", "--audit-log-path", self.audit,
                                             "--service-cluster-ip-range", "10.0.0.0/24"], stdout=log, stderr=log))
         (d / "kubeconfig").write_text(yaml.safe_dump({
             "apiVersion": "v1", "kind": "Config", "current-context": "t",
@@ -109,21 +109,37 @@ def deploy(name, rendered, ns="prot"):
 
 
 WAIT_IMAGE = "registry.invalid/clearance-wait@sha256:" + "0" * 64
+CORE_URL = "http://clearance-core.invalid:8080"
 
 
-def wait_job(name, image=WAIT_IMAGE, label="wait", hook="PreSync", volumes=False, token=None, ns="prot", host_network=False):
+def wait_job(name, image=WAIT_IMAGE, label="wait", hook="PreSync", ns="prot", extra_volume=False, token="clearance",
+             host=None, privileged=False, command=None, args=None, env=None, env_from=False, aliases=False, init=False):
+    """The Job exactly as providers/argocd/cmp/job.go builds it, with one deviation per call."""
     md = {"name": name, "namespace": ns, "annotations": {"argocd.argoproj.io/hook": hook}}
     if label:
         md["labels"] = {"clearance.hangar.io/injected": label}
-    spec = {"restartPolicy": "Never", "containers": [{"name": "wait", "image": image, "args": ["--id", "ch-1"]}]}
-    if volumes:
-        spec["volumes"] = [{"name": "v", "emptyDir": {}}]
-    if token:  # what the CMP's Job really mounts
-        spec["volumes"] = [{"name": "clearance-token", "projected": {"sources": [
-            {"serviceAccountToken": {"audience": token, "expirationSeconds": 3600, "path": "clearance"}}]}}]
-        spec["containers"][0]["volumeMounts"] = [{"name": "clearance-token", "mountPath": "/var/run/secrets/tokens"}]
-    if host_network:
-        spec["hostNetwork"] = True
+    ctr = {"name": "wait", "image": image,
+           "args": args if args is not None else ["--change", "ch-1", "--timeout", "1h0m0s"],
+           "env": env if env is not None else [{"name": "CLEARANCE_URL", "value": CORE_URL},
+                                               {"name": "CLEARANCE_TOKEN_FILE", "value": "/var/run/secrets/tokens/clearance"}],
+           "volumeMounts": [{"name": "clearance-token", "mountPath": "/var/run/secrets/tokens", "readOnly": True}]}
+    if privileged:
+        ctr["securityContext"] = {"privileged": True}
+    if command:
+        ctr["command"] = command
+    if env_from:
+        ctr["envFrom"] = [{"secretRef": {"name": "anything"}}]
+    spec = {"restartPolicy": "Never", "automountServiceAccountToken": False, "containers": [ctr],
+            "volumes": [{"name": "clearance-token", "projected": {"sources": [
+                {"serviceAccountToken": {"audience": token, "expirationSeconds": 3600, "path": "clearance"}}]}}]}
+    if extra_volume:
+        spec["volumes"].append({"name": "v", "emptyDir": {}})
+    if host:
+        spec[host] = True
+    if aliases:
+        spec["hostAliases"] = [{"ip": "10.9.9.9", "hostnames": ["clearance-core.invalid"]}]
+    if init:
+        spec["initContainers"] = [{"name": "i", "image": image}]
     return {"apiVersion": "batch/v1", "kind": "Job", "metadata": md, "spec": {"template": {"spec": spec}}}
 
 
@@ -246,26 +262,38 @@ def run(deny):
         check("not matched: the scale subresource as Argo", True,
               sh(["patch", "deployment", "web", "-n", "prot", "--subresource=scale", "--type=merge", "-p", '{"spec":{"replicas":2}}'], who=ARGO))
 
-        print(f"-- the injected PreSync wait Job ({mode})")
-        check("admit: the labelled Job with the pinned wait image, no stamp, no grant entry", True,
-              sh(["create", "-f", "-"], wait_job("wait-1"), ARGO))
-        check("refuse: a labelled Job with another image", False,
-              sh(["create", "-f", "-"], wait_job("wait-2", image="busybox"), ARGO), "no clearance.hangar.io/rendered annotation on batch/Job/wait-2")
-        check("refuse: an unlabelled Job with the wait image", False,
-              sh(["create", "-f", "-"], wait_job("wait-3", label=None), ARGO), "no clearance.hangar.io/rendered annotation")
-        check("refuse: the label with a different value", False, sh(["create", "-f", "-"], wait_job("wait-4", label="x"), ARGO))
-        check("refuse: the label and image without the PreSync hook annotation", False,
-              sh(["create", "-f", "-"], wait_job("wait-5", hook="Sync"), ARGO))
-        check("admit: the Job as the CMP builds it (the audience-clearance token volume)", True,
-              sh(["create", "-f", "-"], wait_job("wait-8", token="clearance"), ARGO))
-        check("refuse: a projected token volume for another audience", False,
-              sh(["create", "-f", "-"], wait_job("wait-9", token="kubernetes.default"), ARGO))
-        check("refuse: the label and image on the host network", False,
-              sh(["create", "-f", "-"], wait_job("wait-10", host_network=True), ARGO))
-        check("refuse: the label and image with a volume added", False,
-              sh(["create", "-f", "-"], wait_job("wait-6", volumes=True), ARGO))
-        check("not matched: the same labelled Job with another image by another writer", True,
-              sh(["create", "-f", "-"], wait_job("wait-7", image="busybox"), OTHER))
+        print(f"-- the injected PreSync wait Job, exactly as the CMP builds it ({mode})")
+        check("admit: the Job exactly as the CMP builds it, no stamp, no grant entry", True,
+              sh(["create", "-f", "-"], wait_job("wait-ok"), ARGO))
+        cases = [
+            ("another image", dict(image="busybox")),
+            ("an extra --url style flag in args", dict(args=["--change", "ch-1", "--timeout", "1h", "--url", "http://evil"])),
+            ("a different args shape", dict(args=["--url", "http://evil", "--timeout", "1h", "--change", "ch-1"])),
+            ("CLEARANCE_URL pointed elsewhere (the token would leak)",
+             dict(env=[{"name": "CLEARANCE_URL", "value": "http://evil.example"},
+                       {"name": "CLEARANCE_TOKEN_FILE", "value": "/var/run/secrets/tokens/clearance"}])),
+            ("an extra env var", dict(env=[{"name": "CLEARANCE_URL", "value": CORE_URL},
+                                          {"name": "CLEARANCE_TOKEN_FILE", "value": "/var/run/secrets/tokens/clearance"},
+                                          {"name": "X", "value": "y"}])),
+            ("envFrom", dict(env_from=True)),
+            ("a command override", dict(command=["/bin/sh"])),
+            ("hostNetwork", dict(host="hostNetwork")),
+            ("hostPID", dict(host="hostPID")),
+            ("hostIPC", dict(host="hostIPC")),
+            ("a privileged container", dict(privileged=True)),
+            ("an extra volume", dict(extra_volume=True)),
+            ("a token volume for another audience", dict(token="kubernetes.default")),
+            ("hostAliases (the pin is none)", dict(aliases=True)),
+            ("an init container", dict(init=True)),
+            ("the label with another value", dict(label="x")),
+            ("no label", dict(label=None)),
+            ("no PreSync hook annotation", dict(hook="Sync")),
+        ]
+        for i, (what, kw) in enumerate(cases):
+            check("refuse: the labelled Job with " + what, False, sh(["create", "-f", "-"], wait_job(f"wait-bad{i}", **kw), ARGO),
+                  "clearance-protected-writes" if deny else None)
+        check("not matched: the same Job with another image by another writer", True,
+              sh(["create", "-f", "-"], wait_job("wait-other", image="busybox"), OTHER))
 
         print(f"-- expiry is the agent's: status.valid ({mode})")
         check("the agent marks the grant expired", True, sh(["patch", "clearancegrant", "g1", "-n", "prot", "--subresource=status",
