@@ -96,19 +96,26 @@ func (s *Service) RecordOutcome(ctx context.Context, ev store.Event, wr evidence
 	}
 	var out store.Record
 	err = s.op(ctx, func(tx store.Tx, w *writer) error {
+		var c *Change
+		if id != "" && !s.Config.Off {
+			var err error
+			if c, err = load(ctx, tx, id); err != nil {
+				return err
+			}
+		}
+		attach := c != nil && (c.Subject == nil || c.Subject.Kind != KindTerraformPlan)
+		if attach && c.State != StateCleared {
+			// The evidence is kept, but only a cleared change takes an outcome (and so an attestation): the record
+			// says why this one was not attached.
+			attach = false
+			ev["unattached"] = "the change is " + c.State + ", not cleared: the outcome is recorded, not attached"
+		}
 		rec, err := tx.Append(ctx, ev, wr)
 		if err != nil {
 			return err
 		}
 		out = rec
-		if id == "" || s.Config.Off {
-			return nil
-		}
-		c, err := load(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		if c == nil || (c.Subject != nil && c.Subject.Kind == KindTerraformPlan) {
+		if !attach {
 			return nil
 		}
 		seq, ok := SeqInt(rec["seq"])

@@ -509,7 +509,8 @@ pull request, change, grant, outcome, attestation, release record, joined by ids
   attest with their release. The agent now sends `release {id}` and no `change.release`.
 - **The outcome on the change.** The core sets the change's `outcome` in the same transaction that appends the
   provider's `deploy.outcome` (`gate.Service.RecordOutcome`); the latest outcome stands, since an Application can sync
-  more than once. `seq` and `hash` are the record's, so a reader finds it on the chain (`GET /v1/evidence/{seq}`) and
+  more than once. Only a cleared change takes it: for a holding, denied, expired or otherwise not-cleared change the
+  outcome is still recorded, with `unattached` saying why, and neither the change's `outcome` nor an attestation follows. `seq` and `hash` are the record's, so a reader finds it on the chain (`GET /v1/evidence/{seq}`) and
   checks the hash. `matched` is whether the applied digest is the cleared tree; a record with no digest is
   `matched: false`, with `digest` empty. Everything in it is the provider's claim; the core did not observe the target.
   A terraform-plan change keeps its own outcome route.
