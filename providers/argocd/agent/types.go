@@ -67,6 +67,23 @@ type GrantSpec struct {
 		Tier int    `json:"tier"`
 	} `json:"clearance"`
 	Objects map[string]GrantObject `json:"objects"`
+	// Carried are the other live cleared trees of the namespace, on the active grant only: what the admission policy
+	// also admits (each at its own hash) so that a tree still running, or cleared and not merged yet, is not refused
+	// while a newer change is the active one. Each entry ends at its own expiresAt (the agent drops it then) and
+	// when its change leaves the feed (revoked or superseded). docs/gate.md, "The running tree and the active grant".
+	Carried []CarriedTree `json:"carried,omitempty"`
+}
+
+// MaxCarried bounds Grant.Carried (the CRD's maxItems): the newest cleared trees; older ones are not carried.
+const MaxCarried = 16
+
+// CarriedTree is one other cleared change's objects on the active grant: only the objects whose hash differs from
+// the active grant's own (a hash the active grant lists anyway need not be said twice).
+type CarriedTree struct {
+	Change    string                 `json:"change"`
+	Tree      string                 `json:"tree,omitempty"`
+	ExpiresAt string                 `json:"expiresAt"`
+	Objects   map[string]GrantObject `json:"objects"`
 }
 
 // Grant is a ClearanceGrant: namespaced, with the agent's status.valid.

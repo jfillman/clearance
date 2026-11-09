@@ -1,7 +1,8 @@
 # The Terraform gate in plain CI (G-TF-3)
 
 Status: **Built** (`clearance hold`, `release` and `report`, `terraform/action.yml`), tested against `clearance core
---memory` with fixture plans. **Draft** on a real workflow: the lab workflow that uses it (G-TF-4) is
+--memory` with fixture plans, and passing the provider conformance suite as `terraform-ci` (G-TF-7,
+[below](#provider-identity-and-conformance-g-tf-7)). **Draft** on a real workflow: the lab workflow that uses it (G-TF-4) is
 [`network-lab.yaml` in jfillman/hangar-infra](https://github.com/jfillman/hangar-infra/pull/3), **Unverified** until its
 first real apply is cleared and matched.
 
@@ -95,6 +96,35 @@ applied, re-hashed at that moment. Exit 0 means the outcome was recorded and mat
 Like `register/action.yml`, it builds the Go binary at its own ref. Outputs: `clearance` (the id), `result`, `state`.
 A holding exit (3) is not a failure of the `hold` step, and `release` then refuses it. CI lints the action
 (`terraform-action` job: metadata, shellcheck on every embedded script) and runs a `hold --dry-run` of a fixture plan.
+
+## Provider identity and conformance (G-TF-7)
+
+Status: **Built**; the suite passes in CI (`TestTerraformConformance`, `go test ./cmd/clearance`). **Unverified** with a
+real `terraform` and the lab's real principal: the test drives the CLI against a fake workspace.
+
+The conformance suite ([provider-protocol.md](provider-protocol.md)) runs `hold`, `release` and `report` in process
+against an in-memory core and a fake target: the plan is held for a person (nothing applied), released once they clear
+it, applied once and only as the cleared plan file, and reported with an outcome whose digest is the cleared plan's; a
+plan that policy clears is applied without a person; a denied plan and an expired one are never applied. All ten
+assertions pass, and the chain verifies.
+
+**The records name `terraform-ci`.** A Terraform CI is registered as a provider (`CLEARANCE_PROVIDERS`) and the outcome
+`report` posts (`POST /v1/clearances/{id}/outcome`, which the core writes on the caller's behalf) names that provider and
+its registered version in `provider`, verified by the core from the authenticated principal. Without a registration the
+outcome names the core, `clearance`, as before. The change's own records (registered, cleared, denied, expired) and a
+`digest-mismatch` exception are the core's findings and keep the core's name.
+
+```json
+{"name": "terraform-ci", "version": "0.1.0", "principals": ["repo:jfillman/hangar-infra:*"],
+ "kinds": ["deploy.outcome"]}
+```
+
+The same principal must be in `CLEARANCE_VERIFIERS` (it registers the changes). A provider entry also lets that principal
+write the kinds it names through `POST /v1/records`; `kinds` narrows it, and the core refuses a record a provider may not
+write. The lab's entry is the manager's to add (hangar-dev's `CLEARANCE_PROVIDERS`): nothing here changes a cluster.
+
+**Not in this package.** Packet rendering of a terraform-plan subject (C-5). That the lab workflow's records carry
+`terraform-ci` is **Unverified** until the manager adds the entry and the lab applies once more.
 
 ## The lab workflow (G-TF-4, Draft)
 

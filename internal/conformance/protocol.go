@@ -71,6 +71,11 @@ type Info struct {
 	Name    string   `json:"name"`
 	Version string   `json:"version"`
 	Roles   []string `json:"roles"`
+	// Flow is a deployment provider's flow (flows.go): omitted for one that registers the change it is given.
+	Flow string `json:"flow,omitempty"`
+	// Stamps (pushed-tree) are the annotations the provider adds to the objects it applies after it took their
+	// digest; the target leaves them out when it digests what it received.
+	Stamps []string `json:"stamps,omitempty"`
 }
 
 // Endpoint is where the provider sends its normal traffic during the test, and the bearer token it presents there.

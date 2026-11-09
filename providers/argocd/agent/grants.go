@@ -205,12 +205,66 @@ func desiredGrants(claims []*token.Claims, now time.Time) []Grant {
 	for i, c := range all {
 		if newest[c.g.Namespace] == i && expiryAfter(c.g.Spec.ExpiresAt, now) {
 			c.g.Labels[LabelActive] = "true"
+			// The active grant also carries the namespace's other live cleared trees (see carriedTrees).
+			var others []carryCand
+			for j, o := range all {
+				if j != i && o.g.Namespace == c.g.Namespace {
+					others = append(others, carryCand{o.g, o.decided, o.iat})
+				}
+			}
+			c.g.Spec.Carried = carriedTrees(c.g, others, now)
 		}
 		out = append(out, c.g)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].Namespace+"/"+out[i].Name < out[j].Namespace+"/"+out[j].Name
 	})
+	return out
+}
+
+type carryCand struct {
+	g       Grant
+	decided string
+	iat     int64
+}
+
+// carriedTrees is what the active grant adds to its own objects: the objects of every other cleared change of the
+// namespace that is still live in the feed and not past its own expiresAt on the agent's clock, newest first, at most
+// MaxCarried changes. Only an object whose hash the active grant does not list itself is kept, and a change left with
+// none is not listed. The admission policy admits an object at any hash the active grant or one carried entry lists
+// for it, so the tree that is still running (or was cleared and has not merged) is not refused while a newer change
+// is the active one. This is no "any cleared tree": an entry exists only while its change's token is in the signed
+// feed (revoked, superseded, exception and expired changes are not), and the agent drops it at its own expiresAt.
+func carriedTrees(active Grant, others []carryCand, now time.Time) []CarriedTree {
+	sort.Slice(others, func(i, j int) bool {
+		a, b := others[i], others[j]
+		if a.decided != b.decided {
+			return a.decided > b.decided
+		}
+		if a.iat != b.iat {
+			return a.iat > b.iat
+		}
+		return a.g.Name > b.g.Name
+	})
+	var out []CarriedTree
+	for _, o := range others {
+		if !expiryAfter(o.g.Spec.ExpiresAt, now) {
+			continue
+		}
+		extra := map[string]GrantObject{}
+		for k, v := range o.g.Spec.Objects {
+			if mine, ok := active.Spec.Objects[k]; !ok || mine.Rendered != v.Rendered {
+				extra[k] = v
+			}
+		}
+		if len(extra) == 0 {
+			continue
+		}
+		out = append(out, CarriedTree{Change: o.g.Name, Tree: o.g.Spec.Subject.Tree, ExpiresAt: o.g.Spec.ExpiresAt, Objects: extra})
+		if len(out) == MaxCarried {
+			break
+		}
+	}
 	return out
 }
 
@@ -270,13 +324,18 @@ func (a *Agent) reconcile(ctx context.Context, want, have []Grant) error {
 		delete(hold.Labels, LabelActive)
 		if ok && h.Active() && (w.Active() || pending[w.Namespace]) {
 			hold.Labels[LabelActive] = "true"
+			if !w.Active() {
+				// Held active only until its replacement is ready: keep the trees it carries, so the running tree is
+				// admitted right up to the flip (the replacement carries this grant's own tree from then on).
+				hold.Spec.Carried = h.Spec.Carried
+			}
 		}
-		if ok && reflect.DeepEqual(h.Spec, w.Spec) && sameLabels(h.Labels, hold.Labels) {
+		if ok && reflect.DeepEqual(h.Spec, hold.Spec) && sameLabels(h.Labels, hold.Labels) {
 			continue
 		}
 		if step("writing", w, a.kube.ApplyGrant(ctx, hold)) {
 			a.log.Info("grant written", "grant", gkey(w), "active", hold.Active())
-			haveBy[gkey(w)] = Grant{Namespace: w.Namespace, Name: w.Name, Labels: hold.Labels, Spec: w.Spec, Valid: h.Valid}
+			haveBy[gkey(w)] = Grant{Namespace: w.Namespace, Name: w.Name, Labels: hold.Labels, Spec: hold.Spec, Valid: h.Valid}
 		}
 	}
 	for _, w := range want { // 2. valid
@@ -348,6 +407,21 @@ func (a *Agent) expireGrants(ctx context.Context) error {
 	var errs []error
 	for _, g := range have {
 		if expiryAfter(g.Spec.ExpiresAt, a.now()) {
+			// Still valid itself: drop the carried trees whose own clearance has run out (the policy has no clock).
+			var keep []CarriedTree
+			for _, c := range g.Spec.Carried {
+				if expiryAfter(c.ExpiresAt, a.now()) {
+					keep = append(keep, c)
+				}
+			}
+			if len(keep) != len(g.Spec.Carried) {
+				g.Spec.Carried = keep
+				if err := a.kube.ApplyGrant(ctx, g); err != nil {
+					errs = append(errs, fmt.Errorf("dropping expired carried trees of grant %s: %w", gkey(g), err))
+					continue
+				}
+				a.log.Info("carried trees expired", "grant", gkey(g))
+			}
 			continue
 		}
 		if g.Valid == nil || *g.Valid {

@@ -234,7 +234,9 @@ keeping B's manual sync policy as defence in depth. The record is the same eithe
 
 ## Phase 2 design pass (G-ARGO-1, 2026-11-03)
 
-Status: **Draft.** The shapes below are chosen; none of them is built. Each was spiked on hangar-dev (Argo CD 3.5.0,
+Status: **Draft** as a design record; the shapes below are chosen, and since then built (the admission policy and
+grant, G-ARGO-2; the agent, G-ARGO-3; the plugin and the PreSync wait, G-ARGO-4 and G-ARGO-5; the release join,
+G-ARGO-6: each section says its own status). Each was spiked on hangar-dev (Argo CD 3.5.0,
 Kubernetes 1.36.5, Kyverno 1.19.0) in scratch namespaces created and deleted for the purpose, in Warn mode only. The
 two measurements that only mean something on hangar-prod (Kyverno's failure modes under prod load, the cross-cluster
 path) are prepared for the user in [spikes/g-argo-1/prod-plan.md](spikes/g-argo-1/prod-plan.md) and are
@@ -362,7 +364,8 @@ What follows for G-ARGO-2:
   namespace (the grant is read from the admitted object's own namespace).
 - **Exactly one active grant per protected namespace.** Because every selected grant must pass, the agent labels only
   the newest cleared grant active and that grant lists **every** object of its tree (with `changed` marking the diff),
-  so unchanged objects stay admitted. Older grants stay for the record, unlabelled.
+  so unchanged objects stay admitted. Older grants stay for the record, unlabelled; what they list reaches admission only through `spec.carried` of the active
+  one (see "The running tree and the active grant").
 - **Expiry is the agent's.** Kubernetes CEL in admission has no clock; the agent sets `status.valid` (status
   subresource, written only by the agent) and removes the active label on expiry, and the policy checks
   `status.valid`.
@@ -458,8 +461,8 @@ kube-apiserver); **not yet applied** anywhere. Apron renders them into an upper 
   control plane writes on its own and Argo never applies (`clearancegrants`, events, endpoints, endpointslices,
   leases); and Deny with no grant freezes the namespace's controllers (a ReplicaSet cannot create Pods) until a grant
   is active. That is the fail-closed outcome the design wants, but it is why Warn uses `Allow`.
-- **Envtest** (`providers/argocd/crd/test_admission.py`, CI `admission-policy`, 162 checks over both modes): admit (listed
-  ConfigMap and Deployment, an update); refuse (unlisted, wrong hash on create and update, no stamp, `generateName`
+- **Envtest** (`providers/argocd/crd/test_admission.py`, CI `admission-policy`, 189 checks over both modes): admit (listed
+  ConfigMap and Deployment, an update; a carried tree's hash, below); refuse (unlisted, wrong hash on create and update, no stamp, `generateName`
   with no name, expired grant, grant with no status, two active grants, no active grant); not matched (another
   writer, another service account, an unprotected namespace, a labelled Namespace object, the `scale` subresource);
   grant writes (agent only, status included, the CRD's schema); the audit annotation in the API server's audit log; no
@@ -986,14 +989,19 @@ subject kind.
 
 ## The Argo CD agent (G-ARGO-3, Built)
 
-Status: **Built**; tested against a fake Argo CD (`providers/argocd/agent`, `go test`), **Unverified** on hangar-prod
-(the proof is prepared below). One controller on the protected cluster, one replica, three loops. It holds no key and
+Status: **Built**; tested against a fake Argo CD (`providers/argocd/agent`, `go test`) and **passing the provider
+conformance suite** as `argocd-agent` (G-ARGO-9, with the plugin: `TestArgoConformance` in `providers/argocd/cmp`; see
+[the provider protocol](provider-protocol.md#the-gates-adapters-g-tf-7-g-argo-9)). The gate is **live on hangar-prod in
+Warn mode, not Deny** (reported by the owner, 2026-11-09): admission warns about what a grant does not list and refuses
+nothing, so nothing here claims enforcement. The numbered proof below is **Unverified** by this repository (its steps were
+not run for this change). One controller on the protected cluster, one replica, three loops. It holds no key and
 decides nothing; its credential is the pod's projected service-account token (audience `clearance`), read fresh for
-every request. Provider identity `argocd-agent/<version>` is in `source.provider` of every record it posts.
+every request. Provider identity `argocd-agent/<version>` is in `source.provider` of every record it posts, and the core's verified
+`provider` is `argocd-agent` with the registered version (live records name `argocd-agent`, owner, 2026-11-09).
 
 | Loop | Every | Does |
 | --- | --- | --- |
-| **Grant sync** | 30 s | `GET /v1/keys` (cached 5 min, refetched on an unknown key id), `GET /v1/grant-feeds/<cluster>`; verifies the feed (signature, issuer, cluster, freshness, seq within its epoch), that the tokens beside it are exactly its entries, and each token (signature, expiry, cluster); then writes one `ClearanceGrant` (`clearance.hangar.io/v1`) per cleared change and namespace its objects name, whether or not the namespace is labelled protected yet; `spec.objects` is every object of the tree keyed `<group>/<kind>/<name>` (an empty group for core kinds) to `{rendered, changed}`; labels exactly the newest cleared grant of a namespace `clearance.hangar.io/active=true`; sets `status.valid` (with `reason`, `checkedAt`); and deletes the grants no entry names |
+| **Grant sync** | 30 s | `GET /v1/keys` (cached 5 min, refetched on an unknown key id), `GET /v1/grant-feeds/<cluster>`; verifies the feed (signature, issuer, cluster, freshness, seq within its epoch), that the tokens beside it are exactly its entries, and each token (signature, expiry, cluster); then writes one `ClearanceGrant` (`clearance.hangar.io/v1`) per cleared change and namespace its objects name, whether or not the namespace is labelled protected yet; `spec.objects` is every object of the tree keyed `<group>/<kind>/<name>` (an empty group for core kinds) to `{rendered, changed}`; labels exactly the newest cleared grant of a namespace `clearance.hangar.io/active=true` and lists on it, in `spec.carried`, the namespace's other live cleared trees (the running tree stays admissible, [below](#the-running-tree-and-the-active-grant)); sets `status.valid` (with `reason`, `checkedAt`); and deletes the grants no entry names |
 | **Outcomes** | a watch | Lists and watches Applications in the Argo CD namespace whose project is protected; for each finished operation (`Succeeded`, `Failed`, `Error`) posts one `deploy.outcome` keyed by `<Application UID>@<operation startedAt>` (`source.operation`), carrying the sync phase, `observed_revision` and `revisions`, health and sync status, and the applied tree digest (`outcome.digests.sha256`, `change.tree`), `change.id` and `change.release.id` read from the `clearance.hangar.io/tree`, `/grant` and `hangar.io/release-id` stamps of the live objects Argo tracks to the Application (`mixed_stamps: true` and no digest when they disagree) |
 | **Exceptions** | 60 s | For every object of the scanned kinds in a protected namespace (not those a controller owns, nor `kube-root-ca.crt` and the `default` service account): no `clearance.hangar.io/rendered` stamp; a stamp no valid grant of the namespace lists for that object; or, when Argo CD's client-side apply left `last-applied-configuration`, content whose hash (without the tracking id and the gate's annotations) is not the stamp. Posts `deploy.exception` (`out-of-band`; `result` says which) once per finding, one record per namespace, reason and writer (the newest field manager); a finding that goes away is forgotten and reported again if it returns. A failed sync whose message is the admission policy's refusal (`ValidatingAdmissionPolicy` or `clearance.hangar.io` in the operation or a resource message) is reported once per operation with `result` "sync refused by the admission policy" |
 
@@ -1011,13 +1019,94 @@ agent keeps them, and the tests hold it to them (`TestGrantSync`, `TestARotation
    `clearance.hangar.io/protected=true`. An operator labels a namespace protected only after
    `kubectl get clearancegrants -n <ns> -l clearance.hangar.io/active=true` shows one with `status.valid` true; the agent
    never labels namespaces.
-2. **Exactly one active grant per namespace; rotation in a fixed order.** Write the new grant (not active), mark it
+2. **Exactly one active grant per namespace; rotation in a fixed order.** (The active grant also carries the other live
+   trees, `spec.carried`; the grant held active until the flip keeps its carried list, so the running tree is admitted right
+   up to the flip.) Write the new grant (not active), mark it
    valid, then per namespace deactivate the old and at once activate the new, two consecutive calls with nothing
    between. A namespace is under two active grants never, and under none only between those two calls (the policy
    refuses writes there and Argo CD retries). If the new grant cannot be written or validated, the old stays active.
 3. **Only revocation and expiry leave a namespace with none.** A grant whose token left the feed (revoked, superseded) is
    deleted and one past `spec.expiresAt` is marked invalid and deactivated: that is the gate closing, by design, and the
    namespace refuses until the next clearance.
+
+### The running tree and the active grant
+
+**The gap (seen on hangar-prod, 2026-11-09).** The agent makes a grant active as soon as its change clears on the pull
+request, not when it merges or syncs, and the policy reads exactly one active grant. So between the clear and the merge
+the tree prod still runs had no active grant: the Rollout was stamped with grant `ch-0a29f11f80f20359` while
+`ch-212c050629a9d5d7` was active. If Argo CD re-applied the running tree in that gap (self-heal correcting drift), the
+write failed the hash check. In Warn that is a warning; under Deny it is refused until the pull request merges, and a
+change cleared and never merged would leave it blocked. A rollback or revert to a tree that was already cleared hit the
+same refusal.
+
+**The design: the active grant carries the other live trees.** `spec.carried` (on the active grant only; the CRD allows
+16 entries) lists, for each other cleared change of the namespace, `{change, tree, expiresAt, objects}`, where `objects`
+is the same `<group>/<kind>/<name>` map to `{rendered}` as `spec.objects`, trimmed to the objects whose hash differs from
+the active grant's own. The policy's third check admits an object when its `rendered` stamp equals the hash in the
+active grant's own `objects` **or** in any `carried[].objects` entry for that key. Everything else is as before: one
+active grant (the policy still needs exactly one), the stamp required, `status.valid` required, each object bound to a
+hash by its key, the injected wait Job's exemption unchanged. Warn behaves as before; a refusal is still a warning.
+
+A carried entry lives only as long as its change's clearance:
+
+- **Revoked, superseded, exception, or the horizon passed:** the change's token leaves the signed feed, and the next grant
+  sync (30 s) writes the active grant without it. This is the same lag a revoked grant has today (its `ClearanceGrant` is
+  deleted on the next pass).
+- **Expired:** each entry has its own `expiresAt` (the token's), and the agent drops the entry on its own clock every
+  pass, **whether or not the feed can be read**, so a carried tree cannot outlive its clearance because the active
+  grant is still valid. The admission policy has no clock; it never reads `expiresAt`.
+- The agent carries at most 16 changes (the newest by decision time); another namespace's trees are never carried.
+
+What this admits, and what it does not: the running tree, a tree that was cleared and has not merged, and a tree
+rolled back to (any of them still within its clearance, up to the 7 day horizon for a change cleared and not
+revoked). It is not "any tree cleared before": an old tree is admissible exactly while its clearance is live, and each
+object is still bound to a cleared rendered hash by its key. Because the carried trees were each cleared by policy and
+approvals on their own, the set of hashes a protected namespace accepts is the union of live clearances, which is what
+"this change is cleared for this cluster" already means; carrying them adds no clearance, it stops the active grant
+from hiding the ones that still hold.
+
+**Alternatives weighed.**
+
+- *Activate at sync, not at clear.* The agent would flip the active label only once Argo has synced the tree. It has the
+  smallest grant but the largest moving part: the sync itself needs the new tree's grant active (Argo's write is what the
+  policy checks), so the agent must flip before the sync starts and cannot tell a sync from a self-heal; it would need to
+  learn the intent from the PreSync wait Job or the Application operation, a new path from cluster state to
+  authorisation. It also leaves the rollback and cleared-but-unmerged cases open.
+- *Several active grants.* Refused by the API server's own semantics: `paramRef` by selector evaluates every matching
+  param and each must pass (`test_admission.py`, "two active grants, each must pass"), so a second grant can only deny.
+- *Carry only the running tree.* The agent could read the live objects' `clearance.hangar.io/grant` stamps and carry only
+  those. It would admit less, but gives the agent a second input to trust and misses the rollback to a cleared tree
+  that is not running. Not done; the carry set is bounded by the clearances themselves.
+
+**Grant-writer restriction unchanged.** Only the agent's service account writes a `ClearanceGrant` (`spec.carried`
+included); the list comes from the same verified signed feed as the grant's own objects.
+
+**When the path to the hub is down.** `spec.expiresAt` of a grant is its token's expiry. The core re-issues each token
+about every 7.5 minutes, and a token lives 15 minutes (`CLEARANCE_TOKEN_TTL`), so `expiresAt` rolls forward while
+the agent can read the feed. With clearance-api or the path to it down the agent changes no grant (fail closed, above),
+and on its own clock:
+
+1. a carried entry is dropped at its own `expiresAt`, and the active grant is marked `status.valid: false` with its label
+   removed at its own: between 7.5 and 15 minutes after the last successful refresh, and in any case 15 minutes after the
+   last feed it read;
+2. a feed older than 5 minutes is refused anyway, so a late or replayed feed does not extend anything.
+
+Under **Warn** that changes nothing (a missing or invalid grant warns; `parameterNotFoundAction: Allow`). Under **Deny**
+the namespace then refuses every matched write, and, because the API server resolves the param before the match
+conditions, **from any user**: Argo's self-heal, and also the ReplicaSet controller creating pods (see "Found while
+testing"). Running pods are not touched. Recovery:
+
+- *The path returns:* the next grant sync (30 s) reads a fresh feed, rewrites the grants with new `expiresAt`, marks them
+  valid and flips the active label back (`TestTheActiveGrantCarriesTheRunningTree`, "recovery"). No operator action.
+- *The path does not return and the namespace must move:* a cluster admin sets the first binding back to Warn
+  (`validationActions: [Warn, Audit]` and `parameterNotFoundAction: Allow`, in apron `clearance.gate.enforce`), or removes the
+  `clearance.hangar.io/protected` label from the namespace. Either is a break-glass act: restore it and confirm one active, valid grant
+  (`kubectl get clearancegrants -n <ns> -l clearance.hangar.io/active=true`) before enforcing again.
+
+Apron renders the admission policy from `providers/argocd/crd/admission.yaml` and the CRD from
+`clearancegrant-crd.yaml`; both changed here (the third validation and `spec.carried`), so apron's copies must be
+re-rendered to match before the Deny flip, and the agent image must be at this version first (an older agent writes no
+`carried`, so the policy behaves as before).
 
 **Break-glass.** The agent reads `GET /v1/breakglass?cluster=<c>` (it is a registered provider). It reports exceptions
 inside a window like any other, names the window in `exception.detail`, and the core tags the record with it
@@ -1374,11 +1463,17 @@ token live until its horizon. A second outcome is `DG-STATE` either way (the cha
 one is no longer cleared). The core writes this exception itself, so it is not checked by `gate.CheckReport` and is
 not tagged with a break-glass window: a plan names no cluster.
 
-## The Argo CD plugin and the PreSync wait (G-ARGO-4 and G-ARGO-5, Built; not deployed)
+## The Argo CD plugin and the PreSync wait (G-ARGO-4 and G-ARGO-5, Built)
 
-Status: **Built** in `providers/argocd/cmp` and `providers/argocd/wait`, with unit tests and a parity test against a
-recorded gate-api render; the lookup it needs is in the core (`gate.Service.clearedByTree`). **Unverified** on a
-cluster: nothing here has run inside Argo CD yet (the steps are [at the end](#checking-it-on-hangar-prod-steps-for-the-manager)).
+Status: **Built** in `providers/argocd/cmp` and `providers/argocd/wait`, with unit tests, a parity test against a
+recorded gate-api render, and the provider conformance suite (G-ARGO-9: the plugin's `Generate` with the agent behind a
+fake Argo CD, `TestArgoConformance`: it holds a tree nobody cleared with the PreSync wait Job and applies nothing, stamps
+and syncs once a person clears it, finds a tree a pull request's check cleared by policy, and refuses a denied or an
+expired one); the lookup it needs is in the core (`gate.Service.clearedByTree`). The conformance run does not start the
+Job's container (`clearance-wait` has its own tests). The owner reports the gate **live on hangar-prod in Warn mode, not
+Deny** (2026-11-09); the steps [at the end](#checking-it-on-hangar-prod-steps-for-the-manager) were not run for this
+change and stay **Unverified** here. The plugin writes no evidence record of its own: it registers changes as a verifier
+(`proposer: system:argocd-cmp`), so the records that name the gate are the agent's.
 Apron's half (the sidecar and the ApplicationSet's plugin source, off by default) is `clearance.gate.enabled` in
 [apron](https://github.com/jfillman/apron) `README.md`. The shape is the Phase 2 design pass's (D26, (a) above): the
 plugin replaces the Helm source.
