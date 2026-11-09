@@ -87,7 +87,7 @@ type Capabilities struct {
 	Outcomes bool `json:"outcomes"`
 }
 
-// Service is the run task adapter. The zero value is not usable: set Config and Gate (HTTP, Log, Clock, MaxWait
+// Service is the run task adapter. The zero value is not usable: set Config and Gate (HTTP, Log, MaxWait
 // and KeepAlive have defaults).
 type Service struct {
 	Config *Config
@@ -255,7 +255,7 @@ func (s *Service) Accept(raw []byte, signature string) (int, Answer) {
 	if err := in.checkURL(p.TaskResultCallbackURL, "/api/v2/task-results/"); err != nil {
 		return http.StatusBadRequest, Answer{Result: "refused", Reason: "task_result_callback_url: " + err.Error()}
 	}
-	if p.Stage != "pre_plan" {
+	if p.Stage == "post_plan" || p.Stage == "pre_apply" { // the stages that fetch the plan
 		if err := in.checkURL(p.PlanJSONAPIURL, "/api/v2/"); err != nil {
 			return http.StatusBadRequest, Answer{Result: "refused", Reason: "plan_json_api_url: " + err.Error()}
 		}

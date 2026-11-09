@@ -359,9 +359,7 @@ func TestStages(t *testing.T) {
 		e := newEnv(t, gate.StateCleared)
 		e.signed(t, payload(t, func(m map[string]any) {
 			m["stage"] = stage
-			if stage == "pre_plan" {
-				delete(m, "plan_json_api_url")
-			}
+			delete(m, "plan_json_api_url") // neither stage reads the plan, so neither needs the URL
 		}))
 		e.hcp.waitPatches(t, 1)
 		if got := e.hcp.patches(t); len(got) != 1 || got[0] != want {
