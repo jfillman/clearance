@@ -1100,8 +1100,7 @@ testing"). Running pods are not touched. Recovery:
   valid and flips the active label back (`TestTheActiveGrantCarriesTheRunningTree`, "recovery"). No operator action.
 - *The path does not return and the namespace must move:* a cluster admin sets the first binding back to Warn
   (`validationActions: [Warn, Audit]` and `parameterNotFoundAction: Allow`, in apron `clearance.gate.enforce`), or removes the
-  `clearance.hangar.io/protected` label from the namespace. Either is a break-glass act: record it in the core's
-  break-glass window when the core is reachable, and restore it and confirm one active, valid grant
+  `clearance.hangar.io/protected` label from the namespace. Either is a break-glass act: restore it and confirm one active, valid grant
   (`kubectl get clearancegrants -n <ns> -l clearance.hangar.io/active=true`) before enforcing again.
 
 Apron renders the admission policy from `providers/argocd/crd/admission.yaml` and the CRD from
