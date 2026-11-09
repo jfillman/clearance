@@ -416,3 +416,23 @@ func diff(e *Event) []string {
 	}
 	return d
 }
+
+// Event is the normalized event an assessment was made from (the collectors build the observation record from it).
+func (a *Assessment) Event() *Event { return a.ev }
+
+// CanonicalHash is the digest of a stored object as the pipeline hashes one (no status, no server-managed metadata,
+// none of the gate's own annotations): two versions of an object with the same hash differ in nothing a grant renders.
+// A collector's watch cache uses it to tell a change to desired state from a status write.
+func (p *Pipeline) CanonicalHash(o map[string]any) string {
+	return render.ObjectDigest(render.Doc{Value: p.rs.canonicalObject(o)})
+}
+
+// NoiseWhy is the reason a noise rule of the rule set gives (a rule that has filtered nothing yet included).
+func (p *Pipeline) NoiseWhy(rule string) string {
+	for _, r := range p.rs.noise {
+		if r.name == rule {
+			return r.why
+		}
+	}
+	return ""
+}

@@ -1,0 +1,20 @@
+cluster: hangar-prod
+coreURL: http://clearance.hangar-dev.local
+protectedNamespaces: [app-gate-api-prod]
+argocd:
+  namespace: argocd-apps
+rules:
+  argoControllerSubject: system:serviceaccount:argocd-apps:argocd-application-controller
+  hpaNamespaces: [app-gate-api-prod]
+webhook:
+  service:
+    clusterIP: 10.96.200.50
+auditPolicyMirror: kube-system/audit-policy
+hostAliases:
+  - ip: 192.168.1.72
+    hostnames: [clearance.hangar-dev.local]
+networkPolicy:
+  enabled: true
+  controlPlaneCIDRs: [10.0.0.0/24]
+  apiServerCIDRs: [10.96.0.1/32]
+  clearanceCIDRs: [192.168.1.72/32]

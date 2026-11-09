@@ -1,0 +1,95 @@
+# The kube-apiserver audit policy for Clearance's Kubernetes audit collector (providers/observe-k8s). Rendered from
+# audit-policy.yaml.tmpl with `observe-k8s policy render`; `observe-k8s policy check` holds any policy (this one, or the
+# one on a node) to the rule that matters most: no rule may record a Secret's body.
+#
+# The first rule that matches a request decides its level, so the order below is the policy:
+#   1. Secrets, and anything else that carries a credential in its body, are recorded at Metadata at most, wherever
+#      they live and whoever writes them. They are first, so no later rule can widen them.
+#   2. Reads, the control plane's own loops, events, endpoints and leases are dropped: they are most of the volume and
+#      none of them changes what runs.
+#   3. Status writes are recorded at Metadata (the collector needs to know they happened, not their bodies).
+#   4. A write to desired state in a protected namespace, and a write to a cluster-scoped governed kind (RBAC,
+#      admission configuration, CRDs, Argo CD applications), is recorded at RequestResponse: the body is the diff.
+#   5. Every other write is recorded at Metadata. Everything else is dropped.
+apiVersion: audit.k8s.io/v1
+kind: Policy
+omitStages:
+  - RequestReceived
+omitManagedFields: true
+rules:
+  # --- 1. Secrets and credentials: Metadata at most ---
+  - level: None
+    verbs: [get, list, watch]
+    resources:
+      - group: ""
+        resources: [secrets, secrets/*]
+  - level: Metadata
+    resources:
+      - group: ""
+        resources: [secrets, secrets/*, serviceaccounts/token]
+  - level: None
+    resources:
+      - group: authentication.k8s.io
+        resources: [tokenreviews, tokenrequests]
+      - group: authorization.k8s.io
+        resources: [subjectaccessreviews, selfsubjectaccessreviews, selfsubjectrulesreviews, localsubjectaccessreviews]
+
+  # --- 2. Reads, control-plane loops, events, endpoints, leases: dropped ---
+  - level: None
+    verbs: [get, list, watch]
+  - level: None
+    users:
+      - system:kube-scheduler
+      - system:apiserver
+      - system:kube-proxy
+      - system:serviceaccount:kube-system:endpointslice-controller
+      - system:serviceaccount:kube-system:endpoint-controller
+  - level: None
+    userGroups: ["system:nodes"]
+  - level: None
+    resources:
+      - group: ""
+        resources: [events, endpoints]
+      - group: events.k8s.io
+      - group: discovery.k8s.io
+        resources: [endpointslices]
+      - group: coordination.k8s.io
+        resources: [leases]
+  - level: None
+    nonResourceURLs: ["/healthz*", "/livez*", "/readyz*", "/version", "/metrics", "/openapi*", "/api", "/api/*", "/apis", "/apis/*"]
+
+  # --- 3. Status writes: Metadata ---
+  - level: Metadata
+    verbs: [create, update, patch, delete, deletecollection]
+    resources:
+{{- range .StatusGroups }}
+      - group: {{ printf "%q" . }}
+        resources: ["*/status"]
+{{- end }}
+
+  # --- 4. Desired state in protected namespaces, and governed cluster-scoped kinds: with bodies ---
+{{- if .ProtectedNamespaces }}
+  - level: RequestResponse
+    verbs: [create, update, patch, delete, deletecollection]
+    namespaces:
+{{- range .ProtectedNamespaces }}
+      - {{ printf "%q" . }}
+{{- end }}
+{{- end }}
+  - level: RequestResponse
+    verbs: [create, update, patch, delete, deletecollection]
+    resources:
+      - group: rbac.authorization.k8s.io
+        resources: [clusterroles, clusterrolebindings]
+      - group: admissionregistration.k8s.io
+      - group: apiextensions.k8s.io
+        resources: [customresourcedefinitions]
+      - group: argoproj.io
+        resources: [applications, applicationsets, appprojects]
+      - group: ""
+        resources: [namespaces]
+
+  # --- 5. Every other write: Metadata; everything else: dropped ---
+  - level: Metadata
+    verbs: [create, update, patch, delete, deletecollection]
+  - level: None

@@ -1,0 +1,8 @@
+{{- if not .Values.cluster }}{{ fail "cluster is required (the protected cluster's name: the scope of every record)" }}{{ end }}
+{{- if not .Values.coreURL }}{{ fail "coreURL is required (the core)" }}{{ end }}
+{{- if not .Values.webhook.allowedClients }}{{ fail "webhook.allowedClients is required: the names the API server's client certificate may carry" }}{{ end }}
+{{- if not .Values.webhook.tlsSecret }}{{ fail "webhook.tlsSecret is required (a Secret with tls.crt, tls.key and ca.crt; the chart creates no certificate)" }}{{ end }}
+{{- if and (not .Values.protectedNamespaces) (not .Values.rules.override) }}{{ fail "protectedNamespaces is required: the namespaces the rule set governs and the collector watches" }}{{ end }}
+{{- range .Values.watch.resources }}
+{{- if or (eq (lower (.resource | default "")) "secrets") (eq (lower (.kind | default "")) "secret") }}{{ fail "watch.resources must not name Secrets: the collector never reads them" }}{{ end }}
+{{- end }}

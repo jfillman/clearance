@@ -1,0 +1,124 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.serviceAccount.name }}
+  labels: {{- include "observe.labels" . | nindent 4 }}
+automountServiceAccountToken: true
+---
+# Cluster-wide, read only: the grants (the Argo CD agent's CRD) and the cluster-scoped kinds watched. No Secret, ever.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "observe.fullname" . }}
+  labels: {{- include "observe.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [{{ (split "/" .Values.grantAPI)._0 | quote }}]
+    resources: [clearancegrants]
+    verbs: [list]
+{{- if .Values.watch.enabled }}
+{{- $groups := dict }}
+{{- range .Values.watch.resources }}
+{{- if not .namespaced }}{{ $_ := set $groups .group (append (get $groups .group | default list) .resource) }}{{ end }}
+{{- end }}
+{{- range $g, $rs := $groups }}
+  - apiGroups: [{{ $g | quote }}]
+    resources: [{{ join ", " ($rs | uniq | sortAlpha) }}]
+    verbs: [list, watch]
+{{- end }}
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "observe.fullname" . }}
+  labels: {{- include "observe.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ include "observe.fullname" . }}}
+subjects:
+  - {kind: ServiceAccount, name: {{ .Values.serviceAccount.name }}, namespace: {{ .Release.Namespace }}}
+---
+# The collector's own objects, by name: the heartbeat ConfigMap (patch) and the canary Secret (patch only: no get, so
+# it cannot read what it writes, and no list or watch).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "observe.fullname" . }}-heartbeat
+  labels: {{- include "observe.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [{{ .Values.heartbeat.configMapName | quote }}]
+    verbs: [patch]
+{{- if .Values.heartbeat.canarySecret.enabled }}
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [{{ .Values.heartbeat.canarySecret.name | quote }}]
+    verbs: [patch]
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "observe.fullname" . }}-heartbeat
+  labels: {{- include "observe.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "observe.fullname" . }}-heartbeat}
+subjects:
+  - {kind: ServiceAccount, name: {{ .Values.serviceAccount.name }}, namespace: {{ .Release.Namespace }}}
+{{- if .Values.watch.enabled }}
+{{- $nsGroups := dict }}
+{{- range .Values.watch.resources }}
+{{- if .namespaced }}{{ $_ := set $nsGroups .group (append (get $nsGroups .group | default list) .resource) }}{{ end }}
+{{- end }}
+{{- range (concat .Values.protectedNamespaces (list .Values.argocd.namespace) | uniq) }}
+---
+# Read and watch the kinds the collector keeps the before-state of. No Secret, no write.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "observe.fullname" $ }}-watch
+  namespace: {{ . }}
+  labels: {{- include "observe.labels" $ | nindent 4 }}
+rules:
+{{- range $g, $rs := $nsGroups }}
+  - apiGroups: [{{ $g | quote }}]
+    resources: [{{ join ", " ($rs | uniq | sortAlpha) }}]
+    verbs: [list, watch]
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "observe.fullname" $ }}-watch
+  namespace: {{ . }}
+  labels: {{- include "observe.labels" $ | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "observe.fullname" $ }}-watch}
+subjects:
+  - {kind: ServiceAccount, name: {{ $.Values.serviceAccount.name }}, namespace: {{ $.Release.Namespace }}}
+{{- end }}
+{{- end }}
+{{- with .Values.auditPolicyMirror }}
+{{- $ns := (split "/" .)._0 }}
+{{- $name := (split "/" .)._1 }}
+---
+# The one ConfigMap that mirrors the audit policy, by name, read only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "observe.fullname" $ }}-policy-mirror
+  namespace: {{ $ns }}
+  labels: {{- include "observe.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [{{ $name | quote }}]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "observe.fullname" $ }}-policy-mirror
+  namespace: {{ $ns }}
+  labels: {{- include "observe.labels" $ | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "observe.fullname" $ }}-policy-mirror}
+subjects:
+  - {kind: ServiceAccount, name: {{ $.Values.serviceAccount.name }}, namespace: {{ $.Release.Namespace }}}
+{{- end }}

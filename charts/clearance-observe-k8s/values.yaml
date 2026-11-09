@@ -1,0 +1,141 @@
+# Clearance's Kubernetes audit collector (providers/observe-k8s). Install it on the cluster whose API server audit
+# policy and webhook it serves (hangar-prod; hangar-dev as the lab), in its own namespace. docs/observe-k8s.md is the
+# design; docs/observe-k8s-runbook.md is what the operator does to the API server.
+image:
+  repository: ghcr.io/jfillman/clearance-observe-k8s
+  # Empty: v plus the chart's appVersion (the image's release tag).
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# The collector's identity on the core is this service account: the core's CLEARANCE_FOREIGN_SERVICE_ACCOUNTS lists
+# <namespace>/<name>, and the core's CLEARANCE_PROVIDERS registers the provider observe-k8s with kinds observation,
+# assessment, resolution and observation.health.
+serviceAccount:
+  name: clearance-observe-k8s
+
+# The cluster's name as the core and the Argo CD agent know it: the scope of every record. Required.
+cluster: ""
+# The core (records, break-glass windows), reached from this cluster. Required.
+coreURL: ""
+# The projected token's audience: the core's CLEARANCE_FOREIGN_AUDIENCE (default clearance).
+tokenAudience: clearance
+# The ClearanceGrant CRD's group/version (G-ARGO-2).
+grantAPI: clearance.hangar.io/v1
+
+# The namespaces the gate protects (labelled clearance.hangar.io/protected=true). The collector lists and watches the
+# kinds below in these namespaces (never Secrets) and the audit policy records their desired-state writes with bodies.
+protectedNamespaces: []
+argocd:
+  namespace: argocd
+
+# The webhook the API server posts audit batches to.
+webhook:
+  # The names (common name or DNS SAN) the API server's client certificate may carry. Required: anything else that
+  # chains to the client CA is refused.
+  allowedClients: [kube-apiserver]
+  # A Secret in this namespace with tls.crt and tls.key (the server certificate the API server's kubeconfig trusts)
+  # and ca.crt (the CA that signed the API server's client certificate). The chart creates no certificate or key.
+  tlsSecret: clearance-observe-k8s-tls
+  port: 8443
+  service:
+    type: ClusterIP
+    # The API server runs on the host network and cannot resolve cluster DNS: pin a ClusterIP (or use a NodePort) and
+    # put that address in the webhook kubeconfig (docs/observe-k8s-runbook.md).
+    clusterIP: ""
+    nodePort: null
+
+# The durable queue: an append-only log on a volume. The API server is acknowledged only after a batch is fsynced.
+persistence:
+  size: 5Gi
+  storageClass: ""
+  # Use a claim you manage instead of creating one.
+  existingClaim: ""
+queue:
+  # Past this many unhandled bytes the receiver answers 503 (the API server retries) rather than drop older events.
+  maxBytes: 4294967296
+
+# The proof the audit path works end to end: the collector patches this ConfigMap every heartbeat.interval and the
+# write must come back through the webhook, under the live audit policy.
+heartbeat:
+  configMapName: clearance-observe-heartbeat
+  interval: 30s
+  # An empty Secret the collector patches (and can never read) to show the live policy records Secrets at Metadata.
+  canarySecret:
+    enabled: true
+    name: clearance-observe-canary
+
+# A ConfigMap in which the operator mirrors the audit policy on the nodes (`kube-system/audit-policy`): the collector
+# reads it and holds it to the Secret rule. Empty: no mirror is read (a pod cannot read a node's policy file).
+auditPolicyMirror: ""
+
+# The kinds watched, to keep the object before each change (an audit event carries only the new state) and to notice a
+# change no audit event reported. No Secret, ever: the collector has no get, list or watch on Secrets.
+watch:
+  enabled: true
+  resources:
+    - {group: "", version: v1, resource: configmaps, kind: ConfigMap, namespaced: true}
+    - {group: "", version: v1, resource: services, kind: Service, namespaced: true}
+    - {group: "", version: v1, resource: serviceaccounts, kind: ServiceAccount, namespaced: true}
+    - {group: apps, version: v1, resource: deployments, kind: Deployment, namespaced: true}
+    - {group: apps, version: v1, resource: statefulsets, kind: StatefulSet, namespaced: true}
+    - {group: apps, version: v1, resource: daemonsets, kind: DaemonSet, namespaced: true}
+    - {group: batch, version: v1, resource: cronjobs, kind: CronJob, namespaced: true}
+    - {group: networking.k8s.io, version: v1, resource: networkpolicies, kind: NetworkPolicy, namespaced: true}
+    - {group: networking.k8s.io, version: v1, resource: ingresses, kind: Ingress, namespaced: true}
+    - {group: argoproj.io, version: v1alpha1, resource: applications, kind: Application, namespaced: true}
+    - {group: rbac.authorization.k8s.io, version: v1, resource: clusterroles, kind: ClusterRole, namespaced: false}
+    - {group: rbac.authorization.k8s.io, version: v1, resource: clusterrolebindings, kind: ClusterRoleBinding, namespaced: false}
+    - {group: admissionregistration.k8s.io, version: v1, resource: validatingwebhookconfigurations, kind: ValidatingWebhookConfiguration, namespaced: false}
+    - {group: admissionregistration.k8s.io, version: v1, resource: mutatingwebhookconfigurations, kind: MutatingWebhookConfiguration, namespaced: false}
+    - {group: admissionregistration.k8s.io, version: v1, resource: validatingadmissionpolicies, kind: ValidatingAdmissionPolicy, namespaced: false}
+    - {group: admissionregistration.k8s.io, version: v1, resource: validatingadmissionpolicybindings, kind: ValidatingAdmissionPolicyBinding, namespaced: false}
+    - {group: apiextensions.k8s.io, version: v1, resource: customresourcedefinitions, kind: CustomResourceDefinition, namespaced: false}
+
+# The observation rule set (clearance.observe-rules/v1, docs/observe-pipeline.md), generated from these values. A
+# complete document in `override` replaces it. Its name and version are in every assessment.
+rules:
+  name: observe-hangar
+  version: "2026.11.2"
+  override: ""
+  # Argo CD's application controller, as the API server sees it.
+  argoControllerSubject: system:serviceaccount:argocd:argocd-application-controller
+  # Federated agent identities (a subject with one of these prefixes, and a task_id in the user's extra).
+  federatedPrefixes: ["oidc:", "federated:"]
+  # The gate's own stamp names (they are stripped before a live object is hashed against a grant).
+  annotations:
+    grant: clearance.hangar.io/grant
+    rendered: clearance.hangar.io/rendered
+    strip: [clearance.hangar.io/tree, clearance.hangar.io/release, argocd.argoproj.io/tracking-id]
+  # Namespaces whose writes are governed, beside protectedNamespaces and the argocd namespace.
+  extraGovernedNamespaces: [kube-system]
+  # Cluster-scoped kinds whose writes are governed.
+  governedKinds: [ValidatingWebhookConfiguration, MutatingWebhookConfiguration, ValidatingAdmissionPolicy,
+                  ValidatingAdmissionPolicyBinding, ClusterRole, ClusterRoleBinding, Namespace, CustomResourceDefinition]
+  hpaNamespaces: []
+
+healthInterval: 1m
+gapGrace: 3m
+
+# hangar-prod reaches the lab core over plain HTTP through a host alias to the other cluster's ingress.
+hostAliases: []
+#  - ip: 192.168.1.72
+#    hostnames: [clearance.hangar-dev.local]
+
+# Ingress from the control plane (where the API server runs) and egress for DNS, the kube-apiserver and the core. Off by
+# default; turn it on with the CIDRs.
+networkPolicy:
+  enabled: false
+  controlPlaneCIDRs: []
+  apiServerCIDRs: []
+  clearanceCIDRs: []
+  clearancePorts: [80, 443]
+
+resources:
+  requests: {cpu: 50m, memory: 64Mi}
+  limits: {memory: 256Mi}
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
