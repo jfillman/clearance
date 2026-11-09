@@ -18,9 +18,11 @@ import (
 // fakeCore is the core's contract for an observed provider: a record per post, an observation de-duplicated by
 // source.event_id (the answer is the first record's seq and Duplicate).
 type fakeCore struct {
-	reqs    []*client.RecordRequest
-	byEvent map[string]int64
-	fail    error
+	reqs      []*client.RecordRequest
+	byEvent   map[string]int64
+	fail      error
+	failKind  string
+	failTimes int
 }
 
 func (f *fakeCore) Record(_ context.Context, r *client.RecordRequest) (*client.RecordRef, error) {
@@ -30,13 +32,17 @@ func (f *fakeCore) Record(_ context.Context, r *client.RecordRequest) (*client.R
 	if f.byEvent == nil {
 		f.byEvent = map[string]int64{}
 	}
-	if r.Kind == "observation" {
-		id := r.Record.Source["event_id"].(string)
-		if seq, ok := f.byEvent[id]; ok {
+	if id, ok := r.Record.Source["event_id"].(string); ok && id != "" {
+		key := r.Kind + "\x00" + id
+		if seq, dup := f.byEvent[key]; dup {
 			return &client.RecordRef{Seq: seq, Duplicate: true}, nil
 		}
+		if f.failKind == r.Kind && f.failTimes > 0 {
+			f.failTimes--
+			return nil, errors.New("transient")
+		}
 		f.reqs = append(f.reqs, r)
-		f.byEvent[id] = int64(len(f.reqs))
+		f.byEvent[key] = int64(len(f.reqs))
 		return &client.RecordRef{Seq: int64(len(f.reqs))}, nil
 	}
 	f.reqs = append(f.reqs, r)
@@ -346,5 +352,29 @@ func TestParseMessageRefusesWhatTheRulesDoNotSend(t *testing.T) {
 	}
 	if _, err := ParseMessage([]byte(fmt.Sprintf(`{"detail-type":"Config Configuration Item Change","detail":{"configurationItem":{}}}`)), t0); err == nil {
 		t.Fatal("a configuration item with no resource is an error")
+	}
+}
+
+// A failed assessment after a posted observation is completed by the retry: the core ends with one observation, one
+// assessment and one resolution (their event ids are derived from the event's, so each post is idempotent).
+func TestAssessmentFailureIsCompletedByTheRetry(t *testing.T) {
+	r := newRig(t)
+	r.co.failKind, r.co.failTimes = "assessment", 1
+	r.ingest(consoleSG("ev-1", t0).envelope(), t0)
+	r.clk.add(10 * time.Minute)
+	if err := r.c.Step(context.Background()); err == nil {
+		t.Fatal("the failed assessment is reported")
+	}
+	if r.acks != 0 || len(r.co.of("observation")) != 1 || len(r.co.of("assessment")) != 0 {
+		t.Fatalf("%v acks %d", r.co.kinds(), r.acks)
+	}
+	if err := r.c.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(r.co.kinds(), ",") != "observation,assessment,resolution" || r.acks != 1 {
+		t.Fatalf("%v acks %d", r.co.kinds(), r.acks)
+	}
+	if got := *r.co.of("assessment")[0].Record.Coverage; got != "out-of-band-detected" {
+		t.Fatal(got)
 	}
 }

@@ -226,17 +226,22 @@ func (c *Collector) emit(ctx context.Context, m *Merged) error {
 	}
 	c.remember(v.ID, ref.Seq)
 	if ref.Duplicate {
-		// The core already has this event (a redelivery, or the other feed's copy): its observation, assessment and
-		// resolution were posted with it.
+		// The core already has this event (a redelivery, or the other feed's copy). ref.Seq is the original record's
+		// seq. The chain is posted whole anyway: the assessment and resolution carry deterministic event ids, so the
+		// core's de-duplication makes each post idempotent and a failed assessment is completed by the retry.
 		c.count(func(s *Stats) { s.Duplicates++ })
-		return nil
+	} else {
+		c.count(func(s *Stats) { s.Posted++ })
 	}
-	c.count(func(s *Stats) { s.Posted++ })
-	if _, err := c.post(ctx, evidence.KindAssessment, c.assessment(m, a, ref.Seq)); err != nil {
+	as := c.assessment(m, a, ref.Seq)
+	as.Source["event_id"] = v.ID + "/assessment"
+	if _, err := c.post(ctx, evidence.KindAssessment, as); err != nil {
 		return fmt.Errorf("posting the assessment of seq %d: %w", ref.Seq, err)
 	}
 	if a.Coverage != evidence.CoverageAuthorizedAndVerified {
-		if _, err := c.post(ctx, evidence.KindResolution, resolution(scopeID, ref.Seq, "still-live", "")); err != nil {
+		rr := resolution(scopeID, ref.Seq, "still-live", "")
+		rr.Source["event_id"] = v.ID + "/resolution"
+		if _, err := c.post(ctx, evidence.KindResolution, rr); err != nil {
 			return fmt.Errorf("posting the resolution of seq %d: %w", ref.Seq, err)
 		}
 	}
@@ -441,9 +446,9 @@ func (c *Collector) emitConfigOnly(ctx context.Context, m *Merged) error {
 	c.remember(id, ref.Seq)
 	if ref.Duplicate {
 		c.count(func(s *Stats) { s.Duplicates++ })
-		return nil
+	} else {
+		c.count(func(s *Stats) { s.Posted++; s.ConfigOnly++ })
 	}
-	c.count(func(s *Stats) { s.Posted++; s.ConfigOnly++ })
 	tier := 1
 	detail := fmt.Sprintf("AWS Config recorded %s %s changed (%s) and the trail delivered no event for it within the settle time: an effect the trail did not report, with no actor to quote", cc.ResourceType, cc.ResourceID, strings.Join(cc.Pointers(), ", "))
 	if len(cc.Related) > 0 {
@@ -454,10 +459,13 @@ func (c *Collector) emitConfigOnly(ctx context.Context, m *Merged) error {
 		RuleSet:     map[string]any{"version": c.Pipe.RuleSet().Version, "name": c.Pipe.RuleSet().Name},
 		Attribution: map[string]any{"signal": "config.item-without-event", "detail": clipText(detail, 3500)},
 		Source:      map[string]any{"name": ProviderName}}
+	as.Source["event_id"] = id + "/assessment"
 	if _, err := c.post(ctx, evidence.KindAssessment, as); err != nil {
 		return fmt.Errorf("posting the assessment of seq %d: %w", ref.Seq, err)
 	}
-	if _, err := c.post(ctx, evidence.KindResolution, resolution(cc.Account, ref.Seq, "still-live", "")); err != nil {
+	rr := resolution(cc.Account, ref.Seq, "still-live", "")
+	rr.Source["event_id"] = id + "/resolution"
+	if _, err := c.post(ctx, evidence.KindResolution, rr); err != nil {
 		return fmt.Errorf("posting the resolution of seq %d: %w", ref.Seq, err)
 	}
 	return nil
