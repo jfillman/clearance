@@ -9,15 +9,9 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
-## [0.37.0] - 2026-11-09
-
-### Fixed
-- **The Argo agent no longer tries to read namespaces the gate does not protect.** A protected project can hold an
-  environment that is not gated, such as a staging beside a gated prod. The agent has no read in such a namespace, so
-  every list logged a 403. It now reports only Applications whose destination namespace is labelled protected.
+## [0.38.0] - 2026-11-09
 
 ### Added
-
 - **The AWS collector, observe-aws** (O-4; `providers/observe-aws`, [docs/observe-aws.md](docs/observe-aws.md)). Three feeds
   through one normalizer and the O-2 pipeline: CloudTrail writes and AWS Config items from an EventBridge queue, and the S3
   trail read in batches with log-file integrity validation (each digest's RSA signature, its link to the previous digest
@@ -27,14 +21,6 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   drift detectors are now stages of it and the `terraform-detector` command is removed (same exceptions, same
   once-only rule). Chart `clearance-observe-aws`, image `clearance-observe-aws`. Unverified against a real trail, queue and
   Config recorder (see the doc).
-- **O-2: the observation pipeline (`internal/observe/pipeline`) and `clearance observe replay`.** Six stages over raw
-  Kubernetes audit events and CloudTrail records: normalize, scope, noise, attribute, classify, correlate. The rules are
-  CEL in a versioned bundle (`clearance.observe-rules/v1`) compiled once at load under a cost limit and named in every
-  assessment; a rule that does not compile, is over the limit, or is a blanket noise rule (anything from a service
-  account) makes the bundle refuse to load. Attribution is an ordered signal list per provider; a burst is one change
-  transaction; an apply-and-revert is one exception; an operation on monitoring is tier 3, alerts and flips the scope's
-  health. The packet carries the per-rule `filtered: N events under rule X` counts when a collector supplies them
-  (`packet.Params.Filtered`). Documented in `docs/observe-pipeline.md`. Wired to no collector yet (O-3, O-4).
 - **O-3: the Kubernetes audit collector (`providers/observe-k8s`), its image (`clearance-observe-k8s`) and chart
   (`clearance-observe-k8s`).** The webhook receiver for the API server's audit backend (mutual TLS with a name allowlist,
   Secret bodies cut before anything is written, acknowledged only after an fsynced append to a durable queue on a
@@ -48,6 +34,22 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   counts from the collectors' health records. `pipeline.ObjectGrants` resolves an object-less Argo write (a Secret, a
   prune) through the grants' object lists. Docs: `docs/observe-k8s.md`, `docs/observe-k8s-runbook.md`.
 
+## [0.37.0] - 2026-11-09
+
+### Fixed
+- **The Argo agent no longer tries to read namespaces the gate does not protect.** A protected project can hold an
+  environment that is not gated, such as a staging beside a gated prod. The agent has no read in such a namespace, so
+  every list logged a 403. It now reports only Applications whose destination namespace is labelled protected.
+
+### Added
+- **O-2: the observation pipeline (`internal/observe/pipeline`) and `clearance observe replay`.** Six stages over raw
+  Kubernetes audit events and CloudTrail records: normalize, scope, noise, attribute, classify, correlate. The rules are
+  CEL in a versioned bundle (`clearance.observe-rules/v1`) compiled once at load under a cost limit and named in every
+  assessment; a rule that does not compile, is over the limit, or is a blanket noise rule (anything from a service
+  account) makes the bundle refuse to load. Attribution is an ordered signal list per provider; a burst is one change
+  transaction; an apply-and-revert is one exception; an operation on monitoring is tier 3, alerts and flips the scope's
+  health. The packet carries the per-rule `filtered: N events under rule X` counts when a collector supplies them
+  (`packet.Params.Filtered`). Documented in `docs/observe-pipeline.md`. Wired to no collector yet (O-3, O-4).
 ## [0.36.1] - 2026-11-09
 
 ### Fixed
@@ -908,7 +910,8 @@ What the Autopilot gateway needs of the core before the hangar-dev cutover (R-3e
   scope, narrow-only limits, CEL policy, sessions, the hash-chained audit log and the gateway; the Hangar pack's
   `glidepath.*` and `airframe.*` tools over glidepath-api and a GET-only Kubernetes adapter.
 
-[Unreleased]: https://github.com/jfillman/clearance/compare/v0.37.0...HEAD
+[Unreleased]: https://github.com/jfillman/clearance/compare/v0.38.0...HEAD
+[0.38.0]: https://github.com/jfillman/clearance/compare/v0.37.0...v0.38.0
 [0.37.0]: https://github.com/jfillman/clearance/compare/v0.36.1...v0.37.0
 [0.36.1]: https://github.com/jfillman/clearance/compare/v0.36.0...v0.36.1
 [0.36.0]: https://github.com/jfillman/clearance/compare/v0.35.0...v0.36.0
