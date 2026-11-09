@@ -37,6 +37,7 @@ vocabulary:
   gateOutsideGroups: ["group:default/admins"]
   gateReleaseStamps: ["/metadata/labels/app.kubernetes.io~1version"]
   gateOwnerFallback: "group:default/admins"
+  monitoringProtectionOps: ["StopLogging", "DeleteTrail", "UpdateTrail", "PutEventSelectors", "StopConfigurationRecorder", "DeleteConfigRule"]
   v0Provider: autopilot-gateway/unrecorded
   aiCoauthors: ["<noreply@anthropic.com>", "Acme Agent <agent@acme.dev>"]
 gate:

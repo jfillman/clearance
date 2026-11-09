@@ -142,6 +142,13 @@ type Reader interface {
 	Records(ctx context.Context, from int64, limit int) ([]Record, error)
 	// Receipts are the records whose tool is in tools and whose effect names repo and pr (provenance).
 	Receipts(ctx context.Context, repo string, pr int, tools []string) ([]Record, error)
+	// EventRecord is the first record a provider wrote of kind (its tool) for the event the provider itself names
+	// (source.name, source.event_id): the idempotency key of POST /v1/records. A record with no source.name matches an
+	// event_id with source "". ErrNotFound when there is none.
+	EventRecord(ctx context.Context, provider, kind, source, eventID string) (Record, error)
+	// LatestHealth is the newest observation.health record of the scope and source, from any writer (the core writes
+	// one when an operation on monitoring flips a scope). ErrNotFound when there is none.
+	LatestHealth(ctx context.Context, scope, source string) (Record, error)
 	// Assurance is the record's assurance state, kept beside it, never inside the hash.
 	Assurance(ctx context.Context, seq int64) (string, error)
 

@@ -45,7 +45,7 @@ func TestEvidenceSchemaMatchesTheWriter(t *testing.T) {
 		"boundary":  {strs(s.Props["boundary"].Enum), evidence.Boundaries},
 		"coverage":  {strs(s.Else.Properties["coverage"].Enum), evidence.Coverage},
 		"assurance": {strs(s.Props["assurance"].Enum), evidence.Assurance},
-		"schema":    {strs(s.Props["schema"].Enum), []string{evidence.Schema, evidence.SchemaV0}},
+		"schema":    {strs(s.Props["schema"].Enum), []string{evidence.Schema, evidence.SchemaV1_1, evidence.SchemaV0}},
 		"subject":   {strs(s.Props["subject"].OneOf[1].Properties["kind"].Enum), evidence.SubjectKinds},
 	} {
 		if !slices.Equal(c.got, c.want) {

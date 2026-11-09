@@ -61,11 +61,44 @@ the inbox, trigger history, results), so the Go API serves only Clearance's own 
 | getContract | `GET /v1/contract` | **ported**; an OpenAPI 3.1 document since C-10, naming `x-clearance-core` (`CLEARANCE_CORE_URL`) and `x-clearance-gateway` |
 | (healthz, readyz) | `GET /healthz`, `/readyz` | **ported**; readyz checks the database |
 | (new) listDefinitions | `GET /v1/definitions` | **new**: the definitions Clearance holds, api.py's agent view without the gateway's `hold` |
-| (new) listExceptions | `GET /v1/exceptions` | **new** (C-6): the packet's exceptions: every `deploy.exception` (`kind=` out-of-band, drift, untraced-apply, digest-mismatch), `deploy.degraded`, `breakglass.open`, `breakglass.close`, and every `coverage-unavailable` record; `tool`, `kind`, `app`, `since`, `until`, `limit`, `after`; newest first, cursor `seq`, scoped like the evidence list ([gate.md](gate.md#the-packets-exceptions)) |
+| (new) listExceptions | `GET /v1/exceptions` | **new** (C-6): the packet's exceptions: every `deploy.exception` (`kind=` out-of-band, drift, untraced-apply, digest-mismatch, attempted-refused, monitoring-protection), `deploy.degraded`, `breakglass.open`, `breakglass.close`, and every `coverage-unavailable` record; `tool`, `kind`, `app`, `since`, `until`, `limit`, `after`; newest first, cursor `seq`, scoped like the evidence list ([gate.md](gate.md#the-packets-exceptions)) |
+| (new) listObservations | `GET /v1/observations` | **new** (O-1), auditors: a scope's `observation` records (`kind=assessment` or `resolution` for those); `scope` required, `source`, `since`, `until`, `limit`, `after`; newest first, cursor `seq` |
+| (new) listObservationHealth | `GET /v1/observations/health` | **new** (O-1), auditors: a scope's `observation.health` and `observation.audit-gap` records, same parameters |
+| (new) getCoverage | `GET /v1/coverage` | **new** (O-1), auditors: the three-part coverage statement of a scope and window ([below](#observations-and-the-coverage-statement-o-1)) |
 | (new) getKeys | `GET /v1/keys` | **new** (C-1): the clearance token verification keys, a JWKS, from `clearance_signing_keys`; public |
 | (new) getGrantFeed | `GET /v1/grant-feeds/{cluster}` | **new** (C-10): the cluster's **signed** grant feed, for grant-sync (below) |
 | (new) listInstallations | `GET /v1/github/installations` | **new** (C-10): the GitHub App's installations as the records name them |
 | (new) streamEvents | `GET /v1/stream` | **new** (C-10): server-sent events of new records and gate state changes |
+
+### Observations and the coverage statement (O-1)
+
+Built. Three auditor-only reads over the observation kinds ([evidence.md](evidence.md#observations-clearanceevidencev11-o-1)).
+They are auditor-only because an observation is about an account or a cluster, not an agent or an app, so there is no
+narrower scope to give a person; a person gets 403.
+
+`GET /v1/coverage?scope=&from=&to=` (RFC 3339; `to` defaults to now and is never in the future, `from` to 24 hours
+before it; at most 92 days) answers:
+
+- `cleared_and_verified`: the observations whose latest assessment is `authorized-and-verified` (an operation on
+  monitoring never is), with `count`, `by_coverage` and the first 200 `items`;
+- `seen_not_cleared`: every other observation, by coverage (`out-of-band-detected`, `observed-not-attributed`,
+  `break-glass`, `attempted-refused`, or `unassessed` when no assessment has arrived), each item with its latest
+  resolution and cause;
+- `could_not_see`: the `segments` of the window a feed was blind or degraded (`reason`: `reported`, `stale` or
+  `never-seen`), the `audit_gaps`, and the seconds;
+- `health`: per source, the worst `state` in the window, the state `now`, the last health record, whether it is `stale`
+  and the checks that failed;
+- `state` (`healthy`, `degraded` or `blind`: the worst of any source; `blind` when no feed has a health record at all),
+  `clean` and `text` (the statement in words, what the packet prints).
+
+A health record holds for twice its `interval_seconds` (default 900); after that the feed is blind until the next one.
+`clean` is true only when `state` is `healthy` and nothing was seen uncleared and no read was truncated (10000 records
+of a kind): **a clean exceptions list is never printed for a window without a healthy health record**, and a feed that
+stops produces a blind window. A window that starts before the feed's first health record is blind (`never-seen`) for the
+stretch before it. `TestCoverageIsBlindForAScopeWhoseHealthRecordIsStale` runs this on memory and on Postgres.
+
+Indexes (the core's schema): `clearance_evidence_observed` on `((record->>'scope'), seq)` for the five kinds, and
+`clearance_evidence_event` on provider, kind and `source.event_id` behind the core's de-duplication.
 
 ### The grant feed and the token (C-1)
 

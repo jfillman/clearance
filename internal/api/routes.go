@@ -6,6 +6,7 @@ import (
 
 	"github.com/jfillman/clearance/internal/attest"
 	"github.com/jfillman/clearance/internal/gate"
+	"github.com/jfillman/clearance/internal/observe"
 	"github.com/jfillman/clearance/internal/token"
 )
 
@@ -115,11 +116,32 @@ var routeTable = []Route{
 	{OperationID: "listExceptions", Method: "GET", Path: "/v1/exceptions", Roles: PersonRoles,
 		Params: []string{"tool", "kind", "app", "since", "until", "limit", "after"},
 		Summary: "The packet's exceptions, newest first; the cursor is seq: every deploy.exception (kind=out-of-band, " +
-			"drift, untraced-apply or digest-mismatch), every provider's degraded-mode report (deploy.degraded: what " +
+			"drift, untraced-apply, digest-mismatch, attempted-refused or monitoring-protection), every provider's degraded-mode report (deploy.degraded: what " +
 			"it did while the core was unreachable, with the outage policy it was held to), every break-glass window " +
 			"(breakglass.open, breakglass.close with what changed in it) and every runtime read allowed during an " +
 			"outage (tool.call, coverage-unavailable). tool narrows to one of those",
 		Response: EvidencePage{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).listExceptions},
+	{OperationID: "listObservations", Method: "GET", Path: "/v1/observations", Roles: []string{RoleAuditor},
+		Params: []string{"scope", "source", "kind", "since", "until", "limit", "after"},
+		Summary: "The observation records (clearance.evidence/v1.1) of one scope, newest first; the cursor is seq. " +
+			"kind=observation (default), assessment or resolution. scope is required: the account, cluster or workspace " +
+			"observed; source narrows to one feed. Auditors only",
+		Response: EvidencePage{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).listObservations},
+	{OperationID: "listObservationHealth", Method: "GET", Path: "/v1/observations/health", Roles: []string{RoleAuditor},
+		Params: []string{"scope", "source", "since", "until", "limit", "after"},
+		Summary: "The health of the feeds behind a scope's observations, newest first: observation.health records " +
+			"(healthy, degraded or blind per source, with the checks that produced it) and the observation.audit-gap " +
+			"records written when a feed dropped. scope is required. Auditors only",
+		Response: EvidencePage{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).listObservationHealth},
+	{OperationID: "getCoverage", Method: "GET", Path: "/v1/coverage", Roles: []string{RoleAuditor},
+		Params: []string{"scope", "from", "to"},
+		Summary: "The coverage statement for a scope and window (from and to, RFC 3339; default the last 24 hours): " +
+			"what was cleared and verified, what was seen and not cleared (by coverage state, with how each ended), " +
+			"what could not be seen (the stretches a feed was blind or degraded, and the audit gaps), and the health " +
+			"of each feed. clean is true only when nothing was seen uncleared and every feed was healthy for the " +
+			"whole window: a window with no healthy health record, or whose last record has gone stale, is blind and " +
+			"never clean. Auditors only",
+		Response: observe.Statement{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).getCoverage},
 	{OperationID: "getEvidence", Method: "GET", Path: "/v1/evidence/{seq}", Roles: PersonRoles, Params: []string{},
 		Summary:  "One evidence record with its hash",
 		Response: Record{}, Errors: []int{400, 401, 403, 404, 503}, serve: (*Server).getEvidence},

@@ -32,6 +32,10 @@ type EvidenceFilter struct {
 	// its exception.kind.
 	Exceptions bool
 	Kind       string
+	// Scope keeps the records of one observed scope (O-1: the observation kinds' scope), Source those whose
+	// source.name is it, and Tools those whose tool is one of them.
+	Scope, Source string
+	Tools         []string
 }
 
 // ChangeFilter is the deployment gate's list and counts filters; "" and nil are unset.

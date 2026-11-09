@@ -25,6 +25,9 @@ type EvaluationResult struct {
 type RecordRef struct {
 	Seq  int64  `json:"seq"`
 	Hash string `json:"hash"`
+	// Duplicate is true when POST /v1/records found the provider's own event (source.event_id) already recorded and
+	// answers with that record's reference instead of writing another (O-1). Absent otherwise.
+	Duplicate bool `json:"duplicate,omitempty"`
 }
 
 // Caller is the `caller` field of a decision or outcome record: the registered provider that asked, and the

@@ -16,7 +16,7 @@ from ._codec import Field, Model, Operation
 
 CONTRACT_VERSION = "1.0.0"
 
-RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "run.finish", "human.answer", "session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome", "deploy.exception", "deploy.degraded", "federated.decision")
+RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "run.finish", "human.answer", "session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome", "deploy.exception", "deploy.degraded", "federated.decision", "observation", "assessment", "resolution", "observation.health")
 
 __all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateReason", "GateRequirement", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "Health", "Hold", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
 
@@ -1379,17 +1379,24 @@ class ProviderEvent(Model):
 
     _STRICT: ClassVar[bool] = True
     _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("about", "about", ("map", ("any",)), False),
+        Field("action", "action", ("map", ("any",)), False),
+        Field("actor", "actor", ("map", ("any",)), False),
         Field("agent", "agent", ("nullable", ("str",)), False),
         Field("app", "app", ("nullable", ("str",)), False),
         Field("args_sha256", "args_sha256", ("nullable", ("str",)), False),
+        Field("attribution", "attribution", ("map", ("any",)), False),
         Field("change", "change", ("map", ("any",)), False),
+        Field("correlation", "correlation", ("map", ("any",)), False),
         Field("cost", "cost", ("nullable", ("ref", "Cost")), False),
         Field("coverage", "coverage", ("nullable", ("str",)), False),
         Field("decision", "decision", ("nullable", ("str",)), False),
         Field("destination", "destination", ("map", ("any",)), False),
         Field("effect", "effect", ("map", ("any",)), False),
         Field("exception", "exception", ("map", ("any",)), False),
+        Field("health", "health", ("map", ("any",)), False),
         Field("initiator", "initiator", ("map", ("any",)), False),
+        Field("integrity", "integrity", ("map", ("any",)), False),
         Field("intent", "intent", ("nullable", ("str",)), False),
         Field("model_version", "model_version", ("nullable", ("str",)), False),
         Field("outage", "outage", ("map", ("any",)), False),
@@ -1399,28 +1406,41 @@ class ProviderEvent(Model):
         Field("principal", "principal", ("nullable", ("str",)), False),
         Field("reason", "reason", ("nullable", ("str",)), False),
         Field("release", "release", ("map", ("any",)), False),
+        Field("resolution", "resolution", ("map", ("any",)), False),
+        Field("resource", "resource", ("map", ("any",)), False),
         Field("result", "result", ("nullable", ("str",)), False),
         Field("rule", "rule", ("nullable", ("str",)), False),
+        Field("rule_set", "rule_set", ("map", ("any",)), False),
+        Field("scope", "scope", ("nullable", ("str",)), False),
         Field("session", "session", ("nullable", ("str",)), False),
         Field("source", "source", ("map", ("any",)), False),
+        Field("state_change", "state_change", ("map", ("any",)), False),
         Field("subject", "subject", ("map", ("any",)), False),
         Field("target", "target", ("nullable", ("str",)), False),
         Field("task_id", "task_id", ("nullable", ("str",)), False),
         Field("tier", "tier", ("nullable", ("int",)), False),
+        Field("times", "times", ("map", ("any",)), False),
         Field("tool", "tool", ("nullable", ("str",)), False),
     )
 
+    about: dict[str, Any] | None = None
+    action: dict[str, Any] | None = None
+    actor: dict[str, Any] | None = None
     agent: str | None = None
     app: str | None = None
     args_sha256: str | None = None
+    attribution: dict[str, Any] | None = None
     change: dict[str, Any] | None = None
+    correlation: dict[str, Any] | None = None
     cost: Cost | None = None
     coverage: str | None = None
     decision: str | None = None
     destination: dict[str, Any] | None = None
     effect: dict[str, Any] | None = None
     exception: dict[str, Any] | None = None
+    health: dict[str, Any] | None = None
     initiator: dict[str, Any] | None = None
+    integrity: dict[str, Any] | None = None
     intent: str | None = None
     model_version: str | None = None
     outage: dict[str, Any] | None = None
@@ -1430,14 +1450,20 @@ class ProviderEvent(Model):
     principal: str | None = None
     reason: str | None = None
     release: dict[str, Any] | None = None
+    resolution: dict[str, Any] | None = None
+    resource: dict[str, Any] | None = None
     result: str | None = None
     rule: str | None = None
+    rule_set: dict[str, Any] | None = None
+    scope: str | None = None
     session: str | None = None
     source: dict[str, Any] | None = None
+    state_change: dict[str, Any] | None = None
     subject: dict[str, Any] | None = None
     target: str | None = None
     task_id: str | None = None
     tier: int | None = None
+    times: dict[str, Any] | None = None
     tool: str | None = None
 
 
@@ -1469,10 +1495,12 @@ class RecordRef(Model):
 
     _STRICT: ClassVar[bool] = False
     _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("duplicate", "duplicate", ("bool",), False),
         Field("hash", "hash", ("str",), True),
         Field("seq", "seq", ("int",), True),
     )
 
+    duplicate: bool | None = None
     hash: str
     seq: int
 

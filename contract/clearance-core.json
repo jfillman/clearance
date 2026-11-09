@@ -2284,6 +2284,18 @@
       "ProviderEvent": {
         "additionalProperties": false,
         "properties": {
+          "about": {
+            "additionalProperties": {},
+            "type": "object"
+          },
+          "action": {
+            "additionalProperties": {},
+            "type": "object"
+          },
+          "actor": {
+            "additionalProperties": {},
+            "type": "object"
+          },
           "agent": {
             "type": [
               "string",
@@ -2302,7 +2314,15 @@
               "null"
             ]
           },
+          "attribution": {
+            "additionalProperties": {},
+            "type": "object"
+          },
           "change": {
+            "additionalProperties": {},
+            "type": "object"
+          },
+          "correlation": {
             "additionalProperties": {},
             "type": "object"
           },
@@ -2340,7 +2360,15 @@
             "additionalProperties": {},
             "type": "object"
           },
+          "health": {
+            "additionalProperties": {},
+            "type": "object"
+          },
           "initiator": {
+            "additionalProperties": {},
+            "type": "object"
+          },
+          "integrity": {
             "additionalProperties": {},
             "type": "object"
           },
@@ -2396,6 +2424,14 @@
             "additionalProperties": {},
             "type": "object"
           },
+          "resolution": {
+            "additionalProperties": {},
+            "type": "object"
+          },
+          "resource": {
+            "additionalProperties": {},
+            "type": "object"
+          },
           "result": {
             "type": [
               "string",
@@ -2408,6 +2444,16 @@
               "null"
             ]
           },
+          "rule_set": {
+            "additionalProperties": {},
+            "type": "object"
+          },
+          "scope": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "session": {
             "type": [
               "string",
@@ -2415,6 +2461,10 @@
             ]
           },
           "source": {
+            "additionalProperties": {},
+            "type": "object"
+          },
+          "state_change": {
             "additionalProperties": {},
             "type": "object"
           },
@@ -2439,6 +2489,10 @@
               "integer",
               "null"
             ]
+          },
+          "times": {
+            "additionalProperties": {},
+            "type": "object"
           },
           "tool": {
             "type": [
@@ -2483,6 +2537,9 @@
       },
       "RecordRef": {
         "properties": {
+          "duplicate": {
+            "type": "boolean"
+          },
           "hash": {
             "type": "string"
           },
@@ -4421,6 +4478,10 @@
     "deploy.outcome",
     "deploy.exception",
     "deploy.degraded",
-    "federated.decision"
+    "federated.decision",
+    "observation",
+    "assessment",
+    "resolution",
+    "observation.health"
   ]
 }

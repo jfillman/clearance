@@ -9,6 +9,24 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Added
+- **O-1: `clearance.evidence/v1.1`, observations.** Additive: the schema file is the same (`x-clearance-revision` 4),
+  and a record says v1.1 only when it is an observation kind or its coverage is new; every other record is still v1.
+  Two new coverage states (`break-glass`, `attempted-refused`); five new kinds: `observation` (the normalized event,
+  with `integrity` splitting `sourceVerified` from `completenessClaimed`), `assessment`, `resolution` (with a cause on a
+  revert), `observation.health` (healthy, degraded or blind, with the checks) and the core's `observation.audit-gap`.
+  `deploy.exception` gains `attempted-refused` (does not move a change) and `monitoring-protection`.
+  Secrets are observed at Metadata only and an observation cannot carry a Secret body. An operation on monitoring
+  (`CLEARANCE_MONITORING_PROTECTION_OPS`, chart `vocabulary.monitoringProtectionOps`, default none) is tier 3 whether or
+  not it succeeded and flips its scope's health. A provider writes the observation kinds only when its `kinds` name them.
+- **`POST /v1/records` de-duplicates** a provider's own event by provider, kind, `source.name` and `source.event_id`: a
+  repeat answers 200 with the first record's reference and `duplicate: true` and writes nothing (closes the R-9 line).
+  New indexes `clearance_evidence_event` and `clearance_evidence_observed` (created on start).
+- **clearance-api** (auditors): `GET /v1/observations`, `GET /v1/observations/health` and `GET /v1/coverage?scope=&from=&to=`,
+  the three-part statement (cleared and verified; seen, not cleared; could not see) with the health summary. A stale or
+  missing health record makes the window `blind`, and a blind window is never clean.
+- The core contract and the Python client models are regenerated (`duplicate` on the record reference).
+
 ## [0.35.0] - 2026-11-09
 
 ### Changed

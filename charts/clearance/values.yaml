@@ -80,6 +80,10 @@ vocabulary:
   # (default the app.kubernetes.io/version label, on the object and its pod template)
   gateReleaseStamps: []
   gateOwnerFallback: ""
+  # CLEARANCE_MONITORING_PROTECTION_OPS: globs on the observed operations that protect monitoring (a trail, an audit
+  # policy, a recorder), "<api>" or "<source>:<api>"; such an observation is tier 3 and flips its scope's health
+  # (default none; a provider may also mark one itself)
+  monitoringProtectionOps: []
   # CLEARANCE_V0_PROVIDER: name/version for rows written before providers were recorded (default unrecorded/unrecorded)
   v0Provider: ""
   # CLEARANCE_AI_COAUTHORS: matchers on the Co-Authored-By, Assisted-by and Generated-by trailers an AI coding agent

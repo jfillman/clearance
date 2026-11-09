@@ -1,10 +1,10 @@
-# The evidence record: clearance.evidence/v1
+# The evidence record: clearance.evidence/v1 and v1.1
 
 Every decision Clearance makes, and every event a registered provider reports, is one evidence record in one
 hash-chained log. This page is the record's contract: the schema, the versioning rule, how the rows written before
 the schema froze are read, and the record check on real hangar-dev records.
 
-Status: **Built** (R-6). The schema is published at
+Status: **Built** (R-6; v1.1, the observation kinds, O-1: [Observations](#observations-clearanceevidencev11-o-1)). The schema is published at
 [`schemas/evidence.schema.json`](../schemas/evidence.schema.json) (`$id`
 `https://clearance.hangarplatform.dev/schemas/evidence/v1.json`, embedded in the Go binary as
 `github.com/jfillman/clearance/schemas.EvidenceV1`). The Go core is the one writer
@@ -52,10 +52,10 @@ schema are allowed and are claimed unless the writer verified them.
 | Provenance | `provenance` | optional {level, signals[{name, tag}]} |
 | Decision | `decision`, `tier`, `rule`, `rules`, `reason`, `policy`, `approvals`, `token`, `preflight` | verdict, tier, rule fired; `policy` {ref, engine, version}, filled by R-5 for runtime decisions (engine `cel-go`) and by C-8 for deployment decisions (plus `verdict` and `bundle`: the offline admission engine's result and rule set; [gate.md](gate.md) "The policy in the record"); `approvals` [{sub, iss, via, at}] (C-1: on `deploy.clear`, with `person` and `role`, and on the App's `deploy.request` and `deploy.answer` once cleared); `token` the clearance token's nonce (C-1: `deploy.clear`, `deploy.revoke`); `attestation` {digest, backend, outcome_seq, rekor_log_index, ...} (C-2: `deploy.attestation`, [core.md](core.md#change-attestations)); `preflight` {result: pass\|fail\|not-run, definition, cases} optional (revision 3, AP-C1): the Preflight result of a run's definition |
 | Outcome | `result`, `effect`, `refusal`, `outcome` | `result` keeps its v0 meaning (the result line, or a deny's reason); `effect` is the receipt of a write the writer made; `refusal` {rule, message} optional (revision 2): a handler's refusal on an outcome, after the core allowed; `outcome` {applied, observed_revision, digests, health, rollback} optional; `exception` {kind, objects, addresses, actor, expected, observed, state, detected_at, detail} on `deploy.exception` (revision 3, C-6); `usage` (revision 3, AP-C2) on a `model.call` outcome: {input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, charged_tokens}; `cost` (revision 3) on `run.finish`: the run's own summary |
-| Coverage state | `coverage`, `outage`, `outage_policy`, `breakglass`, `window`, `changes`, `reported`, `truncated`, `limitations` | `coverage`: `authorized-and-verified` (default), `observed-not-attributed`, `out-of-band-detected`, `coverage-unavailable`; the core sets it on `deploy.exception` from the kind. Revision 3 (C-6): `outage` {from, to} on `deploy.degraded` (claimed) and `outage_policy` {action, source, conforms} (verified, the core's); `breakglass` the window on `breakglass.open`/`.close`, or its id on an exception inside it (verified); `window`, `changes`, `reported`, `truncated`, `limitations` on `breakglass.close` (verified) ([gate.md](gate.md#protected-environments-the-outage-policy-states-exceptions-and-break-glass-c-6-built)) |
+| Coverage state | `coverage`, `outage`, `outage_policy`, `breakglass`, `window`, `changes`, `reported`, `truncated`, `limitations` | `coverage`: `authorized-and-verified` (default), `observed-not-attributed`, `out-of-band-detected`, `coverage-unavailable`, and from v1.1 `break-glass` and `attempted-refused`; the core sets it on `deploy.exception` from the kind. Revision 3 (C-6): `outage` {from, to} on `deploy.degraded` (claimed) and `outage_policy` {action, source, conforms} (verified, the core's); `breakglass` the window on `breakglass.open`/`.close`, or its id on an exception inside it (verified); `window`, `changes`, `reported`, `truncated`, `limitations` on `breakglass.close` (verified) ([gate.md](gate.md#protected-environments-the-outage-policy-states-exceptions-and-break-glass-c-6-built)) |
 | Assurance state | `assurance` | beside the record, never hashed: `checkpointed`, `recorded-not-checkpointed`, `not-recorded`; a reader adds it |
 | Intent | `intent` | {capture: redacted\|full, sha256[, text]}; only when the event has an intent |
-| Integrity | `schema`, `seq`, `ts`, `prev_hash`, `hash`, `verified`, `claimed`, `projected` | `projected` is read-only, added by a reader (below). A signature and a checkpoint reference attach beside the record when the ledger exists, like `assurance` |
+| Integrity | `schema`, `seq`, `ts`, `prev_hash`, `hash`, `verified`, `claimed`, `projected`; v1.1: `integrity`, `times`, `completeness_supported` on an observation | `projected` is read-only, added by a reader (below). A signature and a checkpoint reference attach beside the record when the ledger exists, like `assurance` |
 
 Required in every v1 record: `schema`, `seq`, `ts`, `prev_hash`, `hash`, `boundary`, `coverage`, `provider`,
 `subject`, `tool`, `verified`, `claimed`.
@@ -109,6 +109,14 @@ func Stored(r map[string]any) map[string]any
   `GatewayVerified` plus `matched` (the core compared the applied plan digest with the cleared one); `outcome`
   {applied, digests, changes, started_at, finished_at, error} is the reporter's claim. A mismatch adds a
   `deploy.exception` (`exception.kind: digest-mismatch`, `expected`, `observed`; `coverage: out-of-band-detected`).
+- A registered provider's record that names its own event (`source.event_id`, optionally `source.name`) is
+  **de-duplicated** (O-1): the core looks for an earlier record of the same provider, kind, `source.name` and
+  `source.event_id` and, if there is one, writes nothing and answers `200` with that record's `{seq, hash}` and
+  `duplicate: true`. At-least-once adapters can therefore post again after a restart. The check and the write are one
+  step (one writer, one lock), and `clearance_evidence_event` indexes it. A record with no `source.event_id` is never a
+  duplicate. This is the R-9 line "de-duplicate POST /v1/records (idempotency by provider, kind and the provider's
+  own event id)"; the Argo agent and the Traefik Hub adapter key their own state rather than send an event id, so they
+  are unchanged.
 - A registered provider's own records (POST /v1/records: session.open, run.launch, run.finish, deploy.outcome,
   ...): that provider's name and version, and `evidence.ProviderVerified` (only `provider` is verified; everything
   the provider says is claimed). Pass the provider's `subject` in the event. A `tool.call` record from a provider is
@@ -156,6 +164,72 @@ and any count over 2^40.
 the `run.finish` records' `cost`, so a run is never counted twice. A partial index on the records that carry either
 field (`clearance_evidence_cost`) keeps it off a chain scan.
 
+## Observations: clearance.evidence/v1.1 (O-1)
+
+Built. A provider that watches an environment rather than gating it (a cloud audit trail, a Kubernetes audit webhook,
+a configuration recorder) reports what it *saw*. Seeing is not clearing: every observation is
+`observed-not-attributed` until an assessment says otherwise, and a feed that stops is `blind`, not clean. The change
+is **additive**: the schema file is the same, `x-clearance-revision` is 4, and a record says
+`clearance.evidence/v1.1` only when it is one of the kinds below or its coverage is `break-glass` or
+`attempted-refused`. Every other record is still `clearance.evidence/v1`, byte for byte, and one chain holds v0-draft,
+v1 and v1.1 (`TestChainVerifiesAcrossTheV1ToV1_1Boundary`: the lab-shaped fixture chain, extended with v1 then v1.1
+records, `clearance chain verify` ok).
+
+**Six coverage states.** The four of v1, plus `break-glass` (inside a declared break-glass window) and
+`attempted-refused` (an operation something tried and a control refused: nothing landed).
+
+**Five kinds.** A provider posts four of them through `POST /v1/records`, and only when its registration names them in
+`kinds` (a provider with no `kinds` writes every kind *but* these: a registered observed provider is one that opted
+in). The fifth is the core's.
+
+| Kind | Written by | What it is | Fields (all claimed unless noted) |
+| --- | --- | --- | --- |
+| `observation` | provider | The normalized event | `scope` (account, cluster or workspace), `source` {`name`, `event_id`, `level`?}, `resource` {kind, name or id, namespace, region, ...}, `actor` {`subject` (the subject the source verified), `chain` (who assumed whom), `issuer`, `client` (self-reported), `attributes`}, `action` {`verb`, `api`, `succeeded`, `refused_reason`?, `protects_monitoring`?}, `state_change` {before, after} where a state service has it, `correlation` {grant, plan, task_id, run_id, operation_id}, `integrity` {`sourceVerified`, `completenessClaimed`, `method`?}, `times` {requested, observed, delivered}. The core adds `coverage` (`observed-not-attributed`), `tier` (3 for an operation on monitoring, verified) and `completeness_supported` (verified) |
+| `assessment` | provider | What was made of an observation | `about` {seq}, `scope`, `coverage` (the assessed state: any of the six), `tier`, `rule_set` {version}, `attribution` {signal, detail?, grant?}: the signal that decided it |
+| `resolution` | provider | How an observed change ended | `about` {seq}, `scope`, `resolution` {`state`: `reverted`, `ratified`, `declared-break-glass` or `still-live`; `cause` on a revert only: `agent-caused`, `policy-triggered`, `human-initiated`, `automated-remediation`, `requirement-changed`, `external-dependency`, `unattributed`} |
+| `observation.health` | provider (and the core, below) | A feed's state per scope and source | `scope`, `source` {name}, `health` {`state`: `healthy`, `degraded` or `blind`; `checks` [{name, ok, detail?}], `interval_seconds`?} |
+| `observation.audit-gap` | the core | A feed dropped | `scope`, `source` {name}, `gap` {state, reason, health_seq, since?} (verified), coverage `coverage-unavailable` |
+
+**Source integrity is not completeness.** `integrity.sourceVerified` says the delivered log files were verified
+unaltered (a trail's digest chain). `integrity.completenessClaimed` says the provider believes the feed delivered
+everything for the period. Neither is the core's finding; the core adds `completeness_supported` (verified): true only
+when the scope and source's latest health record was `healthy` and not stale when the observation arrived. A claim of
+completeness over a feed that was blind reads `completenessClaimed: true`, `completeness_supported: false`.
+
+**Health.** Conventional checks by source kind: a Kubernetes audit feed, *audit policy present* and *webhook
+delivering*; a cloud trail, *trail enabled*, *regions and accounts covered*, *event selectors as expected*, *digests
+arriving* and *digests validating*; a configuration recorder, *recorder running*, *rules enabled* and *collector
+current* (a check name is a lowercase name the provider chooses; the core holds the state to the checks, not the
+names). `healthy` means every check passed: a healthy record with a failed check, or a degraded or blind one with none
+failing, is refused. A health record holds for twice its `interval_seconds` (default 900); after that the feed is
+**blind** until the next one arrives. When a feed goes from healthy (or unseen) to degraded or blind, the core writes an
+`observation.audit-gap` record in the same transaction; it writes no second while the feed stays down.
+
+**Operations on monitoring.** An operation that turns off, narrows or deletes the controls that watch the environment is
+a tier 3 observation whether or not it succeeded, and flips the scope's health: blind when it succeeded, degraded when
+it was refused, with an audit gap, written by the core with a check named `monitoring-protection`. Which operations
+are such is **configuration**, not code: `CLEARANCE_MONITORING_PROTECTION_OPS` (chart `vocabulary.monitoringProtectionOps`),
+globs on `action.api` or `<source>:<api>`, default none; a provider may also mark one itself
+(`action.protects_monitoring`). Only the provider's next `healthy` health record, produced by its own checks, clears the
+flip. The matching `deploy.exception` kinds are `monitoring-protection` and `attempted-refused`
+([gate.md](gate.md#the-packets-exceptions)).
+
+**Secrets are observed at Metadata only.** An observation of a Secret (`resource.kind` Secret, Secrets or SecretList)
+must say `source.level: Metadata` and carries no `state_change`; and no observation carries a Secret's body anywhere
+in what the provider reported (an object of kind Secret with `data`, `stringData`, `apiVersion` or `metadata`, or any
+`stringData` key): the core refuses it with `400`. A provider that cannot filter at the source cannot post it.
+
+**References.** An assessment's or resolution's `about.seq` must name an existing observation (a resolution may also
+name an assessment) in the same `scope`, or the core refuses it. Nothing is rewritten: the latest assessment of an
+observation, and the latest resolution, win when read.
+
+**Reading it.** clearance-api (auditors) lists observations and health by scope (`GET /v1/observations`,
+`GET /v1/observations/health`) and answers `GET /v1/coverage?scope=&from=&to=` with the three-part statement the packet
+prints (C-5): *cleared and verified*, *seen, not cleared* (by coverage state, with each one's resolution and cause) and
+*could not see* (the blind and degraded stretches and the audit gaps), with the health of each feed. `clean` is true only
+when nothing was seen uncleared and every feed was healthy for the whole window; a window with no health record, or
+whose last record has gone stale, is `blind` and never clean ([clearance-api.md](clearance-api.md#observations-and-the-coverage-statement-o-1)).
+
 ## Versioning rule
 
 - The `schema` string names the record shape a writer emitted. It changes only for a breaking change: a field
@@ -163,7 +237,9 @@ field (`clearance_evidence_cost`) keeps it off a chain scan.
   required field, an enum value removed.
 - Additive changes inside v1 (a new optional field, a new optional property inside an optional object, a new enum
   value for a reserved field) bump `x-clearance-revision` in the schema file and are listed in the changelog. No
-  stored record changes.
+  stored record changes. v1.1 (revision 4) is such a change: the `schema` string of a record that uses what it adds
+  says `clearance.evidence/v1.1` (a reader that accepts v1 records and ignores unknown fields reads the rest of a v1.1
+  record), and everything else is still written as v1.
 - Rows are never migrated. A row stays exactly as written, because its bytes are hashed; readers project old
   versions into the current shape.
 - The chain rule is version independent, so one chain holds every version.

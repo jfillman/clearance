@@ -41,14 +41,24 @@ const (
 )
 
 // ExceptionKinds are deploy.exception's kinds.
-var ExceptionKinds = []string{"out-of-band", "drift", "untraced-apply", "digest-mismatch"}
+var ExceptionKinds = []string{"out-of-band", "drift", "untraced-apply", "digest-mismatch", KindAttemptedRefused, KindMonitoringProtection}
+
+// The exception kinds O-1 adds. attempted-refused is an operation something tried and a control refused: nothing
+// landed, so it never moves a change to exception. monitoring-protection is an operation on the controls that watch
+// the environment (a trail, an audit policy, a recorder): a tier 3 exception whether or not it succeeded.
+const (
+	KindAttemptedRefused     = "attempted-refused"
+	KindMonitoringProtection = "monitoring-protection"
+)
 
 // ExceptionCoverage is the coverage the core gives each exception kind.
 var ExceptionCoverage = map[string]string{
-	"out-of-band":     "out-of-band-detected",
-	"drift":           "observed-not-attributed",
-	"untraced-apply":  "out-of-band-detected",
-	"digest-mismatch": "out-of-band-detected",
+	"out-of-band":            "out-of-band-detected",
+	"drift":                  "observed-not-attributed",
+	"untraced-apply":         "out-of-band-detected",
+	"digest-mismatch":        "out-of-band-detected",
+	KindAttemptedRefused:     evidence.CoverageAttemptedRefused,
+	KindMonitoringProtection: "out-of-band-detected",
 }
 
 // Report caps.
@@ -243,6 +253,10 @@ func checkException(ev store.Event) error {
 		if x["actor"] == nil {
 			return badReport("an untraced-apply exception names the actor behind the write (exception.actor)")
 		}
+	case KindAttemptedRefused, KindMonitoringProtection:
+		if x["actor"] == nil || x["detail"] == nil {
+			return badReport("a %s exception names the actor and the operation (exception.actor, exception.detail)", kind)
+		}
 	case "digest-mismatch":
 		if x["expected"] == nil || x["observed"] == nil || id == "" {
 			return badReport("a digest-mismatch exception names the change (change.id) and the expected and observed digests")
@@ -339,7 +353,8 @@ func (s *Service) Report(ctx context.Context, ev store.Event, wr evidence.Writer
 		}
 		now := PyTime{w.now}
 		switch {
-		case ev["tool"] == KindException && (c.State == StateHolding || c.State == StateCleared):
+		case ev["tool"] == KindException && (c.State == StateHolding || c.State == StateCleared) &&
+			ev["exception"].(map[string]any)["kind"] != KindAttemptedRefused:
 			kind, _ := ev["exception"].(map[string]any)["kind"].(string)
 			w.move(c, StateException, "exception: "+kind, map[string]any{"exception": seq, "kind": kind})
 			c.Ended = &Ended{Seq: seq, Tool: KindException, Kind: kind}

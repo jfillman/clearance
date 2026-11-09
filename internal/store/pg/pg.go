@@ -129,6 +129,11 @@ CREATE INDEX IF NOT EXISTS clearance_breakglass_open ON clearance_breakglass (ex
 CREATE INDEX IF NOT EXISTS clearance_evidence_exceptions ON clearance_evidence (seq)
   WHERE record->>'tool' IN ('deploy.exception', 'deploy.degraded', 'breakglass.open', 'breakglass.close')
      OR record->>'coverage' = 'coverage-unavailable';
+CREATE INDEX IF NOT EXISTS clearance_evidence_event ON clearance_evidence
+  ((record->'provider'->>'name'), (record->>'tool'), (record->'source'->>'event_id'))
+  WHERE record->'source' ? 'event_id';
+CREATE INDEX IF NOT EXISTS clearance_evidence_observed ON clearance_evidence ((record->>'scope'), seq)
+  WHERE record->>'tool' IN ('observation', 'assessment', 'resolution', 'observation.health', 'observation.audit-gap');
 `
 
 // Options tune a store; the zero value is the defaults.
@@ -678,6 +683,24 @@ func (t *tx) Receipts(ctx context.Context, repo string, pr int, tools []string) 
 	return receipts(ctx, q, t.s.opt, repo, pr, tools)
 }
 
+func (t *tx) EventRecord(ctx context.Context, provider, kind, source, eventID string) (store.Record, error) {
+	q, done, err := t.q()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	return eventRecord(ctx, q, t.s.opt, provider, kind, source, eventID)
+}
+
+func (t *tx) LatestHealth(ctx context.Context, scope, source string) (store.Record, error) {
+	q, done, err := t.q()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	return latestHealth(ctx, q, t.s.opt, scope, source)
+}
+
 func (t *tx) Assurance(ctx context.Context, seq int64) (string, error) {
 	q, done, err := t.q()
 	if err != nil {
@@ -780,6 +803,14 @@ func (r *Reader) Records(ctx context.Context, from int64, limit int) ([]store.Re
 
 func (r *Reader) Receipts(ctx context.Context, repo string, pr int, tools []string) ([]store.Record, error) {
 	return receipts(ctx, r.pool, r.opt, repo, pr, tools)
+}
+
+func (r *Reader) EventRecord(ctx context.Context, provider, kind, source, eventID string) (store.Record, error) {
+	return eventRecord(ctx, r.pool, r.opt, provider, kind, source, eventID)
+}
+
+func (r *Reader) LatestHealth(ctx context.Context, scope, source string) (store.Record, error) {
+	return latestHealth(ctx, r.pool, r.opt, scope, source)
 }
 
 func (r *Reader) Assurance(ctx context.Context, seq int64) (string, error) {
@@ -1096,6 +1127,33 @@ func records(ctx context.Context, q querier, opt Options, from int64, limit int)
 	}
 	limit = min(limit, MaxRecords)
 	return recordRows(ctx, q, opt, "SELECT record::text FROM clearance_evidence WHERE seq >= $1 ORDER BY seq LIMIT $2", from, limit)
+}
+
+// eventRecord uses clearance_evidence_event (O-1): the partial index's predicate and expressions as it spells them.
+func eventRecord(ctx context.Context, q querier, opt Options, provider, kind, source, eventID string) (store.Record, error) {
+	rs, err := recordRows(ctx, q, opt, "SELECT record::text FROM clearance_evidence WHERE record->'source' ? 'event_id' "+
+		"AND (record->'provider'->>'name') = $1 AND (record->>'tool') = $2 AND (record->'source'->>'event_id') = $3 "+
+		"AND COALESCE(record->'source'->>'name', '') = $4 ORDER BY seq LIMIT 1", provider, kind, eventID, source)
+	if err != nil {
+		return nil, err
+	}
+	if len(rs) == 0 {
+		return nil, store.ErrNotFound
+	}
+	return rs[0], nil
+}
+
+// latestHealth uses clearance_evidence_observed.
+func latestHealth(ctx context.Context, q querier, opt Options, scope, source string) (store.Record, error) {
+	rs, err := recordRows(ctx, q, opt, "SELECT record::text FROM clearance_evidence WHERE record->>'tool' = 'observation.health' "+
+		"AND (record->>'scope') = $1 AND (record->'source'->>'name') = $2 ORDER BY seq DESC LIMIT 1", scope, source)
+	if err != nil {
+		return nil, err
+	}
+	if len(rs) == 0 {
+		return nil, store.ErrNotFound
+	}
+	return rs[0], nil
 }
 
 // receipts uses clearance_evidence_receipt: the partial index's predicate (record ? 'effect') and its two

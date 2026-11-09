@@ -449,6 +449,62 @@ func (v view) recordsFrom(from int64, limit int) ([]store.Record, error) {
 	return out, nil
 }
 
+func (s *Store) EventRecord(ctx context.Context, provider, kind, source, eventID string) (store.Record, error) {
+	v, err := s.view()
+	if err != nil {
+		return nil, err
+	}
+	return v.eventRecord(provider, kind, source, eventID)
+}
+
+func (t *tx) EventRecord(ctx context.Context, provider, kind, source, eventID string) (store.Record, error) {
+	v, err := t.view()
+	if err != nil {
+		return nil, err
+	}
+	return v.eventRecord(provider, kind, source, eventID)
+}
+
+func (v view) eventRecord(provider, kind, source, eventID string) (store.Record, error) {
+	for _, b := range v.records {
+		r := decode(b)
+		src, _ := r["source"].(map[string]any)
+		p, _ := r["provider"].(map[string]any)
+		name, _ := src["name"].(string)
+		if id, ok := src["event_id"].(string); ok && id == eventID && name == source && p["name"] == provider && r["tool"] == kind {
+			return r, nil
+		}
+	}
+	return nil, store.ErrNotFound
+}
+
+func (s *Store) LatestHealth(ctx context.Context, scope, source string) (store.Record, error) {
+	v, err := s.view()
+	if err != nil {
+		return nil, err
+	}
+	return v.latestHealth(scope, source)
+}
+
+func (t *tx) LatestHealth(ctx context.Context, scope, source string) (store.Record, error) {
+	v, err := t.view()
+	if err != nil {
+		return nil, err
+	}
+	return v.latestHealth(scope, source)
+}
+
+func (v view) latestHealth(scope, source string) (store.Record, error) {
+	for i := len(v.records) - 1; i >= 0; i-- {
+		r := decode(v.records[i])
+		src, _ := r["source"].(map[string]any)
+		if r["tool"] == "observation.health" && r["scope"] == scope && src["name"] == source {
+			return r, nil
+		}
+	}
+	return nil, store.ErrNotFound
+}
+
 func (s *Store) Receipts(ctx context.Context, repo string, pr int, tools []string) ([]store.Record, error) {
 	v, err := s.view()
 	if err != nil {
