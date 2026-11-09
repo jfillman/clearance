@@ -10,7 +10,9 @@ const WaitJobName = "clearance-awaiting-approval"
 
 // WaitJob is the PreSync hook injected while a change is held for people (providers/argocd/wait). It polls the
 // core until the change is cleared (exit 0) or denied, expired or timed out (non-zero), so the sync reads
-// "PreSync: clearance awaiting approval" until a person clears it. It is not a control: `argocd app sync
+// "PreSync: clearance awaiting approval" until a person clears it. The pod sets no serviceAccountName (it runs as the
+// destination namespace's default account and only mounts the projected token, audience clearance): the admission
+// policy's exempt expression allowlists exactly these fields and refuses a serviceAccountName. It is not a control: `argocd app sync
 // --strategy apply` skips hooks, and admission (the ClearanceGrant policy) refuses the objects without a grant.
 func WaitJob(cfg Config, changeID string) (map[string]any, error) {
 	if cfg.WaitImage == "" {
@@ -37,9 +39,6 @@ func WaitJob(cfg Config, changeID string) (map[string]any, error) {
 		}},
 		"volumes": []any{map[string]any{"name": "clearance-token", "projected": map[string]any{"sources": []any{
 			map[string]any{"serviceAccountToken": map[string]any{"audience": "clearance", "expirationSeconds": 3600, "path": "clearance"}}}}}},
-	}
-	if cfg.WaitSAName != "" {
-		pod["serviceAccountName"] = cfg.WaitSAName
 	}
 	if ip, hosts, ok := strings.Cut(cfg.WaitHost, "="); ok {
 		var hs []any
