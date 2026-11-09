@@ -758,3 +758,28 @@ func TestChangesPrintTheOperationalClassOfRealRecords(t *testing.T) {
 		t.Error("csv")
 	}
 }
+
+// The observation pipeline's per-rule filtered counts are printed: "filtered: N events under rule X".
+func TestPacketPrintsWhatTheNoiseRulesFiltered(t *testing.T) {
+	q := params(t)
+	q.Filtered = []packet.FilteredRule{{Rule: "hpa-scale", RuleSet: "observe-default@2026.11.1", Count: 2},
+		{Rule: "argo-application-bookkeeping", RuleSet: "observe-default@2026.11.1", Count: 3}}
+	res, err := packet.Build(bg, miniChain(t, health("2026-10-09T00:00:00Z", "aws-111", "healthy", 5184000)), q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := res.Packet.Exceptions.Filtered
+	if len(f) != 2 || f[0].Rule != "argo-application-bookkeeping" {
+		t.Fatalf("%+v", f)
+	}
+	if got, want := f[0].Line(), "filtered: 3 events under rule argo-application-bookkeeping (observe-default@2026.11.1)"; got != want {
+		t.Fatalf("%q", got)
+	}
+	if !strings.Contains(string(packet.PDF(res.Packet)), "filtered: 3 events under rule argo-application-bookkeeping") {
+		t.Error("the PDF should print it")
+	}
+	res, err = packet.Build(bg, miniChain(t, health("2026-10-09T00:00:00Z", "aws-111", "healthy", 5184000)), params(t))
+	if err != nil || res.Packet.Exceptions.Filtered != nil {
+		t.Fatalf("no counts supplied, none printed: %v %+v", err, res.Packet.Exceptions.Filtered)
+	}
+}

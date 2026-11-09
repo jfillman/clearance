@@ -127,6 +127,13 @@ func (b *builder) exceptionsSection(pk *Packet) {
 		ex.Unverified = "This list is empty, but it is not a clean one: " + pk.Coverage.Text +
 			" An exception that happened while a feed was blind would not appear here."
 	}
+	ex.Filtered = append(ex.Filtered, b.p.Filtered...)
+	sort.SliceStable(ex.Filtered, func(i, j int) bool {
+		if ex.Filtered[i].Count != ex.Filtered[j].Count {
+			return ex.Filtered[i].Count > ex.Filtered[j].Count
+		}
+		return ex.Filtered[i].Rule < ex.Filtered[j].Rule
+	})
 	pk.Exceptions = ex
 }
 
