@@ -538,7 +538,7 @@ func TestWhoMayClearATier2Change(t *testing.T) {
 	for _, c := range []struct {
 		who, rule string
 		status    int
-	}{{"dana", "DG-PROPOSER", 403}, {"sam", "DG-FORBIDDEN", 403}, {"ci", "DG-PERSON", 403}} {
+	}{{"dana", "DG-PROPOSER", 403}, {"sam", "DG-FORBIDDEN", 403}, {"ci", "DG-APPROVER-AUTOMATION", 403}} {
 		_, err := f.svc.Clear(f.ctx, principals[c.who], cid, "")
 		if r, s := ruleOf(err); r != c.rule || s != c.status {
 			t.Fatal(c.who, err)
@@ -553,7 +553,7 @@ func TestWhoMayClearATier2Change(t *testing.T) {
 		t.Fatal(out, err)
 	}
 	via := tower
-	if !reflect.DeepEqual(out.Approvals, []gate.Approval{{"user:erin", &via, "owner", "2026-09-26T12:00:00Z", "user:erin", "delegate:" + tower}}) {
+	if !reflect.DeepEqual(out.Approvals, []gate.Approval{{"user:erin", &via, "owner", "2026-09-26T12:00:00Z", "user:erin", "delegate:" + tower, "person", ""}}) {
 		t.Fatal(out.Approvals)
 	}
 	recs := f.records(t, "deploy.clear")

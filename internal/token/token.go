@@ -162,6 +162,26 @@ type Approval struct {
 	Via    string `json:"via,omitempty"`
 	Role   string `json:"role"`
 	At     string `json:"at"`
+	// Kind is "person" when the approval route checked the approver is a person, not automation (GATE-APPROVER-001).
+	// Approvals recorded before C-14 carry none.
+	Kind string `json:"kind,omitempty"`
+}
+
+// ApproversStatement is "approvers: distinct subjects, none automation" when every approval is kind person and no
+// two share a subject at an issuer, else "" (an approval recorded before the check proves nothing, so says nothing).
+func ApproversStatement(as []Approval) string {
+	if len(as) == 0 {
+		return ""
+	}
+	seen := map[string]bool{}
+	for _, a := range as {
+		k := a.Iss + "\x00" + a.Sub
+		if a.Kind != "person" || seen[k] {
+			return ""
+		}
+		seen[k] = true
+	}
+	return "approvers: distinct subjects, none automation"
 }
 
 // Signer signs a SHA-256 digest with ECDSA P-256 and returns the ASN.1 DER signature. A file key (KeySigner) is

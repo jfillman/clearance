@@ -635,7 +635,7 @@ What exists in Clearance now; the check, the release guardrail and the screens f
   `image-bump`, `image:not-trusted-registry`, `metadata-only`, `release-stamp`, `non-runtime`, `lines>400`, `checks:ci,render`,
   `provenance:agent`), then the decision: tiers 0 and 1 clear by policy, 2 and 3 hold for a `Requirement`
   (owner-group people, outside-group people), an unknown proposer is denied (`DG-PROVENANCE`). `Change`: the record,
-  with `role_for()` (owner first, then outside; `DG-PROPOSER`, `DG-TWICE`, `DG-FILLED`, `DG-FORBIDDEN`, `DG-STATE`).
+  with `role_for()` (owner first, then outside; `DG-PROPOSER`, `DG-TWICE`, `DG-FILLED`, `DG-FORBIDDEN`, `DG-STATE`; since C-14 also `DG-APPROVER-AUTOMATION` and `DG-APPROVER-SAME`, [rule GATE-APPROVER-001](#tier-3-approvers-are-people-c-14-built)).
 - **Gateway**: `register_change` (a verifier's call; idempotent by repo, PR and head; a holding change is re-evaluated
   with the new check results and clears by policy once they hold; a new head supersedes the heads still holding),
   `clear_change` and `deny_change` (the delegate model; the owner group is the request's, or the catalog's through
@@ -691,6 +691,47 @@ clearance-gate lists every rendered object this way.
 Not yet: admission on the grant (G-ARGO-2), the CMP that registers the whole rendered tree with unchanged objects
 marked (G-ARGO-4), the PreSync wait
 (G-ARGO-5), and the Terraform plan subject (G-TF-1, which adds `subjects.plan_digest`).
+
+## Tier 3 approvers are people (C-14, Built)
+
+**Rule `GATE-APPROVER-001`: the approvers of a change are distinct people, never automation.** The clear route
+(`POST /v1/clearances/{id}/clear`) enforces it, on top of `DG-PROPOSER` (no self-clearance), `DG-TWICE`, `DG-FILLED` and
+the outside-team rule, which are unchanged:
+
+| Id | Status | Meaning |
+| --- | --- | --- |
+| `DG-APPROVER-AUTOMATION` | 403 | The approver is not a person: the principal is a service account (TokenReview or another cluster's), a GitHub Actions identity or any non-person principal; or the person's name, subject or issuer matches an automation pattern (a bot account such as `cicd-pac[bot]`, the agents' GitHub App, an ID-JAG agent identity such as `agent:triage`, a service-account subject, an agent-identity issuer) |
+| `DG-APPROVER-SAME` | 409 | The approval resolves to the same subject as one already on the change: the same IdP subject under another name, the same IdP session (`sid`), or two names the deployment lists as one person |
+
+How the check reads an approval:
+
+- **Signed in directly**: the principal's name, the token's `sub` and its `iss` are tested. The issuer is tested only
+  here: a Kubernetes or GitHub Actions issuer, or an ID-JAG issuer, never signs a person.
+- **Through a delegate** (Tower clears as `hangar-prod/app-backstage-prod/backstage` naming `user:riley-roooo`, recorded as
+  `iss: delegate:<delegate>`, `sub: user:riley-roooo`, `via: <delegate>`): the person named is the approver and is
+  tested. The delegate is a service identity by design and is **not** refused; a delegate naming `user:cicd-pac[bot]`
+  or an agent identity is.
+- **Distinct**: an approval's keys are its person, its subject, its subject at its issuer (direct sign-ins only), its
+  session and the alias group any of them belongs to. Two approvals that share a key are one approver.
+
+The patterns are configuration, product-neutral by default, with platform names in the deployment's vocabulary
+(`internal/vocab`, [core.md](core.md#configuration)): `CLEARANCE_AUTOMATION_SUBJECTS` (default `*[bot]`, `*-bot`,
+`bot-*`, `bot:*`, `app/*`, `agent:*`, `agent-*`, `*-agent`, `system:*`, `serviceaccount:*`, `service-account:*`, `svc-*`,
+`spiffe://*`, `*.iam.gserviceaccount.com`), `CLEARANCE_AUTOMATION_ISSUERS` (default `*kubernetes*`, `*.svc`, `*.svc.*`,
+`*token.actions.githubusercontent.com*`, `*id-jag*`, `*idjag*`) and `CLEARANCE_APPROVER_ALIASES` (`a=b=c;d=e`, each
+group one person; default none). `*` is the only wildcard, matching is case-insensitive, and `none` empties a pattern
+list. A deployment whose bots or agents are named otherwise adds its names there.
+
+An approval that passed the check records `kind: person` with its `sub` and `iss`, in the change, in the token's
+`approvals` and in the `deploy.clear` record. The attestation predicate's approval items carry `kind` too (absent on
+approvals recorded before C-14, which prove nothing about it). `token.ApproversStatement` turns verified approvals into
+the line a packet or verification statement prints, "approvers: distinct subjects, none automation", and prints
+nothing for a change with any approval lacking `kind: person`.
+
+Limits, stated: an alias is only known if the deployment lists it, since the gate has no directory of a person's
+other names; the patterns catch naming shapes, not an automation that signs in under a plain person-looking name at a
+plain issuer (the allowlist at sign-in and the delegate list are the controls there); a break-glass window is not an
+approval and is unchanged.
 
 ## Protected environments, the outage policy, states, exceptions and break-glass (C-6, Built)
 

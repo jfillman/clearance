@@ -90,7 +90,7 @@ func ProvenanceLevel(c *Change) string {
 // approval is a person's approval as the token and the deploy.* records name it. An approval recorded before C-1
 // carries no identity: the person stands in as sub, with UnattestedIssuer.
 func (a Approval) claim() token.Approval {
-	out := token.Approval{Sub: a.Sub, Iss: a.Iss, Person: a.Person, Role: a.Role, At: a.At}
+	out := token.Approval{Sub: a.Sub, Iss: a.Iss, Person: a.Person, Role: a.Role, At: a.At, Kind: a.Kind}
 	if a.Via != nil {
 		out.Via = *a.Via
 	}
@@ -249,6 +249,9 @@ func clearedFields(c *Change, nonce string) map[string]any {
 		m := map[string]any{"sub": cl.Sub, "iss": cl.Iss, "person": cl.Person, "role": cl.Role, "at": cl.At}
 		if cl.Via != "" {
 			m["via"] = cl.Via
+		}
+		if cl.Kind != "" {
+			m["kind"] = cl.Kind
 		}
 		approvals = append(approvals, m)
 	}
