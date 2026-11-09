@@ -1038,7 +1038,7 @@ Backstage catalog, as the Python deployment does (`internal/directory/backstage`
 `BackstageDirectory` and `BackstageAppOwners`). A person `user:<login>`'s groups are the `memberOf` relations of
 `user:default/<login>` (`GET /api/catalog/entities/by-name/user/default/<login>`), cached 60 s; a change registered
 without an owner gets its app's Component `spec.owner` (`.../by-name/component/default/<app>`), a bare name read as
-`group:default/<name>` and a user owner ignored, cached 300 s. Configuration, the same variables as autopilot
+`group:default/<name>`, `<namespace>/<name>` as `group:<namespace>/<name>`, and a user owner ignored, cached 300 s. Configuration, the same variables as autopilot
 `serve.py` so apron's values carry over:
 
 | Variable | Meaning |
