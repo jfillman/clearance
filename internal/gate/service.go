@@ -366,7 +366,7 @@ func (s *Service) Register(ctx context.Context, p authn.Principal, body any) (*C
 		} else {
 			ch = existing
 			ch.Checks, ch.Tier, ch.Reasons, ch.UpdatedAt = copyChecks(req.Checks), c.Tier, append([]Reason(nil), c.Reasons...), now
-			ch.Requirement, ch.Protected, ch.Outage = c.Requirement, req.Protected, c.Policy.OutageFor(c.Tier)
+			ch.Requirement, ch.Owner, ch.Protected, ch.Outage = c.Requirement, req.Owner, req.Protected, c.Policy.OutageFor(c.Tier)
 			ch.Admission = copyAdmission(req.Admission)
 			ch.PolicyRef, ch.PolicyVersion, ch.RepoPolicyDigest = policyRefOf(req), c.Policy.Version, c.Policy.RepoPolicyDigest
 			if to != StateHolding {

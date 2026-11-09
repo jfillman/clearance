@@ -9,6 +9,15 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.34.1] - 2026-11-08
+
+### Fixed
+- **A catalog owner written `namespace/name` is that group.** `spec.owner: default/admins` became
+  `group:default/default/admins`, a group nobody is in, so a tier 3 hold's owner slot could not be filled. It is now
+  `group:default/admins`.
+- **A holding change takes the owner of its latest registration**, in `owner` as well as the requirement, so the
+  correction reaches a hold already open the next time it is registered.
+
 ## [0.34.0] - 2026-11-07
 
 ### Added
@@ -744,7 +753,8 @@ What the Autopilot gateway needs of the core before the hangar-dev cutover (R-3e
   scope, narrow-only limits, CEL policy, sessions, the hash-chained audit log and the gateway; the Hangar pack's
   `glidepath.*` and `airframe.*` tools over glidepath-api and a GET-only Kubernetes adapter.
 
-[Unreleased]: https://github.com/jfillman/clearance/compare/v0.34.0...HEAD
+[Unreleased]: https://github.com/jfillman/clearance/compare/v0.34.1...HEAD
+[0.34.1]: https://github.com/jfillman/clearance/compare/v0.34.0...v0.34.1
 [0.34.0]: https://github.com/jfillman/clearance/compare/v0.33.0...v0.34.0
 [0.33.0]: https://github.com/jfillman/clearance/compare/v0.32.0...v0.33.0
 [0.32.0]: https://github.com/jfillman/clearance/compare/v0.31.1...v0.32.0

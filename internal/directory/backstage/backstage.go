@@ -259,8 +259,7 @@ func NewOwners(c *Catalog, ttl time.Duration, clock func() time.Time) *Owners {
 	return &Owners{catalog: c, cache: newCache[string](ttl, clock)}
 }
 
-// OwnerOf is the app's owner group ref. A bare owner name is group:default/<name>, a namespace-less group ref gains
-// default/, and an owner of another kind (a user), an unknown app or any failure is "" (the gate then lets the
+// OwnerOf is the app's owner group ref (NormalizeOwner), and an owner of another kind (a user), an unknown app or any failure is "" (the gate then lets the
 // outside group stand in as owner).
 func (o *Owners) OwnerOf(ctx context.Context, app string) string {
 	if !valid(app) {
@@ -287,8 +286,8 @@ func (o *Owners) fetch(ctx context.Context, app string) string {
 	return NormalizeOwner(raw)
 }
 
-// NormalizeOwner is BackstageAppOwners' reading of a spec.owner: "" stays "", a group ref is kept (gaining
-// default/ when it has no namespace), a ref of another kind is "", and a bare name is group:default/<name>.
+// NormalizeOwner is the group ref of a spec.owner, which Backstage writes as [group:][namespace/]name: "" stays "", a
+// ref with no namespace gains default/, a ref with no kind gains group:, and a ref of another kind is "".
 func NormalizeOwner(raw string) string {
 	if raw == "" {
 		return ""
@@ -298,7 +297,7 @@ func NormalizeOwner(raw string) string {
 		if strings.Contains(raw, ":") {
 			return ""
 		}
-		owner = "group:default/" + raw
+		owner = "group:" + raw
 	}
 	if !strings.Contains(owner, "/") {
 		owner = strings.Replace(owner, "group:", "group:default/", 1)

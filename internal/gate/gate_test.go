@@ -670,6 +670,20 @@ func TestANewHeadSupersedesTheHoldingOneAndTheTTLExpires(t *testing.T) {
 	}
 }
 
+// A holding change takes the owner of its latest registration, so a corrected catalog or owner lookup reaches a hold
+// already open; without this nobody could fill its owner slot.
+func TestReRegisteringAHoldingChangeTakesTheNewOwner(t *testing.T) {
+	f := newGate(t)
+	first := f.register(t, "ci", change(map[string]any{"objects": replicas, "owner": "group:default/default-admins"}))
+	if first.State != "holding" {
+		t.Fatalf("state %s, want holding", first.State)
+	}
+	out := f.register(t, "ci", change(map[string]any{"objects": replicas}))
+	if out.ID != first.ID || out.State != "holding" || out.Owner != owner || out.Requirement.OwnerGroup != owner {
+		t.Fatalf("%s %s owner %q requirement %+v, want %s holding with owner %q", out.ID, out.State, out.Owner, out.Requirement, first.ID, owner)
+	}
+}
+
 func TestTheOwnerGroupComesFromTheCatalogWhenTheCheckDoesNotSay(t *testing.T) {
 	f := newGate(t)
 	out := f.register(t, "ci", change(map[string]any{"objects": replicas, "owner": nil}))
