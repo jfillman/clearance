@@ -292,6 +292,36 @@ func TestExceptionKinds(t *testing.T) {
 	}
 }
 
+// The gate's own wait Job is not an exception, and neither the name nor the label alone earns that.
+func TestScanSkipsOnlyTheRealWaitJob(t *testing.T) {
+	w := newWorld(t)
+	w.kube.protect("app-a", map[string]string{agent.LabelEnvironment: "prod"})
+	job := func(ns string, spec []byte) agent.ObjectDetail {
+		return agent.ObjectDetail{Object: agent.Object{APIVersion: "batch/v1", Kind: "Job", Namespace: ns, Name: agent.WaitJobName, UID: "u-" + string(rune('a'+len(spec)%26)),
+			Manager: "argocd-controller", Labels: map[string]string{"clearance.hangar.io/injected": "wait"},
+			Annotations: map[string]string{"argocd.argoproj.io/hook": "PreSync"}}, Spec: spec}
+	}
+	w.kube.objs["app-a"] = []agent.ObjectDetail{job("app-a", agent.LiveWaitSpec)}
+	w.core.windows = nil
+	if err := w.a.ScanExceptions(bg); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.core.of("deploy.exception"); len(got) != 0 {
+		t.Fatalf("the injected Job was reported: %d exceptions", len(got))
+	}
+	forged := strings.Replace(string(agent.LiveWaitSpec), `"http://clearance.hangar-dev.local"}`, `"http://evil.example"}`, 1)
+	if forged == string(agent.LiveWaitSpec) {
+		t.Fatal("the fixture did not change")
+	}
+	w.kube.objs["app-a"] = []agent.ObjectDetail{job("app-a", []byte(forged))}
+	if err := w.a.ScanExceptions(bg); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.core.of("deploy.exception"); len(got) != 1 {
+		t.Fatalf("a Job that copies the name and label must be reported: %d exceptions", len(got))
+	}
+}
+
 func TestContentHashIgnoresArgosAndTheStamps(t *testing.T) {
 	plain := `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"a","namespace":"n"},"data":{"k":"v"}}`
 	annotated := `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"a","namespace":"n","annotations":{"argocd.argoproj.io/tracking-id":"x","clearance.hangar.io/rendered":"y","clearance.hangar.io/tree":"z","keep":"me"}},"data":{"k":"v"}}`

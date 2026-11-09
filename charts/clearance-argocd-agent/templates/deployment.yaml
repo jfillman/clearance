@@ -46,6 +46,15 @@ spec:
             - --grant-api={{ .Values.grantAPI }}
             - --grant-interval={{ .Values.grantInterval }}
             - --scan-interval={{ .Values.scanInterval }}
+            {{- with .Values.waitJob.image }}
+            - --wait-image={{ . }}
+            {{- end }}
+            {{- with .Values.waitJob.url }}
+            - --wait-url={{ . }}
+            {{- end }}
+            {{- with .Values.waitJob.hostAlias }}
+            - --wait-host-alias={{ . }}
+            {{- end }}
           env:
             - name: POD_NAMESPACE
               valueFrom: {fieldRef: {fieldPath: metadata.namespace}}

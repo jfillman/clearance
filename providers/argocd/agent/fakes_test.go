@@ -359,6 +359,7 @@ func newWorld(t *testing.T) *world {
 // agent builds an agent over the world's cluster, as a restart does: state is read from the ConfigMap.
 func (w *world) agent() *agent.Agent {
 	a, err := agent.New(agent.Config{Cluster: "hangar-prod", Environment: "prod", Version: "0.0.0-test",
+		Wait:          agent.TestWaitPin,
 		ArgoNamespace: "argocd-apps", Projects: []string{"tenants"}, StateNS: "clearance-system"},
 		w.kube, w.feeds, w.core, w.clock.now, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
