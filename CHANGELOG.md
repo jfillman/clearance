@@ -23,6 +23,13 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   `clearance ledger keygen`.
 - The local anchored `Checkpoint` and `clearance chain verify --anchor` stay: they are the only protection against
   truncation while the ledger is off.
+- **Tier 3 approvers are people (C-14, rule `GATE-APPROVER-001`).** The clear route refuses an approver that is
+  automation (a service account, GitHub Actions, a bot account, an ID-JAG agent identity, or a delegate naming one) with
+  `DG-APPROVER-AUTOMATION` 403, and a second approval that resolves to the same subject, alias or session with
+  `DG-APPROVER-SAME` 409. Approvals record and carry `kind: person` (change, token, `deploy.clear`, attestation).
+  Patterns are configuration: `CLEARANCE_AUTOMATION_SUBJECTS`, `CLEARANCE_AUTOMATION_ISSUERS`,
+  `CLEARANCE_APPROVER_ALIASES`. A non-person principal calling clear without naming a person now gets
+  `DG-APPROVER-AUTOMATION`, where it got `DG-PERSON`.
 
 ## [0.35.0] - 2026-11-09
 

@@ -41,6 +41,11 @@ type Approval struct {
 	At     string  `json:"at"`
 	Sub    string  `json:"sub,omitempty"`
 	Iss    string  `json:"iss,omitempty"`
+	// Kind is "person" once the approval route checked the approver is a person (GATE-APPROVER-001); absent before.
+	Kind string `json:"kind,omitempty"`
+	// Session is a digest of the approver's session at their identity provider, when the ID token carried one (kept to
+	// refuse a second approval from the same session; the session id itself is not kept, and is not in the token).
+	Session string `json:"session,omitempty"`
 }
 
 // Deployment is a GitHub Actions deployment waiting on a change (github_app.py's deployment protection rule).

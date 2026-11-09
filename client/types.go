@@ -649,6 +649,10 @@ type Approval struct {
 	// Sub and Iss name the person at their identity provider ("delegate:<delegate>" as Iss through a delegate).
 	Sub string `json:"sub,omitempty"`
 	Iss string `json:"iss,omitempty"`
+	// Kind is "person" once the clear route checked the approver is a person, not automation (GATE-APPROVER-001).
+	Kind string `json:"kind,omitempty"`
+	// Session is a digest of the approver's session at their identity provider, when the token carried one.
+	Session string `json:"session,omitempty"`
 }
 
 // Deployment is a GitHub Actions deployment waiting on a change.
