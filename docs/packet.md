@@ -143,15 +143,20 @@ signatures), how many carried records are under it, the proofs, the attestation 
 be read), and the OSCAL file. If the store holds no witnessed checkpoint the section begins "NOT CHECKPOINTED" and says
 what that does and does not show.
 
-**Acceptances.** A person accepting something seen and not cleared: a `ratified` or `declared-break-glass` resolution, and
-each break-glass window an administrator opened.
+**Acceptances.** The signed acceptance receipts assurance recipients return for a packet (package P-1): packet id,
+engagement, framework and mapping versions, checkpoint, verdict and per-control notes; later packets carry the prior
+receipts. P-1 does not exist yet, so the section prints that no receipt has been recorded and nothing else: no content
+is inferred from the chain. `acceptances` in the JSON is `{status, statement, receipts[]}` (`status` is `none-recorded`
+until receipts exist, and `packet.Params.Receipts` is where P-1 will hand them in), and `csv/acceptances.csv` has the
+receipt columns, empty for now. A `ratified` or `declared-break-glass` resolution and each break-glass window are
+**Exceptions** rows (the resolution column, and the `break-glass` class).
 
 ## Freeze and incident reports
 
 Two scoped views of the same records, not new data: `--view freeze --title "Q4 freeze" --env prod` and
 `--view incident --title INC-42 --cluster hangar-prod --from ... --to ...`. A view narrows the gate's records to the
 place named and keeps the sections that answer its question: **freeze** carries the coverage statement, changes,
-exceptions, acceptances and verification (what changed or tried to change inside the freeze, and whether it was
+exceptions, acceptances (receipts) and verification (what changed or tried to change inside the freeze, and whether it was
 cleared); **incident** adds AI identities, policy changes and a **timeline** of the changes, exceptions and break-glass
 events in scope in time order. Both always carry the full coverage statement.
 

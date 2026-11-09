@@ -8,6 +8,7 @@
 package packet
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/jfillman/clearance/internal/observe"
@@ -42,6 +43,8 @@ type Params struct {
 	Version string
 	// LogKeys and WitnessPolicy are the ledger's public verification material, when the job was given it: the
 	// checkpoint's signatures are checked with them and they are copied into the packet for the offline verifier.
+	// Receipts are the prior acceptance receipts to carry (P-1 supplies them; none until it exists).
+	Receipts      []Receipt
 	LogKeys       []string // vkeys, the key in use first
 	WitnessPolicy []byte
 }
@@ -64,7 +67,7 @@ type Packet struct {
 	Exceptions   Exceptions    `json:"exceptions"`
 	Policy       []PolicyEvent `json:"policy_changes"`
 	Verification Verification  `json:"verification"`
-	Acceptances  []Acceptance  `json:"acceptances"`
+	Acceptances  Acceptances   `json:"acceptances"`
 	// Timeline is the incident view's chronology of the changes and exceptions in scope (absent in the other views).
 	Timeline []TimelineEntry `json:"timeline,omitempty"`
 }
@@ -357,16 +360,27 @@ type PolicyEvent struct {
 	Detail  string `json:"detail,omitempty"`
 }
 
-// Acceptance is a person accepting something that was seen and not cleared: a ratified change, a declared
-// break-glass, or a break-glass window an administrator opened.
-type Acceptance struct {
-	Seq    int64  `json:"seq"`
-	TS     string `json:"ts"`
-	Kind   string `json:"kind"` // ratified, declared-break-glass, break-glass-window
-	About  *int64 `json:"about_seq"`
-	Scope  string `json:"scope,omitempty"`
-	Who    string `json:"who,omitempty"`
-	Detail string `json:"detail,omitempty"`
+// Acceptances is the signed acceptance receipts assurance recipients returned for earlier packets (package P-1:
+// packet id, engagement, framework and mapping versions, checkpoint, verdict, per-control notes). P-1 does not exist
+// yet, so Receipts is empty and the section says no receipt has been recorded; nothing is inferred from the chain.
+// Later packets carry prior receipts here.
+type Acceptances struct {
+	// Status is "none-recorded" while there are no receipts, else "recorded".
+	Status    string    `json:"status"`
+	Statement string    `json:"statement"`
+	Receipts  []Receipt `json:"receipts"`
+}
+
+// Receipt is one recipient's signed acceptance of a packet (the shape P-1 will fix; held as raw fields so a receipt is
+// carried exactly as signed).
+type Receipt struct {
+	PacketID   string            `json:"packet_id"`
+	Engagement string            `json:"engagement"`
+	Mappings   []string          `json:"framework_mapping_versions"`
+	Checkpoint string            `json:"checkpoint"`
+	Verdict    string            `json:"verdict"`
+	Notes      map[string]string `json:"control_notes,omitempty"` // by control
+	Signed     json.RawMessage   `json:"signed,omitempty"`        // the signed receipt as received
 }
 
 // Verification says what an offline verifier (C-4) will find in the packet, and what it will not.

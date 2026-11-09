@@ -210,15 +210,14 @@ func PDF(pk *Packet) []byte {
 	}
 
 	d.h1("Acceptances")
+	d.para(pk.Acceptances.Statement)
 	rows = nil
-	for _, a := range pk.Acceptances {
-		about := "-"
-		if a.About != nil {
-			about = fmt.Sprint(*a.About)
-		}
-		rows = append(rows, []string{fmt.Sprint(a.Seq), a.TS, a.Kind, about, orDash(a.Who), a.Detail})
+	for _, rc := range pk.Acceptances.Receipts {
+		rows = append(rows, []string{rc.PacketID, rc.Engagement, strings.Join(rc.Mappings, " "), rc.Verdict})
 	}
-	d.table([]string{"seq", "ts", "kind", "about", "who", "detail"}, []int{5, 20, 20, 6, 20, 0}, rows)
+	if len(rows) > 0 {
+		d.table([]string{"packet", "engagement", "mappings", "verdict"}, []int{24, 24, 30, 0}, rows)
+	}
 	return d.bytes()
 }
 

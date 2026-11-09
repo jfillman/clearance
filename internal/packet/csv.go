@@ -117,14 +117,10 @@ func CSVs(pk *Packet) (map[string][]byte, error) {
 	}
 	do(put("policy-changes.csv", []string{"seq", "ts", "kind", "name", "ref", "version", "digest", "detail"}, rows))
 	rows = nil
-	for _, a := range pk.Acceptances {
-		about := ""
-		if a.About != nil {
-			about = fmt.Sprint(*a.About)
-		}
-		rows = append(rows, []string{fmt.Sprint(a.Seq), a.TS, a.Kind, about, a.Scope, a.Who, a.Detail})
+	for _, r := range pk.Acceptances.Receipts {
+		rows = append(rows, []string{r.PacketID, r.Engagement, strings.Join(r.Mappings, " "), r.Checkpoint, r.Verdict})
 	}
-	do(put("acceptances.csv", []string{"seq", "ts", "kind", "about_seq", "scope", "who", "detail"}, rows))
+	do(put("acceptances.csv", []string{"packet_id", "engagement", "framework_mapping_versions", "checkpoint", "verdict"}, rows))
 	return out, err
 }
 

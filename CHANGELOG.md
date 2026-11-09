@@ -18,7 +18,7 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   function `GET /v1/coverage` uses: "no exceptions detected" is printed only for a window whose feeds were all verified
   healthy; a scope with no collector prints blind), control assertions (resting on verified fields only), changes (Argo
   CD manifest trees and Terraform plans side by side, who reported each outcome), human-cleared changes
-  (`token.ApproversStatement`), AI identities, exceptions in seven classes, policy changes, verification and acceptances.
+  (`token.ApproversStatement`), AI identities, exceptions in seven classes, policy changes, verification and acceptances (the signed receipts from assurance recipients, P-1: none recorded yet, so the section says so).
   `--view freeze` and `--view incident` are scoped views. Control mappings are data (`soc2/2017` CC8.1 and
   `soc2/2027-draft` CC7.1 first), published as an OSCAL component definition, signed as a DSSE envelope on request
   (`clearance packet oscal`). New in `internal/ledger`: `Tree` (inclusion proofs from the chain's record hashes alone,

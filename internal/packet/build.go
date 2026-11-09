@@ -740,24 +740,15 @@ func (b *builder) policySection(pk *Packet) {
 
 // ---- acceptances -----------------------------------------------------------------------------------------------
 
+// NoReceipts is what the Acceptances section says until package P-1 records receipts.
+const NoReceipts = "No acceptance receipts have been recorded for this packet or for earlier ones. Receipts are the signed " +
+	"acceptances assurance recipients return (package P-1); none exist yet, and nothing here is inferred from the chain."
+
 func (b *builder) acceptances(pk *Packet) {
-	pk.Acceptances = []Acceptance{}
-	for _, r := range b.sel {
-		switch str(r, "tool") {
-		case evidence.KindResolution:
-			rs := obj(r, "resolution")
-			st := str(rs, "state")
-			if st != "ratified" && st != "declared-break-glass" {
-				continue
-			}
-			a, _ := observe.About(r)
-			pk.Acceptances = append(pk.Acceptances, Acceptance{Seq: seqOf(r), TS: b.ts(r), Kind: st, About: &a, Scope: str(r, "scope"),
-				Who: str(r, "principal"), Detail: short(obj(r, "provider")["name"], 80)})
-		case gate.ToolBreakglassOpen:
-			bg := obj(r, "breakglass")
-			pk.Acceptances = append(pk.Acceptances, Acceptance{Seq: seqOf(r), TS: b.ts(r), Kind: "break-glass-window", Scope: str(r, "target"),
-				Who: str(r, "principal"), Detail: fmt.Sprintf("%s until %s: %s", str(bg, "id"), str(bg, "expires_at"), short(r["reason"], 160))})
-		}
+	pk.Acceptances = Acceptances{Status: "none-recorded", Statement: NoReceipts, Receipts: []Receipt{}}
+	if len(b.p.Receipts) > 0 {
+		pk.Acceptances = Acceptances{Status: "recorded", Receipts: b.p.Receipts,
+			Statement: fmt.Sprintf("%d acceptance receipts recorded for earlier packets.", len(b.p.Receipts))}
 	}
 }
 

@@ -256,13 +256,19 @@ func TestLabPacketSections(t *testing.T) {
 			t.Errorf("degraded windows lack %s: %v", k, kinds)
 		}
 	}
-	// Acceptances, policy, AI identities.
-	ak := map[string]bool{}
-	for _, a := range pk.Acceptances {
-		ak[a.Kind] = true
+	// Acceptances are receipts from assurance recipients (P-1, not built): none recorded, nothing invented. The
+	// ratified resolution and the break-glass window are exceptions rows instead.
+	if ac := pk.Acceptances; ac.Status != "none-recorded" || ac.Statement != packet.NoReceipts || ac.Receipts == nil || len(ac.Receipts) != 0 {
+		t.Errorf("acceptances %+v", ac)
 	}
-	if !ak["ratified"] || !ak["break-glass-window"] {
-		t.Errorf("acceptances %v", ak)
+	ratified := false
+	for _, e := range pk.Exceptions.Rows {
+		if e.Resolution == "ratified" {
+			ratified = true
+		}
+	}
+	if !ratified || countOf(pk.Exceptions.ByClass, packet.ClassBreakGlass) != 1 {
+		t.Error("a ratified observation and the break-glass window belong with the exceptions")
 	}
 	pol := 0
 	for _, p := range pk.Policy {
@@ -497,9 +503,9 @@ func TestOutputsRenderInAllThreeFormsAndAreDeterministic(t *testing.T) {
 		ctl += len(c.Assertions)
 	}
 	for name, want := range map[string]int{"changes.csv": len(pk.Changes), "exceptions.csv": len(pk.Exceptions.Rows), "human-cleared.csv": humanRows,
-		"ai-identities.csv": len(pk.AIIdentities), "assertions.csv": ctl, "policy-changes.csv": len(pk.Policy), "acceptances.csv": len(pk.Acceptances),
+		"ai-identities.csv": len(pk.AIIdentities), "assertions.csv": ctl, "policy-changes.csv": len(pk.Policy), "acceptances.csv": len(pk.Acceptances.Receipts),
 		"degraded-windows.csv": len(pk.Coverage.Degraded), "coverage-scopes.csv": len(pk.Coverage.Scopes), "coverage.csv": len(pk.Coverage.ByCoverage) + 1} {
-		if got := rows(name); got != want || want == 0 {
+		if got := rows(name); got != want || (want == 0 && name != "acceptances.csv") {
 			t.Errorf("%s: %d rows, section has %d", name, got, want)
 		}
 	}
@@ -539,8 +545,11 @@ func TestOutputsRenderInAllThreeFormsAndAreDeterministic(t *testing.T) {
 		}
 	}
 	// CSV injection: a cell that begins with a formula character stays text.
-	if cs, _ := packet.CSVs(&packet.Packet{Acceptances: []packet.Acceptance{{Detail: "=cmd()"}}}); !strings.Contains(string(cs["acceptances.csv"]), "'=cmd()") {
+	if cs, _ := packet.CSVs(&packet.Packet{Acceptances: packet.Acceptances{Receipts: []packet.Receipt{{Verdict: "=cmd()"}}}}); !strings.Contains(string(cs["acceptances.csv"]), "'=cmd()") {
 		t.Error("csv formula injection")
+	}
+	if !strings.Contains(text, "No acceptance receipts have been recorded") {
+		t.Error("the PDF should say no receipts have been recorded")
 	}
 }
 
