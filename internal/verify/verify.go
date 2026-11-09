@@ -84,6 +84,7 @@ func Verify(dir string, opts Options) *Report {
 	c.inputs()
 	c.ledgerCheck()
 	c.figuresCheck()
+	c.statementsCheck()
 	c.attestationsCheck()
 	c.seenCheck()
 	return c.rep

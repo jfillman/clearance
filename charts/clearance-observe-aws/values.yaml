@@ -10,7 +10,7 @@ fullnameOverride: ""
 
 # The collector's identity on the core is this service account: the core's CLEARANCE_FOREIGN_SERVICE_ACCOUNTS lists
 # <namespace>/<name>, and CLEARANCE_PROVIDERS registers observe-aws for it (kinds observation, assessment, resolution,
-# observation.health, deploy.exception).
+# observation.health, observation.verification, deploy.exception).
 serviceAccount:
   name: clearance-observe-aws
 

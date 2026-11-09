@@ -203,3 +203,31 @@ func TestFailPutsTheChangeBackWithItsItems(t *testing.T) {
 		t.Fatal(acks)
 	}
 }
+
+// The trail's verified copy of an event: pending with the EventBridge copy it replaces it (the event is posted once,
+// with the proof); after the event was posted it is reported as already posted, for a verification record.
+func TestAVerifiedCopyUpgradesAPendingEventOrIsReportedAfterItWasPosted(t *testing.T) {
+	clk := &clock{t0}
+	r := newRec(clk)
+	ev := consoleSG("ev-v", t0)
+	eb, v := ctItem(ev, clk.t)
+	tr, _ := ctItem(ev, clk.t)
+	tr.Feed, tr.Verified, tr.Method = FeedTrail, true, MethodDigestChain
+	if r.AddCT(eb, v) {
+		t.Fatal("the first copy is not a duplicate")
+	}
+	if r.AddCT(tr, v) {
+		t.Fatal("a copy of a pending event is not yet 'already posted'")
+	}
+	clk.add(10 * time.Minute)
+	got := r.Ready()
+	if len(got) != 1 || !got[0].Item.Verified || got[0].Item.Feed != FeedTrail {
+		t.Fatalf("the pending event takes the verified copy: %+v", got)
+	}
+	r.Done(got[0])
+	late, _ := ctItem(ev, clk.t)
+	late.Verified = true
+	if !r.AddCT(late, v) {
+		t.Fatal("a copy after the event was posted is reported, so the collector can post its verification")
+	}
+}

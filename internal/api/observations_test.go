@@ -35,7 +35,7 @@ func onBoth(t *testing.T, fn func(t *testing.T, f *fakeObserved)) {
 func newFakeObserved(t *testing.T, dsn string) *fakeObserved {
 	t.Helper()
 	ps, err := server.ParseProviders(`[{"name": "fake-trail", "version": "0.1.0", "principals": ["observed-system/fake-trail"],
-	  "kinds": ["observation", "assessment", "resolution", "observation.health"]}]`)
+	  "kinds": ["observation", "assessment", "resolution", "observation.health", "observation.verification"]}]`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,4 +242,52 @@ func checkTheObservationAndHealthListsAreByScopeAndForAuditors(t *testing.T, f *
 	h.status(t, 403, "GET", "/v1/observations?scope="+obsScope, "carol", "")
 	h.status(t, 403, "GET", "/v1/coverage?scope="+obsScope, "carol", "")
 	h.status(t, 401, "GET", "/v1/coverage?scope="+obsScope, "", "")
+}
+
+// O-5: the coverage statement counts the observations the trail verified after the fact, and lists the verification
+// records; a verification does not add an observation.
+func TestCoverageCountsWhatTheTrailVerifiedLater(t *testing.T) {
+	onBoth(t, checkCoverageCountsWhatTheTrailVerifiedLater)
+}
+
+func checkCoverageCountsWhatTheTrailVerifiedLater(t *testing.T, f *fakeObserved) {
+	start := time.Now().UTC().Truncate(time.Second)
+	f.post("observation.health", obsHealth("healthy"))
+	a := obsEvent("e-1", "RunInstances", true)
+	a["integrity"] = map[string]any{"sourceVerified": false, "completenessClaimed": true, "method": "eventbridge-delivery"}
+	later := f.post("observation", a)
+	b := obsEvent("e-2", "RunInstances", true)
+	b["integrity"] = map[string]any{"sourceVerified": false, "completenessClaimed": true, "method": "eventbridge-delivery"}
+	f.post("observation", b)                                     // never verified
+	f.post("observation", obsEvent("e-3", "RunInstances", true)) // verified by its own delivery
+	f.post("observation.verification", map[string]any{"scope": obsScope, "source": map[string]any{"name": "cloudtrail", "event_id": "e-1/verification"},
+		"about": map[string]any{"seq": later["seq"]}, "verification": map[string]any{"method": "cloudtrail-digest-chain", "verified": true}})
+	h := f.harness(t, start.Add(time.Minute))
+	st := h.ok("/v1/coverage?scope="+obsScope+"&from="+evidence.ISO(f.firstTS()), "audit")
+	si := st["source_integrity"].(map[string]any)
+	if si["observations"] != json.Number("3") || si["verified"] != json.Number("2") || si["verified_later"] != json.Number("1") ||
+		si["verified_by_record"] != json.Number("1") || si["unverified"] != json.Number("1") {
+		t.Fatalf("source integrity %v", si)
+	}
+	var how []string
+	for _, it := range st["seen_not_cleared"].(map[string]any)["items"].([]any) {
+		m := it.(map[string]any)
+		by, _ := m["verified_by"].(string)
+		how = append(how, by)
+		if (by != "") != (m["source_verified"] == true) {
+			t.Fatalf("source_verified and verified_by disagree: %v", m)
+		}
+	}
+	if strings.Join(how, ",") != "later,,self" {
+		t.Fatalf("how each observation was verified (in seq order): %v", how)
+	}
+	if st["seen_not_cleared"].(map[string]any)["count"] != json.Number("3") {
+		t.Fatalf("a verification adds no observation: %v", st["seen_not_cleared"])
+	}
+	if got := seqs(h.ok("/v1/observations?scope="+obsScope+"&kind=observation.verification", "audit")); len(got) != 1 {
+		t.Fatalf("verification records: %v", got)
+	}
+	if !strings.Contains(st["text"].(string), "Source verified: 2 of 3 observations") {
+		t.Fatal(st["text"])
+	}
 }

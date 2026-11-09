@@ -100,3 +100,53 @@ func TestMonitoringProtectionComesFromConfiguration(t *testing.T) {
 		t.Fatal("globs on the api, or source:api")
 	}
 }
+
+func TestAVerificationNamesTheObservationItVerifiesAndSaysItVerified(t *testing.T) {
+	mk := func(edit func(m map[string]any)) map[string]any {
+		ev := map[string]any{"scope": "aws-1", "source": map[string]any{"name": "observe-aws", "event_id": "e1/verification"},
+			"about": map[string]any{"seq": json.Number("7")}, "verification": map[string]any{"method": "cloudtrail-digest-chain", "verified": true}}
+		if edit != nil {
+			edit(ev)
+		}
+		return ev
+	}
+	res, err := Check("observation.verification", mk(nil), vocab.Vocabulary{})
+	if err != nil || res.Source != "observe-aws" || res.EventID != "e1/verification" {
+		t.Fatalf("%+v %v", res, err)
+	}
+	for name, edit := range map[string]func(m map[string]any){
+		"not verified":  func(m map[string]any) { m["verification"].(map[string]any)["verified"] = false },
+		"no event id":   func(m map[string]any) { delete(m["source"].(map[string]any), "event_id") },
+		"no about":      func(m map[string]any) { delete(m, "about") },
+		"no method":     func(m map[string]any) { delete(m["verification"].(map[string]any), "method") },
+		"extra field":   func(m map[string]any) { m["verification"].(map[string]any)["by"] = "me" },
+		"a coverage":    func(m map[string]any) { m["coverage"] = "authorized-and-verified" },
+		"a stray field": func(m map[string]any) { m["resolution"] = map[string]any{"state": "ratified"} },
+	} {
+		if _, err := Check("observation.verification", mk(edit), vocab.Vocabulary{}); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	// the field is the observation kinds' alone
+	if _, err := Check("tool.call", map[string]any{"verification": map[string]any{}}, vocab.Vocabulary{}); err == nil {
+		t.Error("a tool.call carries a verification")
+	}
+}
+
+func TestAnObservationIsCountedOnceHoweverManyRecordsVouchForIt(t *testing.T) {
+	obs := func(seq int64, verified bool) Record {
+		return Record{"seq": json.Number(itoa(int(seq))), "ts": t0.Format(time.RFC3339), "tool": "observation", "source": map[string]any{"name": "cloudtrail"},
+			"integrity": map[string]any{"sourceVerified": verified}, "action": map[string]any{"api": "x", "succeeded": true}}
+	}
+	ver := func(seq, about int64) Record {
+		return Record{"seq": json.Number(itoa(int(seq))), "tool": "observation.verification", "about": map[string]any{"seq": json.Number(itoa(int(about)))}}
+	}
+	st := Build(Input{Scope: "s", Window: window(-time.Hour, time.Hour), Observations: []Record{obs(1, false), obs(2, true), obs(3, false)},
+		Verifications: []Record{ver(10, 1), ver(11, 1), ver(12, 2)}, Health: []Record{health(9, t0.Add(-30*time.Minute), Healthy, 3600)}}, t0.Add(10*time.Minute))
+	if si := st.Integrity; si.Observations != 3 || si.Verified != 2 || si.Own != 1 || si.Later != 1 || si.Unverified != 1 {
+		t.Fatalf("%+v", si)
+	}
+	if st.Seen.Count+st.Cleared.Count != 3 {
+		t.Fatal("a verification record is not an observation")
+	}
+}

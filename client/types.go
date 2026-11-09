@@ -32,7 +32,7 @@ const (
 var RecordKinds = []string{"session.open", "run.launch", "run.delete", "run.finish", "human.answer",
 	"session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome",
 	"deploy.exception", "deploy.degraded", "federated.decision",
-	"observation", "assessment", "resolution", "observation.health"}
+	"observation", "assessment", "resolution", "observation.health", "observation.verification"}
 
 // CoverageUnavailable is a tool.call record's coverage: a T0 read the provider allowed while the core was
 // unreachable (the outage policy), posted once it answers.
@@ -390,6 +390,9 @@ type ProviderEvent struct {
 	RuleSet     map[string]any `json:"rule_set,omitempty"`
 	Attribution map[string]any `json:"attribution,omitempty"`
 	Resolution  map[string]any `json:"resolution,omitempty"`
+	// Verification is an observation.verification's {method, verified, reference?}: a feed's later proof that the
+	// observation About names was delivered unaltered.
+	Verification map[string]any `json:"verification,omitempty"`
 }
 
 // String is a pointer to s, for ProviderEvent's optional fields.

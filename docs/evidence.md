@@ -178,9 +178,9 @@ records, `clearance chain verify` ok).
 **Six coverage states.** The four of v1, plus `break-glass` (inside a declared break-glass window) and
 `attempted-refused` (an operation something tried and a control refused: nothing landed).
 
-**Five kinds.** A provider posts four of them through `POST /v1/records`, and only when its registration names them in
+**Six kinds.** A provider posts five of them through `POST /v1/records`, and only when its registration names them in
 `kinds` (a provider with no `kinds` writes every kind *but* these: a registered observed provider is one that opted
-in). The fifth is the core's.
+in). The sixth is the core's.
 
 | Kind | Written by | What it is | Fields (all claimed unless noted) |
 | --- | --- | --- | --- |
@@ -188,10 +188,21 @@ in). The fifth is the core's.
 | `assessment` | provider | What was made of an observation | `about` {seq}, `scope`, `coverage` (the assessed state: any of the six), `tier`, `rule_set` {version}, `attribution` {signal, detail?, grant?}: the signal that decided it |
 | `resolution` | provider | How an observed change ended | `about` {seq}, `scope`, `resolution` {`state`: `reverted`, `ratified`, `declared-break-glass` or `still-live`; `cause` on a revert only: `agent-caused`, `policy-triggered`, `human-initiated`, `automated-remediation`, `requirement-changed`, `external-dependency`, `unattributed`} |
 | `observation.health` | provider (and the core, below) | A feed's state per scope and source | `scope`, `source` {name}, `health` {`state`: `healthy`, `degraded` or `blind`; `checks` [{name, ok, detail?}], `interval_seconds`?} |
+| `observation.verification` | provider | A feed's later proof that an observation it already reported was delivered unaltered (O-5, revision 6) | `scope`, `source` {`name`, `event_id` (`<event id>/verification`)}, `about` {seq}: an observation of the same source, `verification` {`method`, `verified`: true, `reference`?}. A record of its own: the observation is not rewritten, not counted twice and raises no second exception |
 | `observation.audit-gap` | the core | A feed dropped | `scope`, `source` {name}, `gap` {state, reason, health_seq, since?} (verified), coverage `coverage-unavailable` |
 
+**Resolutions are append-only; a person may set one (O-5).** The first resolution of an observation is its collector's
+(`still-live`, or `reverted` when the collector saw the revert). A person sets what a person knows (why it happened,
+or that it was ratified) with `POST /v1/observations/{seq}/resolution` on the core ([gate.md](gate.md#a-persons-resolution-of-an-observation-o-5)):
+a `resolution` record about the same seq, in the same shape, naming the person (`principal`, `initiator` {sub, iss}, and
+`resolution.by`). An edit is another record; **the newest record about a seq is the resolution when it is read**
+(the coverage statement, the packet and the verifier all read it that way), and every earlier one stays in the chain,
+so who set which cause and when is never lost. `GET /v1/observations?kind=resolution` is the history.
+
 **Source integrity is not completeness.** `integrity.sourceVerified` says the delivered log files were verified
-unaltered (a trail's digest chain). `integrity.completenessClaimed` says the provider believes the feed delivered
+unaltered (a trail's digest chain). When the feed that delivered an event first could not verify it and another feed later
+did, an `observation.verification` says so and the coverage statement counts the observation verified once, by either.
+`integrity.completenessClaimed` says the provider believes the feed delivered
 everything for the period. Neither is the core's finding; the core adds `completeness_supported` (verified): true only
 when the scope and source's latest health record was `healthy` and not stale when the observation arrived. A claim of
 completeness over a feed that was blind reads `completenessClaimed: true`, `completeness_supported: false`.

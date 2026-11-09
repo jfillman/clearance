@@ -26,8 +26,8 @@ const (
 
 // carry picks the records the packet carries in full: every record from the first to the last in the window (so the
 // chain's prev_hash links between them can be rechecked), and, beside them, the records outside that range the
-// packet's statements read (the last health record before the window of each feed, and the assessments and
-// resolutions of the window's observations), so a verifier can rebuild the coverage statement from the file alone.
+// packet's statements read (the last health record before the window of each feed, and the assessments,
+// resolutions and verifications of the window's observations), so a verifier can rebuild the coverage statement from the file alone.
 func (b *builder) carry(ctx context.Context, res *Result, lo, hi int64) {
 	seqs := map[int64]bool{}
 	if lo >= 0 {
@@ -49,7 +49,7 @@ func (b *builder) carry(ctx context.Context, res *Result, lo, hi int64) {
 			if b.ts(r) < b.from {
 				lastHealth[str(r, "scope")+"\x00"+str(obj(r, "source"), "name")] = seq
 			}
-		case evidence.KindAssessment, evidence.KindResolution:
+		case evidence.KindAssessment, evidence.KindResolution, evidence.KindVerification:
 			if a, ok := aboutSeq(r); ok && b.inWin[a] {
 				seqs[seq] = true
 			}

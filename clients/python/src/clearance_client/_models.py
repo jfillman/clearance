@@ -16,9 +16,9 @@ from ._codec import Field, Model, Operation
 
 CONTRACT_VERSION = "1.0.0"
 
-RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "run.finish", "human.answer", "session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome", "deploy.exception", "deploy.degraded", "federated.decision", "observation", "assessment", "resolution", "observation.health")
+RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "run.finish", "human.answer", "session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome", "deploy.exception", "deploy.degraded", "federated.decision", "observation", "assessment", "resolution", "observation.health", "observation.verification")
 
-__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateReason", "GateRequirement", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
+__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateReason", "GateRequirement", "GateResolutionRecorded", "GateResolutionRequest", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -990,6 +990,50 @@ class GateRequirement(Model):
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
+class GateResolutionRecorded(Model):
+    """Contract schema GateResolutionRecorded."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("about", "about", ("int",), True),
+        Field("by", "by", ("str",), True),
+        Field("cause", "cause", ("nullable", ("str",)), True),
+        Field("note", "note", ("nullable", ("str",)), True),
+        Field("scope", "scope", ("str",), True),
+        Field("seq", "seq", ("int",), True),
+        Field("state", "state", ("str",), True),
+        Field("ts", "ts", ("str",), True),
+        Field("via", "via", ("nullable", ("str",)), True),
+    )
+
+    about: int
+    by: str
+    cause: str | None
+    note: str | None
+    scope: str
+    seq: int
+    state: str
+    ts: str
+    via: str | None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class GateResolutionRequest(Model):
+    """Contract schema GateResolutionRequest (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("cause", "cause", ("nullable", ("str",)), False),
+        Field("note", "note", ("nullable", ("str",)), False),
+        Field("state", "state", ("str",), True),
+    )
+
+    cause: str | None = None
+    note: str | None = None
+    state: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
 class GateResource(Model):
     """Contract schema GateResource."""
 
@@ -1515,6 +1559,7 @@ class ProviderEvent(Model):
         Field("tier", "tier", ("nullable", ("int",)), False),
         Field("times", "times", ("map", ("any",)), False),
         Field("tool", "tool", ("nullable", ("str",)), False),
+        Field("verification", "verification", ("map", ("any",)), False),
     )
 
     about: dict[str, Any] | None = None
@@ -1559,6 +1604,7 @@ class ProviderEvent(Model):
     tier: int | None = None
     times: dict[str, Any] | None = None
     tool: str | None = None
+    verification: dict[str, Any] | None = None
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -2039,6 +2085,8 @@ MODELS: dict[str, type[Model]] = {
     "GatePlanSummary": GatePlanSummary,
     "GateReason": GateReason,
     "GateRequirement": GateRequirement,
+    "GateResolutionRecorded": GateResolutionRecorded,
+    "GateResolutionRequest": GateResolutionRequest,
     "GateResource": GateResource,
     "GateSubject": GateSubject,
     "GateTokenView": GateTokenView,
@@ -2107,6 +2155,7 @@ OPERATIONS: dict[str, Operation] = {
     "reviewDefinition": Operation("POST", "/v1/definitions/review", "bearer", 65536, None, ReviewResult),
     "githubWebhook": Operation("POST", "/v1/github/webhook", "github-signature", 26214400, None, WebhookAnswer),
     "getKeys": Operation("GET", "/v1/keys", "none", 65536, None, TokenJWKS),
+    "setObservationResolution": Operation("POST", "/v1/observations/{seq}/resolution", "bearer", 16384, GateResolutionRequest, GateResolutionRecorded),
     "verifyProvenance": Operation("POST", "/v1/provenance", "bearer", 4194304, None, ProvenanceVerdict),
     "appendRecord": Operation("POST", "/v1/records", "provider", 262144, RecordRequest, RecordRef),
     "hcpRunTask": Operation("POST", "/v1/terraform/run-task", "hcp-signature", 65536, None, HcprunAnswer),

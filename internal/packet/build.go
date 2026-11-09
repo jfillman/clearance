@@ -79,8 +79,8 @@ func (p *Params) normalize() error {
 var sectionsByView = map[string][]string{
 	ViewPacket: {"header", "coverage_statement", "control_assertions", "changes", "human_cleared_changes", "ai_identities",
 		"exceptions", "policy_changes", "verification", "acceptances"},
-	ViewFreeze:   {"header", "coverage_statement", "changes", "exceptions", "acceptances", "verification"},
-	ViewIncident: {"header", "coverage_statement", "changes", "ai_identities", "exceptions", "policy_changes", "acceptances", "verification"},
+	ViewFreeze:   {"header", "coverage_statement", "changes", "observed_changes", "exceptions", "acceptances", "verification"},
+	ViewIncident: {"header", "coverage_statement", "changes", "observed_changes", "ai_identities", "exceptions", "policy_changes", "acceptances", "verification"},
 }
 
 // Build reads the chain through r and makes the packet p asks for.
@@ -120,12 +120,14 @@ type builder struct {
 
 	// assessments and resolutions by the seq they are about, latest wins
 	assessed, resolved map[int64]Record
-	changes            []Change
-	byChange           map[string]*Change
-	exceptions         []Exception
-	statements         []ScopeState
-	extra              map[int64]bool // records outside the window's range the sections read
-	proofErr           error
+	// verified is the seq of the earliest observation.verification record about an observation seq.
+	verified   map[int64]int64
+	changes    []Change
+	byChange   map[string]*Change
+	exceptions []Exception
+	statements []ScopeState
+	extra      map[int64]bool // records outside the window's range the sections read
+	proofErr   error
 }
 
 func (b *builder) ts(r Record) string { return str(r, "ts") }
@@ -210,7 +212,7 @@ func (b *builder) build(ctx context.Context, maps []Mapping) (*Result, error) {
 	p := b.p
 	b.from, b.to = evidence.ISO(p.From), evidence.ISO(p.To)
 	b.inWin, b.extra = map[int64]bool{}, map[int64]bool{}
-	b.assessed, b.resolved = map[int64]Record{}, map[int64]Record{}
+	b.assessed, b.resolved, b.verified = map[int64]Record{}, map[int64]Record{}, map[int64]int64{}
 	scopeSeen := map[string]bool{}
 	lo, hi := int64(-1), int64(-1)
 	for _, r := range b.c.records {
@@ -224,6 +226,11 @@ func (b *builder) build(ctx context.Context, maps []Mapping) (*Result, error) {
 				m := b.assessed
 				if tool == evidence.KindResolution {
 					m = b.resolved
+				}
+				if tool == evidence.KindVerification {
+					if _, have := b.verified[a]; !have {
+						b.verified[a] = seq
+					}
 				}
 				if tool == evidence.KindAssessment || tool == evidence.KindResolution {
 					if old, have := m[a]; !have || seqOf(old) < seq {
@@ -264,6 +271,7 @@ func (b *builder) build(ctx context.Context, maps []Mapping) (*Result, error) {
 	b.humanCleared(pk)
 	b.aiIdentities(pk)
 	b.exceptionsSection(pk)
+	b.observedSection(pk)
 	b.policySection(pk)
 	b.acceptances(pk)
 	res := &Result{Packet: pk, Window: b.inWin, Mappings: maps, Bundles: map[string][]byte{}}
@@ -356,6 +364,8 @@ func (b *builder) coverage(pk *Packet) {
 				in.Assessments = append(in.Assessments, r)
 			case evidence.KindResolution:
 				in.Resolutions = append(in.Resolutions, r)
+			case evidence.KindVerification:
+				in.Verifications = append(in.Verifications, r)
 			case evidence.KindHealth:
 				if t < b.to {
 					in.Health = append(in.Health, r)
@@ -373,6 +383,12 @@ func (b *builder) coverage(pk *Packet) {
 				"an empty list for it is not a clean one.", sc, st.From, st.To)
 		}
 		cv.Scopes = append(cv.Scopes, ss)
+		si := st.Integrity
+		cv.Integrity.Observations += si.Observations
+		cv.Integrity.Verified += si.Verified
+		cv.Integrity.Own += si.Own
+		cv.Integrity.Later += si.Later
+		cv.Integrity.Unverified += si.Unverified
 	}
 	b.statements = cv.Scopes
 	cv.WindowVerified = len(cv.Scopes) > 0
@@ -459,6 +475,10 @@ func coverageWords(cv Coverage, b *builder) string {
 			}
 		}
 		sb.WriteString("Coverage was NOT verified for this window: " + strings.Join(bad, ", ") + ".")
+	}
+	if n := cv.Integrity.Observations; n > 0 {
+		fmt.Fprintf(&sb, " Source verified for %d of %d observations (%d by the delivery's own verification, %d by a later verification of the same event).",
+			cv.Integrity.Verified, n, cv.Integrity.Own, cv.Integrity.Later)
 	}
 	return sb.String()
 }

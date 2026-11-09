@@ -61,7 +61,7 @@ func (s *Server) appendObserved(ctx context.Context, tx store.Tx, kind string, e
 		if res.Monitoring {
 			verified["tier"] = true
 		}
-	case evidence.KindAssessment, evidence.KindResolution:
+	case evidence.KindAssessment, evidence.KindResolution, evidence.KindVerification:
 		about, _ := observe.About(ev)
 		rs, err := tx.Records(ctx, about, 1)
 		if err != nil {
@@ -76,10 +76,18 @@ func (s *Server) appendObserved(ctx context.Context, tx store.Tx, kind string, e
 		}
 		ok := a["tool"] == evidence.KindObservation || (kind == evidence.KindResolution && a["tool"] == evidence.KindAssessment)
 		if !ok {
+			if kind == evidence.KindVerification {
+				return nil, bad("about.seq %d is a %v record: a verification is about an observation", about, a["tool"])
+			}
 			if kind == evidence.KindResolution {
 				return nil, bad("about.seq %d is a %v record: a resolution is about an observation or an assessment", about, a["tool"])
 			}
 			return nil, bad("about.seq %d is a %v record: an assessment is about an observation", about, a["tool"])
+		}
+		if kind == evidence.KindVerification {
+			if src, _ := a["source"].(map[string]any); src["name"] != source {
+				return nil, bad("about.seq %d was reported by source %v: a feed verifies only its own observations", about, src["name"])
+			}
 		}
 		if a["scope"] != scope {
 			return nil, bad("about.seq %d is in scope %v, not %s", about, a["scope"], scope)

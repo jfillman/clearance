@@ -31,7 +31,7 @@ import (
 var RecordKinds = []string{"session.open", "run.launch", "run.delete", "run.finish", "human.answer",
 	"session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome",
 	"deploy.exception", "deploy.degraded", FederatedKind,
-	evidence.KindObservation, evidence.KindAssessment, evidence.KindResolution, evidence.KindHealth}
+	evidence.KindObservation, evidence.KindAssessment, evidence.KindResolution, evidence.KindHealth, evidence.KindVerification}
 
 // OutageKind is the record of a T0 read the provider allowed while the core was unreachable. Its tool is the tool
 // that was called (record.tool), its coverage is CoverageUnavailable, and everything in it is claimed: the core
@@ -74,10 +74,11 @@ var recordKinds = map[string]kindSpec{
 		"destination"}, "deployment"},
 	FederatedKind: {[]string{"decision", "result", "coverage"}, "runtime"},
 	// The observation kinds (O-1); observe.Check holds each to its shape.
-	evidence.KindObservation: {[]string{"scope", "source", "resource", "actor", "action", "integrity", "times"}, "deployment"},
-	evidence.KindAssessment:  {[]string{"scope", "about", "coverage", "tier", "rule_set", "attribution"}, "deployment"},
-	evidence.KindResolution:  {[]string{"scope", "about", "resolution"}, "deployment"},
-	evidence.KindHealth:      {[]string{"scope", "source", "health"}, "deployment"},
+	evidence.KindObservation:  {[]string{"scope", "source", "resource", "actor", "action", "integrity", "times"}, "deployment"},
+	evidence.KindAssessment:   {[]string{"scope", "about", "coverage", "tier", "rule_set", "attribution"}, "deployment"},
+	evidence.KindResolution:   {[]string{"scope", "about", "resolution"}, "deployment"},
+	evidence.KindHealth:       {[]string{"scope", "source", "health"}, "deployment"},
+	evidence.KindVerification: {[]string{"scope", "source", "about", "verification"}, "deployment"},
 }
 
 // RecordRequest is POST /v1/records's body. provider must be the provider the caller authenticates as; kind is the
@@ -155,6 +156,8 @@ type ProviderEvent struct {
 	RuleSet     map[string]any `json:"rule_set,omitempty"`
 	Attribution map[string]any `json:"attribution,omitempty"`
 	Resolution  map[string]any `json:"resolution,omitempty"`
+	// Verification is an observation.verification's {method, verified, reference?} (O-5).
+	Verification map[string]any `json:"verification,omitempty"`
 }
 
 var hexDigest = regexp.MustCompile(`^[0-9a-f]{64}\z`)
@@ -226,7 +229,7 @@ func (e *ProviderEvent) event(kind string, spec kindSpec, ts string) (store.Even
 		{"outage", e.Outage}, {"resource", e.Resource}, {"actor", e.Actor}, {"action", e.Action},
 		{"state_change", e.StateChange}, {"correlation", e.Correlation}, {"integrity", e.Integrity}, {"times", e.Times},
 		{"health", e.Health}, {"about", e.About}, {"rule_set", e.RuleSet}, {"attribution", e.Attribution},
-		{"resolution", e.Resolution}} {
+		{"resolution", e.Resolution}, {"verification", e.Verification}} {
 		if f.v != nil {
 			ev[f.k] = f.v
 		}

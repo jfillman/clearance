@@ -76,6 +76,42 @@ type Packet struct {
 	Acceptances  Acceptances   `json:"acceptances"`
 	// Timeline is the incident view's chronology of the changes and exceptions in scope (absent in the other views).
 	Timeline []TimelineEntry `json:"timeline,omitempty"`
+	// Observed is the freeze and incident views' list of every change the observation feeds saw inside the window and
+	// scope, cleared or not (absent in the packet view, whose exceptions section lists only what was not cleared).
+	Observed *ObservedChanges `json:"observed_changes,omitempty"`
+}
+
+// MaxObservedChanges caps the observed-changes section; past it Truncated is set and Count is still the whole count.
+const MaxObservedChanges = 2000
+
+// ObservedChanges are the observations in a freeze's or incident's window: one row per observed change.
+type ObservedChanges struct {
+	Count     int              `json:"count"`
+	Truncated bool             `json:"truncated"`
+	Rows      []ObservedChange `json:"rows"`
+}
+
+// ObservedChange is one observation as a freeze or incident report reads it: what changed, who did it, whether it was
+// cleared, how it ended and whether its source was verified.
+type ObservedChange struct {
+	Seq       int64  `json:"seq"`
+	TS        string `json:"ts"`
+	Scope     string `json:"scope"`
+	Source    string `json:"source"`
+	Resource  string `json:"resource"`
+	Actor     string `json:"actor"`
+	API       string `json:"api,omitempty"`
+	Succeeded *bool  `json:"succeeded,omitempty"`
+	Diff      string `json:"diff,omitempty"`
+	// Coverage is the latest assessment's coverage state ("unassessed" when none arrived).
+	Coverage   string `json:"coverage"`
+	Resolution string `json:"resolution"`
+	Cause      string `json:"cause,omitempty"`
+	ResolvedBy string `json:"resolved_by,omitempty"`
+	// SourceVerified and VerifiedBy ("self": the observation's own integrity; "later": a verification record) say
+	// whether the delivery was verified unaltered.
+	SourceVerified bool   `json:"source_verified"`
+	VerifiedBy     string `json:"verified_by,omitempty"`
 }
 
 // TimelineEntry is one event of an incident timeline.
@@ -128,12 +164,14 @@ type ChainRef struct {
 
 // Coverage is the coverage statement.
 type Coverage struct {
-	Total       int          `json:"total_records"`
-	ByCoverage  []Count      `json:"by_coverage"`
-	ByAssurance []Count      `json:"by_assurance"`
-	Matrix      []MatrixRow  `json:"coverage_by_assurance"`
-	Degraded    []Degraded   `json:"degraded_windows"`
-	Scopes      []ScopeState `json:"observation_health"`
+	Total       int         `json:"total_records"`
+	ByCoverage  []Count     `json:"by_coverage"`
+	ByAssurance []Count     `json:"by_assurance"`
+	Matrix      []MatrixRow `json:"coverage_by_assurance"`
+	Degraded    []Degraded  `json:"degraded_windows"`
+	// Integrity sums the scopes' statements: how many of the window's observations had their source verified.
+	Integrity observe.SourceIntegrity `json:"source_integrity"`
+	Scopes    []ScopeState            `json:"observation_health"`
 	// WindowVerified is true only when at least one scope was observed and every observed scope's feeds were healthy
 	// for the whole window. Only then may the packet print that no exceptions were detected.
 	WindowVerified bool   `json:"window_verified"`
@@ -365,9 +403,16 @@ type Exception struct {
 	Subject string `json:"subject,omitempty"` // the app and env, the resource or the token's change
 	Actor   string `json:"actor,omitempty"`
 	// Diff is what differed: expected and observed digests, the objects or addresses, or the operation observed.
-	Diff             string   `json:"diff,omitempty"`
-	Resolution       string   `json:"resolution"`
-	Cause            string   `json:"cause,omitempty"`
+	Diff       string `json:"diff,omitempty"`
+	Resolution string `json:"resolution"`
+	Cause      string `json:"cause,omitempty"`
+	// ResolutionSeq and ResolvedBy name the newest resolution record about an observation row and the person (or
+	// provider) it names; an edit is a newer record about the same seq and this is its latest.
+	ResolutionSeq *int64 `json:"resolution_seq,omitempty"`
+	ResolvedBy    string `json:"resolved_by,omitempty"`
+	// SourceVerified and VerifiedBy: see ObservedChange.
+	SourceVerified   bool     `json:"source_verified,omitempty"`
+	VerifiedBy       string   `json:"verified_by,omitempty"`
 	Detail           string   `json:"detail,omitempty"`
 	Coverage         string   `json:"coverage,omitempty"`
 	Window           string   `json:"break_glass_window,omitempty"`

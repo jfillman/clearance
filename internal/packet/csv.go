@@ -47,9 +47,10 @@ func CSVs(pk *Packet) (map[string][]byte, error) {
 	for _, s := range cov.Scopes {
 		st := s.Statement
 		rows = append(rows, []string{s.Scope, fmt.Sprint(s.Collector), st.State, fmt.Sprint(st.Clean), itoa(st.Cleared.Count), itoa(st.Seen.Count),
-			fmt.Sprint(st.Blind.Seconds), fmt.Sprint(cov.WindowVerified), s.Text})
+			fmt.Sprint(st.Blind.Seconds), fmt.Sprint(cov.WindowVerified), s.Text, itoa(st.Integrity.Observations), itoa(st.Integrity.Verified), itoa(st.Integrity.Later)})
 	}
-	do(put("coverage-scopes.csv", []string{"scope", "collector", "state", "clean", "cleared_and_verified", "seen_not_cleared", "could_not_see_seconds", "window_verified", "text"}, rows))
+	do(put("coverage-scopes.csv", []string{"scope", "collector", "state", "clean", "cleared_and_verified", "seen_not_cleared", "could_not_see_seconds", "window_verified", "text",
+		"observations", "source_verified", "source_verified_later"}, rows))
 	rows = nil
 	for _, d := range cov.Degraded {
 		seq := ""
@@ -108,9 +109,18 @@ func CSVs(pk *Packet) (map[string][]byte, error) {
 	rows = nil
 	for _, e := range pk.Exceptions.Rows {
 		rows = append(rows, []string{e.Class, fmt.Sprint(e.Seq), e.TS, e.Kind, e.Source, e.Scope, e.Subject, e.Actor, e.Diff, e.Resolution, e.Cause, e.Window,
-			strings.Join(e.OperationalClass, " "), e.Detail})
+			strings.Join(e.OperationalClass, " "), e.Detail, ptrStr(e.ResolutionSeq), e.ResolvedBy, fmt.Sprint(e.SourceVerified)})
 	}
-	do(put("exceptions.csv", []string{"class", "seq", "ts", "kind", "source", "scope", "subject", "actor", "diff", "resolution", "cause", "break_glass_window", "operational_class", "detail"}, rows))
+	do(put("exceptions.csv", []string{"class", "seq", "ts", "kind", "source", "scope", "subject", "actor", "diff", "resolution", "cause", "break_glass_window", "operational_class", "detail",
+		"resolution_seq", "resolved_by", "source_verified"}, rows))
+	if oc := pk.Observed; oc != nil {
+		rows = nil
+		for _, o := range oc.Rows {
+			rows = append(rows, []string{fmt.Sprint(o.Seq), o.TS, o.Scope, o.Source, o.Resource, o.Actor, o.API, o.Diff, o.Coverage, o.Resolution, o.Cause, o.ResolvedBy,
+				fmt.Sprint(o.SourceVerified), o.VerifiedBy})
+		}
+		do(put("observed-changes.csv", []string{"seq", "ts", "scope", "source", "resource", "actor", "api", "diff", "coverage", "resolution", "cause", "resolved_by", "source_verified", "verified_by"}, rows))
+	}
 	rows = nil
 	for _, e := range pk.Policy {
 		rows = append(rows, []string{fmt.Sprint(e.Seq), e.TS, e.Kind, e.Name, e.Ref, e.Version, e.Digest, e.Detail})

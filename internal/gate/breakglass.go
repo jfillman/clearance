@@ -136,14 +136,14 @@ func openWindow(ctx context.Context, r store.Reader, cluster, env string, app *s
 }
 
 // admin is the person behind p (themselves, or the person a delegate names) when they are an admin.
-func (s *Service) admin(ctx context.Context, p authn.Principal, onBehalfOf string) (string, *string, identity, error) {
+func (s *Service) admin(ctx context.Context, p authn.Principal, onBehalfOf string, rule, hint string) (string, *string, identity, error) {
 	person, via, _, who, err := s.person(ctx, p, onBehalfOf)
 	if err != nil {
 		return "", nil, who, err
 	}
 	if !pycompat.MatchAny(person, s.Config.Admins) {
-		return "", nil, who, gerr("DG-BREAKGLASS", person+" is not a Clearance admin (CLEARANCE_ADMINS)",
-			"Only an admin, or a delegate naming one, may break glass.", 403)
+		return "", nil, who, gerr(rule, person+" is not a Clearance admin (CLEARANCE_ADMINS)",
+			hint, 403)
 	}
 	return person, via, who, nil
 }
@@ -170,7 +170,7 @@ func (s *Service) OpenBreakglass(ctx context.Context, p authn.Principal, req Bre
 	if err := s.gateOn(); err != nil {
 		return nil, err
 	}
-	person, via, who, err := s.admin(ctx, p, onBehalfOf)
+	person, via, who, err := s.admin(ctx, p, onBehalfOf, "DG-BREAKGLASS", "Only an admin, or a delegate naming one, may break glass.")
 	if err != nil {
 		return nil, err
 	}
@@ -266,7 +266,7 @@ func (s *Service) CloseBreakglass(ctx context.Context, p authn.Principal, id, on
 	if err := s.gateOn(); err != nil {
 		return nil, err
 	}
-	person, via, _, err := s.admin(ctx, p, onBehalfOf)
+	person, via, _, err := s.admin(ctx, p, onBehalfOf, "DG-BREAKGLASS", "Only an admin, or a delegate naming one, may break glass.")
 	if err != nil {
 		return nil, err
 	}
