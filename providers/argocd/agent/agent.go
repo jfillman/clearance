@@ -123,6 +123,10 @@ type Agent struct {
 	mu   sync.Mutex // the state, and the keys
 	st   State
 	keys keyCache
+
+	protMu   sync.Mutex // the protected-namespace cache of handleApp
+	prot     map[string]map[string]string
+	protUpTo time.Time
 }
 
 // New builds an agent. now and log may be nil.

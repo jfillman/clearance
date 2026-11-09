@@ -442,3 +442,35 @@ func TestAnOutcomeOfATenantOnboardedApplicationAttachesToItsChange(t *testing.T)
 		t.Fatalf("outcome: %+v", got.Outcome)
 	}
 }
+
+// A protected project can hold an environment the gate does not protect. The agent has no read in that namespace and
+// must not try: on hangar-prod gate-api-staging produced a 403 on every list.
+func TestAnApplicationOutsideAProtectedNamespaceIsSkipped(t *testing.T) {
+	w := newWorld(t)
+	w.kube.protect("app-a", map[string]string{agent.LabelEnvironment: "prod"})
+	d, _ := stamped(t, "Deployment", "web", "app-a", "web", ch2, hex("c"))
+	w.kube.objs["app-a"] = []agent.ObjectDetail{d}
+	w.kube.objs["app-staging"] = []agent.ObjectDetail{d}
+
+	staging := webApp(succeeded("2026-11-07T12:00:00Z"))
+	staging.Name, staging.UID, staging.DestNS = "web-staging", "uid-staging", "app-staging"
+	if err := w.a.HandleApplication(bg, staging); err != nil {
+		t.Fatalf("an unprotected namespace is not an error: %v", err)
+	}
+	if n := len(w.core.of("deploy.outcome")); n != 0 {
+		t.Fatalf("%d outcomes for an unprotected namespace", n)
+	}
+	lists := w.kube.nsLists
+	if err := w.a.HandleApplication(bg, staging); err != nil {
+		t.Fatal(err)
+	}
+	if lists == 0 || w.kube.nsLists != lists {
+		t.Fatalf("a second status change inside the window listed the namespaces again: %d then %d", lists, w.kube.nsLists)
+	}
+	if err := w.a.HandleApplication(bg, webApp(succeeded("2026-11-07T12:00:00Z"))); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(w.core.of("deploy.outcome")); n != 1 {
+		t.Fatalf("%d outcomes for the protected namespace, want 1", n)
+	}
+}
