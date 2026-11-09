@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/jfillman/clearance/internal/attest"
+	"github.com/jfillman/clearance/internal/attestor"
 	"github.com/jfillman/clearance/internal/gate"
 	"github.com/jfillman/clearance/internal/store"
 )
@@ -29,7 +29,7 @@ func outcomeRec(applied bool, digest string) store.Record {
 }
 
 func TestAManifestOutcomeBecomesAStatement(t *testing.T) {
-	st, err := attest.BuildStatement(manifestChange(), outcomeRec(true, treeRoot), "clearance")
+	st, err := attestor.BuildStatement(manifestChange(), outcomeRec(true, treeRoot), "clearance")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,21 +51,21 @@ func TestAManifestOutcomeBecomesAStatement(t *testing.T) {
 	}
 	withRelease := outcomeRec(true, treeRoot)
 	withRelease["release"] = map[string]any{"id": "rel-42"}
-	if st, err := attest.BuildStatement(manifestChange(), withRelease, "clearance"); err != nil || st.Predicate.Release == nil || st.Predicate.Release.ID != "rel-42" {
+	if st, err := attestor.BuildStatement(manifestChange(), withRelease, "clearance"); err != nil || st.Predicate.Release == nil || st.Predicate.Release.ID != "rel-42" {
 		t.Fatalf("release: %+v %v", st, err)
 	}
 	// release {id} wins; the Argo CD agent's older placement, change.release.id, still counts.
 	legacy := outcomeRec(true, treeRoot)
 	legacy["change"].(map[string]any)["release"] = map[string]any{"id": "rel-old"}
-	if st, err := attest.BuildStatement(manifestChange(), legacy, "clearance"); err != nil || st.Predicate.Release == nil || st.Predicate.Release.ID != "rel-old" {
+	if st, err := attestor.BuildStatement(manifestChange(), legacy, "clearance"); err != nil || st.Predicate.Release == nil || st.Predicate.Release.ID != "rel-old" {
 		t.Fatalf("legacy release: %+v %v", st, err)
 	}
 	legacy["release"] = map[string]any{"id": "rel-new"}
-	if st, _ := attest.BuildStatement(manifestChange(), legacy, "clearance"); st.Predicate.Release.ID != "rel-new" {
+	if st, _ := attestor.BuildStatement(manifestChange(), legacy, "clearance"); st.Predicate.Release.ID != "rel-new" {
 		t.Fatalf("release {id} must win: %+v", st.Predicate.Release)
 	}
 	// A provider that reports no digest still gets an attestation, with matched null and a limitation saying so.
-	st, err = attest.BuildStatement(manifestChange(), outcomeRec(true, ""), "clearance")
+	st, err = attestor.BuildStatement(manifestChange(), outcomeRec(true, ""), "clearance")
 	if err != nil || st.Predicate.Outcome.Matched != nil || len(st.Predicate.Limitations) < 3 {
 		t.Fatalf("%+v %v", st, err)
 	}
@@ -92,7 +92,7 @@ func TestNoStatementForAnOutcomeThatIsNotAnAppliedClearedDeploy(t *testing.T) {
 		"another change": {manifestChange(), wrongChange},
 		"not an outcome": {manifestChange(), notOutcome},
 	} {
-		if _, err := attest.BuildStatement(c.c, c.rec, "clearance"); !errors.Is(err, attest.ErrNoAttestation) {
+		if _, err := attestor.BuildStatement(c.c, c.rec, "clearance"); !errors.Is(err, attestor.ErrNoAttestation) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}

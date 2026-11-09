@@ -26,6 +26,10 @@ import (
 	"github.com/jfillman/clearance/internal/store/memory"
 )
 
+// labLogSkey is the throwaway log key the last witnessedLab made (the verifier tests re-sign with it, as an attacker
+// holding the log's key would; it is generated in the test and never leaves it).
+var labLogSkey string
+
 // witnessedLab runs the real ledger service and a real in-process witness over st until every record is under a
 // witnessed checkpoint, then stops the service. It returns the log's public vkey and the witness policy.
 func witnessedLab(t *testing.T, st *memory.Store) (vkey string, policy []byte) {
@@ -34,6 +38,7 @@ func witnessedLab(t *testing.T, st *memory.Store) (vkey string, policy []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	labLogSkey = skey
 	signer, verifier, err := f_note.NewEd25519SignerVerifier(skey)
 	if err != nil {
 		t.Fatal(err)

@@ -1,4 +1,4 @@
-package attest
+package attestor
 
 import (
 	"errors"
@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jfillman/clearance/internal/attest"
 	"github.com/jfillman/clearance/internal/gate"
 	"github.com/jfillman/clearance/internal/store"
 )
@@ -17,7 +18,7 @@ var ErrNoAttestation = errors.New("attest: no attestation for this change")
 // BuildStatement assembles the attestation of change c from its deploy.outcome record. Refused with
 // ErrNoAttestation (wrapped, with the reason) when the change was never cleared, the outcome says the deploy did not
 // apply, or what it applied is not what was cleared: an approved change that never synced gets none.
-func BuildStatement(c *gate.Change, rec store.Record, issuer string) (*Statement, error) {
+func BuildStatement(c *gate.Change, rec store.Record, issuer string) (*attest.Statement, error) {
 	no := func(f string, a ...any) error { return fmt.Errorf("%w: %s", ErrNoAttestation, fmt.Sprintf(f, a...)) }
 	if c.ClearedBy == nil || c.DecidedAt == nil {
 		return nil, no("the change was never cleared")
@@ -78,17 +79,17 @@ func BuildStatement(c *gate.Change, rec store.Record, issuer string) (*Statement
 		lim = append(lim, fmt.Sprintf("The outcome's coverage is %s.", coverage))
 	}
 
-	st := &Statement{Type: StatementType, PredicateType: PredicateType}
+	st := &attest.Statement{Type: attest.StatementType, PredicateType: attest.PredicateType}
 	switch claims.Subjects.Kind {
 	case gate.KindTerraformPlan:
-		st.Subject = append(st.Subject, Subject{Name: "terraform-plan:" + c.Repo + "/" + c.App + "/" + c.Env,
+		st.Subject = append(st.Subject, attest.Subject{Name: "terraform-plan:" + c.Repo + "/" + c.App + "/" + c.Env,
 			Digest: map[string]string{"sha256": claims.Subjects.PlanDigest}})
 	default:
-		st.Subject = append(st.Subject, Subject{Name: "manifest-tree:" + c.Repo + "/" + c.App + "/" + c.Env,
+		st.Subject = append(st.Subject, attest.Subject{Name: "manifest-tree:" + c.Repo + "/" + c.App + "/" + c.Env,
 			Digest: map[string]string{"sha256": strings.TrimPrefix(claims.Subjects.TreeRoot, "sha256:")}})
 	}
 	if claims.Subjects.Commit != "" {
-		st.Subject = append(st.Subject, Subject{Name: "commit:" + c.Repo, Digest: map[string]string{"gitCommit": claims.Subjects.Commit}})
+		st.Subject = append(st.Subject, attest.Subject{Name: "commit:" + c.Repo, Digest: map[string]string{"gitCommit": claims.Subjects.Commit}})
 	}
 	skipped := 0
 	for _, im := range claims.Subjects.Images {
@@ -97,7 +98,7 @@ func BuildStatement(c *gate.Change, rec store.Record, issuer string) (*Statement
 			skipped++
 			continue
 		}
-		st.Subject = append(st.Subject, Subject{Name: name, Digest: map[string]string{"sha256": hex}})
+		st.Subject = append(st.Subject, attest.Subject{Name: name, Digest: map[string]string{"sha256": hex}})
 	}
 	if skipped > 0 {
 		lim = append(lim, fmt.Sprintf("%d image reference(s) carry no digest and are not subjects.", skipped))
@@ -113,10 +114,10 @@ func BuildStatement(c *gate.Change, rec store.Record, issuer string) (*Statement
 	}
 	obs, _ := oc["observed_revision"].(string)
 	prov, _ := rec["provider"].(string)
-	st.Predicate = Predicate{
+	st.Predicate = attest.Predicate{
 		Clearance: claims.Clearance, Target: claims.Target, Tier: claims.Tier, Policy: claims.Policy,
 		Approvals: claims.Approvals, Provenance: claims.Provenance, Cleared: claims.Subjects,
-		Outcome: Outcome{Seq: seq, Provider: prov, Applied: true, Matched: matched, Digest: digest,
+		Outcome: attest.Outcome{Seq: seq, Provider: prov, Applied: true, Matched: matched, Digest: digest,
 			ObservedRevision: obs, At: at},
 		Coverage: coverage, Limitations: lim,
 	}
@@ -125,7 +126,7 @@ func BuildStatement(c *gate.Change, rec store.Record, issuer string) (*Statement
 		id = mapStr(rec, "change", "release", "id") // an outcome from before release {id} (the Argo CD agent <= v0.32)
 	}
 	if id != "" {
-		st.Predicate.Release = &Release{ID: id}
+		st.Predicate.Release = &attest.Release{ID: id}
 	}
 	if err := st.Check(); err != nil {
 		return nil, err

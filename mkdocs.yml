@@ -10,6 +10,7 @@ nav:
   - The Terraform gate in plain CI: terraform-gate.md
   - The evidence record (clearance.evidence/v1): evidence.md
   - The evidence packet (C-5): packet.md
+  - Verifying a packet offline (C-4): verify.md
   - The provider protocol and conformance: provider-protocol.md
   - The provenance App (design pass): provenance-app.md
   - The Traefik Hub adapter (Unverified): federate-traefik-hub.md

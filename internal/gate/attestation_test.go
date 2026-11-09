@@ -12,6 +12,7 @@ import (
 
 	"github.com/jfillman/clearance/internal/attest"
 	"github.com/jfillman/clearance/internal/attest/attesttest"
+	"github.com/jfillman/clearance/internal/attestor"
 	"github.com/jfillman/clearance/internal/canon"
 	"github.com/jfillman/clearance/internal/evidence"
 	"github.com/jfillman/clearance/internal/gate"
@@ -33,7 +34,7 @@ func (f *flaky) Sign(ctx context.Context, p []byte) (attest.Signed, error) {
 }
 
 // attestorFor wires an Attestor to f's gate with a static backend (the fixture's token key stands in) and a fake Rekor.
-func attestorFor(t *testing.T, f *fixture) (*attest.Attestor, *attesttest.Rekor, token.KeySet, *flaky) {
+func attestorFor(t *testing.T, f *fixture) (*attestor.Attestor, *attesttest.Rekor, token.KeySet, *flaky) {
 	t.Helper()
 	sg := f.svc.Tokens.Signer
 	ks := token.KeySet{sg.KeyID(): sg.Public()}
@@ -43,7 +44,7 @@ func attestorFor(t *testing.T, f *fixture) (*attest.Attestor, *attesttest.Rekor,
 		t.Fatal(err)
 	}
 	fl := &flaky{Backend: &attest.Static{Signer: sg, Rekor: rk}}
-	a := &attest.Attestor{Backend: fl, Store: f.st, Gate: f.svc, Issuer: "clearance-test", Clock: f.clock.now}
+	a := &attestor.Attestor{Backend: fl, Store: f.st, Gate: f.svc, Issuer: "clearance-test", Clock: f.clock.now}
 	f.svc.OnOutcome = a.Notify
 	return a, rekor, ks, fl
 }
@@ -166,9 +167,9 @@ func TestNoAttestationWhenTheApplyDidNotHappenOrDidNotMatch(t *testing.T) {
 	h := heldPlan(t, f, d3)
 	row, _ := f.st.Change(f.ctx, h.ID)
 	c3, _ := gate.FromRecord(row.Record)
-	_, err := attest.BuildStatement(c3, store.Record{"tool": "deploy.outcome", "seq": int64(1), "change": map[string]any{"id": h.ID},
+	_, err := attestor.BuildStatement(c3, store.Record{"tool": "deploy.outcome", "seq": int64(1), "change": map[string]any{"id": h.ID},
 		"outcome": map[string]any{"applied": true}}, "x")
-	if !errors.Is(err, attest.ErrNoAttestation) {
+	if !errors.Is(err, attestor.ErrNoAttestation) {
 		t.Fatalf("a held change: %v", err)
 	}
 }

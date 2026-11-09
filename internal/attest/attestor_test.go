@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jfillman/clearance/internal/attest"
+	"github.com/jfillman/clearance/internal/attestor"
 	"github.com/jfillman/clearance/internal/evidence"
 	"github.com/jfillman/clearance/internal/gate"
 	"github.com/jfillman/clearance/internal/store"
@@ -22,7 +23,7 @@ func TestAProviderOutcomeRecordIsAttestedKeyless(t *testing.T) {
 	now := time.Date(2026, 11, 7, 1, 0, 0, 0, time.UTC)
 	svc := gate.NewService(gate.Config{}, st, func() time.Time { return now })
 	k := newKeyless(t)
-	a := &attest.Attestor{Backend: k.b, Store: st, Gate: svc, Issuer: "clearance", Clock: func() time.Time { return now }}
+	a := &attestor.Attestor{Backend: k.b, Store: st, Gate: svc, Issuer: "clearance", Clock: func() time.Time { return now }}
 
 	c := manifestChange()
 	raw, _ := json.Marshal(c)
@@ -90,7 +91,7 @@ func TestANotAppliedOutcomeDoesNotHideALaterAppliedOne(t *testing.T) {
 	now := time.Date(2026, 11, 7, 1, 0, 0, 0, time.UTC)
 	svc := gate.NewService(gate.Config{}, st, func() time.Time { return now })
 	k := newKeyless(t)
-	a := &attest.Attestor{Backend: k.b, Store: st, Gate: svc, Issuer: "clearance", Clock: func() time.Time { return now }}
+	a := &attestor.Attestor{Backend: k.b, Store: st, Gate: svc, Issuer: "clearance", Clock: func() time.Time { return now }}
 	c := manifestChange()
 	raw, _ := json.Marshal(c)
 	err := st.Atomic(ctx, func(tx store.Tx) error {
@@ -151,7 +152,7 @@ func TestAnOutcomeNotifiedDuringAProcessingIsNotLost(t *testing.T) {
 	svc := gate.NewService(gate.Config{}, mem, func() time.Time { return now })
 	k := newKeyless(t)
 	ns := &notifyingStore{Store: mem}
-	a := &attest.Attestor{Backend: k.b, Store: ns, Gate: svc, Issuer: "clearance", Clock: func() time.Time { return now }}
+	a := &attestor.Attestor{Backend: k.b, Store: ns, Gate: svc, Issuer: "clearance", Clock: func() time.Time { return now }}
 	c := manifestChange()
 	raw, _ := json.Marshal(c)
 	var seqs []int64
@@ -231,7 +232,7 @@ func TestAnAppliedOutcomeIsNeverDroppedForTheCountOfEarlierOnes(t *testing.T) {
 	mem := memory.New()
 	now := time.Date(2026, 11, 7, 1, 0, 0, 0, time.UTC)
 	k := newKeyless(t)
-	a := &attest.Attestor{Backend: k.b, Store: mem, Gate: gate.NewService(gate.Config{}, mem, func() time.Time { return now }),
+	a := &attestor.Attestor{Backend: k.b, Store: mem, Gate: gate.NewService(gate.Config{}, mem, func() time.Time { return now }),
 		Issuer: "clearance", Clock: func() time.Time { return now }}
 	flags := make([]bool, 130)
 	flags[129] = true
@@ -260,7 +261,7 @@ func TestTheRetryDelayDoublesFromFiveSeconds(t *testing.T) {
 	mem := memory.New()
 	now := time.Date(2026, 11, 7, 1, 0, 0, 0, time.UTC)
 	b := &failing{}
-	a := &attest.Attestor{Backend: b, Store: mem, Gate: gate.NewService(gate.Config{}, mem, func() time.Time { return now }),
+	a := &attestor.Attestor{Backend: b, Store: mem, Gate: gate.NewService(gate.Config{}, mem, func() time.Time { return now }),
 		Issuer: "clearance", Clock: func() time.Time { return now }}
 	seqs := seedOutcomes(t, mem, now, true)
 	a.Notify("chg-9", seqs[0])
@@ -298,7 +299,7 @@ func TestAStoreFailureAfterLoggingDoesNotLogAgain(t *testing.T) {
 	now := time.Date(2026, 11, 7, 1, 0, 0, 0, time.UTC)
 	k := newKeyless(t)
 	fo := &failOnce{Store: mem, armed: true}
-	a := &attest.Attestor{Backend: k.b, Store: mem, Gate: gate.NewService(gate.Config{}, fo, func() time.Time { return now }),
+	a := &attestor.Attestor{Backend: k.b, Store: mem, Gate: gate.NewService(gate.Config{}, fo, func() time.Time { return now }),
 		Issuer: "clearance", Clock: func() time.Time { return now }}
 	seqs := seedOutcomes(t, mem, now, true)
 	a.Notify("chg-9", seqs[0])
