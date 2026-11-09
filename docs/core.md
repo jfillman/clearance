@@ -166,6 +166,7 @@ All configuration comes from the environment. An empty variable counts as unset.
 | `CLEARANCE_TOKEN_TTL` | Each token's life, a Go duration (default `15m`; `1m` to `24h`, and at least four times `CLEARANCE_EXPIRE_SECONDS`, the refresh interval). |
 | `CLEARANCE_TOKEN_ISSUER` | The tokens' `iss`, which verifiers check (default `clearance`). |
 | `CLEARANCE_GITHUB_APP_ID`, `CLEARANCE_GITHUB_APP_KEY_FILE`, `CLEARANCE_GITHUB_APP_WEBHOOK_SECRET_FILE` | The Clearance GitHub App. Set all three or none. The key and secret are read from files. |
+| `CLEARANCE_HCP_RUN_TASK_CONFIG_FILE` | The HCP Terraform run task (G-TF-6): a JSON file of installations `{organization, host, hmacKeyFile, environment}` ([docs/terraform-gate.md](terraform-gate.md#the-hcp-terraform-run-task-g-tf-6-built-not-live-verified)). Unset: `POST /v1/terraform/run-task` answers 404. Needs `hcp-run-task:*` in `CLEARANCE_VERIFIERS`. |
 | `CLEARANCE_GITHUB_APP_COMMENTS` | `off` (default) or `agent-failures`. |
 | `CLEARANCE_GITHUB_API` | The GitHub API base (default `https://api.github.com`). |
 | `CLEARANCE_AUDIENCE` | The TokenReview audience for this cluster's workloads, and the audience of the foreign cluster's tokens (default `clearance`). |

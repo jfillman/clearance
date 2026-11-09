@@ -192,6 +192,16 @@ githubActions:
   # CLEARANCE_GITHUB_OIDC_ALLOWED: globs on the token's sub (empty: the core's default, repo:*).
   allowed: []
 
+# The HCP Terraform run task (CLEARANCE_HCP_RUN_TASK_CONFIG_FILE, docs/terraform-gate.md). Off unless enabled: the
+# route answers 404. Each installation is one HCP Terraform organization; its HMAC key is key `secretKey` of the
+# Secret existingSecret, mounted as a file (mode 0400). The core needs egress to the HCP Terraform host
+# (networkPolicy.extraEgress) and `hcp-run-task:*` in verifiers. Expose only POST /v1/terraform/run-task publicly.
+hcpRunTask:
+  enabled: false
+  existingSecret: ""
+  # - {organization: acme, environment: prod, secretKey: acme-hmac-key, host: app.terraform.io, redirectHosts: []}
+  installations: []
+
 # The Clearance GitHub App (CLEARANCE_GITHUB_APP_*). The private key and webhook secret come from a Secret, mounted
 # as files; set existingSecret, or externalSecrets.githubApp to have one created.
 githubApp:

@@ -1,0 +1,19 @@
+{{- if .Values.hcpRunTask.enabled }}
+# The HCP Terraform run task's installations (internal/hcprun Config); the HMAC keys are in the Secret, not here.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "clearance.fullname" . }}-hcp-run-task
+  labels:
+    {{- include "clearance.labels" . | nindent 4 }}
+data:
+  config.json: |
+    {{- $out := list }}
+    {{- range required "hcpRunTask.installations is required with hcpRunTask.enabled" .Values.hcpRunTask.installations }}
+    {{- $i := dict "organization" (required "hcpRunTask.installations[].organization is required" .organization) "environment" (required "hcpRunTask.installations[].environment is required" .environment) "hmacKeyFile" (printf "/etc/clearance/hcp-run-task/%s" (required "hcpRunTask.installations[].secretKey is required" .secretKey)) }}
+    {{- with .host }}{{ $_ := set $i "host" . }}{{ end }}
+    {{- with .redirectHosts }}{{ $_ := set $i "redirectHosts" . }}{{ end }}
+    {{- $out = append $out $i }}
+    {{- end }}
+    {{ dict "installations" $out | toJson }}
+{{- end }}
