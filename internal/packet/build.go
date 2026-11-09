@@ -62,7 +62,7 @@ func (p *Params) normalize() error {
 	p.From = p.From.UTC().Truncate(time.Second)
 	switch {
 	case !p.From.Before(p.To):
-		return errors.New("packet: from is before to")
+		return errors.New("packet: from must be before to")
 	case p.To.Sub(p.From) > MaxWindow:
 		return errors.New("packet: the window is at most 366 days")
 	}
