@@ -1,0 +1,4 @@
+# Render and lint only: placeholders, not keys.
+existingSecret: clearance-witness-key
+logs: |
+  clearance-ledger+0a1b2c3d+AY4Qn1kGp2g9fU0y1z5Rz2gk8rrQeE8Gz0g1b9z4cE5L

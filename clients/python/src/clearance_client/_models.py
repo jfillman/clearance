@@ -18,7 +18,7 @@ CONTRACT_VERSION = "1.0.0"
 
 RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "run.finish", "human.answer", "session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome", "deploy.exception", "deploy.degraded", "federated.decision")
 
-__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateReason", "GateRequirement", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "Health", "Hold", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
+__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateReason", "GateRequirement", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "Health", "Hold", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -526,6 +526,7 @@ class GateChange(Model):
         Field("deployments", "deployments", ("list", ("ref", "GateDeployment")), True),
         Field("ended", "ended", ("nullable", ("ref", "GateEnded")), False),
         Field("env", "env", ("str",), True),
+        Field("evidence_wait", "evidence_wait", ("nullable", ("ref", "GateEvidenceWait")), False),
         Field("expires_at", "expires_at", ("str",), True),
         Field("head", "head", ("str",), True),
         Field("id", "id", ("str",), True),
@@ -573,6 +574,7 @@ class GateChange(Model):
     deployments: list[GateDeployment]
     ended: GateEnded | None = None
     env: str
+    evidence_wait: GateEvidenceWait | None = None
     expires_at: str
     head: str
     id: str
@@ -627,6 +629,7 @@ class GateChangeWithAuditSeq(Model):
         Field("deployments", "deployments", ("list", ("ref", "GateDeployment")), True),
         Field("ended", "ended", ("nullable", ("ref", "GateEnded")), False),
         Field("env", "env", ("str",), True),
+        Field("evidence_wait", "evidence_wait", ("nullable", ("ref", "GateEvidenceWait")), False),
         Field("expires_at", "expires_at", ("str",), True),
         Field("head", "head", ("str",), True),
         Field("id", "id", ("str",), True),
@@ -675,6 +678,7 @@ class GateChangeWithAuditSeq(Model):
     deployments: list[GateDeployment]
     ended: GateEnded | None = None
     env: str
+    evidence_wait: GateEvidenceWait | None = None
     expires_at: str
     head: str
     id: str
@@ -805,6 +809,22 @@ class GateErrorBody(Model):
     error: str
     hint: str
     rule: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class GateEvidenceWait(Model):
+    """Contract schema GateEvidenceWait."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("assurance", "assurance", ("str",), True),
+        Field("reason", "reason", ("str",), True),
+        Field("since", "since", ("str",), True),
+    )
+
+    assurance: str
+    reason: str
+    since: str
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -1117,6 +1137,54 @@ class Hold(Model):
     by: str | None = None
     reason: str | None = None
     until: datetime.datetime | None = None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class LedgerStatus(Model):
+    """Contract schema LedgerStatus."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("chain", "chain", ("int",), True),
+        Field("detail", "detail", ("str",), False),
+        Field("enabled", "enabled", ("bool",), True),
+        Field("holding", "holding", ("bool",), True),
+        Field("ledger", "ledger", ("int",), True),
+        Field("origin", "origin", ("str",), False),
+        Field("state", "state", ("str",), False),
+        Field("tier3_wait", "tier3_wait", ("bool",), True),
+        Field("witnessed", "witnessed", ("int",), True),
+        Field("witnesses", "witnesses", ("list", ("ref", "LedgerWitnessStatus")), False),
+    )
+
+    chain: int
+    detail: str | None = None
+    enabled: bool
+    holding: bool
+    ledger: int
+    origin: str | None = None
+    state: str | None = None
+    tier3_wait: bool
+    witnessed: int
+    witnesses: list[LedgerWitnessStatus] | None = None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class LedgerWitnessStatus(Model):
+    """Contract schema LedgerWitnessStatus."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("at", "at", ("str",), False),
+        Field("detail", "detail", ("str",), False),
+        Field("state", "state", ("str",), True),
+        Field("url", "url", ("str",), True),
+    )
+
+    at: str | None = None
+    detail: str | None = None
+    state: str
+    url: str
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -1451,6 +1519,7 @@ class Ready(Model):
         Field("degraded", "degraded", ("list", ("str",)), False),
         Field("error", "error", ("str",), False),
         Field("head", "head", ("int",), True),
+        Field("ledger", "ledger", ("nullable", ("ref", "LedgerStatus")), False),
         Field("ok", "ok", ("bool",), True),
         Field("policy", "policy", ("ref", "PolicyRef"), True),
     )
@@ -1459,6 +1528,7 @@ class Ready(Model):
     degraded: list[str] | None = None
     error: str | None = None
     head: int
+    ledger: LedgerStatus | None = None
     ok: bool
     policy: PolicyRef
 
@@ -1907,6 +1977,7 @@ MODELS: dict[str, type[Model]] = {
     "GateDeployment": GateDeployment,
     "GateEnded": GateEnded,
     "GateErrorBody": GateErrorBody,
+    "GateEvidenceWait": GateEvidenceWait,
     "GateObjectChange": GateObjectChange,
     "GateOutcome": GateOutcome,
     "GateOutcomeRequest": GateOutcomeRequest,
@@ -1922,6 +1993,8 @@ MODELS: dict[str, type[Model]] = {
     "Grant": Grant,
     "Health": Health,
     "Hold": Hold,
+    "LedgerStatus": LedgerStatus,
+    "LedgerWitnessStatus": LedgerWitnessStatus,
     "Limits": Limits,
     "Models": Models,
     "OutcomeRequest": OutcomeRequest,

@@ -1,6 +1,7 @@
 {{- if .Values.core.replicas }}{{ fail "core.replicas is not a setting: the core is always one replica (the one writer of the evidence chain)" }}{{ end -}}
 {{- range .Values.gate.trustedRegistries }}{{ if not (hasSuffix "/" .) }}{{ fail (printf "gate.trustedRegistries: %q must end in \"/\"" .) }}{{ end }}{{ end -}}
 {{- range .Values.gate.protectedEnvironments }}{{ if ne (len (splitList "/" .)) 2 }}{{ fail (printf "gate.protectedEnvironments: %q is not <cluster>/<env>" .) }}{{ end }}{{ end -}}
+{{- if .Values.ledger.enabled }}{{ if not .Values.ledger.existingSecret }}{{ fail "ledger.enabled needs ledger.existingSecret (the log's signing key: make it with `clearance ledger keygen`)" }}{{ end }}{{ if not .Values.ledger.witnessPolicy }}{{ fail "ledger.enabled needs ledger.witnessPolicy (at least one witness: a log nobody countersigns is not a ledger)" }}{{ end }}{{ end -}}
 {{- if not (has (toString .Values.githubApp.comments) (list "off" "agent-failures")) }}{{ fail "githubApp.comments is off or agent-failures" }}{{ end -}}
 apiVersion: apps/v1
 kind: Deployment
@@ -106,6 +107,28 @@ spec:
             - name: CLEARANCE_ATTEST_REKOR_URL
               value: {{ . | quote }}
             {{- end }}
+            {{- if .Values.ledger.enabled }}
+            - name: CLEARANCE_LEDGER_DIR
+              value: /var/lib/clearance/ledger
+            - name: CLEARANCE_LEDGER_KEY_FILE
+              value: /etc/clearance/ledger/{{ .Values.ledger.key }}
+            - name: CLEARANCE_LEDGER_WITNESS_POLICY_FILE
+              value: /etc/clearance/ledger-config/witness-policy
+            {{- if .Values.ledger.retiredKeys }}
+            - name: CLEARANCE_LEDGER_RETIRED_KEYS_FILE
+              value: /etc/clearance/ledger-config/retired-keys
+            {{- end }}
+            {{- with .Values.ledger.checkpointInterval }}
+            - name: CLEARANCE_LEDGER_CHECKPOINT_INTERVAL
+              value: {{ . | quote }}
+            {{- end }}
+            - name: CLEARANCE_LEDGER_TIER3_WAIT
+              value: {{ .Values.ledger.tier3Wait | quote }}
+            {{- with .Values.ledger.stallAfter }}
+            - name: CLEARANCE_LEDGER_STALL_AFTER
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
             {{- with .Values.token.ttl }}
             - name: CLEARANCE_TOKEN_TTL
               value: {{ . | quote }}
@@ -159,6 +182,16 @@ spec:
               mountPath: /var/run/clearance-attest
               readOnly: true
             {{- end }}
+            {{- if .Values.ledger.enabled }}
+            - name: ledger-key
+              mountPath: /etc/clearance/ledger
+              readOnly: true
+            - name: ledger-config
+              mountPath: /etc/clearance/ledger-config
+              readOnly: true
+            - name: ledger
+              mountPath: /var/lib/clearance/ledger
+            {{- end }}
             {{- with .Values.core.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -197,6 +230,20 @@ spec:
                   path: oidc-token
                   audience: {{ .Values.attestation.keyless.audience | quote }}
                   expirationSeconds: {{ .Values.attestation.keyless.tokenExpirationSeconds }}
+        {{- end }}
+        {{- if .Values.ledger.enabled }}
+        - name: ledger-key
+          secret:
+            secretName: {{ .Values.ledger.existingSecret }}
+            defaultMode: 0400
+            items:
+              - {key: {{ .Values.ledger.key | quote }}, path: {{ .Values.ledger.key | quote }}}
+        - name: ledger-config
+          configMap:
+            name: {{ include "clearance.coreName" . }}-ledger
+        - name: ledger
+          persistentVolumeClaim:
+            claimName: {{ include "clearance.coreName" . }}-ledger
         {{- end }}
         {{- with .Values.core.extraVolumes }}
         {{- toYaml . | nindent 8 }}

@@ -1,0 +1,38 @@
+{{- if .Values.ledger.enabled }}
+# The evidence ledger's volume and public configuration (C-3). Off by default: nothing here renders unless
+# ledger.enabled. The signing key is not here: it is the existing Secret ledger.existingSecret.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "clearance.coreName" . }}-ledger
+  labels:
+    {{- include "clearance.labels" . | nindent 4 }}
+    app.kubernetes.io/component: core
+  annotations:
+    # The tiles are a cache of the chain's record hashes (the core rebuilds them), but a rebuild takes time and the
+    # witnesses hold the last checkpoint: do not delete the claim with a helm uninstall by accident.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [{{ .Values.ledger.persistence.accessMode }}]
+  {{- with .Values.ledger.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.ledger.persistence.size }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "clearance.coreName" . }}-ledger
+  labels:
+    {{- include "clearance.labels" . | nindent 4 }}
+    app.kubernetes.io/component: core
+data:
+  witness-policy: |
+    {{- .Values.ledger.witnessPolicy | nindent 4 }}
+  {{- if .Values.ledger.retiredKeys }}
+  retired-keys: |
+    {{- .Values.ledger.retiredKeys | nindent 4 }}
+  {{- end }}
+{{- end }}

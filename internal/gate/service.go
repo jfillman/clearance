@@ -89,6 +89,10 @@ type Service struct {
 	OnOutcome func(changeID string, seq int64)
 	// Tokens issues the clearance token on deploy.clear (C-1); nil: no tokens (a deployment without a signing key).
 	Tokens *Tokens
+	// Evidence is the evidence ledger's outage knob (C-3): while it says to hold, a tier 3 change whose
+	// approvals are all in waits instead of clearing (SettleEvidence clears it when the ledger recovers).
+	// nil: no ledger, nothing waits.
+	Evidence EvidenceGate
 
 	mu     sync.Mutex
 	notify Notifier
@@ -529,7 +533,18 @@ func (s *Service) Clear(ctx context.Context, p authn.Principal, changeID, onBeha
 		req := c.RequirementObj()
 		done := req != nil && req.Satisfied(c.Approvals)
 		nonce := ""
+		var waiting string
 		if done {
+			if waiting = s.evidenceHold(ctx, c); waiting != "" {
+				done = false
+				if c.EvidenceWait == nil {
+					c.EvidenceWait = &EvidenceWait{Since: pycompat.ISO(w.now)}
+				}
+				c.EvidenceWait.Assurance, c.EvidenceWait.Reason = AssuranceWaiting, waiting
+			}
+		}
+		if done {
+			c.EvidenceWait = nil
 			w.move(c, StateCleared, "", nil)
 			c.ClearedBy, c.DecidedAt = strp("people"), &now
 			w.settle(c)
@@ -541,10 +556,16 @@ func (s *Service) Clear(ctx context.Context, p authn.Principal, changeID, onBeha
 		result := "cleared as " + role
 		if done {
 			result += " (requirement met)"
+		} else if waiting != "" {
+			result += " (requirement met; waiting, the evidence cannot be checkpointed: " + waiting + ")"
 		} else {
 			result += fmt.Sprintf(" (%d of the people needed)", len(c.Approvals))
 		}
-		rec := w.record(person, via, "deploy.clear", c, "allow", nil, result, map[string]any{"role": role}, clearedFields(c, nonce))
+		extra := clearedFields(c, nonce)
+		if waiting != "" {
+			extra["evidence"] = map[string]any{"assurance": AssuranceWaiting, "detail": waiting}
+		}
+		rec := w.record(person, via, "deploy.clear", c, "allow", nil, result, map[string]any{"role": role}, extra)
 		out = Decided{c.View(), recordSeq(rec)}
 		return nil
 	})

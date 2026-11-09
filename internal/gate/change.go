@@ -110,6 +110,19 @@ type Change struct {
 	// Ended is the record that moved the change to degraded or exception (C-6): its seq, its tool and, for an
 	// exception, its kind.
 	Ended *Ended `json:"ended,omitempty"`
+	// EvidenceWait is set while a tier 3 change whose approvals are all in has not been cleared because its evidence
+	// cannot be checkpointed (C-3, the evidence ledger's outage knob). It is removed when the change clears.
+	EvidenceWait *EvidenceWait `json:"evidence_wait,omitempty"`
+}
+
+// AssuranceWaiting is EvidenceWait.Assurance: the change is waiting for evidence to be checkpointed.
+const AssuranceWaiting = "waiting-for-checkpoint"
+
+// EvidenceWait says why an approved tier 3 change is still holding.
+type EvidenceWait struct {
+	Since     string `json:"since"`     // when the last approval arrived and the ledger could not checkpoint
+	Assurance string `json:"assurance"` // AssuranceWaiting
+	Reason    string `json:"reason"`    // the ledger's state and why
 }
 
 // Ended names the provider record that took a change out of the main path.

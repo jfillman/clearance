@@ -37,6 +37,7 @@ import (
 	"github.com/jfillman/clearance/internal/gate"
 	"github.com/jfillman/clearance/internal/githubapp"
 	"github.com/jfillman/clearance/internal/httpjson"
+	"github.com/jfillman/clearance/internal/ledger"
 	"github.com/jfillman/clearance/internal/provenance"
 	"github.com/jfillman/clearance/internal/review"
 	"github.com/jfillman/clearance/internal/store"
@@ -72,6 +73,10 @@ type Options struct {
 	OnOutcome func(store.Record)
 	// Attestation is what /readyz says of the change attestation signer (C-2).
 	Attestation Attestation
+	// Ledger is the evidence ledger (C-3), whose status /readyz reports; nil: the ledger is off.
+	Ledger interface {
+		Status(context.Context) ledger.Status
+	}
 	// MaxClockSkew bounds |context.now - Clock()| on an evaluation; 0 is DefaultMaxClockSkew, negative is off.
 	MaxClockSkew time.Duration
 	// DevRecords serves GET /v1/dev/records (DevRecordsPath): the chain, for another package's tests to read what
@@ -380,7 +385,12 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 			degraded = append(degraded, b.Name)
 		}
 	}
-	writeJSON(w, http.StatusOK, Ready{OK: true, Policy: pol, Head: seq, Degraded: degraded, Attestation: s.opt.Attestation})
+	ready := Ready{OK: true, Policy: pol, Head: seq, Degraded: degraded, Attestation: s.opt.Attestation}
+	if s.opt.Ledger != nil {
+		st := s.opt.Ledger.Status(ctx)
+		ready.Ledger = &st
+	}
+	writeJSON(w, http.StatusOK, ready)
 }
 
 // Health is GET /healthz's answer.
@@ -398,6 +408,10 @@ type Ready struct {
 	Degraded []string `json:"degraded,omitempty"`
 	// Attestation says whether the change attestation signer (C-2) runs. Off is not unready: nothing else depends on it.
 	Attestation Attestation `json:"attestation"`
+	// Ledger is the evidence ledger's status (C-3): its state, how many records are under a witnessed checkpoint, and
+	// whether a tier 3 change would wait. Absent when the ledger is off. Never unready: an outage of the ledger holds
+	// tier 3 changes, it does not take the core out of service.
+	Ledger *ledger.Status `json:"ledger,omitempty"`
 }
 
 // Attestation is the change attestation signer's status: whether it runs, with which backend, or why it is off.
