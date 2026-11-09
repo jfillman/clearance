@@ -1692,3 +1692,22 @@ regenerates it). Nothing below mutates hangar-prod beyond what Argo CD itself do
 6. **Skipping the wait.** On a held change, `argocd app sync gate-api-prod --strategy apply` skips the hook and
    applies the manifests: with G-ARGO-2's admission enforcing, the apply is refused for want of a grant (Warn mode:
    logged). This is the documented bypass the admission policy backstops.
+
+## A person's resolution of an observation (O-5)
+
+`POST /v1/observations/{seq}/resolution` on the core, for an observation record (`GET /v1/observations` lists them).
+The caller is a person who is an admin (`CLEARANCE_ADMINS`), signed in, or a delegate (Tower's backend) naming one in
+the on-behalf-of header: the same authentication and the same `person` resolution as `deny` and break-glass, so a
+service, an agent or a person who is not an admin is refused (403). The body is `{state, cause?, note?}` and nothing
+else (a field the route does not take is 400): `state` one of `reverted`, `ratified`, `declared-break-glass`,
+`still-live`; `cause` only for `reverted`, and one of the seven (`agent-caused`, `policy-triggered`, `human-initiated`,
+`automated-remediation`, `requirement-changed`, `external-dependency`, `unattributed`): the same check
+(`observe.Check`) a collector's resolution gets, so no other value is stored. An unknown seq, or a seq that is not an
+observation, is 404.
+
+It writes a `resolution` record about the observation's seq, in the observation's scope, in one transaction, and answers
+`{seq, about, scope, state, cause, note, by, via, ts}`. The record names the person: `principal` is the person,
+`initiator` is `{sub, iss}` (`iss` is `delegate:<delegate>` when a delegate asked), `resolution.by` is the person; when the
+person signed in themselves the core marks `initiator` verified, and when a delegate named them it does not. Append-only:
+an edit is another record about the same seq, the newest wins when read, and the earlier ones stay in the chain
+([evidence.md](evidence.md#observations-clearanceevidencev11-o-1)). Tested: `TestAPersonSetsAResolutionCauseAndTheRecordNamesThem`.

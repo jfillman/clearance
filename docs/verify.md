@@ -57,6 +57,11 @@ supplied is written to the note of checkpoints seen (below).
    the checkpoint, proofs and attestations. A figure that no longer recomputes is named with the value the packet says
    and the value the records give. The tables and sentences of the packet (changes, assertions, exceptions) are not
    recomputed; they present the records the earlier checks bind. (The packet header records `scopes_named`, so an observed record with no scope is recounted as the builder counted it: in when no scopes were named, out when some were.)
+   **Coverage statements.** Each observed scope's statement is rebuilt from the carried records with the function the
+   packet and `GET /v1/coverage` use (`observe.Build`), at the clock the packet was made at, and the packet's feed state,
+   `clean`, cleared and seen counts, the seconds that could not be seen and the source-integrity counts must match. A
+   scope the packet calls healthy and clean over a window whose health records show the collector stopped does not pass,
+   even when the file was edited and the manifest made to match.
 6. **Attestations.** For each change attestation in `attestations/`: the DSSE signature; the Fulcio chain and the Rekor
    signed entry timestamp under your trust root, using the material in the bundle (nothing is fetched, so a
    pre-cutover Rekor entry that the current key could re-sign is checked as it was); the Rekor **inclusion proof** the

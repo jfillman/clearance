@@ -90,20 +90,27 @@ func (r *Reconciler) init() {
 }
 
 // AddCT takes a CloudTrail event. A redelivery of one already pending adds its acks to the pending entry; one already
-// emitted and done is a duplicate (its acks run at once: it was posted).
-func (r *Reconciler) AddCT(it *Item, v *ctView) {
+// emitted and done is a duplicate (its acks run at once: it was posted), and AddCT says so (true): the copy may still
+// carry what the posted one lacked, a verified trail's proof (Collector.Ingest hands that on as a verification).
+// A copy that arrives while the event is still pending replaces the pending one when it is verified and the pending
+// one is not, so the event is posted once, with the proof.
+func (r *Reconciler) AddCT(it *Item, v *ctView) (alreadyPosted bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.init()
 	if _, done := r.seen[v.ID]; done {
 		runAcks(it.Acks)
-		return
+		return true
 	}
 	if p, ok := r.cts[v.ID]; ok {
 		p.m.items = append(p.m.items, it)
-		return
+		if it.Verified && !p.m.Item.Verified {
+			p.m.Item = it
+		}
+		return false
 	}
 	r.cts[v.ID] = &pendCT{first: r.now(), m: &Merged{Item: it, View: v, items: []*Item{it}, first: r.now()}}
+	return false
 }
 
 // AddConfig takes a Config configuration item, with the same duplicate rules.

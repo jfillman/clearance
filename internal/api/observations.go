@@ -16,7 +16,7 @@ import (
 // is about an account or a cluster, not an agent or an app, so there is no narrower scope to give a person.
 
 // ObservationKinds are listObservations's `kind`.
-var ObservationKinds = []string{evidence.KindObservation, evidence.KindAssessment, evidence.KindResolution}
+var ObservationKinds = []string{evidence.KindObservation, evidence.KindAssessment, evidence.KindResolution, evidence.KindVerification}
 
 var scopeParam = regexp.MustCompile(`^[\x21-\x7e]{1,256}$`)
 
@@ -174,6 +174,7 @@ func (s *Server) getCoverage(w http.ResponseWriter, r *http.Request, v *Viewer) 
 	input.Observations = read([]string{evidence.KindObservation}, f, t)
 	input.Assessments = read([]string{evidence.KindAssessment}, f, "")
 	input.Resolutions = read([]string{evidence.KindResolution}, f, "")
+	input.Verifications = read([]string{evidence.KindVerification}, f, "")
 	input.Health = read([]string{evidence.KindHealth}, "", t)
 	input.Gaps = read([]string{evidence.KindAuditGap}, f, t)
 	if err != nil {

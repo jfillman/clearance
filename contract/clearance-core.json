@@ -1860,6 +1860,82 @@
         ],
         "type": "object"
       },
+      "GateResolutionRecorded": {
+        "properties": {
+          "about": {
+            "type": "integer"
+          },
+          "by": {
+            "type": "string"
+          },
+          "cause": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          },
+          "ts": {
+            "type": "string"
+          },
+          "via": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "about",
+          "by",
+          "cause",
+          "note",
+          "scope",
+          "seq",
+          "state",
+          "ts",
+          "via"
+        ],
+        "type": "object"
+      },
+      "GateResolutionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "cause": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
       "GateResource": {
         "properties": {
           "actionReason": {
@@ -2624,6 +2700,10 @@
               "string",
               "null"
             ]
+          },
+          "verification": {
+            "additionalProperties": {},
+            "type": "object"
           }
         },
         "type": "object"
@@ -4437,6 +4517,101 @@
         "x-clearance-max-body": 65536
       }
     },
+    "/v1/observations/{seq}/resolution": {
+      "post": {
+        "operationId": "setObservationResolution",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "seq",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GateResolutionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateResolutionRecorded"
+                }
+              }
+            },
+            "description": "the record written, naming the person"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateErrorBody"
+                }
+              }
+            },
+            "description": "a state or cause outside the vocabulary, or a body that is not {state, cause?, note?}"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no bearer token, or one the authenticator refused"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateErrorBody"
+                }
+              }
+            },
+            "description": "not an admin, or a delegate naming none"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateErrorBody"
+                }
+              }
+            },
+            "description": "no such observation (the seq is not an observation record), or a Clearance that keeps no changes (DG-OFF)"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is over the route's cap"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "A person (an admin, CLEARANCE_ADMINS, or a delegate naming one in the on-behalf-of header) sets how an observed change ended: state (reverted, ratified, declared-break-glass, still-live) and, for reverted, its cause (agent-caused, policy-triggered, human-initiated, automated-remediation, requirement-changed, external-dependency, unattributed), with an optional note. Recorded as a resolution record about the observation, naming the person (principal, initiator, resolution.by). Append-only: an edit is another record about the same seq, and the newest wins when it is read; the earlier ones stay in the chain.",
+        "x-clearance-auth": "bearer",
+        "x-clearance-max-body": 16384
+      }
+    },
     "/v1/provenance": {
       "post": {
         "operationId": "verifyProvenance",
@@ -4699,6 +4874,7 @@
     "observation",
     "assessment",
     "resolution",
-    "observation.health"
+    "observation.health",
+    "observation.verification"
   ]
 }

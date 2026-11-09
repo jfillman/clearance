@@ -49,10 +49,13 @@ const (
 	KindResolution  = "resolution"
 	KindHealth      = "observation.health"
 	KindAuditGap    = "observation.audit-gap"
+	// KindVerification is the additive record of O-5: a feed's later proof that an observation it already reported was
+	// delivered unaltered (the S3 trail's verified copy of an event the EventBridge copy recorded first).
+	KindVerification = "observation.verification"
 )
 
 // ObservedKinds are the kinds a record says v1.1 for.
-var ObservedKinds = []string{KindObservation, KindAssessment, KindResolution, KindHealth, KindAuditGap}
+var ObservedKinds = []string{KindObservation, KindAssessment, KindResolution, KindHealth, KindAuditGap, KindVerification}
 
 // SchemaV0 is the draft shape of the rows written before the freeze (hangar-dev seq 0-611). They stay as written;
 // Project gives a reader their v1 shape.

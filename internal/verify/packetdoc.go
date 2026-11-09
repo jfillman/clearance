@@ -11,12 +11,13 @@ import (
 type packetDoc struct {
 	Schema string `json:"schema"`
 	Header struct {
-		From   string                             `json:"from"`
-		To     string                             `json:"to"`
-		Scopes []string                           `json:"observation_scopes"`
-		Named  bool                               `json:"scopes_named"`
-		Filter struct{ App, Env, Cluster string } `json:"filter"`
-		Chain  struct {
+		Generated string                             `json:"generated_at"`
+		From      string                             `json:"from"`
+		To        string                             `json:"to"`
+		Scopes    []string                           `json:"observation_scopes"`
+		Named     bool                               `json:"scopes_named"`
+		Filter    struct{ App, Env, Cluster string } `json:"filter"`
+		Chain     struct {
 			Count    int64  `json:"count"`
 			Head     string `json:"head"`
 			FirstSeq int64  `json:"first_seq"`
@@ -42,6 +43,30 @@ type packetDoc struct {
 			NotRecorded int    `json:"not_recorded"`
 			Total       int    `json:"total"`
 		} `json:"coverage_by_assurance"`
+		Scopes []struct {
+			Scope     string `json:"scope"`
+			Collector bool   `json:"collector"`
+			Statement struct {
+				State   string `json:"state"`
+				Clean   bool   `json:"clean"`
+				Cleared struct {
+					Count int `json:"count"`
+				} `json:"cleared_and_verified"`
+				Seen struct {
+					Count int `json:"count"`
+				} `json:"seen_not_cleared"`
+				Blind struct {
+					Seconds int64 `json:"seconds"`
+				} `json:"could_not_see"`
+				Integrity struct {
+					Observations int `json:"observations"`
+					Verified     int `json:"verified"`
+					Own          int `json:"verified_by_record"`
+					Later        int `json:"verified_later"`
+					Unverified   int `json:"unverified"`
+				} `json:"source_integrity"`
+			} `json:"statement"`
+		} `json:"observation_health"`
 	} `json:"coverage_statement"`
 	Changes []struct {
 		ID          string `json:"id"`

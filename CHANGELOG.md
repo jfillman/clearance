@@ -9,6 +9,22 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Added
+
+- **O-5: coverage in the packet, a person's resolution, and the trail's verification** (clearance side; the Tower tab, banner
+  and alert follow). The packet prints each scope's three-part statement (cleared and verified, seen not cleared, could not
+  see), its health summary and how many observations had their source verified, from the same `observe.Build` that `GET
+  /v1/coverage` runs; exceptions rows carry the newest resolution and who set it; the freeze and incident views gain an
+  `observed_changes` section. `clearance-verify` rebuilds each scope's statement from the carried records, so a packet that
+  calls a stopped collector's scope healthy and clean fails ([docs/packet.md](docs/packet.md), [docs/verify.md](docs/verify.md)).
+  `POST /v1/observations/{seq}/resolution` on the core: an admin (or a delegate naming one) sets a resolution state and, for
+  `reverted`, one of the seven causes; it is a `resolution` record naming the person, append-only, newest wins
+  ([docs/gate.md](docs/gate.md)). New `observation.verification` kind (evidence revision 6, additive): the AWS collector's
+  S3 trail copy of an event the EventBridge copy recorded first is no longer dropped as a duplicate; it reaches the evidence
+  as a verification record about the observation, counted once, never a second observation or exception. **Rollout:** add
+  `observation.verification` to the observe-aws provider's registered `kinds`; until then the collector counts and logs
+  the core's refusal and the observations stay `sourceVerified: false`. The evidence record schema is `x-clearance-revision` 6.
+
 ## [0.37.0] - 2026-11-09
 
 ### Fixed

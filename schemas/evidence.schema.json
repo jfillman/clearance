@@ -2,8 +2,8 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://clearance.hangarplatform.dev/schemas/evidence/v1.json",
   "title": "clearance.evidence/v1",
-  "description": "One Clearance evidence record (docs/evidence.md). Flat: every field is a top-level key, grouped by x-clearance-group into Identities, Source, Target, Provenance, Decision, Outcome, Coverage, Assurance, Intent and Integrity, and tagged verified or claimed by the record's own lists. Fields not listed here are allowed and are claimed unless the writer verified them. The chain rule is the same for every version. Revision 4 (O-1) is clearance.evidence/v1.1: additive, so the same file describes v1 and v1.1. Revision 5 (I-1) adds operational_class and class_mapping to the Decision group, also additive. A record says v1.1 only when it is an observation kind (observation, assessment, resolution, observation.health, observation.audit-gap) or its coverage is break-glass or attempted-refused; every other record is still written as v1.",
-  "x-clearance-revision": 5,
+  "description": "One Clearance evidence record (docs/evidence.md). Flat: every field is a top-level key, grouped by x-clearance-group into Identities, Source, Target, Provenance, Decision, Outcome, Coverage, Assurance, Intent and Integrity, and tagged verified or claimed by the record's own lists. Fields not listed here are allowed and are claimed unless the writer verified them. The chain rule is the same for every version. Revision 4 (O-1) is clearance.evidence/v1.1: additive, so the same file describes v1 and v1.1. Revision 5 (I-1) adds operational_class and class_mapping to the Decision group, also additive. Revision 6 (O-5) adds the observation.verification kind and its verification field, also additive. A record says v1.1 only when it is an observation kind (observation, assessment, resolution, observation.health, observation.audit-gap, observation.verification) or its coverage is break-glass or attempted-refused; every other record is still written as v1.",
+  "x-clearance-revision": 6,
   "x-clearance-groups": [
     "identities",
     "source",
@@ -1180,6 +1180,26 @@
       },
       "x-clearance-group": "outcome",
       "description": "Revision 4 (O-1): on a resolution, how an observed change ended. A reverted resolution carries its cause; no other state does."
+    },
+    "verification": {
+      "type": "object",
+      "required": [
+        "method",
+        "verified"
+      ],
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "verified": {
+          "const": true
+        },
+        "reference": {
+          "type": "string"
+        }
+      },
+      "x-clearance-group": "integrity",
+      "description": "Revision 6 (O-5): on observation.verification, a feed's later proof that the observation named by about was delivered unaltered (the S3 trail's digest-verified copy of an event the EventBridge copy recorded first). Claimed. It is a record of its own, so the observation is not rewritten and not counted twice."
     },
     "gap": {
       "type": "object",

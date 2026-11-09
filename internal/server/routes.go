@@ -259,6 +259,22 @@ var routeTable = []Route{
 			{409, "the window is already closed", gate.ErrorBody{}}},
 	},
 	{
+		Method: "POST", Path: "/v1/observations/{seq}/resolution", OperationID: "setObservationResolution", Auth: AuthBearer,
+		MaxBody: gate.MaxResolutionBody,
+		Summary: "A person (an admin, CLEARANCE_ADMINS, or a delegate naming one in the on-behalf-of header) sets how an " +
+			"observed change ended: state (reverted, ratified, declared-break-glass, still-live) and, for reverted, its " +
+			"cause (agent-caused, policy-triggered, human-initiated, automated-remediation, requirement-changed, " +
+			"external-dependency, unattributed), with an optional note. Recorded as a resolution record about the " +
+			"observation, naming the person (principal, initiator, resolution.by). Append-only: an edit is another " +
+			"record about the same seq, and the newest wins when it is read; the earlier ones stay in the chain.",
+		Request: gate.ResolutionRequest{},
+		Responses: []Response{{200, "the record written, naming the person", gate.ResolutionRecorded{}},
+			{400, "a state or cause outside the vocabulary, or a body that is not {state, cause?, note?}", gate.ErrorBody{}},
+			errs(401)[0], {403, "not an admin, or a delegate naming none", gate.ErrorBody{}},
+			{404, "no such observation (the seq is not an observation record), or a Clearance that keeps no changes (DG-OFF)", gate.ErrorBody{}},
+			errs(413)[0]},
+	},
+	{
 		Method: "GET", Path: "/v1/breakglass", OperationID: "listBreakglass", Auth: AuthBearer,
 		MaxBody: DefaultMaxBody,
 		Summary: "The break-glass windows open now (?cluster= narrows them), for a registered provider that honours " +

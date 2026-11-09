@@ -61,7 +61,7 @@ component definition.
 | --- | --- |
 | `packet.json` | The canonical packet |
 | `packet.pdf` | The PDF presentation |
-| `csv/*.csv` | `coverage`, `coverage-scopes`, `degraded-windows`, `assertions`, `changes`, `human-cleared`, `ai-identities`, `exceptions`, `policy-changes`, `acceptances`. A cell a spreadsheet would read as a formula is prefixed so it stays text |
+| `csv/*.csv` | `coverage`, `coverage-scopes`, `observed-changes` (freeze and incident views), `degraded-windows`, `assertions`, `changes`, `human-cleared`, `ai-identities`, `exceptions`, `policy-changes`, `acceptances`. A cell a spreadsheet would read as a formula is prefixed so it stays text |
 | `evidence/records.jsonl` | The originals: every record from the first to the last in the window, plus the context records the statements read (a feed's last health record before the window; the assessments and resolutions of the window's observations), one canonical record per line **with its `hash`**. Drop `hash`, canonicalize, SHA-256: that is the hash |
 | `evidence/proofs.json` | An inclusion proof (RFC 6962 audit path) for each carried record the checkpoint covers |
 | `ledger/checkpoint.txt` | The latest witnessed checkpoint as published: a C2SP signed note with the log's signature and the witnesses' countersignatures |
@@ -85,7 +85,16 @@ unreachable, from a provider's `deploy.degraded` outage window; a feed blind or 
 **observation health** of each scope: the same three-part statement `GET /v1/coverage` answers
 ([clearance-api.md](clearance-api.md#observations-and-the-coverage-statement-o-1)), built from the same function over
 the same records, with `window_verified` true only when there is at least one scope and every one had a collector and a
-healthy feed throughout.
+healthy feed throughout. Each scope prints the statement's **three parts**: (1) *cleared and verified* (the
+observations whose latest assessment is `authorized-and-verified`), (2) *seen, not cleared* (by coverage state) and (3)
+*could not see* (every stretch a feed was blind or degraded, with its source, reason and seconds, and the audit gaps), then
+the **health summary** per source (worst state in the window, state now, blind and degraded seconds, whether it went
+stale) and **source integrity**: how many of the window's observations had their source verified, by the delivery's own
+verification or by a later `observation.verification` of the same event (the S3 trail's proof of an event EventBridge
+delivered first, [observe-aws.md](observe-aws.md)), each counted once. A collector that was stopped is a blind window
+for its scope, a collector that kept reporting is a clean one, side by side in the same packet, and a scope with no
+collector is printed blind. The numbers are `observe.Build`'s, the function `GET /v1/coverage` runs, so the two cannot
+disagree about the same records; the offline verifier rebuilds them ([verify.md](verify.md)).
 
 **Control assertions.** For each mapping, each control's assertions with a status: `met` (every record in the
 population supports it), `met-with-exceptions`, `claimed-only` (everything in the population rests on a claimed field),
@@ -149,7 +158,10 @@ receipts. P-1 does not exist yet, so the section prints that no receipt has been
 is inferred from the chain. `acceptances` in the JSON is `{status, statement, receipts[]}` (`status` is `none-recorded`
 until receipts exist, and `packet.Params.Receipts` is where P-1 will hand them in), and `csv/acceptances.csv` has the
 receipt columns, empty for now. A `ratified` or `declared-break-glass` resolution and each break-glass window are
-**Exceptions** rows (the resolution column, and the `break-glass` class).
+**Exceptions** rows (the resolution column, and the `break-glass` class). An observation row shows its **newest**
+resolution with the person (or provider) who wrote it (`resolved_by`, `resolution_seq`, and the cause): a person's edit
+in Tower is a newer record about the same seq and replaces the collector's in the packet, the earlier records staying
+in the evidence. A row also says whether its source was verified.
 
 ## Freeze and incident reports
 
@@ -158,7 +170,11 @@ Two scoped views of the same records, not new data: `--view freeze --title "Q4 f
 place named and keeps the sections that answer its question: **freeze** carries the coverage statement, changes,
 exceptions, acceptances (receipts) and verification (what changed or tried to change inside the freeze, and whether it was
 cleared); **incident** adds AI identities, policy changes and a **timeline** of the changes, exceptions and break-glass
-events in scope in time order. Both always carry the full coverage statement.
+events in scope in time order. Both always carry the full coverage statement, and both add an **observed changes** section (`observed_changes`, CSV
+`observed-changes.csv`): every observation inside the window and scope, cleared or not, in time order, with the actor, what
+changed, the coverage the latest assessment gave it, how it was resolved and by whom, and whether its source was verified
+(the exceptions section lists only what was not cleared; a freeze or an incident also asks what *did* change). At most
+2000 rows are listed (`truncated` says so, `count` is the whole count).
 
 ## Control mappings and the OSCAL component definition
 

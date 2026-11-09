@@ -35,15 +35,20 @@ type Config struct {
 
 // Stats are the collector's counters, for logs and the health record.
 type Stats struct {
-	Ingested      map[string]int `json:"ingested"` // by feed
-	Posted        int            `json:"posted"`
-	Duplicates    int            `json:"duplicates"` // the core already had the event (a redelivery)
-	ConfigOnly    int            `json:"config_only"`
-	NotWrites     int            `json:"not_writes"`
-	NotEvaluated  map[string]int `json:"not_evaluated"`
-	OutOfAccounts int            `json:"out_of_accounts"`
-	Filtered      int            `json:"filtered"`
-	Errors        int            `json:"errors"`
+	Ingested   map[string]int `json:"ingested"` // by feed
+	Posted     int            `json:"posted"`
+	Duplicates int            `json:"duplicates"` // the core already had the event (a redelivery)
+	// Verifications are the trail's verification records posted for events the core already had; VerificationsRefused
+	// those the core refused (a collector registered without the observation.verification kind: the observation keeps
+	// sourceVerified false, and the refusal is logged once).
+	Verifications        int            `json:"verifications"`
+	VerificationsRefused int            `json:"verifications_refused"`
+	ConfigOnly           int            `json:"config_only"`
+	NotWrites            int            `json:"not_writes"`
+	NotEvaluated         map[string]int `json:"not_evaluated"`
+	OutOfAccounts        int            `json:"out_of_accounts"`
+	Filtered             int            `json:"filtered"`
+	Errors               int            `json:"errors"`
 }
 
 // Collector runs the feeds' items through the scope filter, the reconciler and the pipeline, and posts the result.
@@ -63,6 +68,8 @@ type Collector struct {
 	stats Stats
 	seqs  map[string]int64 // event id -> its observation's seq, for the resolutions a flush makes
 	order []string
+	// verifyQ are the verified trail copies of events already posted, waiting for their verification record.
+	verifyQ []*lateVerification
 }
 
 func (c *Collector) now() time.Time {
@@ -147,8 +154,21 @@ func (c *Collector) Ingest(it *Item) error {
 		runAcks(it.Acks)
 		return nil
 	}
-	c.Rec.AddCT(it, v)
+	if c.Rec.AddCT(it, v) && it.Verified {
+		// The event was posted already (the EventBridge copy usually is: it arrives first and the core keeps the first
+		// copy of an event id). The trail's copy is the same event, verified: it reaches the evidence as a
+		// verification record about the posted observation, never as a second observation.
+		c.mu.Lock()
+		c.verifyQ = append(c.verifyQ, &lateVerification{it: it, v: v})
+		c.mu.Unlock()
+	}
 	return nil
+}
+
+// lateVerification is a verified trail copy of an event that was posted already.
+type lateVerification struct {
+	it *Item
+	v  *ctView
 }
 
 // Step posts everything the reconciler has due, then closes the correlation and posts the resolutions that follow
@@ -160,6 +180,9 @@ func (c *Collector) Step(ctx context.Context) error {
 		}
 	}
 	var errs []string
+	if err := c.flushVerifications(ctx); err != nil {
+		errs = append(errs, err.Error())
+	}
 	for _, m := range c.Rec.Ready() {
 		if err := c.emit(ctx, m); err != nil {
 			c.Rec.Fail(m)
@@ -230,6 +253,12 @@ func (c *Collector) emit(ctx context.Context, m *Merged) error {
 		// seq. The chain is posted whole anyway: the assessment and resolution carry deterministic event ids, so the
 		// core's de-duplication makes each post idempotent and a failed assessment is completed by the retry.
 		c.count(func(s *Stats) { s.Duplicates++ })
+		if it.Verified {
+			// This delivery is the trail's verified copy of an event the core recorded from the other feed first.
+			if err := c.verify(ctx, scopeID, ref.Seq, v.ID, it.Method); err != nil {
+				return err
+			}
+		}
 	} else {
 		c.count(func(s *Stats) { s.Posted++ })
 	}
@@ -244,6 +273,61 @@ func (c *Collector) emit(ctx context.Context, m *Merged) error {
 		if _, err := c.post(ctx, evidence.KindResolution, rr); err != nil {
 			return fmt.Errorf("posting the resolution of seq %d: %w", ref.Seq, err)
 		}
+	}
+	return nil
+}
+
+// verify posts the trail's verification of an observation the core already had: an observation.verification about its
+// seq, with a deterministic event id so a redelivery is one record. The core's refusal for a collector registered
+// without the kind is counted and logged, not an error: nothing else in the chain depends on it.
+func (c *Collector) verify(ctx context.Context, scopeID string, seq int64, eventID, method string) error {
+	ev := client.ProviderEvent{Scope: client.String(scopeID), About: map[string]any{"seq": seq},
+		Source:       map[string]any{"name": ProviderName, "event_id": eventID + "/verification"},
+		Verification: map[string]any{"method": orElse(method, MethodDigestChain), "verified": true}}
+	ref, err := c.post(ctx, evidence.KindVerification, ev)
+	var api *client.APIError
+	switch {
+	case errors.As(err, &api) && api.Status == 403:
+		c.count(func(s *Stats) { s.VerificationsRefused++ })
+		c.log().Warn("the core refuses observation.verification records: register the collector with that kind so the trail's verification reaches the evidence",
+			"err", err.Error())
+		return nil
+	case err != nil:
+		return fmt.Errorf("posting the verification of seq %d: %w", seq, err)
+	}
+	if !ref.Duplicate {
+		c.count(func(s *Stats) { s.Verifications++ })
+	}
+	return nil
+}
+
+// flushVerifications posts the verification records of the trail copies that arrived after their event was posted.
+// A copy whose observation's seq is not known (a restart, or the memory of it evicted) is posted in full instead: the
+// core answers the observation as a duplicate with the original's seq, and the verification follows from that.
+func (c *Collector) flushVerifications(ctx context.Context) error {
+	c.mu.Lock()
+	q := c.verifyQ
+	c.verifyQ = nil
+	c.mu.Unlock()
+	var errs []string
+	var again []*lateVerification
+	for _, lv := range q {
+		var err error
+		if seq, ok := c.seqOf(lv.v.ID); ok {
+			err = c.verify(ctx, orElse(lv.v.Account, "unknown"), seq, lv.v.ID, lv.it.Method)
+		} else {
+			err = c.emit(ctx, &Merged{Item: lv.it, View: lv.v, items: []*Item{lv.it}})
+		}
+		if err != nil {
+			again = append(again, lv)
+			errs = append(errs, fmt.Sprintf("%s: %v", lv.v.ID, err))
+		}
+	}
+	if len(again) > 0 {
+		c.mu.Lock()
+		c.verifyQ = append(c.verifyQ, again...)
+		c.mu.Unlock()
+		return errors.New(strings.Join(errs, "; "))
 	}
 	return nil
 }

@@ -234,6 +234,13 @@ func (b *builder) observationRows() []Exception {
 			s := obj(rr, "resolution")
 			row.Resolution = str(s, "state")
 			row.Cause = str(s, "cause")
+			row.ResolutionSeq = ptr(seqOf(rr))
+			row.ResolvedBy = orDefault(str(s, "by"), str(obj(rr, "provider"), "name"))
+		}
+		if selfVerified(r) {
+			row.SourceVerified, row.VerifiedBy = true, "self"
+		} else if _, ok := b.verified[seq]; ok {
+			row.SourceVerified, row.VerifiedBy = true, "later"
 		}
 		rows = append(rows, row)
 		// A provider that named what an operation belongs to (a grant, a plan, a task, a run) and still left it
@@ -306,3 +313,56 @@ func foldSameChange(rows []Exception) []Exception {
 }
 
 const coverageUnavailable = "coverage-unavailable"
+
+// selfVerified: the observation's own integrity says its source was verified unaltered.
+func selfVerified(r Record) bool {
+	v, _ := obj(r, "integrity")["sourceVerified"].(bool)
+	return v
+}
+
+// observedSection is the freeze and incident views' observed changes: every observation in the window and scopes, in
+// time order, with how each was assessed and resolved and whether its source was verified. The packet view leaves it
+// out (its exceptions section lists what was not cleared).
+func (b *builder) observedSection(pk *Packet) {
+	if b.p.View != ViewFreeze && b.p.View != ViewIncident {
+		return
+	}
+	oc := &ObservedChanges{Rows: []ObservedChange{}}
+	for _, r := range b.sel {
+		if str(r, "tool") != evidence.KindObservation {
+			continue
+		}
+		oc.Count++
+		if len(oc.Rows) >= MaxObservedChanges {
+			oc.Truncated = true
+			continue
+		}
+		seq := seqOf(r)
+		ac, rs, act := obj(r, "action"), obj(r, "resource"), obj(r, "actor")
+		res := str(rs, "kind")
+		if n := orDefault(str(rs, "name"), str(rs, "id")); n != "" {
+			res += "/" + n
+		}
+		row := ObservedChange{Seq: seq, TS: b.ts(r), Scope: str(r, "scope"), Source: str(obj(r, "source"), "name"), Resource: res,
+			Actor: str(act, "subject"), API: str(ac, "api"), Coverage: "unassessed", Resolution: "none recorded",
+			Diff: short(r["state_change"], 160)}
+		if ok, has := ac["succeeded"].(bool); has {
+			row.Succeeded = &ok
+		}
+		if a, ok := b.assessed[seq]; ok {
+			row.Coverage = str(a, "coverage")
+		}
+		if rr, ok := b.resolved[seq]; ok {
+			s := obj(rr, "resolution")
+			row.Resolution, row.Cause = str(s, "state"), str(s, "cause")
+			row.ResolvedBy = orDefault(str(s, "by"), str(obj(rr, "provider"), "name"))
+		}
+		if selfVerified(r) {
+			row.SourceVerified, row.VerifiedBy = true, "self"
+		} else if _, ok := b.verified[seq]; ok {
+			row.SourceVerified, row.VerifiedBy = true, "later"
+		}
+		oc.Rows = append(oc.Rows, row)
+	}
+	pk.Observed = oc
+}

@@ -2,6 +2,7 @@ package packet
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -58,7 +59,17 @@ func PDF(pk *Packet) []byte {
 		for _, sh := range s.Statement.Health.Sources {
 			d.para(fmt.Sprintf("  feed %s: worst %s, now %s, blind %ds, degraded %ds, stale %v", sh.Source, sh.State, sh.Now, sh.Blind, sh.Degraded, sh.Stale))
 		}
-		d.para(fmt.Sprintf("  cleared and verified %d, seen and not cleared %d, audit gaps %d", s.Statement.Cleared.Count, s.Statement.Seen.Count, len(s.Statement.Blind.Gaps)))
+		st := s.Statement
+		d.para(fmt.Sprintf("  1. Cleared and verified: %d.", st.Cleared.Count))
+		d.para(fmt.Sprintf("  2. Seen, not cleared: %d%s.", st.Seen.Count, byCoverageWords(st.Seen.ByCoverage)))
+		d.para(fmt.Sprintf("  3. Could not see: %d seconds in %d stretch(es) a feed was blind or degraded; %d audit gap(s).",
+			st.Blind.Seconds, len(st.Blind.Segments), len(st.Blind.Gaps)))
+		for _, sg := range st.Blind.Segments {
+			d.para(fmt.Sprintf("     %s %s from %s to %s (%ds, %s)", orDash(sg.Source), sg.State, sg.From, sg.To, sg.Seconds, sg.Reason))
+		}
+		si := st.Integrity
+		d.para(fmt.Sprintf("  Source verified: %d of %d observations (%d by the delivery's own verification, %d by a later verification of the same event).",
+			si.Verified, si.Observations, si.Own, si.Later))
 	}
 
 	keep := map[string]bool{}
@@ -176,13 +187,31 @@ func PDF(pk *Packet) []byte {
 				continue
 			}
 			who := orDash(e.Actor)
-			cr = append(cr, []string{fmt.Sprint(e.Seq), e.TS, e.Kind, who, orDash(e.Diff), e.Resolution + causeSuffix(e)})
+			cr = append(cr, []string{fmt.Sprint(e.Seq), e.TS, e.Kind, who, orDash(e.Diff), e.Resolution + causeSuffix(e) + resolvedBySuffix(e)})
 		}
 		if len(cr) == 0 {
 			continue
 		}
 		d.h2(class)
 		d.table([]string{"seq", "ts", "kind", "actor", "diff", "resolution"}, []int{5, 20, 14, 16, 30, 0}, cr)
+	}
+
+	if oc := pk.Observed; oc != nil {
+		d.h1("Observed changes")
+		d.para(fmt.Sprintf("Every change the observation feeds saw in this window and scope, cleared or not: %d.", oc.Count))
+		if oc.Truncated {
+			d.para(fmt.Sprintf("Only the first %d are listed here; the records are in evidence/records.jsonl.", len(oc.Rows)))
+		}
+		rows = nil
+		for _, o := range oc.Rows {
+			ver := "no"
+			if o.SourceVerified {
+				ver = "yes (" + o.VerifiedBy + ")"
+			}
+			res := o.Resolution + orEmpty(o.Cause, " (", ")") + orEmpty(o.ResolvedBy, " by ", "")
+			rows = append(rows, []string{fmt.Sprint(o.Seq), o.TS, o.Scope, orDash(o.Actor), o.Resource + " " + o.API, o.Coverage, res, ver})
+		}
+		d.table([]string{"seq", "ts", "scope", "actor", "what", "coverage", "resolution", "verified"}, []int{5, 20, 12, 16, 22, 14, 18, 0}, rows)
 	}
 
 	if keep["policy_changes"] {
@@ -237,6 +266,29 @@ func orDash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+func resolvedBySuffix(e Exception) string {
+	if e.ResolvedBy != "" {
+		return " by " + e.ResolvedBy
+	}
+	return ""
+}
+
+func byCoverageWords(m map[string]int) string {
+	if len(m) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var parts []string
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s %d", k, m[k]))
+	}
+	return " (" + strings.Join(parts, ", ") + ")"
 }
 
 func causeSuffix(e Exception) string {

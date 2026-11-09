@@ -35,6 +35,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/clearances/{change_id}/deny", h.deny)
 	mux.HandleFunc("POST /v1/breakglass", h.openBreakglass)
 	mux.HandleFunc("POST /v1/breakglass/{id}/close", h.closeBreakglass)
+	mux.HandleFunc("POST /v1/observations/{seq}/resolution", h.setResolution)
 }
 
 func (h *Handler) openBreakglass(w http.ResponseWriter, r *http.Request) {

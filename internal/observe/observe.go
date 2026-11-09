@@ -49,20 +49,22 @@ const (
 
 // Fields are the record fields only observation kinds carry. A provider may not set one on another kind.
 var Fields = []string{"scope", "resource", "actor", "action", "state_change", "correlation", "integrity", "times",
-	"health", "about", "rule_set", "attribution", "resolution"}
+	"health", "about", "rule_set", "attribution", "resolution", "verification"}
 
 var required = map[string][]string{
-	evidence.KindObservation: {"scope", "source", "resource", "actor", "action", "integrity", "times"},
-	evidence.KindAssessment:  {"scope", "about", "coverage", "tier", "rule_set", "attribution"},
-	evidence.KindResolution:  {"scope", "about", "resolution"},
-	evidence.KindHealth:      {"scope", "source", "health"},
+	evidence.KindObservation:  {"scope", "source", "resource", "actor", "action", "integrity", "times"},
+	evidence.KindAssessment:   {"scope", "about", "coverage", "tier", "rule_set", "attribution"},
+	evidence.KindResolution:   {"scope", "about", "resolution"},
+	evidence.KindHealth:       {"scope", "source", "health"},
+	evidence.KindVerification: {"scope", "source", "about", "verification"},
 }
 
 var allowed = map[string][]string{
-	evidence.KindObservation: {"scope", "resource", "actor", "action", "state_change", "correlation", "integrity", "times", "app", "tier"},
-	evidence.KindAssessment:  {"scope", "about", "rule_set", "attribution", "app", "tier"},
-	evidence.KindResolution:  {"scope", "about", "resolution", "app"},
-	evidence.KindHealth:      {"scope", "health", "app"},
+	evidence.KindObservation:  {"scope", "resource", "actor", "action", "state_change", "correlation", "integrity", "times", "app", "tier"},
+	evidence.KindAssessment:   {"scope", "about", "rule_set", "attribution", "app", "tier"},
+	evidence.KindResolution:   {"scope", "about", "resolution", "app"},
+	evidence.KindHealth:       {"scope", "health", "app"},
+	evidence.KindVerification: {"scope", "about", "verification", "app"},
 }
 
 var (
@@ -76,7 +78,7 @@ var (
 func Is(kind string) bool { return slices.Contains(required2(), kind) }
 
 func required2() []string {
-	return []string{evidence.KindObservation, evidence.KindAssessment, evidence.KindResolution, evidence.KindHealth}
+	return []string{evidence.KindObservation, evidence.KindAssessment, evidence.KindResolution, evidence.KindHealth, evidence.KindVerification}
 }
 
 // Kinds are the kinds a provider posts, in the order they build on each other.
@@ -184,6 +186,9 @@ func Check(kind string, ev map[string]any, v vocab.Vocabulary) (Result, error) {
 		return res, checkAssessment(ev)
 	case evidence.KindResolution:
 		return res, checkResolution(ev)
+	case evidence.KindVerification:
+		res.Source, res.EventID, err = checkVerification(ev)
+		return res, err
 	default:
 		res.Source, err = checkHealth(ev)
 		return res, err
@@ -514,6 +519,39 @@ func checkResolution(ev map[string]any) error {
 		}
 	}
 	return nil
+}
+
+// Verification methods an observation.verification may name are free text (the feed's own name for how it verified);
+// what the core holds it to is that it says it verified, and of which observation.
+func checkVerification(ev map[string]any) (source, event string, err error) {
+	if source, event, err = checkSource(ev, true); err != nil {
+		return "", "", err
+	}
+	if c, present := ev["coverage"]; present && c != evidence.CoverageObservedNotAttributed {
+		return "", "", bad("a verification is not a coverage statement: leave coverage unset")
+	}
+	ev["coverage"] = evidence.CoverageObservedNotAttributed
+	if err := checkAbout(ev); err != nil {
+		return "", "", err
+	}
+	v, err := obj(ev, "verification")
+	if err != nil {
+		return "", "", err
+	}
+	if err := only("verification", v, "method", "verified", "reference"); err != nil {
+		return "", "", err
+	}
+	if ok, err := boolean("verification", v, "verified", true); err != nil || !ok {
+		return "", "", bad("verification.verified is true: a feed that could not verify an event says nothing about it")
+	}
+	for _, k := range []string{"method", "reference"} {
+		if x, present := v[k]; present || k == "method" {
+			if _, err := text("verification."+k, x, 256); err != nil {
+				return "", "", err
+			}
+		}
+	}
+	return source, event, nil
 }
 
 func checkHealth(ev map[string]any) (string, error) {

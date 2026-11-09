@@ -56,7 +56,18 @@ type Item struct {
 	Assessment *int64  `json:"assessment"`
 	Resolution *string `json:"resolution"`
 	Cause      *string `json:"cause"`
-	Monitoring bool    `json:"monitoring_protection,omitempty"`
+	// ResolutionSeq, ResolvedBy and ResolvedAt are the newest resolution record about the observation, the person (or
+	// provider) it names and when it was written; null when none. Every edit is a record of its own: the history is
+	// GET /v1/observations?kind=resolution.
+	ResolutionSeq *int64  `json:"resolution_seq"`
+	ResolvedBy    *string `json:"resolved_by"`
+	ResolvedAt    *string `json:"resolved_at"`
+	// SourceVerified: the feed's source was verified unaltered, by the observation's own integrity (VerifiedBy "self")
+	// or by a later observation.verification record (VerifiedBy "later", VerifiedSeq its seq).
+	SourceVerified bool   `json:"source_verified"`
+	VerifiedBy     string `json:"verified_by,omitempty"`
+	VerifiedSeq    *int64 `json:"verified_seq,omitempty"`
+	Monitoring     bool   `json:"monitoring_protection,omitempty"`
 	// CompletenessSupported: the observation claimed completeness and its feed's health supported it when it arrived.
 	CompletenessSupported *bool `json:"completeness_supported,omitempty"`
 }
@@ -79,15 +90,29 @@ type Statement struct {
 	To    string `json:"to"`
 	// State is the worst state of any source in the window: healthy, degraded or blind (blind when no source has a
 	// health record at all).
-	State     string      `json:"state"`
-	Clean     bool        `json:"clean"`
-	Cleared   Part        `json:"cleared_and_verified"`
-	Seen      Part        `json:"seen_not_cleared"`
-	Blind     CouldNotSee `json:"could_not_see"`
-	Health    Health      `json:"health"`
-	Truncated bool        `json:"truncated"`
+	State   string      `json:"state"`
+	Clean   bool        `json:"clean"`
+	Cleared Part        `json:"cleared_and_verified"`
+	Seen    Part        `json:"seen_not_cleared"`
+	Blind   CouldNotSee `json:"could_not_see"`
+	Health  Health      `json:"health"`
+	// Integrity counts the window's observations by whether their source was verified unaltered.
+	Integrity SourceIntegrity `json:"source_integrity"`
+	Truncated bool            `json:"truncated"`
 	// Text is the statement in words, the form the packet prints.
 	Text string `json:"text"`
+}
+
+// SourceIntegrity is how many of a window's observations had their source verified (a trail's digest chain): by the
+// observation's own integrity record, or by a later observation.verification about it. An observation is counted once,
+// however many records vouch for it.
+type SourceIntegrity struct {
+	Observations int `json:"observations"`
+	Verified     int `json:"verified"`
+	// Own are verified by the observation's own integrity.sourceVerified; Later only by an observation.verification.
+	Own        int `json:"verified_by_record"`
+	Later      int `json:"verified_later"`
+	Unverified int `json:"unverified"`
 }
 
 // CouldNotSee is the third part: the stretches no feed was healthy for, and the audit gaps recorded.
@@ -122,9 +147,11 @@ type Input struct {
 	Observations []Record
 	Assessments  []Record
 	Resolutions  []Record
-	Health       []Record
-	Gaps         []Record
-	Truncated    bool
+	// Verifications are the observation.verification records about the window's observations (any that arrived).
+	Verifications []Record
+	Health        []Record
+	Gaps          []Record
+	Truncated     bool
 }
 
 func seqOf(r Record) int64 {
@@ -286,6 +313,14 @@ func Build(in Input, now time.Time) Statement {
 		return m
 	}
 	assessed, resolved := latest(in.Assessments), latest(in.Resolutions)
+	verified := map[int64]int64{} // observation seq -> its earliest verification's seq
+	for _, v := range in.Verifications {
+		if a, ok := About(v); ok {
+			if p, have := verified[a]; !have || seqOf(v) < p {
+				verified[a] = seqOf(v)
+			}
+		}
+	}
 
 	sources := map[string]bool{}
 	sort.Slice(in.Observations, func(i, j int) bool { return seqOf(in.Observations[i]) < seqOf(in.Observations[j]) })
@@ -328,6 +363,26 @@ func Build(in Input, now time.Time) Statement {
 			if c := s(rr, "cause"); c != "" {
 				it.Cause = &c
 			}
+			rseq, rts := seqOf(r), s(r, "ts")
+			it.ResolutionSeq, it.ResolvedAt = &rseq, &rts
+			by := s(rr, "by")
+			if by == "" {
+				by = s(sub(r, "provider"), "name")
+			}
+			if by != "" {
+				it.ResolvedBy = &by
+			}
+		}
+		st.Integrity.Observations++
+		switch vs, later := verified[seq]; {
+		case sub(o, "integrity")["sourceVerified"] == true:
+			it.SourceVerified, it.VerifiedBy = true, "self"
+			st.Integrity.Own++
+		case later:
+			it.SourceVerified, it.VerifiedBy, it.VerifiedSeq = true, "later", &vs
+			st.Integrity.Later++
+		default:
+			st.Integrity.Unverified++
 		}
 		part := &st.Seen
 		if it.Coverage == evidence.CoverageAuthorizedAndVerified && !it.Monitoring {
@@ -401,6 +456,7 @@ func Build(in Input, now time.Time) Statement {
 		st.Blind.Gaps = append(st.Blind.Gaps, Gap{Seq: seqOf(g), TS: s(g, "ts"), Source: s(sub(g, "source"), "name"),
 			State: s(gp, "state"), Reason: s(gp, "reason")})
 	}
+	st.Integrity.Verified = st.Integrity.Own + st.Integrity.Later
 	st.Clean = st.State == Healthy && st.Seen.Count == 0 && !st.Truncated
 	st.Text = words(st)
 	return st
@@ -423,6 +479,10 @@ func words(st Statement) string {
 	line("Scope %s, %s to %s: feed %s.", st.Scope, st.From, st.To, st.State)
 	line("Cleared and verified: %d.", st.Cleared.Count)
 	line("Seen, not cleared: %d.", st.Seen.Count)
+	if n := st.Integrity.Observations; n > 0 {
+		line("Source verified: %d of %d observations (%d by the delivery's own verification, %d by a later verification of the same event).",
+			st.Integrity.Verified, n, st.Integrity.Own, st.Integrity.Later)
+	}
 	switch {
 	case st.State == Healthy && st.Seen.Count == 0:
 		line("No exceptions, and every feed was healthy for the whole window.")

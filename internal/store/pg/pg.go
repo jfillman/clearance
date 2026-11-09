@@ -134,6 +134,8 @@ CREATE INDEX IF NOT EXISTS clearance_evidence_event ON clearance_evidence
   WHERE record->'source' ? 'event_id';
 CREATE INDEX IF NOT EXISTS clearance_evidence_observed ON clearance_evidence ((record->>'scope'), seq)
   WHERE record->>'tool' IN ('observation', 'assessment', 'resolution', 'observation.health', 'observation.audit-gap');
+CREATE INDEX IF NOT EXISTS clearance_evidence_verification ON clearance_evidence ((record->>'scope'), seq)
+  WHERE record->>'tool' = 'observation.verification';
 CREATE TABLE IF NOT EXISTS clearance_ledger_checkpoints (
   size   bigint      PRIMARY KEY,
   origin text        NOT NULL,

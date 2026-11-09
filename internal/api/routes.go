@@ -124,7 +124,8 @@ var routeTable = []Route{
 	{OperationID: "listObservations", Method: "GET", Path: "/v1/observations", Roles: []string{RoleAuditor},
 		Params: []string{"scope", "source", "kind", "since", "until", "limit", "after"},
 		Summary: "The observation records (clearance.evidence/v1.1) of one scope, newest first; the cursor is seq. " +
-			"kind=observation (default), assessment or resolution. scope is required: the account, cluster or workspace " +
+			"kind=observation (default), assessment, resolution (every edit of a resolution is a record of its own: the history) or " +
+			"observation.verification (a feed's later proof an observation was delivered unaltered). scope is required: the account, cluster or workspace " +
 			"observed; source narrows to one feed. Auditors only",
 		Response: EvidencePage{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).listObservations},
 	{OperationID: "listObservationHealth", Method: "GET", Path: "/v1/observations/health", Roles: []string{RoleAuditor},
@@ -138,7 +139,8 @@ var routeTable = []Route{
 		Summary: "The coverage statement for a scope and window (from and to, RFC 3339; default the last 24 hours): " +
 			"what was cleared and verified, what was seen and not cleared (by coverage state, with how each ended), " +
 			"what could not be seen (the stretches a feed was blind or degraded, and the audit gaps), and the health " +
-			"of each feed. clean is true only when nothing was seen uncleared and every feed was healthy for the " +
+			"of each feed, with each item's newest resolution (state, cause, who set it and when) and how many of the window's " +
+			"observations had their source verified (source_integrity). clean is true only when nothing was seen uncleared and every feed was healthy for the " +
 			"whole window: a window with no healthy health record, or whose last record has gone stale, is blind and " +
 			"never clean. Auditors only",
 		Response: observe.Statement{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).getCoverage},

@@ -24,10 +24,23 @@ lookups and re-implements no attribution ([observe-pipeline.md](observe-pipeline
 
 `completenessClaimed` is true on every observation; the core decides `completeness_supported` from the account's latest
 health record ([evidence.md](evidence.md)). Both event feeds report under one `source.name` (`observe-aws`), so the core's
-de-duplication on (provider, source, event id) makes a change reported by both feeds one record. **An event first seen
-through EventBridge keeps `sourceVerified: false`**; the trail's copy is the core's duplicate. Its verification still counts:
-the `digests-validating` check covers every digest read, and an event only the trail has (EventBridge dropped it) is posted
-`sourceVerified: true`. That is the trail's job as the completeness reference.
+de-duplication on (provider, source, event id) makes a change reported by both feeds one record, and the ledger is
+append-only, so the observation the EventBridge copy created is never rewritten and keeps `integrity.sourceVerified: false`.
+The trail's verification of the same event reaches the evidence as a record of its own (O-5): an
+**`observation.verification`** about the observation's seq (`verification` {`method`: `cloudtrail-digest-chain`,
+`verified`: true}, `source.event_id` = `<event id>/verification`, so a redelivery is one record). Three cases, all tested:
+
+| What arrives | What is posted |
+| --- | --- |
+| The trail's copy while the EventBridge copy of the event is still waiting in the reconciler | One observation, posted with the trail's copy (`sourceVerified: true`); nothing more |
+| The trail's copy after the event was posted (the usual order: the digest comes an hour later) | An `observation.verification` about the posted observation. Never a second observation or assessment, so the population and the exceptions are unchanged |
+| An event only the trail has (EventBridge dropped it) | An observation with `sourceVerified: true`; no verification record |
+
+The coverage statement and the packet read the two together and count each observation **once**: *source verified, N of M
+observations (by the delivery's own verification, or by a later verification of the same event)*
+([packet.md](packet.md#sections)). A trail copy whose digest chain did not link is not verified and posts nothing. The
+collector must be registered for the new kind (below); a collector registered before it keeps working: the core refuses the
+verification (403), the collector counts it (`verifications_refused`) and logs once, and the observation stays unverified.
 
 ### Digest-chain validation (`digest`)
 
@@ -102,7 +115,7 @@ RBAC, no Secret. Two projected service-account tokens are its whole credential: 
 
 ```json
 {"name": "observe-aws", "version": "0.1.0", "principals": ["<namespace>/clearance-observe-aws"],
- "kinds": ["observation", "assessment", "resolution", "observation.health", "deploy.exception"]}
+ "kinds": ["observation", "assessment", "resolution", "observation.health", "observation.verification", "deploy.exception"]}
 ```
 
 and give it the auditor role on clearance-api (outcomes). Terraform for the AWS side is in

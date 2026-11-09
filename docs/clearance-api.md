@@ -62,7 +62,7 @@ the inbox, trigger history, results), so the Go API serves only Clearance's own 
 | (healthz, readyz) | `GET /healthz`, `/readyz` | **ported**; readyz checks the database |
 | (new) listDefinitions | `GET /v1/definitions` | **new**: the definitions Clearance holds, api.py's agent view without the gateway's `hold` |
 | (new) listExceptions | `GET /v1/exceptions` | **new** (C-6): the packet's exceptions: every `deploy.exception` (`kind=` out-of-band, drift, untraced-apply, digest-mismatch, attempted-refused, monitoring-protection), `deploy.degraded`, `breakglass.open`, `breakglass.close`, and every `coverage-unavailable` record; `tool`, `kind`, `app`, `since`, `until`, `limit`, `after`; newest first, cursor `seq`, scoped like the evidence list ([gate.md](gate.md#the-packets-exceptions)) |
-| (new) listObservations | `GET /v1/observations` | **new** (O-1), auditors: a scope's `observation` records (`kind=assessment` or `resolution` for those); `scope` required, `source`, `since`, `until`, `limit`, `after`; newest first, cursor `seq` |
+| (new) listObservations | `GET /v1/observations` | **new** (O-1), auditors: a scope's `observation` records (`kind=assessment`, `resolution` (every edit of one is a record of its own: the history) or `observation.verification` for those); `scope` required, `source`, `since`, `until`, `limit`, `after`; newest first, cursor `seq` |
 | (new) listObservationHealth | `GET /v1/observations/health` | **new** (O-1), auditors: a scope's `observation.health` and `observation.audit-gap` records, same parameters |
 | (new) getCoverage | `GET /v1/coverage` | **new** (O-1), auditors: the three-part coverage statement of a scope and window ([below](#observations-and-the-coverage-statement-o-1)) |
 | (new) getKeys | `GET /v1/keys` | **new** (C-1): the clearance token verification keys, a JWKS, from `clearance_signing_keys`; public |
@@ -86,6 +86,10 @@ before it; at most 92 days) answers:
   resolution and cause;
 - `could_not_see`: the `segments` of the window a feed was blind or degraded (`reason`: `reported`, `stale` or
   `never-seen`), the `audit_gaps`, and the seconds;
+- `source_integrity`: how many of the window's observations had their source verified (`observations`, `verified`,
+  `verified_by_record` (the observation's own integrity), `verified_later` (an `observation.verification` about it, O-5)
+  and `unverified`); each item says `source_verified` and `verified_by` (`self` or `later`), and carries its newest
+  resolution's `resolution_seq`, `resolved_by` (the person, or the provider) and `resolved_at`;
 - `health`: per source, the worst `state` in the window, the state `now`, the last health record, whether it is `stale`
   and the checks that failed;
 - `state` (`healthy`, `degraded` or `blind`: the worst of any source; `blind` when no feed has a health record at all),
@@ -97,7 +101,11 @@ of a kind): **a clean exceptions list is never printed for a window without a he
 stops produces a blind window. A window that starts before the feed's first health record is blind (`never-seen`) for the
 stretch before it. `TestCoverageIsBlindForAScopeWhoseHealthRecordIsStale` runs this on memory and on Postgres.
 
-Indexes (the core's schema): `clearance_evidence_observed` on `((record->>'scope'), seq)` for the five kinds, and
+A person sets a resolution on the **core**, not here (clearance-api writes nothing):
+`POST /v1/observations/{seq}/resolution` ([gate.md](gate.md#a-persons-resolution-of-an-observation-o-5)); the coverage
+statement reads the newest resolution record about an observation.
+
+Indexes (the core's schema): `clearance_evidence_observed` on `((record->>'scope'), seq)` for the five kinds (and `clearance_evidence_verification` for `observation.verification`), and
 `clearance_evidence_event` on provider, kind and `source.event_id` behind the core's de-duplication.
 
 ### The grant feed and the token (C-1)
