@@ -89,6 +89,9 @@ type Header struct {
 	From        string   `json:"from"`
 	To          string   `json:"to"`
 	Scopes      []string `json:"observation_scopes"`
+	// ScopesNamed is true when the packet was asked for explicit scopes: an observed record with no scope is then
+	// not in its counts (with none named, every observed record is). The offline verifier recounts by it.
+	ScopesNamed bool     `json:"scopes_named,omitempty"`
 	Filter      Filter   `json:"filter"`
 	Mappings    []string `json:"mappings"`
 	Chain       ChainRef `json:"chain"`

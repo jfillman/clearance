@@ -727,3 +727,29 @@ func TestVerifyBinaryRunsWithNoNetwork(t *testing.T) {
 		t.Fatalf("%v\n%s", err, out)
 	}
 }
+
+// An observed record with no scope is in the counts when no scopes were named and out of them when some were (the
+// builder's scopeWanted); the verifier's recount must agree either way, or a valid packet reads as failed.
+func TestVerifyRecountsAnObservedRecordWithNoScope(t *testing.T) {
+	for _, named := range []bool{true, false} {
+		st, _ := labChain(t)
+		l := &labber{t: t, st: st}
+		l.add(obsW, observation("2026-10-20T10:00:00Z", "", "PutBucketPolicy", "bucket", nil))
+		p := params(t)
+		if !named {
+			p.Scopes = nil
+		}
+		res, err := packet.Build(bg, st, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir := filepath.Join(t.TempDir(), "packet")
+		if _, err := packet.Write(bg, dir, res, nil, nil); err != nil {
+			t.Fatal(err)
+		}
+		rep := verify.Verify(dir, verify.Options{})
+		if c := check(rep, "counted figures"); c == nil || c.Status != verify.Pass {
+			t.Fatalf("named=%v:\n%s", named, render(rep))
+		}
+	}
+}

@@ -63,7 +63,9 @@ func (c *ctx) figuresCheck() {
 		hi = r.seq
 		tool, _ := r.m["tool"].(string)
 		if observed[tool] {
-			if sc, _ := r.m["scope"].(string); sc != "" && !scopeOK[sc] {
+			// The builder's scopeWanted: with scopes named, only those; a record with no scope is then out.
+			sc, _ := r.m["scope"].(string)
+			if (sc != "" && !scopeOK[sc]) || (sc == "" && h.Named) {
 				continue
 			}
 		} else if !gateMatch(r.m, h.Filter.App, h.Filter.Env, h.Filter.Cluster) {

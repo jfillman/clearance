@@ -14,6 +14,7 @@ type packetDoc struct {
 		From   string                             `json:"from"`
 		To     string                             `json:"to"`
 		Scopes []string                           `json:"observation_scopes"`
+		Named  bool                               `json:"scopes_named"`
 		Filter struct{ App, Env, Cluster string } `json:"filter"`
 		Chain  struct {
 			Count    int64  `json:"count"`

@@ -56,7 +56,7 @@ supplied is written to the note of checkpoints seen (below).
    state, their cross, and that every state is listed (at zero too); the verification section's counts under and after
    the checkpoint, proofs and attestations. A figure that no longer recomputes is named with the value the packet says
    and the value the records give. The tables and sentences of the packet (changes, assertions, exceptions) are not
-   recomputed; they present the records the earlier checks bind.
+   recomputed; they present the records the earlier checks bind. (The packet header records `scopes_named`, so an observed record with no scope is recounted as the builder counted it: in when no scopes were named, out when some were.)
 6. **Attestations.** For each change attestation in `attestations/`: the DSSE signature; the Fulcio chain and the Rekor
    signed entry timestamp under your trust root, using the material in the bundle (nothing is fetched, so a
    pre-cutover Rekor entry that the current key could re-sign is checked as it was); the Rekor **inclusion proof** the
