@@ -234,7 +234,9 @@ keeping B's manual sync policy as defence in depth. The record is the same eithe
 
 ## Phase 2 design pass (G-ARGO-1, 2026-11-03)
 
-Status: **Draft.** The shapes below are chosen; none of them is built. Each was spiked on hangar-dev (Argo CD 3.5.0,
+Status: **Draft** as a design record; the shapes below are chosen, and since then built (the admission policy and
+grant, G-ARGO-2; the agent, G-ARGO-3; the plugin and the PreSync wait, G-ARGO-4 and G-ARGO-5; the release join,
+G-ARGO-6: each section says its own status). Each was spiked on hangar-dev (Argo CD 3.5.0,
 Kubernetes 1.36.5, Kyverno 1.19.0) in scratch namespaces created and deleted for the purpose, in Warn mode only. The
 two measurements that only mean something on hangar-prod (Kyverno's failure modes under prod load, the cross-cluster
 path) are prepared for the user in [spikes/g-argo-1/prod-plan.md](spikes/g-argo-1/prod-plan.md) and are
@@ -986,10 +988,15 @@ subject kind.
 
 ## The Argo CD agent (G-ARGO-3, Built)
 
-Status: **Built**; tested against a fake Argo CD (`providers/argocd/agent`, `go test`), **Unverified** on hangar-prod
-(the proof is prepared below). One controller on the protected cluster, one replica, three loops. It holds no key and
+Status: **Built**; tested against a fake Argo CD (`providers/argocd/agent`, `go test`) and **passing the provider
+conformance suite** as `argocd-agent` (G-ARGO-9, with the plugin: `TestArgoConformance` in `providers/argocd/cmp`; see
+[the provider protocol](provider-protocol.md#the-gates-adapters-g-tf-7-g-argo-9)). The gate is **live on hangar-prod in
+Warn mode, not Deny** (reported by the owner, 2026-11-09): admission warns about what a grant does not list and refuses
+nothing, so nothing here claims enforcement. The numbered proof below is **Unverified** by this repository (its steps were
+not run for this change). One controller on the protected cluster, one replica, three loops. It holds no key and
 decides nothing; its credential is the pod's projected service-account token (audience `clearance`), read fresh for
-every request. Provider identity `argocd-agent/<version>` is in `source.provider` of every record it posts.
+every request. Provider identity `argocd-agent/<version>` is in `source.provider` of every record it posts, and the core's verified
+`provider` is `argocd-agent` with the registered version (live records name `argocd-agent`, owner, 2026-11-09).
 
 | Loop | Every | Does |
 | --- | --- | --- |
@@ -1416,11 +1423,17 @@ token live until its horizon. A second outcome is `DG-STATE` either way (the cha
 one is no longer cleared). The core writes this exception itself, so it is not checked by `gate.CheckReport` and is
 not tagged with a break-glass window: a plan names no cluster.
 
-## The Argo CD plugin and the PreSync wait (G-ARGO-4 and G-ARGO-5, Built; not deployed)
+## The Argo CD plugin and the PreSync wait (G-ARGO-4 and G-ARGO-5, Built)
 
-Status: **Built** in `providers/argocd/cmp` and `providers/argocd/wait`, with unit tests and a parity test against a
-recorded gate-api render; the lookup it needs is in the core (`gate.Service.clearedByTree`). **Unverified** on a
-cluster: nothing here has run inside Argo CD yet (the steps are [at the end](#checking-it-on-hangar-prod-steps-for-the-manager)).
+Status: **Built** in `providers/argocd/cmp` and `providers/argocd/wait`, with unit tests, a parity test against a
+recorded gate-api render, and the provider conformance suite (G-ARGO-9: the plugin's `Generate` with the agent behind a
+fake Argo CD, `TestArgoConformance`: it holds a tree nobody cleared with the PreSync wait Job and applies nothing, stamps
+and syncs once a person clears it, finds a tree a pull request's check cleared by policy, and refuses a denied or an
+expired one); the lookup it needs is in the core (`gate.Service.clearedByTree`). The conformance run does not start the
+Job's container (`clearance-wait` has its own tests). The owner reports the gate **live on hangar-prod in Warn mode, not
+Deny** (2026-11-09); the steps [at the end](#checking-it-on-hangar-prod-steps-for-the-manager) were not run for this
+change and stay **Unverified** here. The plugin writes no evidence record of its own: it registers changes as a verifier
+(`proposer: system:argocd-cmp`), so the records that name the gate are the agent's.
 Apron's half (the sidecar and the ApplicationSet's plugin source, off by default) is `clearance.gate.enabled` in
 [apron](https://github.com/jfillman/apron) `README.md`. The shape is the Phase 2 design pass's (D26, (a) above): the
 plugin replaces the Helm source.

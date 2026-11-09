@@ -27,6 +27,7 @@ import (
 	"github.com/jfillman/clearance/internal/gate"
 	"github.com/jfillman/clearance/internal/server"
 	"github.com/jfillman/clearance/internal/store"
+	"github.com/jfillman/clearance/internal/tfplan"
 )
 
 // The identities the harness controls. The provider authenticates to the in-memory core as Principal; the
@@ -182,6 +183,10 @@ func (h *harness) fetchInfo(ctx context.Context) (Info, error) {
 		return info, fmt.Errorf("the provider's roles %v do not include %s", info.Roles, h.opt.Role)
 	case info.Name == "" || info.Version == "":
 		return info, errors.New("info names no provider name or version")
+	case !ValidFlow(info.Flow):
+		return info, fmt.Errorf("info names a flow the harness does not know: %q", info.Flow)
+	case info.Flow != FlowRegister && h.opt.Role != RoleDeployment:
+		return info, fmt.Errorf("a %s provider has no flow", h.opt.Role)
 	}
 	if _, err := server.ParseProviders(mustJSON([]server.Provider{{Name: info.Name, Version: info.Version,
 		Principals: []string{Principal}}})); err != nil {
@@ -235,6 +240,8 @@ func (h *harness) start(ctx context.Context, info Info) error {
 	}
 	// core.Build wires no group directory (nobody could clear by person); the harness supplies its own.
 	c.Gate.Directory = directory{Approver: {OwnerGroup}}
+	// A change that does not name its owner (a pushed commit's registration, a plan's) is owned by the same group.
+	c.Gate.Owners = owners{}
 	h.core = c
 	h.stops = append(h.stops, c.Close)
 
@@ -242,7 +249,7 @@ func (h *harness) start(ctx context.Context, info Info) error {
 	if h.coreURL, err = h.serve(h.proxy); err != nil {
 		return err
 	}
-	h.target = NewTarget(h.targetTk, nil)
+	h.target = NewTarget(h.targetTk, nil).WithDigest(digestFor(info.Flow, info.Stamps))
 	if h.targetURL, err = h.serve(h.target.Handler()); err != nil {
 		return err
 	}
@@ -272,6 +279,10 @@ func (h *harness) stop() {
 		h.stops[i]()
 	}
 }
+
+type owners struct{}
+
+func (owners) OwnerOf(context.Context, string) string { return OwnerGroup }
 
 type directory map[string][]string
 
@@ -734,15 +745,26 @@ type fakeChange struct {
 	digest   string // hex sha256 of manifest
 	changeID string
 	body     json.RawMessage
+	// ci is the registration a pull request's check made before the provider ran (pushed-tree, cleared by policy):
+	// the provider finds that change by its tree.
+	ci json.RawMessage
 }
 
 // change is a fake change for apply id: tier 2 (a Deployment's replicas, one owner must clear) or tier 0 (a docs
-// path, cleared by policy). Each has its own PR so none supersedes another.
+// path, cleared by policy). Each has its own PR so none supersedes another. What the change is depends on the
+// provider's flow (flows.go).
 func (h *harness) change(id string, pr int64, tier2 bool) fakeChange {
 	head := sha("conformance-head-" + id)[:40]
 	manifest := fmt.Sprintf("apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n  namespace: conformance\n"+
 		"  annotations:\n    conformance.clearance.dev/apply: %s\nspec:\n  replicas: 3\n", id)
 	digest := sha(manifest)
+	if h.info.Flow == FlowPushedTree {
+		d, err := TreeDigestOf(manifest, h.info.Stamps)
+		if err != nil {
+			panic(err)
+		}
+		digest = d
+	}
 	body := map[string]any{"app": changeApp, "env": changeEnv, "cluster": changeCluster, "repo": changeRepo,
 		"pr": pr, "head": head, "proposer": Proposer, "proposerKind": "person", "owner": OwnerGroup,
 		"protected": true, "treeDigest": "sha256:" + digest,
@@ -756,12 +778,70 @@ func (h *harness) change(id string, pr int64, tier2 bool) fakeChange {
 		body["paths"] = []string{"docs/README.md"}
 		body["linesChanged"] = 1
 	}
-	raw, err := json.Marshal(body)
+	c := fakeChange{id: id, pr: pr, head: head, manifest: manifest, digest: digest}
+	switch h.info.Flow {
+	case FlowTerraformPlan:
+		ws := gate.Workspace{Backend: "s3", Key: "conformance/" + id + "/terraform.tfstate", Name: "default"}
+		subject, err := tfplan.Compute([]byte(manifest), PlanJSON(tier2), tfplan.Options{Workspace: ws})
+		if err != nil {
+			panic(err)
+		}
+		// A plan has no cluster, no tree digest and no objects: the subject says what it is.
+		delete(body, "cluster")
+		delete(body, "treeDigest")
+		delete(body, "linesChanged")
+		delete(body, "objects")
+		if tier2 {
+			body["paths"] = []string{"infra/main.tf"}
+		}
+		body["subject"] = subject
+		c.digest = sha(manifest)
+	case FlowPushedTree:
+		if tier2 {
+			// The provider registers the pushed commit itself: pr 0 and the commit.
+			body["pr"] = 0
+		} else {
+			// A pull request's check registered and cleared this tree before it was merged.
+			c.ci = mustRaw(body)
+		}
+	}
+	c.body = mustRaw(body)
+	req, err := parseChange(c.body)
 	if err != nil {
 		panic(err)
 	}
-	return fakeChange{id: id, pr: pr, head: head, manifest: manifest, digest: digest,
-		changeID: gate.ChangeRequest{Repo: changeRepo, PR: pr, Head: head}.ID(), body: raw}
+	c.changeID = req.ID()
+	if h.info.Flow == FlowPushedTree && tier2 {
+		c.changeID = gate.ChangeRequest{Repo: changeRepo, PR: 0, Head: head}.ID()
+	}
+	return c
+}
+
+func mustRaw(v any) json.RawMessage {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return raw
+}
+
+// ciCheck registers c as the pull request's check did before the provider ran (a pushed-tree provider's cleared tree).
+func (h *harness) ciCheck(ctx context.Context, c fakeChange) error {
+	if c.ci == nil {
+		return nil
+	}
+	var out struct {
+		ID    string `json:"id"`
+		State string `json:"state"`
+	}
+	if err := h.call(ctx, "POST", h.coreURL+"/v1/clearances", c.ci, http.StatusOK, &out,
+		"Authorization", "Bearer "+h.providerTok); err != nil {
+		return fmt.Errorf("the CI's registration of %s: %w", c.id, err)
+	}
+	if out.State != "cleared" || out.ID != c.changeID {
+		return fmt.Errorf("the CI's registration of %s is %s %q, want %s cleared", c.id, out.ID, out.State, c.changeID)
+	}
+	return nil
 }
 
 func (h *harness) deployApply(c fakeChange) ApplyRequest {
@@ -921,7 +1001,11 @@ func (h *harness) deployment(ctx context.Context) {
 
 	// Cleared by policy: a tier-0 change is applied without a person, once, with a matching outcome.
 	pol := h.change("dp-policy", 2, false)
-	pst, perr := h.drive(ctx, h.deployApply(pol))
+	perr := h.ciCheck(ctx, pol)
+	var pst Status
+	if perr == nil {
+		pst, perr = h.drive(ctx, h.deployApply(pol))
+	}
 	{
 		recs, _ := h.records(ctx)
 		c, _ := h.storedChange(ctx, pol.changeID)

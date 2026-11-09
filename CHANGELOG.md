@@ -17,6 +17,10 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   (`internal/gate/opclass.json`) and stored on the change. Additive: `x-clearance-revision` 5, same schema file.
   A Secret rotation is `credential-exposure`, an IAM policy change `privilege`, a Deployment image bump `availability`.
   Tiers, requirements and verdicts are unchanged. The packet prints both later (C-5).
+- **The Terraform gate and the Argo CD gate pass the provider conformance suite** (G-TF-7, G-ARGO-9). Two further
+  flows for a deployment provider (`info.flow`: `terraform-plan`, `pushed-tree`; `info.stamps`), and an adapter per gate
+  in its own tests: `terraform-ci` (`clearance hold`, `release`, `report`) and `argocd-agent` (the plugin's `Generate` and
+  the agent's outcome handling behind a fake Argo CD). The suite's assertions are unchanged (`clearance-conformance/v1`).
 - **O-1: `clearance.evidence/v1.1`, observations.** Additive: the schema file is the same (`x-clearance-revision` 4),
   and a record says v1.1 only when it is an observation kind or its coverage is new; every other record is still v1.
   Two new coverage states (`break-glass`, `attempted-refused`); five new kinds: `observation` (the normalized event,
@@ -61,6 +65,12 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   Patterns are configuration: `CLEARANCE_AUTOMATION_SUBJECTS`, `CLEARANCE_AUTOMATION_ISSUERS`,
   `CLEARANCE_APPROVER_ALIASES`. A non-person principal calling clear without naming a person now gets
   `DG-APPROVER-AUTOMATION`, where it got `DG-PERSON`.
+
+### Changed
+- **The outcome of a terraform-plan change names the provider its caller is registered as.** `POST
+  /v1/clearances/{id}/outcome` writes the `deploy.outcome` on the caller's behalf; when the caller's principal matches a
+  `CLEARANCE_PROVIDERS` entry (say `terraform-ci`) the record's verified `provider` is that entry, not `clearance`. No
+  entry, no change. The core's own findings (a `digest-mismatch` exception) keep the core's name.
 
 ## [0.35.0] - 2026-11-09
 

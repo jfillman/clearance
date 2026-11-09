@@ -222,3 +222,38 @@ func FuzzDecodeApply(f *testing.F) {
 		}
 	})
 }
+
+// TestFlows: a provider names a flow the harness knows, and a pushed-tree target leaves the provider's own stamps out of
+// the digest it reports.
+func TestFlows(t *testing.T) {
+	const obj = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: a\n  namespace: n\n  annotations:\n    keep: me\ndata: {a: b}\n"
+	stamped := "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: a\n  namespace: n\n  annotations:\n    keep: me\n    x/stamp: s\ndata: {a: b}\n"
+	plain, err := conformance.TreeDigestOf(obj, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := conformance.TreeDigestOf(stamped, []string{"x/stamp"}); got != plain {
+		t.Fatalf("stamped %s, plain %s", got, plain)
+	}
+	if got, _ := conformance.TreeDigestOf(stamped, nil); got == plain {
+		t.Fatal("an unlisted annotation is part of the digest")
+	}
+	if !conformance.ValidFlow(conformance.FlowTerraformPlan) || !conformance.ValidFlow("") || conformance.ValidFlow("nope") {
+		t.Fatal("ValidFlow")
+	}
+	// A provider that declares a flow the harness does not know fails control.info, not the run.
+	p := fakes.NewDeployment("fake-deploy", "1.0.0")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == conformance.PathInfo {
+			_ = json.NewEncoder(w).Encode(conformance.Info{Name: "fake-deploy", Version: "1", Roles: []string{"deployment"}, Flow: "nope"})
+			return
+		}
+		p.Handler().ServeHTTP(w, r)
+	}))
+	defer func() { p.Close(); srv.Close() }()
+	rep, err := conformance.Run(context.Background(), conformance.Options{Provider: srv.URL, Role: conformance.RoleDeployment,
+		Timeout: 5 * time.Second})
+	if c := rep.Get("control.info"); err != nil || rep.Pass || c == nil || c.Pass {
+		t.Fatalf("%+v %v", rep, err)
+	}
+}

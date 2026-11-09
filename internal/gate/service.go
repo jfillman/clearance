@@ -89,6 +89,11 @@ type Service struct {
 	OnOutcome func(changeID string, seq int64)
 	// Tokens issues the clearance token on deploy.clear (C-1); nil: no tokens (a deployment without a signing key).
 	Tokens *Tokens
+	// ProviderOf is the registered provider (CLEARANCE_PROVIDERS) that a principal is, if it is one. The outcome of a
+	// terraform-plan change is written by the core on the caller's behalf (POST /v1/clearances/{id}/outcome), and
+	// names that provider, so a Terraform CI's records say terraform-ci and not clearance. nil, or a principal that is
+	// no provider: the core's own name.
+	ProviderOf func(principal string) (evidence.Provider, bool)
 	// Evidence is the evidence ledger's outage knob (C-3): while it says to hold, a tier 3 change whose
 	// approvals are all in waits instead of clearing (SettleEvidence clears it when the ledger recovers).
 	// nil: no ledger, nothing waits.

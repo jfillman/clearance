@@ -450,3 +450,33 @@ func TestAnUnprotectedPlanKeepsItsTwentyFourHours(t *testing.T) {
 		t.Fatalf("an unprotected gitops change holds %s", got)
 	}
 }
+
+// A plan's outcome is written by the core for the caller: it names the provider the caller is registered as
+// (terraform-ci), and a mismatch exception, the core's own finding, keeps the core's name.
+func TestAnOutcomeNamesTheCallersProvider(t *testing.T) {
+	f, _ := withTokens(t)
+	f.svc.ProviderOf = func(p string) (evidence.Provider, bool) {
+		if p == principals["ci"].ID {
+			return evidence.Provider{Name: "terraform-ci", Version: "9.9.9"}, true
+		}
+		return evidence.Provider{}, false
+	}
+	a := f.register(t, "ci", tfChange(tagOnly, nil))
+	if _, err := f.svc.Outcome(f.ctx, principals["ci"], a.ID, applied("a"+planDigest[1:])); err != nil { // not the cleared plan
+		t.Fatal(err)
+	}
+	named := func(tool string) string {
+		recs := f.records(t, tool)
+		if len(recs) != 1 {
+			t.Fatalf("%d %s records", len(recs), tool)
+		}
+		p, _ := recs[0]["provider"].(map[string]any)
+		return fmt.Sprint(p["name"], "/", p["version"])
+	}
+	if got := named("deploy.outcome"); got != "terraform-ci/9.9.9" {
+		t.Fatal("outcome provider", got)
+	}
+	if got := named(gate.KindException); strings.HasPrefix(got, "terraform-ci") {
+		t.Fatal("the core's own exception names the caller:", got)
+	}
+}

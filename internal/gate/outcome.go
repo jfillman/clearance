@@ -287,10 +287,19 @@ func (s *Service) Outcome(ctx context.Context, p authn.Principal, changeID strin
 			outcome["error"] = o.err
 		}
 		dest := destinationOf(c)
+		// The outcome is the caller's: it names the provider the caller is registered as. The exception below is the
+		// core's own finding and keeps the core's name.
+		coreWriter := w.wr
+		if s.ProviderOf != nil {
+			if prov, ok := s.ProviderOf(p.ID); ok {
+				w.wr.Provider = prov
+			}
+		}
 		rec := w.recordVerified([]string{"matched"}, func() store.Record {
 			return w.record(p.ID, nil, "deploy.outcome", c, "", nil, outcomeLine(o, matched, cleared), args,
 				map[string]any{"decision": nil, "matched": matched, "outcome": outcome, "destination": dest})
 		})
+		w.wr = coreWriter
 		seq, _ := SeqInt(recordSeq(rec))
 		var exc *int64
 		if !matched {
