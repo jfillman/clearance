@@ -194,7 +194,7 @@ product-neutral default (`internal/vocab`).
 | `CLEARANCE_ATTEST_FULCIO_URL` | Change attestations, **keyless** backend: the Fulcio base URL (https; http only for loopback or an in-cluster Service name, `<svc>.<ns>.svc`). Needs `CLEARANCE_ATTEST_REKOR_URL`. | unset |
 | `CLEARANCE_ATTEST_REKOR_URL` | The Rekor v1 log: required with Fulcio, optional with a static key (unlogged without). | unset |
 | `CLEARANCE_ATTEST_OIDC_TOKEN_FILE` | Keyless: the core's OIDC identity token, re-read on every signing and never cached. | `/var/run/clearance/attest-oidc-token` |
-| `CLEARANCE_AI_COAUTHORS` | Comma-separated matchers, `<email>` or `Name <email>` (case-insensitive), on the `Co-Authored-By`, `Assisted-by` and `Generated-by` trailers an AI coding agent outside Clearance leaves. A PR with no record and no other agent signal whose head commit carries one is `unattested`, a warning that never fails a check ([provenance-app.md](provenance-app.md#ai-co-author-trailers-agent-unattested-built)). `none` turns it off. | Claude Code, OpenAI Codex, Copilot CLI, Cursor, aider (by email) |
+| `CLEARANCE_AI_COAUTHORS` | Comma-separated matchers, `<email>` or `Name <email>` (case-insensitive), on the `Co-Authored-By`, `Assisted-by` and `Generated-by` trailers an AI coding agent outside Clearance leaves. A PR with no record and no other agent signal where any of its commits carries one is `unattested`, a warning that never fails a check ([provenance-app.md](provenance-app.md#ai-co-author-trailers-agent-unattested-built)). `none` turns it off. | Claude Code, OpenAI Codex, Copilot CLI, Cursor, aider (by email) |
 
 The source of truth is the package documentation of `internal/core`, `internal/bundles`, `internal/vocab` and
 `authn.EnvVars`. `clearance register`
