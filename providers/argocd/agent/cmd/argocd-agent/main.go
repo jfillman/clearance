@@ -60,6 +60,9 @@ func run() error {
 		grantEvry = fs.Duration("grant-interval", 30*time.Second, "grant sync interval")
 		scanEvry  = fs.Duration("scan-interval", time.Minute, "exception scan interval")
 		repost    = fs.Bool("repost-on-start", false, "post each Application's last operation again on start (the core de-duplicates only on source.event_id, which the agent does not send yet)")
+		waitImage = fs.String("wait-image", env("CLEARANCE_WAIT_IMAGE", ""), "the pinned image of the gate's PreSync wait Job, as the admission policy's exemption has it (empty: the Job is reported as out-of-band)")
+		waitURL   = fs.String("wait-url", env("CLEARANCE_WAIT_URL", ""), "the core URL the wait Job polls (default --core-url)")
+		waitAlias = fs.String("wait-host-alias", env("CLEARANCE_WAIT_HOST_ALIAS", ""), "the wait Job's host alias, ip=host[,host] (empty: none)")
 		showVer   = fs.Bool("version", false, "print the version")
 	)
 	if err := fs.Parse(os.Args[1:]); err != nil {
@@ -73,6 +76,9 @@ func run() error {
 		if v == "" {
 			return fmt.Errorf("--%s is required", k)
 		}
+	}
+	if *waitURL == "" {
+		*waitURL = *coreURL
 	}
 	grants := agent.DefaultGrantAPI
 	if g, v, ok := strings.Cut(*grantGV, "/"); ok {
@@ -92,7 +98,7 @@ func run() error {
 	}
 	a, err := agent.New(agent.Config{Cluster: *cluster, Environment: *environ, Issuer: *issuer, Version: version,
 		GrantInterval: *grantEvry, ScanInterval: *scanEvry, ArgoNamespace: *argoNS, Projects: list(*projects),
-		StateNS: *stateNS, RepostOnStart: *repost},
+		StateNS: *stateNS, RepostOnStart: *repost, Wait: agent.WaitPin{Image: *waitImage, URL: *waitURL, HostAlias: *waitAlias}},
 		kube, &agent.HTTPFeeds{Base: *apiURL, Token: tok},
 		&agent.HTTPCore{Client: cc, Feeds: agent.HTTPFeeds{Base: *coreURL, Token: tok}}, nil,
 		slog.New(slog.NewJSONHandler(os.Stderr, nil)))

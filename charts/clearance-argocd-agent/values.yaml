@@ -38,6 +38,14 @@ protectedNamespaces: []
 # The ClearanceGrant CRD's group/version (G-ARGO-2).
 grantAPI: clearance.hangar.io/v1
 
+# The gate's own PreSync wait Job: the same three values the admission policy's exemption is rendered with, so the
+# exception scan recognises that Job and nothing that merely copies its name. image empty: the Job is reported as
+# out-of-band on every held release. url empty: coreURL. hostAlias is ip=host[,host], empty when the waiter has none.
+waitJob:
+  image: ""
+  url: ""
+  hostAlias: ""
+
 grantInterval: 30s
 scanInterval: 1m
 

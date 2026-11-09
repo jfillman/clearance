@@ -49,6 +49,7 @@ type Config struct {
 	StateName     string
 	Resources     []Resource // the kinds the exception scan reads
 	Ignore        []string   // Kind/name the scan skips (the objects every namespace gets)
+	Wait          WaitPin    // the gate's own PreSync wait Job, which the scan does not report
 	// PolicyMarkers are the texts that mark an Argo CD sync message as the admission policy's refusal.
 	PolicyMarkers []string
 	// RepostOnStart posts each Application's last operation again on start. The core de-duplicates only records that

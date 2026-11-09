@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 )
 
@@ -37,4 +38,5 @@ type Kube interface {
 type ObjectDetail struct {
 	Object
 	LastApplied string
+	Spec        json.RawMessage // the live spec, read for Jobs only (isWaitJob)
 }

@@ -75,7 +75,7 @@ func (a *Agent) ScanExceptions(ctx context.Context) error {
 				continue
 			}
 			for _, o := range objs {
-				if o.Owned || slices.Contains(a.cfg.Ignore, o.Kind+"/"+o.Name) {
+				if o.Owned || slices.Contains(a.cfg.Ignore, o.Kind+"/"+o.Name) || isWaitJob(o, a.cfg.Wait) {
 					continue
 				}
 				if f := judge(o, idx); f != nil {

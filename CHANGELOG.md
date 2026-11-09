@@ -9,6 +9,13 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Fixed
+- **The Argo gate's exception scan no longer reports its own PreSync wait Job as out-of-band.** The Job carries no stamp
+  and no grant lists it, so every release held for people added a false `deploy.exception`. The agent now recognises a
+  Job that is exactly what the plugin injects, using the same field allowlist as the admission policy's exemption and
+  the pinned image, core URL and host alias (`waitJob` in the `clearance-argocd-agent` chart). A Job that only copies
+  the name or label is still reported. With `waitJob.image` empty, behaviour is unchanged.
+
 ## [0.36.0] - 2026-11-09
 
 ### Added

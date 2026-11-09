@@ -410,6 +410,7 @@ func (a *API) ListObjects(ctx context.Context, res Resource, ns string) ([]Objec
 					Time    string `json:"time"`
 				} `json:"managedFields"`
 			} `json:"metadata"`
+			Spec json.RawMessage `json:"spec"`
 		} `json:"items"`
 		Kind string `json:"kind"`
 	}
@@ -446,7 +447,11 @@ func (a *API) ListObjects(ctx context.Context, res Resource, ns string) ([]Objec
 				newest, o.Manager = f.Time, f.Manager
 			}
 		}
-		out = append(out, ObjectDetail{Object: o, LastApplied: m.Annotations["kubectl.kubernetes.io/last-applied-configuration"]})
+		d := ObjectDetail{Object: o, LastApplied: m.Annotations["kubectl.kubernetes.io/last-applied-configuration"]}
+		if o.Kind == "Job" {
+			d.Spec = it.Spec
+		}
+		out = append(out, d)
 	}
 	return out, nil
 }
