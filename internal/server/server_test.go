@@ -600,6 +600,13 @@ func TestReviewRoute(t *testing.T) {
 	f.do("POST", "/v1/definitions/review", "user:alice", bytes.Repeat([]byte("x"), 64<<10+1)).want(t, 413, "too large")
 }
 
+// G-TF-6: the run task route takes no bearer token (its HMAC signature is its authentication) and is off (404) until
+// an installation is configured; a configured one answers an unsigned request 401, never a bearer challenge.
+func TestRunTaskRouteIsOffUntilConfigured(t *testing.T) {
+	f := memFixture(t)
+	f.do("POST", "/v1/terraform/run-task", "", "{}").want(t, 404, "runs no HCP Terraform run task")
+}
+
 func TestWebhookIsAuthenticatedBySignatureOnly(t *testing.T) {
 	f := memFixture(t)
 	f.do("POST", "/v1/github/webhook", "", "{}").want(t, 404, "runs no GitHub App")

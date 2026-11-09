@@ -34,6 +34,9 @@
 //	                              DG-UNBOUND (docs/gate.md, The manifest-tree digest)
 //	CLEARANCE_GITHUB_APP_ID, CLEARANCE_GITHUB_APP_KEY_FILE, CLEARANCE_GITHUB_APP_WEBHOOK_SECRET_FILE
 //	                              the Clearance GitHub App: all three or none
+//	CLEARANCE_HCP_RUN_TASK_CONFIG_FILE
+//	                              the HCP Terraform run task (G-TF-6): a JSON file of installations {organization, host,
+//	                              hmacKeyFile, environment} (docs/terraform-gate.md). Unset: the route answers 404
 //	CLEARANCE_GITHUB_APP_COMMENTS off | agent-failures
 //	CLEARANCE_GITHUB_API          the GitHub API base (default https://api.github.com)
 //	BACKSTAGE_URL                 the portal's Backstage (http/https): the gate's group directory (a person's memberOf
@@ -85,6 +88,7 @@ import (
 	"github.com/jfillman/clearance/internal/evidence"
 	"github.com/jfillman/clearance/internal/gate"
 	"github.com/jfillman/clearance/internal/githubapp"
+	"github.com/jfillman/clearance/internal/hcprun"
 	"github.com/jfillman/clearance/internal/profile"
 	"github.com/jfillman/clearance/internal/provenance"
 	"github.com/jfillman/clearance/internal/review"
@@ -116,6 +120,7 @@ type Config struct {
 	AgentsDir   string
 	ExpireEvery time.Duration
 	GitHubApp   *githubapp.Config // nil: no App
+	HCPRunTask  *hcprun.Config    // nil: no HCP Terraform run task
 	Auth        authn.Authenticator
 	// MaxClockSkew is server.Options.MaxClockSkew: 0 the default, negative off (CheckMaxClockSkew: --memory only).
 	MaxClockSkew time.Duration
@@ -230,6 +235,9 @@ func FromEnv(getenv func(string) string) (Config, error) {
 			return cfg, err
 		}
 	}
+	if cfg.HCPRunTask, err = hcprun.ReadConfig(get("CLEARANCE_HCP_RUN_TASK_CONFIG_FILE", "")); err != nil {
+		return cfg, err
+	}
 	cfg.BackstageURL = get("BACKSTAGE_URL", "")
 	cfg.BackstageTokenFile = get("BACKSTAGE_TOKEN_FILE", backstage.DefaultTokenFile)
 	if cfg.BackstageURL != "" {
@@ -340,6 +348,8 @@ type Core struct {
 	Gate   *gate.Service
 	Server *server.Server
 	App    *githubapp.App
+	// RunTask is the HCP Terraform run task adapter (nil: off).
+	RunTask *hcprun.Service
 	// Attestor signs change attestations (nil: attestations are off).
 	Attestor *attest.Attestor
 	clock    func() time.Time
@@ -471,6 +481,9 @@ func (c *Core) wire(ctx context.Context) error {
 		c.App = app
 		g.OnAnswered = append(g.OnAnswered, app.Poke)
 	}
+	if cfg.HCPRunTask != nil {
+		c.RunTask = &hcprun.Service{Config: cfg.HCPRunTask, Gate: g, Log: c.log}
+	}
 	status := server.Attestation{Detail: attest.Off}
 	var onOutcome func(store.Record)
 	switch {
@@ -486,7 +499,7 @@ func (c *Core) wire(ctx context.Context) error {
 		Providers: cfg.Providers, Version: cfg.Version, Clock: c.clock, Log: c.log, MaxClockSkew: cfg.MaxClockSkew,
 		DevRecords:      cfg.DevRecords,
 		Definitions:     &definitions.Service{Registry: reg, Store: c.Store, Clock: c.clock, Writer: writer},
-		ParseDefinition: parse, Gate: g, Review: rev, Provenance: prov, App: c.App})
+		ParseDefinition: parse, Gate: g, Review: rev, Provenance: prov, App: c.App, RunTask: c.RunTask})
 	if err != nil {
 		return err
 	}
@@ -521,6 +534,11 @@ func (c *Core) Loops(ctx context.Context) {
 	done := make(chan struct{})
 	if c.App != nil {
 		go func() { c.App.Run(ctx); done <- struct{}{} }()
+	}
+	if c.RunTask != nil {
+		runTasks := make(chan struct{})
+		go func() { c.RunTask.Run(ctx); close(runTasks) }()
+		defer func() { <-runTasks }()
 	}
 	if c.Attestor != nil {
 		attested := make(chan struct{})

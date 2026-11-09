@@ -180,6 +180,90 @@ detectors.json`; it is not written yet. Status: **Built**, tested against a fake
 CloudTrail answers (`go test ./providers/terraform/...`, including the SigV4 published test vector);
 **Unverified** against a real bucket and trail.
 
+## The HCP Terraform run task (G-TF-6, Built, not live-verified)
+
+Status: **Built** (`internal/hcprun`, `POST /v1/terraform/run-task`), tested against HashiCorp's published run task
+payload (a fake HCP Terraform serves the plan JSON and records the callbacks). **Unverified** against a real HCP
+Terraform organization: that waits for a design partner. Off unless `CLEARANCE_HCP_RUN_TASK_CONFIG_FILE` is set; until
+then the route answers 404.
+
+HCP Terraform (or Terraform Enterprise) POSTs a run task request to the route at the **post-plan** (or pre-apply) stage
+of a run. Clearance verifies the request, reads the plan JSON, computes and registers the terraform-plan subject
+([the subject](gate.md#the-terraform-plan-subject-g-tf-1)), and reports the result to HCP Terraform's
+`task_result_callback_url`: `running` at once, then `passed` when the change is cleared (policy or people) or `failed`
+when it is denied, expired or superseded. A mandatory run task then blocks the apply on `failed`. The route answers 200
+`{"result":"accepted"}` straight away and works in the background.
+
+```
+HCP Terraform --POST /v1/terraform/run-task (X-TFC-Task-Signature)--> Clearance
+Clearance     --GET plan_json_api_url (Bearer access_token)--------> HCP Terraform
+Clearance     --PATCH task_result_callback_url: running ------------> HCP Terraform
+              ... registers the plan; holds for people if tier 2 or 3 ...
+Clearance     --PATCH task_result_callback_url: passed | failed ----> HCP Terraform
+```
+
+**Config** (`CLEARANCE_HCP_RUN_TASK_CONFIG_FILE`, JSON), one installation per HCP Terraform organization:
+
+```json
+{"installations": [{"organization": "acme", "host": "app.terraform.io", "hmacKeyFile": "/etc/clearance/hcp/acme-key",
+                    "environment": "prod"}]}
+```
+
+`hmacKeyFile` holds the HMAC key set on the run task in HCP Terraform; it is read on every request and never kept (rotate
+it by replacing the file). `environment` is the environment name the organization's plans register under (the gate's
+own list of protected environments decides whether it is protected). `host` defaults to `app.terraform.io`; a Terraform
+Enterprise host is allowed. `redirectHosts` (default `archivist.terraform.io` for the HCP host) are the hosts the plan
+download may be redirected to. The adapter registers as the principal `hcp-run-task:<organization>`, so
+`CLEARANCE_VERIFIERS` must include it (for example `hcp-run-task:*`), exactly as for any registrant.
+
+In the chart: `hcpRunTask.enabled`, `existingSecret` (one key per organization) and `installations` (`organization`, `environment`, `secretKey`, optional `host`, `redirectHosts`); the chart writes the config file and mounts the keys at mode 0400. It does not open egress to the HCP Terraform host (`networkPolicy.extraEgress`) or expose the route (`httproute` matches): both are yours to set.
+
+**What is registered.** The workspace is `{backend: remote, key: <workspace id>, name: <workspace name>}`; `app` is the
+workspace name made a DNS label; `repo` is the VCS repository (else `<organization>/<workspace name>`); `head` is the
+commit (else a digest of the run id, for a CLI-driven run); `pr` is the pull request when there is one. The plan digest
+is the sha256 of the plan JSON as HCP Terraform serves it (HCP Terraform does not hand out the binary plan), and the
+redacted-JSON and variable-set digests are computed as in `clearance hold`. The plan JSON is never stored and its values
+never leave the process; the registration carries digests, addresses, types, actions and changed attribute pointers.
+The same plan registered again (an HCP Terraform retry) is the same change; a new run is a new plan.
+
+**Stages.** `post_plan` and `pre_apply` are judged. `pre_plan` has no plan: the task is answered `failed` with a message
+to attach it at post-plan. `post_apply` is answered `passed` (nothing left to gate; recording the apply's outcome for
+HCP Terraform is not built). A request with stage `test` (an unconfirmed guess at HCP Terraform's URL check when a run
+task is created) is answered 200 without calling anything.
+
+**Waiting for people.** A tier 2 or 3 plan is held. The run task reports `running` (with who must clear it) and sends
+a progress update every 4 minutes, because HCP Terraform fails a task with no progress for 10 minutes. HCP Terraform
+also limits a task to 60 minutes, so after 55 minutes still holding the task is answered `failed` ("start a new run once
+it is decided"); the change itself keeps its own 24 hour life.
+
+### Guardrails
+
+- **Signature.** `X-TFC-Task-Signature` is HMAC-SHA512 of the body, hex; it is compared in constant time
+  (`hmac.Equal`). A missing or wrong signature, an unknown organization and a malformed body all answer 401, before the
+  payload is used or anything is called. The key is per organization; an unreadable key is 503 (fail closed).
+- **Body size.** The body is capped at 64 KiB before it is read (413).
+- **No SSRF.** `plan_json_api_url` and `task_result_callback_url` must be `https` on the installation's configured host
+  (exact match, no credentials, no port other than 443, no dot segments, under `/api/v2/`) or the request is refused
+  (400) before anything is called. Redirects are followed at most 3 times, only to the configured host or its
+  `redirectHosts`, and the access token is sent to the configured host only.
+- **The access token** lives in memory for one run, goes in one `Authorization` header to the HCP Terraform host, and
+  is never logged, stored or put in an error message (tests assert it appears in no log line and no registration).
+  Logs carry the organization, run id, workspace, stage and outcome only.
+- **Load.** At most 64 runs are worked at once (503, which HCP Terraform retries); a retried request for a task result
+  already being worked is not run twice.
+
+### Not built (HCP Terraform)
+
+- **Targeted plans are not detected.** The run task payload and the plan JSON do not say a plan was made with
+  `-target`, so `targeted` is always false (the plain-CI `--targeted` flag has no HCP Terraform equivalent). Do not
+  rely on this adapter alone for a workspace that allows targeted runs.
+- No `checks` are sent, so a plan that policy would clear at tier 1 only on green checks is held at tier 2 for people.
+- No structured `outcomes` in the callback and no link back to Clearance (only `status` and `message`).
+- No outcome or exception recording for HCP Terraform applies (G-TF-5's detector reads S3 state, not HCP Terraform).
+- Per-workspace environment mapping: one `environment` per organization.
+- Not built, deferred until a design partner asks: **Atlantis** (its `pre_workflow_hooks` / custom workflow could call
+  `clearance hold`, which already works in any CI) and **Spacelift** (a push or approval policy that calls the gate).
+
 ## Not built
 
 The plan's `targeted` and the state's backend are flags, not read from the plan; the CLI does not verify the clearance

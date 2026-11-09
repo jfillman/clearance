@@ -95,7 +95,7 @@ func TestRoutePatternsAndCaps(t *testing.T) {
 		seen[rt.Pattern()] = true
 	}
 	for path, want := range map[string]int64{"/access/v1/evaluation": MaxEvaluationBody, "/v1/decisions/7/outcome": MaxOutcomeBody,
-		"/v1/clearances/ch-1/deny": 64 << 10, "/v1/github/webhook": 25 << 20, "/v1/decisions//outcome": DefaultMaxBody} {
+		"/v1/clearances/ch-1/deny": 64 << 10, "/v1/github/webhook": 25 << 20, "/v1/terraform/run-task": 64 << 10, "/v1/decisions//outcome": DefaultMaxBody} {
 		if got, _ := capFor(httptest.NewRequest("POST", path, nil)); got != want {
 			t.Errorf("%s: cap %d, want %d", path, got, want)
 		}

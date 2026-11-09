@@ -9,6 +9,16 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Added
+- **The HCP Terraform run task** (G-TF-6; `internal/hcprun`, `POST /v1/terraform/run-task`;
+  [docs/terraform-gate.md](docs/terraform-gate.md#the-hcp-terraform-run-task-g-tf-6-built-not-live-verified)). Verifies
+  HCP Terraform's `X-TFC-Task-Signature` (HMAC-SHA512, constant time, per-organization key from a file), reads the plan
+  JSON with the run's access token, registers the terraform-plan subject, and reports `running`, then `passed` or
+  `failed` to the run task callback. Off unless `CLEARANCE_HCP_RUN_TASK_CONFIG_FILE` is set. The plan and callback URLs
+  are restricted to the configured HCP Terraform host. Contract tests use HashiCorp's published payload; not
+  verified against a real organization. Targeted plans are not detectable from the payload. Atlantis and Spacelift
+  adapters are deferred.
+
 ## [0.35.0] - 2026-11-09
 
 ### Changed
