@@ -9,7 +9,8 @@
 #   clearance-protected-writes  Argo CD's application-controller (and nobody else) may create or update an object in a
 #                               namespace labelled clearance.hangar.io/protected=true only if the object carries
 #                               clearance.hangar.io/rendered and the namespace's one active, valid ClearanceGrant
-#                               lists the object (<group>/<kind>/<name>) at exactly that hash.
+#                               lists the object (<group>/<kind>/<name>) at exactly that hash, in its own objects or in one entry of its `carried`
+#                               trees (the other live cleared trees; see docs/gate.md).
 #   clearance-grant-writer      only the grant-sync agent's service account writes a ClearanceGrant or its status.
 #
 # Every matchConditions expression is has()-guarded: a CEL error in a match condition is a cluster-wide refusal under
@@ -164,10 +165,17 @@ spec:
       messageExpression: "'no clearance.hangar.io/rendered annotation on ' + variables.key + ': it did not come from the Clearance plugin'"
     - expression: "variables.exempt || (has(params.status) && has(params.status.valid) && params.status.valid)"
       messageExpression: "'grant ' + params.metadata.name + ' is not valid (expired or unverified)'"
+    # The active grant's own objects, or an entry of its carried trees (the other live cleared trees of the namespace:
+    # the one still running, or cleared and not merged yet). Both bind the object to a hash.
     - expression: >-
-        variables.exempt || (has(params.spec.objects) && variables.key in params.spec.objects &&
-        has(params.spec.objects[variables.key].rendered) &&
-        params.spec.objects[variables.key].rendered == variables.rendered)
+        variables.exempt ||
+        (has(params.spec.objects) && variables.key in params.spec.objects &&
+         has(params.spec.objects[variables.key].rendered) &&
+         params.spec.objects[variables.key].rendered == variables.rendered) ||
+        (has(params.spec.carried) &&
+         params.spec.carried.exists(c, has(c.objects) && variables.key in c.objects &&
+                                    has(c.objects[variables.key].rendered) &&
+                                    c.objects[variables.key].rendered == variables.rendered))
       messageExpression: "'grant ' + params.metadata.name + ' does not list ' + variables.key + ' at ' + variables.rendered"
   auditAnnotations:
     - key: grant

@@ -359,6 +359,38 @@ def run(deny):
               sh(["patch", "configmap", "app-cm", "-n", "prot", "--type=merge", "-p", '{"data":{"k":"v4"}}'], who=ARGO), "is not valid")
         sh(["patch", "clearancegrant", "g1", "-n", "prot", "--subresource=status", "--type=merge", "-p", '{"status":{"valid":true}}'], who=AGENT)
 
+        print(f"-- the running tree beside the active grant: carried trees ({mode})")
+        # g1 is the active grant (the newest cleared change, not merged yet): its own objects are the NEW tree, at H1.
+        # The tree still running is stamped H3 (app-cm) and is carried by g1 from its own, still live, clearance.
+        def stamp(h):
+            return sh(["patch", "configmap", "app-cm", "-n", "prot", "--type=merge", "-p",
+                       '{"metadata":{"annotations":{"clearance.hangar.io/rendered":"' + h + '"}}}'], who=ARGO)
+        def carry(doc):
+            return sh(["patch", "clearancegrant", "g1", "-n", "prot", "--type=merge", "-p", json.dumps({"spec": {"carried": doc}})], who=AGENT)
+        carried = [{"change": "ch-old", "tree": "e" * 64, "expiresAt": "2099-01-01T00:00:00Z",
+                    "objects": {"/ConfigMap/app-cm": {"rendered": H3}, "/ConfigMap/old-only": {"rendered": H3}}}]
+        check("refuse: the running tree's hash while no grant carries it (the gap this closes)", False, stamp(H3), "at " + H3)
+        check("the agent writes a carried tree onto the active grant", True, carry(carried))
+        check("admit: self-heal re-applies the running tree (its hash, carried) while a newer change is active", True, stamp(H3))
+        check("admit: the new tree syncs (the active grant's own hash)", True, stamp(H1))
+        check("admit: a rollback to the live cleared tree (carried hash again)", True, stamp(H3))
+        check("admit: a carried object the active grant does not list at all", True, sh(["create", "-f", "-"], cm("old-only", H3), ARGO))
+        check("refuse: a hash neither the grant nor a carried tree lists", False, stamp(H2), "at " + H2)
+        check("refuse: a carried hash does not admit another object (keyed per object)", False,
+              sh(["create", "-f", "-"], cm("old-other", H3), ARGO), "does not list /ConfigMap/old-other")
+        check("refuse: the carried object at the active grant's hash for ANOTHER object (no cross-key)", False,
+              sh(["create", "-f", "-"], cm("old-only-2", H1), ARGO), "does not list")
+        check("the agent drops the carried tree when its clearance expires", True, carry(None))
+        check("refuse: the running tree once its clearance is gone (expired)", False, stamp(H3), "at " + H3)
+        check("admit: the new tree still syncs after the carried tree is gone", True, stamp(H1))
+        check("an empty carried list is accepted", True, carry([]))
+        if deny:  # the CRD's schema is the same in both modes
+            check("the CRD refuses a carried entry with no hash", False,
+                  carry([{"change": "ch-x", "expiresAt": "2099-01-01T00:00:00Z", "objects": {"/ConfigMap/x": {"changed": True}}}]), "rendered")
+        sh(["delete", "configmap", "old-only", "-n", "prot", "--ignore-not-found"])
+        sh(["delete", "configmap", "old-other", "-n", "prot", "--ignore-not-found"])
+        sh(["delete", "configmap", "old-only-2", "-n", "prot", "--ignore-not-found"])
+
         print(f"-- one active grant per namespace; no active grant ({mode})")
         sh(["create", "-f", "-"], grant("g2", {"/ConfigMap/other": H1}), AGENT)
         sh(["patch", "clearancegrant", "g2", "-n", "prot", "--subresource=status", "--type=merge", "-p", '{"status":{"valid":true}}'], who=AGENT)

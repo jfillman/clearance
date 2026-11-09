@@ -73,6 +73,9 @@ func TestKubeAPI(t *testing.T) {
 	if !strings.Contains(bodies[len(bodies)-1], `"/ConfigMap/gone":null`) || strings.Contains(bodies[len(bodies)-1], `"apps/Deployment/web":null`) {
 		t.Errorf("an object the update drops is removed with null, one it keeps is not: %s", bodies[len(bodies)-1])
 	}
+	if !strings.Contains(bodies[len(bodies)-1], `"carried":null`) {
+		t.Errorf("a grant with no carried trees clears the list a merge patch would otherwise keep: %s", bodies[len(bodies)-1])
+	}
 	if !strings.Contains(bodies[len(bodies)-1], `"clearance.hangar.io/active":null`) ||
 		!strings.HasPrefix(calls[len(calls)-1], "PATCH /apis/clearance.hangar.io/v1/namespaces/app-a/clearancegrants/"+ch2) {
 		t.Errorf("patch: %v %v", calls, bodies)
