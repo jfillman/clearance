@@ -230,6 +230,15 @@ prints (C-5): *cleared and verified*, *seen, not cleared* (by coverage state, wi
 when nothing was seen uncleared and every feed was healthy for the whole window; a window with no health record, or
 whose last record has gone stale, is `blind` and never clean ([clearance-api.md](clearance-api.md#observations-and-the-coverage-statement-o-1)).
 
+## The operational class (revision 5: I-1)
+
+Two optional Decision-group fields, additive (`x-clearance-revision` is 5; the `schema` string is unchanged): `operational_class`
+(a non-empty array of `availability`, `privilege`, `data-integrity`, `security-boundary`, `credential-exposure`, or
+exactly `["none"]`) and `class_mapping` (the mapping version, `opclass/1`). They sit beside `tier` and `policy`, are
+verified, and are on every `deploy.*` record about a registered change. The tier is the customer's policy; the class is
+the only axis a cross-tenant comparison may use. The mapping, the `none` result and what is not classified are in
+[gate.md](gate.md#the-operational-class-i-1-built).
+
 ## Versioning rule
 
 - The `schema` string names the record shape a writer emitted. It changes only for a breaking change: a field
@@ -237,7 +246,7 @@ whose last record has gone stale, is `blind` and never clean ([clearance-api.md]
   required field, an enum value removed.
 - Additive changes inside v1 (a new optional field, a new optional property inside an optional object, a new enum
   value for a reserved field) bump `x-clearance-revision` in the schema file and are listed in the changelog. No
-  stored record changes. v1.1 (revision 4) is such a change: the `schema` string of a record that uses what it adds
+  stored record changes. The operational class (revision 5) is such a change too. v1.1 (revision 4) is such a change: the `schema` string of a record that uses what it adds
   says `clearance.evidence/v1.1` (a reader that accepts v1 records and ignores unknown fields reads the rest of a v1.1
   record), and everything else is still written as v1.
 - Rows are never migrated. A row stays exactly as written, because its bytes are hashed; readers project old

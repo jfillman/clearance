@@ -1244,6 +1244,48 @@ Kyverno CLI against the target cluster's policy bundle, exactly as the `policy-v
 Argo CD's config management plugin (G-ARGO) sends the same `admission` object from its own offline evaluation of the
 tree it rendered; `clearance register` sends none today (`not-evaluated`).
 
+## The operational class (I-1, Built)
+
+The tier is the customer's policy: a tenant can tighten it, so tier 2 in one tenant is not tier 2 in another. The
+**operational class** is what the change does, computed from the rendered diff or the plan with a fixed mapping. It is
+the only axis a cross-tenant comparison may use. The packet's Changes section prints both (C-5, later); the field is
+in the record now.
+
+| Class | What it means | Examples |
+|---|---|---|
+| `availability` | can take a service down or change its capacity | a Deployment image bump, a Service, an HPA, `aws_instance`, `aws_lb` |
+| `privilege` | changes who may do what | Role, RoleBinding, ServiceAccount, `aws_iam_*`, an agent definition's authority |
+| `data-integrity` | can lose or corrupt stored data | PersistentVolumeClaim, StatefulSet, `aws_db_*`, `aws_s3_bucket` |
+| `security-boundary` | moves a network, admission or trust boundary | NetworkPolicy, Ingress, webhook configs, security groups |
+| `credential-exposure` | touches a secret or key | Secret, ExternalSecret, `aws_secretsmanager_*`, `aws_kms_*` |
+| `none` | nothing operational changed (see below) | release stamps only, a plan that changes nothing |
+
+A change carries one or more of the five, sorted, in `operational_class`; `class_mapping` is the mapping's version
+(`opclass/1`). Both are in the Decision group of every `deploy.*` record about a registered change (the request, clear,
+deny, expire, revoke, answer, outcome, exception and degraded records), verified (the core computes them from the diff
+it holds) and stored on the change, so a record says which mapping computed it.
+
+**The mapping is data**: `internal/gate/opclass.json`, embedded, versioned. It holds the Kubernetes kinds, field
+pointers (`securityContext`, `secretKeyRef`, `volumeClaimTemplates`, ...), path globs and Terraform resource-type
+globs, each with its classes. Changing it bumps `version`; the tier rules (classify.go, terraform.go) are untouched.
+A changed or added or removed object of a kind the mapping does not name is `availability` (the fallback): a
+change to a running thing is never classless. A field rule adds a class to the kind's (a Deployment whose
+`envFrom` changed is `availability` and `credential-exposure`). A Terraform resource of an unmapped type that
+changes is also `availability`.
+
+**A change with no operational effect is `["none"]`, never empty**, and `none` never appears beside another class. That
+covers: a change of only release stamps or other metadata fields (the `release-stamp` and `metadata-only` reasons), a
+manifest change with no object changed (non-runtime paths only), a plan with no resource change, a tag-only or
+description-only update of a type that is unmapped or only an availability concern (a tag on an IAM role or a database keeps
+its class: a tag can drive access), and an agent definition whose reasons carry no change in
+authority (provenance notes only). An agent definition that changes authority is `privilege`. `none` is a class a
+reader can aggregate on; an empty list would read as "not classified".
+
+**Not classified**: a deployment request with no change on record (`DG-UNREGISTERED`) has no diff, so its record
+carries neither field. A change registered before I-1 has none stored; its records compute the classes from what the
+change stores, under the baseline, so they are still present. The classes never move the tier, the requirement or any
+verdict.
+
 ## The manifest-tree digest (Built)
 
 A change binds to what will be applied through one digest, the **manifest-tree digest** of the rendered "after"

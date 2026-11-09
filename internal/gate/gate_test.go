@@ -827,7 +827,7 @@ func TestTheViewHasPythonsKeysInOrder(t *testing.T) {
 	keys := []string{"id", "app", "env", "cluster", "repo", "pr", "head", "base", "proposer", "proposer_kind", "agent", "task_id", "owner",
 		"protected", "tree_digest", "subject", "paths", "lines_changed", "objects", "checks", "policy_version", "repo_policy_digest", "policy_ref", "tier",
 		"reasons", "requirement", "state", "created_at", "updated_at", "expires_at", "registered_by", "approvals", "cleared_by",
-		"decided_at", "deny_reason", "denied_by", "superseded_by", "deployments", "target", "objects_count", "paths_count", "outage"}
+		"decided_at", "deny_reason", "denied_by", "superseded_by", "deployments", "target", "objects_count", "paths_count", "outage", "operational_class", "class_mapping"}
 	dec := json.NewDecoder(strings.NewReader(string(raw)))
 	_, _ = dec.Token()
 	var got []string
@@ -889,6 +889,9 @@ func TestTheGateTiersADefinitionRelease(t *testing.T) {
 	if !reflect.DeepEqual(out.Reasons, []gate.Reason{{"agent gate-triage: profile.limits.toolCalls", "60 -> 10", 1}}) {
 		t.Fatal(out.Reasons)
 	}
+	if !reflect.DeepEqual(out.OperationalClasses, []string{"privilege"}) {
+		t.Fatal(out.OperationalClasses)
+	}
 	wider := defDoc(t)
 	wider["profile"].(map[string]any)["repos"] = map[string]any{"allow": strs([]string{"jfillman/gate-api", "jfillman/baggage-api"})}
 	out = f.register(t, "ci", release(defDoc(t), wider, map[string]any{"head": strings.Repeat("1", 40), "pr": 41}))
@@ -907,6 +910,10 @@ func TestTheGateTiersADefinitionRelease(t *testing.T) {
 	denies := f.records(t, "deploy.deny")
 	if denies[len(denies)-1]["rule"] != "DG-DEFINITION" {
 		t.Fatal(denies)
+	}
+	// A definition that never loaded changed no authority: none, not privilege (PR Lens, #90).
+	if !reflect.DeepEqual(out.OperationalClasses, []string{"none"}) {
+		t.Fatal(out.OperationalClasses)
 	}
 	out = f.register(t, "ci", release(nil, defDoc(t), map[string]any{"head": strings.Repeat("3", 40), "pr": 43}))
 	if out.Tier != 3 || out.State != "holding" {

@@ -2,8 +2,8 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://clearance.hangarplatform.dev/schemas/evidence/v1.json",
   "title": "clearance.evidence/v1",
-  "description": "One Clearance evidence record (docs/evidence.md). Flat: every field is a top-level key, grouped by x-clearance-group into Identities, Source, Target, Provenance, Decision, Outcome, Coverage, Assurance, Intent and Integrity, and tagged verified or claimed by the record's own lists. Fields not listed here are allowed and are claimed unless the writer verified them. The chain rule is the same for every version. Revision 4 (O-1) is clearance.evidence/v1.1: additive, so the same file describes v1 and v1.1. A record says v1.1 only when it is an observation kind (observation, assessment, resolution, observation.health, observation.audit-gap) or its coverage is break-glass or attempted-refused; every other record is still written as v1.",
-  "x-clearance-revision": 4,
+  "description": "One Clearance evidence record (docs/evidence.md). Flat: every field is a top-level key, grouped by x-clearance-group into Identities, Source, Target, Provenance, Decision, Outcome, Coverage, Assurance, Intent and Integrity, and tagged verified or claimed by the record's own lists. Fields not listed here are allowed and are claimed unless the writer verified them. The chain rule is the same for every version. Revision 4 (O-1) is clearance.evidence/v1.1: additive, so the same file describes v1 and v1.1. Revision 5 (I-1) adds operational_class and class_mapping to the Decision group, also additive. A record says v1.1 only when it is an observation kind (observation, assessment, resolution, observation.health, observation.audit-gap) or its coverage is break-glass or attempted-refused; every other record is still written as v1.",
+  "x-clearance-revision": 5,
   "x-clearance-groups": [
     "identities",
     "source",
@@ -372,6 +372,28 @@
       "type": "string",
       "x-clearance-group": "decision",
       "description": "Optional: the plain-language reason, apart from the result."
+    },
+    "operational_class": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "availability",
+          "privilege",
+          "data-integrity",
+          "security-boundary",
+          "credential-exposure",
+          "none"
+        ]
+      },
+      "x-clearance-group": "decision",
+      "description": "Optional (revision 5, I-1): what the change does, apart from its tier (the customer's policy): one or more of availability, privilege, data-integrity, security-boundary, credential-exposure, computed by the core from the rendered diff or the plan; or exactly [\"none\"] when nothing operational changed (release stamps or metadata only, non-runtime paths only, a plan with no change or only tags, an agent definition whose authority did not change). Never empty. The operational class is the only axis a cross-tenant comparison may use. On every deploy.* record about a registered change; absent on a record with no change on record (DG-UNREGISTERED). Verified."
+    },
+    "class_mapping": {
+      "type": "string",
+      "x-clearance-group": "decision",
+      "description": "Optional (revision 5, I-1): the version of the mapping that computed operational_class (opclass/1), shipped as data in the core. Verified."
     },
     "policy": {
       "type": "object",
