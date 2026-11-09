@@ -1,9 +1,7 @@
 package conformance
 
 import (
-	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -24,6 +22,7 @@ type Applied struct {
 type Target struct {
 	bearer string
 	now    func() time.Time
+	digest func(string) string
 
 	mu      sync.Mutex
 	applied []Applied
@@ -34,7 +33,13 @@ func NewTarget(bearer string, now func() time.Time) *Target {
 	if now == nil {
 		now = time.Now
 	}
-	return &Target{bearer: bearer, now: now}
+	return &Target{bearer: bearer, now: now, digest: sha256hex}
+}
+
+// WithDigest sets how the target digests what it received (default: the sha256 of the content).
+func (t *Target) WithDigest(f func(string) string) *Target {
+	t.digest = f
+	return t
 }
 
 // Handler serves POST /v1/apply.
@@ -59,9 +64,8 @@ func (t *Target) apply(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id is an apply id"})
 		return
 	}
-	sum := sha256.Sum256([]byte(body.Content))
 	t.mu.Lock()
-	a := Applied{Seq: int64(len(t.applied)), ID: body.ID, SHA256: hex.EncodeToString(sum[:]), At: t.now()}
+	a := Applied{Seq: int64(len(t.applied)), ID: body.ID, SHA256: t.digest(body.Content), At: t.now()}
 	t.applied = append(t.applied, a)
 	t.mu.Unlock()
 	writeJSON(w, http.StatusOK, TargetReceipt{Seq: a.Seq, SHA256: a.SHA256})

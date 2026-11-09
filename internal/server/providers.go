@@ -120,6 +120,15 @@ func (p *Provider) mayWrite(kind string) bool {
 	return slices.Contains(p.Kinds, kind)
 }
 
+// ProviderFor is the registered provider a principal is (the first whose globs match), as the evidence record
+// names it. The gate uses it for the records the core writes on a provider's behalf.
+func ProviderFor(ps []Provider, principal string) (evidence.Provider, bool) {
+	if p := providerFor(ps, principal); p != nil {
+		return p.provider(), true
+	}
+	return evidence.Provider{}, false
+}
+
 // providerFor is the first provider whose globs match principal, or nil.
 func providerFor(ps []Provider, principal string) *Provider {
 	for i := range ps {

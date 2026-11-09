@@ -43,6 +43,11 @@ func init() {
 		}})
 }
 
+// terraformProviderName is the provider name a deployment registers the Terraform gate's callers under
+// (CLEARANCE_PROVIDERS): the outcome `report` posts names it, with the registered version, as the record's provider
+// (docs/terraform-gate.md). The conformance test (conformance_terraform_test.go) runs the CLI as this provider.
+const terraformProviderName = "terraform-ci"
+
 // tfCommon are the flags every one of the three takes: where Clearance is and who the caller is.
 type tfCommon struct{ url, audience, tokenFile string }
 
