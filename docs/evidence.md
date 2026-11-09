@@ -226,7 +226,7 @@ observation, and the latest resolution, win when read.
 **Reading it.** clearance-api (auditors) lists observations and health by scope (`GET /v1/observations`,
 `GET /v1/observations/health`) and answers `GET /v1/coverage?scope=&from=&to=` with the three-part statement the packet
 prints (C-5): *cleared and verified*, *seen, not cleared* (by coverage state, with each one's resolution and cause) and
-*could not see* (the blind and degraded stretches and the audit gaps), with the health of each feed. `clean` is true only
+*could not see* (the blind and degraded stretches and the audit gaps), with the health of each feed (`clearance packet` builds the same statement per scope from the chain itself, [packet.md](packet.md)). `clean` is true only
 when nothing was seen uncleared and every feed was healthy for the whole window; a window with no health record, or
 whose last record has gone stale, is `blind` and never clean ([clearance-api.md](clearance-api.md#observations-and-the-coverage-statement-o-1)).
 

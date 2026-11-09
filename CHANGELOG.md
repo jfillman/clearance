@@ -10,6 +10,19 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 ## [Unreleased]
 
 ### Added
+- **C-5: the evidence packet, `clearance packet`.** A date range and scope to one canonical JSON document, CSV projections
+  and a PDF (standard library only), with the originals an offline verifier (C-4) needs: the stored records as hashed,
+  an inclusion proof for each under the witnessed checkpoint, the checkpoint with its countersignatures, the public keys
+  and the change attestation bundles; with the ledger off it says the records are not checkpointed. Sections: header,
+  coverage statement (every coverage and assurance state, degraded windows, per-scope observation health from the same
+  function `GET /v1/coverage` uses: "no exceptions detected" is printed only for a window whose feeds were all verified
+  healthy; a scope with no collector prints blind), control assertions (resting on verified fields only), changes (Argo
+  CD manifest trees and Terraform plans side by side, who reported each outcome), human-cleared changes
+  (`token.ApproversStatement`), AI identities, exceptions in seven classes, policy changes, verification and acceptances (the signed receipts from assurance recipients, P-1: none recorded yet, so the section says so).
+  `--view freeze` and `--view incident` are scoped views. Control mappings are data (`soc2/2017` CC8.1 and
+  `soc2/2027-draft` CC7.1 first), published as an OSCAL component definition, signed as a DSSE envelope on request
+  (`clearance packet oscal`). New in `internal/ledger`: `Tree` (inclusion proofs from the chain's record hashes alone,
+  tested equal to `Log.Prove`) and `ParseCheckpointNote`. See [docs/packet.md](docs/packet.md).
 - **I-1: the operational class.** Beside the tier (the customer's policy), every `deploy.*` record about a registered
   change carries `operational_class` (one or more of `availability`, `privilege`, `data-integrity`,
   `security-boundary`, `credential-exposure`, or `["none"]` when nothing operational changed, such as release stamps

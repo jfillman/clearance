@@ -892,7 +892,7 @@ records nothing. Windows are kept in `clearance_breakglass`.
 
 ### The packet's exceptions
 
-clearance-api `GET /v1/exceptions` is the list the packet's Exceptions section (C-4, C-5) reads: every
+clearance-api `GET /v1/exceptions` is the list the packet's Exceptions section (C-5, [packet.md](packet.md)) is built from (the job reads the chain itself and applies the same rules): every
 `deploy.exception`, `deploy.degraded`, `breakglass.open` and `breakglass.close`, and every record whose coverage is
 `coverage-unavailable` (the runtime's outage reads too), newest first, scoped by viewer like the evidence list, on the
 partial index `clearance_evidence_exceptions`. Filters: `tool`, `kind` (an exception kind), `app`, `since`, `until`,
@@ -918,7 +918,7 @@ partial index `clearance_evidence_exceptions`. Filters: `tool`, `kind` (an excep
   The change-bound outcome route that writes `digest-mismatch` itself is
   **Built** (G-TF-2, [below](#hold-release-and-outcome-for-a-plan-g-tf-2-built)): it writes the record in this
   shape and moves the change to `exception` with the same edge.
-- The packet itself (C-4, C-5) and its coverage statement (counts by coverage and degraded windows).
+- The packet itself (C-5) is **Built** ([packet.md](packet.md)), with its coverage statement (counts by coverage and assurance, degraded windows, per-scope observation health); its offline verifier (C-4) is not.
 - A report that arrives after its break-glass window closed is not tagged with it.
 
 ## The signed grant feed (C-10, Built)
