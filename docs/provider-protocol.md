@@ -7,7 +7,8 @@ a provider implements, written from the routes the Go core serves today (`intern
 
 Status: **Built** (R-1f) for everything the core serves today: the two roles, the conformance control interface,
 `clearance conformance`, and the reference fakes; the core's read of a change and the signed clearance token are
-**Built** (C-1). The wait route (C-10) and the change-bound outcome route for a terraform-plan change (G-TF-2)
+**Built** (C-1). The Terraform gate (G-TF-7) and the Argo CD gate's plugin and agent (G-ARGO-9) pass the suite in CI,
+through the two further flows described [below](#flows-a-deployment-provider-can-declare). The wait route (C-10) and the change-bound outcome route for a terraform-plan change (G-TF-2)
 are **Built**; the section [Not served yet](#not-served-yet) lists what still is not.
 
 ## What you get
@@ -37,8 +38,9 @@ are **Built**; the section [Not served yet](#not-served-yet) lists what still is
 | Provider | Role | Status |
 | --- | --- | --- |
 | Autopilot gateway (`autopilot-gateway`) | runtime | Built in Python; it calls the Go core from R-3b (autopilot#71) and is tested then, and again as the Go port (A-9) |
-| Argo CD gate: CMP, grant-sync agent, PreSync wait (G-ARGO-3, -4, -5) | deployment | The agent (G-ARGO-3) **Built**, [gate.md](gate.md#the-argo-cd-agent-g-argo-3-built); the CMP and the PreSync wait Proposal; shapes chosen in [gate.md, phase 2](gate.md#phase-2-design-pass-g-argo-1-2026-11-03) (CMP principal `hangar-prod/argocd-apps/argocd-apps-repo-server`, a verifier; the agent its own); G-ARGO-9 requires conformance |
-| Terraform gate: `clearance hold`, `release`, `report` (G-TF-3) | deployment | Proposal |
+| Argo CD gate: the plugin (CMP, G-ARGO-4) and the agent (G-ARGO-3) | deployment | **Built**, and **passes the suite** (G-ARGO-9: `TestArgoConformance`, flow `pushed-tree`, provider `argocd-agent`): [gate.md](gate.md#the-argo-cd-agent-g-argo-3-built), [gate.md](gate.md#the-argo-cd-plugin-and-the-presync-wait-g-argo-4-and-g-argo-5-built). The plugin registers and holds; the agent writes the `deploy.outcome`. Live on hangar-prod in **Warn**, not Deny (owner, 2026-11-09) |
+| Argo CD PreSync wait (`clearance-wait`, G-ARGO-5) | not a provider | **Built**; it is the hook that makes a held sync readable, not a control, and writes no record. The suite exercises the hold through the plugin's injected Job, not the Job's container |
+| Terraform gate: `clearance hold`, `release`, `report` (G-TF-3) | deployment | **Built**, and **passes the suite** (G-TF-7: `TestTerraformConformance`, flow `terraform-plan`, provider `terraform-ci`): [terraform-gate.md](terraform-gate.md#provider-identity-and-conformance-g-tf-7) |
 | Clearance GitHub App, deployment protection rule | deployment | Built inside the core (`internal/githubapp`); it answers GitHub's callback rather than applying, so it is not driven by this suite |
 | `clearance register` (a workflow registering its change) | deployment, register step only | Built (`cmd/clearance/register.go`) |
 
@@ -258,7 +260,7 @@ Routes, on the control address:
 
 | Route | Body | Answer |
 | --- | --- | --- |
-| `GET /conformance/v1/info` | | `{"name", "version", "roles": ["runtime" \| "deployment"]}`: the harness registers the provider in its core under this name and version |
+| `GET /conformance/v1/info` | | `{"name", "version", "roles": ["runtime" \| "deployment"], "flow"?, "stamps"?}`: the harness registers the provider in its core under this name and version. `flow` and `stamps` are for a deployment provider, [below](#flows-a-deployment-provider-can-declare) |
 | `POST /conformance/v1/apply` | `conformance.ApplyRequest` (below) | `202 {"id"}`; the flow runs in the background |
 | `GET /conformance/v1/applies/{id}` | | `conformance.Status`: `{id, state, reason, decision_id, spend, change_id, outcome {seq, hash}}` |
 
@@ -281,6 +283,20 @@ target refused) are final. `spend` is the spend the provider applied for the dec
 The fake target takes `POST /v1/apply {"id", "content"}` with the target bearer, records the sha256 of what it
 received and when, and answers `{"seq", "sha256"}`. A real provider's adapter for the test maps that onto its own
 action (a sync, an apply, a tool backend).
+
+### Flows a deployment provider can declare
+
+The assertions are the same for every deployment provider; what differs is what the provider registers and what its
+subject digest is. `info.flow` says which (omitted: the first).
+
+| `flow` | Provider | The change the harness expects | Digest of what the target received |
+| --- | --- | --- | --- |
+| omitted | registers the manifest-tree change it is given (the reference fake) | `ch-` of repository, PR and commit | sha256 of the manifest |
+| `terraform-plan` | the Terraform gate | The change `clearance hold` registers for the saved plan, which stands for the manifest: `subject` {workspace, plan digest, resources}, no cluster, no objects. Its id is the plan's (`gate.ChangeRequest.ID`: repository, workspace, plan digest). The outcome goes through `POST /v1/clearances/{id}/outcome`, and the core writes it naming the caller's registered provider | sha256 of the plan file |
+| `pushed-tree` | the Argo CD gate | The provider renders the manifest and registers the pushed commit's tree itself (`pr: 0`, the commit in `change.head`). A tree a pull request's check already cleared is found by its tree, so for the policy case the harness first registers and clears it as the CI's check does (`change.pr > 0`) and the change the outcome names is that one | the manifest-tree digest of the objects received, without the annotations the provider stamped (`info.stamps`) |
+
+The harness also gives its core an owner for every app, so a registration that names no owner (a pushed commit, a plan
+with no `--owner`) is owned by the group the approver is in.
 
 ## What the harness drives and asserts
 
@@ -350,3 +366,23 @@ the suite against all four: the good fakes pass every assertion; the runtime bre
 the deployment break fails `deployment.hold`, `deployment.release-once`, `deployment.deny-never-applied` and
 `deployment.expiry-never-applied`. The chain verifies at the end of every run. They are the smallest readable
 providers of each role, a starting point for the gateway's and the gates' own adapters.
+
+### The gates' adapters (G-TF-7, G-ARGO-9)
+
+Each gate's adapter is a test, not a switch in a binary: `fakes.NewAdapter` serves the control interface in front of
+the gate's own code, run in process, so no production binary serves a control route.
+
+- **`cmd/clearance/conformance_terraform_test.go`** (`TestTerraformConformance`): `holdMain`, `releaseMain` and
+  `reportMain`, as the CLI runs them, with `--json` the fake workspace's plan (`conformance.PlanJSON`), the saved plan
+  file the manifest, the harness's target in place of `terraform apply`, and the token in a `--token-file`. Name
+  `terraform-ci`.
+- **`providers/argocd/cmp/conformance_test.go`** (`TestArgoConformance`): the plugin's `Generate` (render with a fake
+  `helm`, hash, find or register, stamp or inject the PreSync wait Job) and the agent's `HandleApplication`, with a fake
+  Argo CD between them that applies what the plugin emitted once it is cleared and leaves the stamped objects and a
+  finished operation for the agent. Name `argocd-agent`; the test also asserts each record the agent claims names
+  `argocd-agent/<version>`.
+
+`go test ./...` (CI's `go test -race ./...`) runs both. What they do not cover: a real Terraform or Argo CD, the
+PreSync Job's container (`clearance-wait` has its own tests), the grant sync and the exception scan (no assertion of
+this suite is about them), and the plugin's own registration as a provider: it registers a change as a verifier and
+writes no evidence record, so the record that names the gate is the agent's.

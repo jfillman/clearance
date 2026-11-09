@@ -9,6 +9,18 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Added
+- **The Terraform gate and the Argo CD gate pass the provider conformance suite** (G-TF-7, G-ARGO-9). Two further
+  flows for a deployment provider (`info.flow`: `terraform-plan`, `pushed-tree`; `info.stamps`), and an adapter per gate
+  in its own tests: `terraform-ci` (`clearance hold`, `release`, `report`) and `argocd-agent` (the plugin's `Generate` and
+  the agent's outcome handling behind a fake Argo CD). The suite's assertions are unchanged (`clearance-conformance/v1`).
+
+### Changed
+- **The outcome of a terraform-plan change names the provider its caller is registered as.** `POST
+  /v1/clearances/{id}/outcome` writes the `deploy.outcome` on the caller's behalf; when the caller's principal matches a
+  `CLEARANCE_PROVIDERS` entry (say `terraform-ci`) the record's verified `provider` is that entry, not `clearance`. No
+  entry, no change. The core's own findings (a `digest-mismatch` exception) keep the core's name.
+
 ## [0.35.0] - 2026-11-09
 
 ### Changed

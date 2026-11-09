@@ -434,6 +434,8 @@ func (c *Core) wire(ctx context.Context) error {
 
 	g := gate.NewService(cfg.Gate, c.Store, c.clock)
 	g.Writer, g.Tools, g.Parse = writer, tools, parse
+	providers := cfg.Providers
+	g.ProviderOf = func(principal string) (evidence.Provider, bool) { return server.ProviderFor(providers, principal) }
 	if cfg.Signer != nil {
 		if err := c.useKey(ctx, cfg.Signer); err != nil {
 			return err
