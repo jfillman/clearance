@@ -96,6 +96,9 @@ func Build(ctx context.Context, r store.Reader, p Params) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	if p.Filtered == nil {
+		p.Filtered = chainFiltered(c.records, p)
+	}
 	ls, err := readLedger(ctx, r, c, p)
 	if err != nil {
 		return nil, err
@@ -800,3 +803,49 @@ func (b *builder) trim(pk *Packet) {
 }
 
 var _ = json.Number("")
+
+// chainFiltered sums the noise-filtered checks of the collectors' health records that fall in the window (and, when
+// scopes are named, in those scopes): the per-rule counts of events the observation pipeline's noise rules dropped.
+// A caller that has its own counts passes them in Params.Filtered and this is not consulted. Rules of different rule
+// sets are different rows: a count belongs to the rule set it was made under.
+func chainFiltered(recs []Record, p Params) []FilteredRule {
+	from, to := evidence.ISO(p.From), evidence.ISO(p.To)
+	type key struct{ rule, set string }
+	counts := map[key]*FilteredRule{}
+	var order []key
+	for _, r := range recs {
+		if str(r, "tool") != evidence.KindHealth {
+			continue
+		}
+		if t := str(r, "ts"); t < from || t >= to {
+			continue
+		}
+		if len(p.Scopes) > 0 && !contains(p.Scopes, str(r, "scope")) {
+			continue
+		}
+		checks, _ := obj(r, "health")["checks"].([]any)
+		for _, c := range checks {
+			m, _ := c.(map[string]any)
+			if str(m, "name") != observe.FilteredCheck {
+				continue
+			}
+			f, ok := observe.ParseFiltered(str(m, "detail"))
+			if !ok {
+				continue
+			}
+			for _, fr := range f.Filtered {
+				k := key{fr.Rule, f.RuleSet}
+				if counts[k] == nil {
+					counts[k] = &FilteredRule{Rule: fr.Rule, RuleSet: f.RuleSet, Why: fr.Why}
+					order = append(order, k)
+				}
+				counts[k].Count += fr.Count
+			}
+		}
+	}
+	var out []FilteredRule
+	for _, k := range order {
+		out = append(out, *counts[k])
+	}
+	return out
+}

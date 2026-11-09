@@ -27,6 +27,7 @@ jobs:
       - run: go vet ./...
       - run: go build -o /dev/null ./providers/argocd/agent/cmd/argocd-agent
       - run: go build -o /dev/null ./providers/observe-aws/cmd/observe-aws
+      - run: go build -o /dev/null ./providers/observe-k8s/cmd/observe-k8s
       - run: test -z "$(gofmt -l .)"
       - run: go test -race ./...
         env:

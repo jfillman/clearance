@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "observe.fullname" . }}-rules
+  labels: {{- include "observe.labels" . | nindent 4 }}
+data:
+  observe-rules.yaml: |
+{{- if .Values.rules.override }}
+{{ .Values.rules.override | indent 4 }}
+{{- else }}
+{{ tpl (.Files.Get "files/observe-rules.yaml") . | indent 4 }}
+{{- end }}
+---
+# The heartbeat object: the collector patches an annotation on it and the write must come back through the webhook.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.heartbeat.configMapName }}
+  labels: {{- include "observe.labels" . | nindent 4 }}
+{{- if .Values.heartbeat.canarySecret.enabled }}
+---
+# The canary: an empty Secret the collector can patch and never read (the Role gives it no get). Its audit event must
+# come back at Metadata with no body, which shows the live policy's Secret rule without a real Secret.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.heartbeat.canarySecret.name }}
+  labels: {{- include "observe.labels" . | nindent 4 }}
+type: Opaque
+{{- end }}

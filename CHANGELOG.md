@@ -9,6 +9,13 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-11-09
+
+### Fixed
+- **The Argo agent no longer tries to read namespaces the gate does not protect.** A protected project can hold an
+  environment that is not gated, such as a staging beside a gated prod. The agent has no read in such a namespace, so
+  every list logged a 403. It now reports only Applications whose destination namespace is labelled protected.
+
 ### Added
 
 - **The AWS collector, observe-aws** (O-4; `providers/observe-aws`, [docs/observe-aws.md](docs/observe-aws.md)). Three feeds
@@ -28,6 +35,18 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   transaction; an apply-and-revert is one exception; an operation on monitoring is tier 3, alerts and flips the scope's
   health. The packet carries the per-rule `filtered: N events under rule X` counts when a collector supplies them
   (`packet.Params.Filtered`). Documented in `docs/observe-pipeline.md`. Wired to no collector yet (O-3, O-4).
+- **O-3: the Kubernetes audit collector (`providers/observe-k8s`), its image (`clearance-observe-k8s`) and chart
+  (`clearance-observe-k8s`).** The webhook receiver for the API server's audit backend (mutual TLS with a name allowlist,
+  Secret bodies cut before anything is written, acknowledged only after an fsynced append to a durable queue on a
+  volume); the processor (pipeline, observation and assessment records, reverted resolutions, lookups over the grants and
+  break-glass windows, a watch cache for the object before each change); audit-gap records for a watch change no audit
+  event reported; a health record per minute (a heartbeat and a canary Secret through the live policy, the queue, the
+  watches, the gaps) that makes a stopped collector blind, not clean; readers for EKS, GKE and AKS exports (fixture-tested
+  only). The audit policy ships as a template with a build-failing test that no rule records a Secret body
+  (`observe-k8s policy render|check`). The packet folds the Argo CD agent's `deploy.exception` and the collector's
+  observation of the same object into one exception row, and prints the pipeline's `filtered: N events under rule X`
+  counts from the collectors' health records. `pipeline.ObjectGrants` resolves an object-less Argo write (a Secret, a
+  prune) through the grants' object lists. Docs: `docs/observe-k8s.md`, `docs/observe-k8s-runbook.md`.
 
 ## [0.36.1] - 2026-11-09
 
@@ -889,7 +908,8 @@ What the Autopilot gateway needs of the core before the hangar-dev cutover (R-3e
   scope, narrow-only limits, CEL policy, sessions, the hash-chained audit log and the gateway; the Hangar pack's
   `glidepath.*` and `airframe.*` tools over glidepath-api and a GET-only Kubernetes adapter.
 
-[Unreleased]: https://github.com/jfillman/clearance/compare/v0.36.1...HEAD
+[Unreleased]: https://github.com/jfillman/clearance/compare/v0.37.0...HEAD
+[0.37.0]: https://github.com/jfillman/clearance/compare/v0.36.1...v0.37.0
 [0.36.1]: https://github.com/jfillman/clearance/compare/v0.36.0...v0.36.1
 [0.36.0]: https://github.com/jfillman/clearance/compare/v0.35.0...v0.36.0
 [0.35.0]: https://github.com/jfillman/clearance/compare/v0.34.2...v0.35.0

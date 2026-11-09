@@ -1,0 +1,155 @@
+# Attribution: ordered signals, strongest first, the first that holds decides. The last of each list is the catch-all.
+attribute:
+  kubernetes:
+    - signal: audit-annotation.vap-denial
+      when: facts.vap_denial
+      outcome: attempted-refused
+      severity: medium
+      detail: refused by a ValidatingAdmissionPolicy (the audit annotation names the policy); nothing landed
+    - signal: response.refused
+      when: facts.refused
+      outcome: attempted-refused
+      severity: low
+      detail: the API server refused the request; nothing landed
+    - signal: grant-annotation+rendered-hash
+      when: facts.hash_match
+      outcome: cleared
+      severity: info
+      detail: the live object's hash is one the grant listed
+    - signal: grant-annotation+mutating-webhook
+      when: facts.hash_differs && facts.mutating_webhook
+      outcome: cleared
+      severity: low
+      confidence: webhook
+      detail: the live object differs from the grant's render and a mutating webhook in the audit annotations explains it
+    - signal: grant-annotation+hash-differs
+      when: facts.hash_differs
+      outcome: out-of-band
+      severity: high
+      detail: the object names a grant but its hash is not one the grant listed, and no mutating webhook explains the difference
+    - signal: grant-annotation.unknown
+      when: facts.grant != "" && !facts.grant_known
+      outcome: out-of-band
+      severity: high
+      detail: the object names a grant the record store does not know (a forged or stale stamp)
+    - signal: break-glass.live
+      when: facts.break_glass
+      outcome: break-glass
+      severity: medium
+      detail: written inside a live break-glass window
+    - signal: grant-annotation.no-hash
+      when: facts.grant_known && !facts.hash_match && !facts.hash_differs && facts.argo_controller
+      outcome: observed-not-attributed
+      severity: medium
+      detail: Argo CD's controller wrote an object naming a known grant, but the event has no hash to compare (a Secret recorded at Metadata, or a delete)
+    - signal: argo-controller.no-grant
+      when: facts.argo_controller
+      outcome: out-of-band
+      severity: high
+      detail: Argo CD's controller wrote an object no grant covers; cross-reference Argo's own application log for the sync that did it
+    - signal: federated-identity.no-task-id
+      when: facts.federated && !facts.has_task_id
+      outcome: observed-not-attributed
+      severity: medium
+      detail: a federated identity with no task_id is seen but not attributable to a task
+    - signal: federated-identity.no-grant
+      when: facts.federated
+      outcome: out-of-band
+      severity: medium
+      detail: an agent's federated identity (it names a task) wrote with no grant covering the object
+    - signal: impersonation
+      when: facts.impersonated
+      outcome: out-of-band
+      severity: medium
+      detail: written by impersonation, with no grant
+    - signal: kubectl-agent
+      when: facts.kubectl
+      outcome: out-of-band
+      severity: medium
+      detail: written by a kubectl client with no grant
+    - signal: service-account.unknown
+      when: facts.service_account
+      outcome: out-of-band
+      severity: medium
+      detail: written by a service account no rule knows, with no grant
+    - signal: human.no-grant
+      when: "true"
+      outcome: out-of-band
+      severity: medium
+      detail: written by a person (or an identity no rule knows) with no grant
+
+  aws:
+    - signal: userIdentity.root
+      when: facts.root
+      outcome: out-of-band
+      severity: critical
+      detail: the root user acted; Root is always an exception
+    - signal: errorCode
+      when: facts.refused
+      outcome: attempted-refused
+      severity: medium
+      detail: the record carries an errorCode; the call was refused and nothing landed
+    - signal: correlation.attestation
+      when: facts.corr_attestation
+      outcome: cleared
+      severity: info
+      confidence: strong
+      detail: a signed execution attestation names this event
+    - signal: correlation.pipeline-run
+      when: facts.corr_pipeline
+      outcome: cleared
+      severity: info
+      confidence: strong
+      detail: a verified pipeline identity and run (the source identity) are the grant's
+    - signal: correlation.apply-role-session
+      when: facts.corr_session
+      outcome: cleared
+      severity: info
+      confidence: medium
+      detail: the apply role and the session it was issued under are the grant's
+    - signal: correlation.plan-change-set
+      when: facts.corr_plan_change
+      outcome: cleared
+      severity: info
+      confidence: medium
+      detail: the cleared plan's resource-change set includes this resource and action
+    - signal: correlation.outside-plan
+      when: facts.outside_plan
+      outcome: out-of-band
+      severity: high
+      detail: the apply role claims a cleared plan, but this resource and action are not in its change set
+    - signal: correlation.plan-digest
+      when: facts.corr_plan_digest
+      outcome: cleared
+      severity: low
+      confidence: weak
+      detail: the user agent's plan digest is a cleared plan's, which lists no change set to check this call against
+    - signal: correlation.apply-window
+      when: facts.corr_window
+      outcome: cleared
+      severity: low
+      confidence: window
+      detail: the apply role acted inside a cleared apply window and nothing stronger ties the call to a grant
+    - signal: sessionIssuer.sso-admin
+      when: facts.sso_admin
+      outcome: out-of-band
+      severity: high
+      detail: an SSO admin role changed the account with no grant; the actor is the source identity the record quotes
+    - signal: principal.no-grant
+      when: "true"
+      outcome: out-of-band
+      severity: medium
+      detail: no grant, attestation, run or plan ties this call to a clearance
+
+# Classify: the coverage state and the tier of each outcome. monitoring-protection is tier 3 and not configurable.
+classify:
+  cleared: {coverage: authorized-and-verified, tier: 0}
+  observed-not-attributed: {coverage: observed-not-attributed, tier: 1}
+  attempted-refused: {coverage: attempted-refused, tier: 1}
+  out-of-band: {coverage: out-of-band-detected, tier: 2}
+  break-glass: {coverage: break-glass, tier: 2}
+  monitoring-protection: {coverage: out-of-band-detected, tier: 3}
+
+correlate:
+  window: 30s
+  revert_window: 15m

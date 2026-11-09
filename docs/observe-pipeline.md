@@ -130,10 +130,18 @@ The golden corpus is `internal/observe/pipeline/testdata`: synthetic Kubernetes 
 `go test -bench Process ./internal/observe/pipeline` measures the whole per-event path (about 25 microseconds on a
 laptop; `TestPerEventPathUnderOneMillisecond` holds it under the 1 ms bound).
 
-## What the collectors still do
+## What the collectors do
 
-O-4's collector ([observe-aws.md](observe-aws.md)) wires the AWS side; O-3's wires Kubernetes. They read the sources, implement `Lookups` over the record store, post the
-assessments and the exceptions, call `Healthy` on their next healthy record, persist the pipeline's counters (`Stats`)
-and pass the per-rule filtered counts to the packet job (`packet.Params.Filtered`); until a collector stores them the
-packet's "filtered" line is empty rather than zero. A Kubernetes collector supplies `before` from its watch cache (an
-audit event carries only the new state), and for Secrets only metadata.
+The Kubernetes collector ([observe-k8s.md](observe-k8s.md), O-3) is the first caller: it reads the API server's audit
+webhook (and a managed cluster's export) into a durable queue, supplies each event with the object *before* the change
+from its watch cache (an audit event carries only the new state; for a Secret there is no object at all), backs `Lookups`
+over the cluster's `ClearanceGrant`s and the core's break-glass windows, posts the observation and assessment of each
+assessed event, gives an apply-and-revert its `reverted` resolution, calls `Healthy` on its next healthy health record, and
+reports the pipeline's per-rule counters in the `noise-filtered` check of that health record (`observe.FilteredSchema`),
+which the packet sums over its window into `packet.Params.Filtered` (the *"filtered: N events under rule X"* line). The
+AWS collector ([observe-aws.md](observe-aws.md), O-4) does the same for CloudTrail.
+
+`Lookups` has one optional extension, `ObjectGrants`: an event with no object (a Secret at Metadata, a delete) carries no
+grant annotation, so for Argo CD's controller only the pipeline asks which active grant lists that namespace, kind and name,
+and the answer feeds the same facts the annotation would, so the event reaches `grant-annotation.no-hash`
+(observed-not-attributed) and not `argo-controller.no-grant`. Anyone else is attributed as before.

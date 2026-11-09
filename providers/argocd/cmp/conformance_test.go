@@ -40,7 +40,7 @@ type fakeArgo struct {
 }
 
 func (k *fakeArgo) ProtectedNamespaces(context.Context) (map[string]map[string]string, error) {
-	return map[string]map[string]string{}, nil
+	return map[string]map[string]string{"conformance": {}}, nil
 }
 func (k *fakeArgo) ListGrants(context.Context) ([]agent.Grant, error) { return nil, nil }
 func (k *fakeArgo) ApplyGrant(context.Context, agent.Grant) error     { return errors.New("not used") }

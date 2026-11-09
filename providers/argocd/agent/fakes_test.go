@@ -45,6 +45,7 @@ type fakeKube struct {
 	t        *testing.T
 	mu       sync.Mutex
 	ns       map[string]map[string]string
+	nsLists  int
 	grants   map[string]agent.Grant
 	apps     []agent.Application
 	objs     map[string][]agent.ObjectDetail // by namespace
@@ -98,6 +99,7 @@ func (k *fakeKube) checkActive() {
 func (k *fakeKube) ProtectedNamespaces(context.Context) (map[string]map[string]string, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	k.nsLists++
 	return k.ns, nil
 }
 func (k *fakeKube) ListGrants(context.Context) ([]agent.Grant, error) {
