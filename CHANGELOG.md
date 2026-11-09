@@ -10,6 +10,13 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 ## [Unreleased]
 
 ### Added
+- **I-1: the operational class.** Beside the tier (the customer's policy), every `deploy.*` record about a registered
+  change carries `operational_class` (one or more of `availability`, `privilege`, `data-integrity`,
+  `security-boundary`, `credential-exposure`, or `["none"]` when nothing operational changed, such as release stamps
+  only) and `class_mapping` (`opclass/1`), computed from the rendered diff or the plan by a mapping shipped as data
+  (`internal/gate/opclass.json`) and stored on the change. Additive: `x-clearance-revision` 5, same schema file.
+  A Secret rotation is `credential-exposure`, an IAM policy change `privilege`, a Deployment image bump `availability`.
+  Tiers, requirements and verdicts are unchanged. The packet prints both later (C-5).
 - **O-1: `clearance.evidence/v1.1`, observations.** Additive: the schema file is the same (`x-clearance-revision` 4),
   and a record says v1.1 only when it is an observation kind or its coverage is new; every other record is still v1.
   Two new coverage states (`break-glass`, `attempted-refused`); five new kinds: `observation` (the normalized event,

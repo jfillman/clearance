@@ -194,7 +194,10 @@ func (w *writer) record(principal string, via *string, tool string, c *Change, d
 			ev[k] = v
 		}
 	}
-	return w.append(ev)
+	// The classes are the core's own computation from the diff it holds, so they are verified; a change registered
+	// before I-1 has none stored and gets them computed from what it stores, under the baseline.
+	stampClass(ev, c, w.svc.Policy)
+	return w.recordVerified([]string{"operational_class", "class_mapping"}, func() store.Record { return w.append(ev) })
 }
 
 func (w *writer) settle(c *Change) {

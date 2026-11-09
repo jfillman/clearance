@@ -112,6 +112,10 @@ type Change struct {
 	// Outage is what a provider does with this change while the core is unreachable: allow-and-record or hold
 	// (its tier under its effective policy's outage block). Absent on changes registered before C-6.
 	Outage string `json:"outage,omitempty"`
+	// OperationalClasses and ClassMapping are I-1's operational class: what the change does (availability, privilege,
+	// data-integrity, security-boundary, credential-exposure, or none), and the mapping version that computed it.
+	OperationalClasses []string `json:"operational_class,omitempty"`
+	ClassMapping       string   `json:"class_mapping,omitempty"`
 	// Ended is the record that moved the change to degraded or exception (C-6): its seq, its tool and, for an
 	// exception, its kind.
 	Ended *Ended `json:"ended,omitempty"`
@@ -202,6 +206,7 @@ func Open(req ChangeRequest, cl Classification, now time.Time, registeredBy stri
 		Requirement: cl.Requirement, State: "holding", CreatedAt: PyTime{now}, UpdatedAt: PyTime{now},
 		ExpiresAt: PyTime{now.AddDate(0, 0, cl.Policy.TTLDays)}, RegisteredBy: registeredBy,
 		Outage: cl.Policy.OutageFor(cl.Tier)}
+	c.OperationalClasses, c.ClassMapping = OperationalClasses(c, cl.Policy), OperationalClassMapping()
 	return c.View()
 }
 

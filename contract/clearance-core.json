@@ -1182,6 +1182,9 @@
             },
             "type": "object"
           },
+          "class_mapping": {
+            "type": "string"
+          },
           "cleared_by": {
             "type": [
               "string",
@@ -1268,6 +1271,12 @@
           },
           "objects_count": {
             "type": "integer"
+          },
+          "operational_class": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "outage": {
             "type": "string"

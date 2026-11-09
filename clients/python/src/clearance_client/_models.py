@@ -521,6 +521,7 @@ class GateChange(Model):
         Field("approvals", "approvals", ("list", ("ref", "GateApproval")), True),
         Field("base", "base", ("str",), True),
         Field("checks", "checks", ("map", ("str",)), True),
+        Field("class_mapping", "class_mapping", ("str",), False),
         Field("cleared_by", "cleared_by", ("nullable", ("str",)), True),
         Field("cluster", "cluster", ("str",), True),
         Field("created_at", "created_at", ("str",), True),
@@ -537,6 +538,7 @@ class GateChange(Model):
         Field("lines_changed", "lines_changed", ("int",), True),
         Field("objects", "objects", ("list", ("ref", "GateObjectChange")), True),
         Field("objects_count", "objects_count", ("int",), True),
+        Field("operational_class", "operational_class", ("list", ("str",)), False),
         Field("outage", "outage", ("str",), False),
         Field("outcome", "outcome", ("nullable", ("ref", "GateOutcome")), False),
         Field("owner", "owner", ("str",), True),
@@ -569,6 +571,7 @@ class GateChange(Model):
     approvals: list[GateApproval]
     base: str
     checks: dict[str, str]
+    class_mapping: str | None = None
     cleared_by: str | None
     cluster: str
     created_at: str
@@ -585,6 +588,7 @@ class GateChange(Model):
     lines_changed: int
     objects: list[GateObjectChange]
     objects_count: int
+    operational_class: list[str] | None = None
     outage: str | None = None
     outcome: GateOutcome | None = None
     owner: str
@@ -624,6 +628,7 @@ class GateChangeWithAuditSeq(Model):
         Field("audit_seq", "audit_seq", ("int",), True),
         Field("base", "base", ("str",), True),
         Field("checks", "checks", ("map", ("str",)), True),
+        Field("class_mapping", "class_mapping", ("str",), False),
         Field("cleared_by", "cleared_by", ("nullable", ("str",)), True),
         Field("cluster", "cluster", ("str",), True),
         Field("created_at", "created_at", ("str",), True),
@@ -640,6 +645,7 @@ class GateChangeWithAuditSeq(Model):
         Field("lines_changed", "lines_changed", ("int",), True),
         Field("objects", "objects", ("list", ("ref", "GateObjectChange")), True),
         Field("objects_count", "objects_count", ("int",), True),
+        Field("operational_class", "operational_class", ("list", ("str",)), False),
         Field("outage", "outage", ("str",), False),
         Field("outcome", "outcome", ("nullable", ("ref", "GateOutcome")), False),
         Field("owner", "owner", ("str",), True),
@@ -673,6 +679,7 @@ class GateChangeWithAuditSeq(Model):
     audit_seq: int
     base: str
     checks: dict[str, str]
+    class_mapping: str | None = None
     cleared_by: str | None
     cluster: str
     created_at: str
@@ -689,6 +696,7 @@ class GateChangeWithAuditSeq(Model):
     lines_changed: int
     objects: list[GateObjectChange]
     objects_count: int
+    operational_class: list[str] | None = None
     outage: str | None = None
     outcome: GateOutcome | None = None
     owner: str
