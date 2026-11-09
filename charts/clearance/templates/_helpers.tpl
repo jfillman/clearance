@@ -144,7 +144,7 @@ app.kubernetes.io/component: {{ .component }}
 - name: CLEARANCE_AI_COAUTHORS
   value: {{ (empty .Values.vocabulary.aiCoauthors | ternary "none" (include "clearance.csv" .Values.vocabulary.aiCoauthors)) | quote }}
 {{- end }}
-{{- range $k, $env := dict "baselineDenyPaths" "CLEARANCE_BASELINE_DENY_PATHS" "baselineDenyFields" "CLEARANCE_BASELINE_DENY_FIELDS" "gateOutsideGroups" "CLEARANCE_GATE_OUTSIDE_GROUPS" }}
+{{- range $k, $env := dict "baselineDenyPaths" "CLEARANCE_BASELINE_DENY_PATHS" "baselineDenyFields" "CLEARANCE_BASELINE_DENY_FIELDS" "gateOutsideGroups" "CLEARANCE_GATE_OUTSIDE_GROUPS" "gateReleaseStamps" "CLEARANCE_GATE_RELEASE_STAMPS" }}
 {{- with index $.Values.vocabulary $k }}
 - name: {{ $env }}
   value: {{ include "clearance.csv" . | quote }}

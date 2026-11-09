@@ -9,6 +9,16 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-11-09
+
+### Changed
+- **What a release stamps on its objects is no longer a change.** `CLEARANCE_GATE_RELEASE_STAMPS` (chart
+  `vocabulary.gateReleaseStamps`) lists the JSON pointers; the default is the `app.kubernetes.io/version` label, on the
+  object and its pod template. An object whose only changes are stamps on its own metadata is tier 0 (`release-stamp`),
+  whatever its kind, and an image change plus stamps is still `image-bump`. Before, a chart that moves its version label
+  made every release tier 3, through the label on the ServiceAccount. A stamp in a pod template restarts pods, so alone it
+  stays tier 2.
+
 ## [0.34.2] - 2026-11-08
 
 ### Fixed
@@ -760,7 +770,8 @@ What the Autopilot gateway needs of the core before the hangar-dev cutover (R-3e
   scope, narrow-only limits, CEL policy, sessions, the hash-chained audit log and the gateway; the Hangar pack's
   `glidepath.*` and `airframe.*` tools over glidepath-api and a GET-only Kubernetes adapter.
 
-[Unreleased]: https://github.com/jfillman/clearance/compare/v0.34.2...HEAD
+[Unreleased]: https://github.com/jfillman/clearance/compare/v0.35.0...HEAD
+[0.35.0]: https://github.com/jfillman/clearance/compare/v0.34.2...v0.35.0
 [0.34.2]: https://github.com/jfillman/clearance/compare/v0.34.1...v0.34.2
 [0.34.1]: https://github.com/jfillman/clearance/compare/v0.34.0...v0.34.1
 [0.34.0]: https://github.com/jfillman/clearance/compare/v0.33.0...v0.34.0

@@ -632,7 +632,7 @@ What exists in Clearance now; the check, the release guardrail and the screens f
   group when the check knows it, the tree digest, the changed paths and lines, each touched object with the JSON
   pointers of its changed fields and its new images, the checks' results, the repo's `clearance.yaml`). `classify()`:
   the tier as the maximum over paths and objects (`kind:Secret`, `field:secretKeyRef`, `path:clearance.yaml`,
-  `image-bump`, `image:not-trusted-registry`, `metadata-only`, `non-runtime`, `lines>400`, `checks:ci,render`,
+  `image-bump`, `image:not-trusted-registry`, `metadata-only`, `release-stamp`, `non-runtime`, `lines>400`, `checks:ci,render`,
   `provenance:agent`), then the decision: tiers 0 and 1 clear by policy, 2 and 3 hold for a `Requirement`
   (owner-group people, outside-group people), an unknown proposer is denied (`DG-PROVENANCE`). `Change`: the record,
   with `role_for()` (owner first, then outside; `DG-PROPOSER`, `DG-TWICE`, `DG-FILLED`, `DG-FORBIDDEN`, `DG-STATE`).

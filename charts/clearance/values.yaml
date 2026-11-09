@@ -76,6 +76,9 @@ vocabulary:
   baselineDenyFields: []
   # CLEARANCE_GATE_OUTSIDE_GROUPS (default none) and CLEARANCE_GATE_OWNER_FALLBACK (default none)
   gateOutsideGroups: []
+  # CLEARANCE_GATE_RELEASE_STAMPS: JSON pointers of what a release stamps on its objects, not counted as changes
+  # (default the app.kubernetes.io/version label, on the object and its pod template)
+  gateReleaseStamps: []
   gateOwnerFallback: ""
   # CLEARANCE_V0_PROVIDER: name/version for rows written before providers were recorded (default unrecorded/unrecorded)
   v0Provider: ""
