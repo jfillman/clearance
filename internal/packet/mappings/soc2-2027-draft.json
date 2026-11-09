@@ -1,0 +1,24 @@
+{
+  "framework": "soc2",
+  "version": "2027-draft",
+  "title": "SOC 2 Trust Services Criteria (2027 draft)",
+  "revision": "2026-11-09",
+  "controls": [
+    {
+      "id": "CC7.1",
+      "title": "Detection and monitoring: the entity uses detection and monitoring procedures to identify changes to configurations (title paraphrased; the draft's wording is not reproduced here)",
+      "assertions": [
+        {"id": "cc7.1-feeds-healthy", "evaluator": "observation-coverage-healthy",
+         "statement": "Every observed scope had a healthy observation feed for the whole window; a blind stretch is stated, not assumed clean."},
+        {"id": "cc7.1-changes-detected-and-resolved", "evaluator": "exceptions-resolved",
+         "statement": "Every change seen and not cleared has a recorded resolution."},
+        {"id": "cc7.1-monitoring-protected", "evaluator": "monitoring-protected",
+         "statement": "No operation turned off, narrowed or deleted the controls that watch the environment."},
+        {"id": "cc7.1-no-unauthorized-change", "evaluator": "no-unauthorized-changes",
+         "statement": "No change landed outside a clearance, in a window whose observation feeds were verified."},
+        {"id": "cc7.1-evidence-checkpointed", "evaluator": "records-checkpointed",
+         "statement": "The records this packet rests on are under a witnessed ledger checkpoint."}
+      ]
+    }
+  ]
+}

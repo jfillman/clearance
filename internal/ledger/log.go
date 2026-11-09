@@ -357,7 +357,11 @@ type Checkpoint struct {
 // ParseCheckpoint verifies a checkpoint note: the log's signature under one of the log's keys (the one in use or a
 // retired one) and the witnesses' countersignatures under the policy.
 func (l *Log) ParseCheckpoint(raw []byte) (Checkpoint, error) {
-	n, err := note.Open(raw, note.VerifierList(l.verifier...))
+	return parseCheckpoint(raw, l.verifier, l.origin, l.group)
+}
+
+func parseCheckpoint(raw []byte, verifiers []note.Verifier, origin string, group tessera.WitnessGroup) (Checkpoint, error) {
+	n, err := note.Open(raw, note.VerifierList(verifiers...))
 	if err != nil {
 		return Checkpoint{}, fmt.Errorf("ledger: checkpoint: %w", err)
 	}
@@ -365,13 +369,13 @@ func (l *Log) ParseCheckpoint(raw []byte) (Checkpoint, error) {
 	if _, err := cp.Unmarshal([]byte(n.Text)); err != nil {
 		return Checkpoint{}, fmt.Errorf("ledger: checkpoint: %w", err)
 	}
-	if cp.Origin != l.origin {
-		return Checkpoint{}, fmt.Errorf("ledger: checkpoint of log %q, this is %q", cp.Origin, l.origin)
+	if cp.Origin != origin {
+		return Checkpoint{}, fmt.Errorf("ledger: checkpoint of log %q, this is %q", cp.Origin, origin)
 	}
 	var logSigned bool
 	var cosigned []string
 	for _, s := range n.Sigs {
-		if s.Name == l.origin {
+		if s.Name == origin {
 			logSigned = true
 		} else {
 			cosigned = append(cosigned, s.Name)
@@ -381,7 +385,7 @@ func (l *Log) ParseCheckpoint(raw []byte) (Checkpoint, error) {
 		return Checkpoint{}, errors.New("ledger: checkpoint: not signed by the log")
 	}
 	return Checkpoint{Origin: cp.Origin, Size: int64(cp.Size), Root: cp.Hash, Note: raw,
-		Witnessed: l.group.Satisfied(raw), Cosigned: cosigned}, nil
+		Witnessed: group.Satisfied(raw), Cosigned: cosigned}, nil
 }
 
 // Latest is the checkpoint the log published last. ok is false when it has published none.

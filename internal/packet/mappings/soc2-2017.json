@@ -1,0 +1,26 @@
+{
+  "framework": "soc2",
+  "version": "2017",
+  "title": "SOC 2 Trust Services Criteria (2017 edition)",
+  "revision": "2026-11-09",
+  "controls": [
+    {
+      "id": "CC8.1",
+      "title": "Change management: the entity authorizes, designs, develops or acquires, configures, documents, tests, approves and implements changes to infrastructure, data, software and procedures",
+      "assertions": [
+        {"id": "cc8.1-authorized-before-apply", "evaluator": "deploy-cleared-before-apply",
+         "statement": "Every change that was applied was cleared by the gate, under a recorded tier, before it was applied."},
+        {"id": "cc8.1-approvers-distinct-people", "evaluator": "approvals-distinct-people",
+         "statement": "Every human-cleared change was approved by distinct subjects the approval route checked were people, none automation."},
+        {"id": "cc8.1-applied-is-cleared", "evaluator": "outcome-matches-cleared",
+         "statement": "What a deployment applied is the digest that was cleared (manifest tree or saved plan)."},
+        {"id": "cc8.1-failures-rolled-back", "evaluator": "failures-rolled-back",
+         "statement": "Every failed change was rolled back."},
+        {"id": "cc8.1-no-unauthorized-change", "evaluator": "no-unauthorized-changes",
+         "statement": "No change landed outside a clearance, in a window whose observation feeds were verified."},
+        {"id": "cc8.1-evidence-checkpointed", "evaluator": "records-checkpointed",
+         "statement": "The records this packet rests on are under a witnessed ledger checkpoint."}
+      ]
+    }
+  ]
+}

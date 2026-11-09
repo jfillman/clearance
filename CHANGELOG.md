@@ -10,6 +10,19 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 ## [Unreleased]
 
 ### Added
+- **C-5: the evidence packet, `clearance packet`.** A date range and scope to one canonical JSON document, CSV projections
+  and a PDF (standard library only), with the originals an offline verifier (C-4) needs: the stored records as hashed,
+  an inclusion proof for each under the witnessed checkpoint, the checkpoint with its countersignatures, the public keys
+  and the change attestation bundles; with the ledger off it says the records are not checkpointed. Sections: header,
+  coverage statement (every coverage and assurance state, degraded windows, per-scope observation health from the same
+  function `GET /v1/coverage` uses: "no exceptions detected" is printed only for a window whose feeds were all verified
+  healthy; a scope with no collector prints blind), control assertions (resting on verified fields only), changes (Argo
+  CD manifest trees and Terraform plans side by side, who reported each outcome), human-cleared changes
+  (`token.ApproversStatement`), AI identities, exceptions in seven classes, policy changes, verification and acceptances.
+  `--view freeze` and `--view incident` are scoped views. Control mappings are data (`soc2/2017` CC8.1 and
+  `soc2/2027-draft` CC7.1 first), published as an OSCAL component definition, signed as a DSSE envelope on request
+  (`clearance packet oscal`). New in `internal/ledger`: `Tree` (inclusion proofs from the chain's record hashes alone,
+  tested equal to `Log.Prove`) and `ParseCheckpointNote`. See [docs/packet.md](docs/packet.md).
 - **O-1: `clearance.evidence/v1.1`, observations.** Additive: the schema file is the same (`x-clearance-revision` 4),
   and a record says v1.1 only when it is an observation kind or its coverage is new; every other record is still v1.
   Two new coverage states (`break-glass`, `attempted-refused`); five new kinds: `observation` (the normalized event,

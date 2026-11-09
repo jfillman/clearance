@@ -549,3 +549,63 @@ func TestWitnessStatePersists(t *testing.T) {
 	}
 	_ = base64.StdEncoding
 }
+
+// The offline tree (built from the chain's record hashes alone, as the evidence packet does) gives the same
+// inclusion proofs as the in-process Tessera log, and the same root as the witnessed checkpoint.
+func TestOfflineProofsEqualTheLogsOwn(t *testing.T) {
+	k := newKey(t, origin)
+	lab := newLab(t, k)
+	st := newChain(t)
+	appendN(t, st, "a", 21) // not a power of two: ephemeral nodes
+	s, err := ledger.Open(bg, lab.config(t.TempDir(), logKey(k)), st, st, nil, quiet())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeSvc(t, s)
+	run(t, s, "21 records witnessed", witnessedAll(s, st))
+	recs, err := st.Records(bg, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entries [][]byte
+	for _, r := range recs {
+		b, _ := hex.DecodeString(r["hash"].(string))
+		entries = append(entries, b)
+	}
+	tree := ledger.NewTree(entries)
+	cp, err := st.LedgerCheckpoint(bg)
+	if err != nil || cp.Size != 21 {
+		t.Fatalf("%+v %v", cp, err)
+	}
+	root, err := tree.Root(cp.Size)
+	if err != nil || hex.EncodeToString(root) != cp.Root {
+		t.Fatalf("root %x vs %s: %v", root, cp.Root, err)
+	}
+	for i := int64(0); i < cp.Size; i++ {
+		want, err := s.Log().Prove(bg, i, entries[i])
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := tree.Prove(i, cp.Size)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != len(want.Hashes) {
+			t.Fatalf("seq %d: path of %d, the log's %d", i, len(got), len(want.Hashes))
+		}
+		for j := range got {
+			if !bytes.Equal(got[j], want.Hashes[j]) {
+				t.Fatalf("seq %d node %d differs", i, j)
+			}
+		}
+		if err := ledger.VerifyInclusion(i, cp.Size, entries[i], got, root); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := tree.Prove(21, 21); err == nil {
+		t.Fatal("proof of an entry past the tree")
+	}
+	if _, err := tree.Root(22); err == nil {
+		t.Fatal("root past the tree")
+	}
+}
