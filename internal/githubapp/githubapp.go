@@ -43,11 +43,13 @@ import (
 
 // Constants of github_app.py.
 const (
-	API            = "https://api.github.com"
-	IdentityCheck  = "Clearance / agent-identity"
-	ScopeCheck     = "Clearance / agent-scope"
-	CommentMarker  = "<!-- clearance:provenance -->"
-	MaxPages       = 30
+	API           = "https://api.github.com"
+	IdentityCheck = "Clearance / agent-identity"
+	ScopeCheck    = "Clearance / agent-scope"
+	CommentMarker = "<!-- clearance:provenance -->"
+	MaxPages      = 30
+	// MaxCommitPages is GitHub's limit on a PR's commit list: 250 commits, 100 to a page.
+	MaxCommitPages = 3
 	MaxAnnotations = 50
 	SweepEvery     = 60 * time.Second
 	QueueSize      = 1000
@@ -597,7 +599,9 @@ func (a *App) token(ctx context.Context, installation int64, repo string, perms 
 
 // Gather is what provenance.Verify needs, from GitHub: the head, the author, every changed path (and a rename's old
 // name), the head commit's trailers and its co-author trailers (Co-Authored-By, Assisted-by, Generated-by), which
-// provenance matches against the AI co-author matchers. Only the head commit is read, as for the trailers.
+// provenance matches against the AI co-author matchers. The <prefix>* trailers come from the head commit only; the
+// co-author trailers come from every commit of the PR (GitHub lists at most 250), so an agent's commit under a
+// person's later commit, or a merge from main, still counts.
 func (a *App) Gather(ctx context.Context, token, repo string, pr int64) (provenance.Request, error) {
 	status, doc, err := a.gh.call(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d", repo, pr), "token", token, nil)
 	if err != nil {
@@ -654,14 +658,40 @@ func (a *App) Gather(ctx context.Context, token, repo string, pr int64) (provena
 	trailers := map[string]any{}
 	coauthors := []any{}
 	trailerRx := regexp.MustCompile(`^` + regexp.QuoteMeta(vocab.Get().TrailerPrefix) + `(Task|Session|Run|Agent): *([^ ]+) *\z`)
-	for _, line := range strings.Split(strings.ReplaceAll(msg, "\r\n", "\n"), "\n") {
-		line = strings.TrimSpace(line)
+	for _, line := range messageLines(msg) {
 		if m := trailerRx.FindStringSubmatch(line); m != nil {
 			trailers[strings.ToLower(m[1])] = m[2]
 		}
-		if key, _, ok := strings.Cut(line, ":"); ok && vocab.IsCoauthorKey(key) && len(line) <= provenance.MaxTrailer &&
-			len(coauthors) < provenance.MaxCoauthors {
-			coauthors = append(coauthors, map[string]any{"commit": head, "trailer": line})
+	}
+	addCoauthors := func(sha, message string) {
+		for _, line := range messageLines(message) {
+			if key, _, ok := strings.Cut(line, ":"); ok && vocab.IsCoauthorKey(key) && len(line) <= provenance.MaxTrailer &&
+				len(coauthors) < provenance.MaxCoauthors {
+				coauthors = append(coauthors, map[string]any{"commit": sha, "trailer": line})
+			}
+		}
+	}
+	addCoauthors(head, msg) // the head first, so a verdict names it when it matches
+	for page := 1; page <= MaxCommitPages; page++ {
+		status, doc, err := a.gh.call(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d/commits?per_page=100&page=%d", repo, pr, page), "token", token, nil)
+		if err != nil {
+			return provenance.Request{}, err
+		}
+		list, isList := doc.([]any)
+		if status != 200 || !isList {
+			return provenance.Request{}, gherr("commits %s#%d: %d", repo, pr, status)
+		}
+		for _, x := range list {
+			cm, _ := x.(map[string]any)
+			sha, _ := cm["sha"].(string)
+			inner, _ := cm["commit"].(map[string]any)
+			message, _ := inner["message"].(string)
+			if sha != "" && sha != head {
+				addCoauthors(sha, message)
+			}
+		}
+		if len(list) < 100 {
+			break
 		}
 	}
 	if len(paths) > provenance.MaxPaths {
@@ -676,6 +706,15 @@ func (a *App) Gather(ctx context.Context, token, repo string, pr int64) (provena
 		return provenance.Request{}, err
 	}
 	return req, nil
+}
+
+// messageLines splits a commit message into trimmed lines.
+func messageLines(msg string) []string {
+	lines := strings.Split(strings.ReplaceAll(msg, "\r\n", "\n"), "\n")
+	for i, l := range lines {
+		lines[i] = strings.TrimSpace(l)
+	}
+	return lines
 }
 
 func (a *App) postCheck(ctx context.Context, token, repo, head, name string, result provenance.Check, violations []provenance.Violation, v provenance.Verdict) (CheckRun, error) {

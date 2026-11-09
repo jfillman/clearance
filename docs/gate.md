@@ -477,7 +477,7 @@ kube-apiserver); **not yet applied** anywhere. Apron renders them into an upper 
   `CLEARANCE_TOKEN_FILE=/var/run/secrets/tokens/clearance`; every `securityContext` value pinned to the CMP's (pod: `runAsNonRoot: true`, user and group 65532, seccomp
   `RuntimeDefault`; container: no privilege escalation, read-only root filesystem, `capabilities.drop: [ALL]`);
   `automountServiceAccountToken: false` and **no**
-  `serviceAccountName` (the CMP sets none, so the pod runs as the namespace's default account, and only the projected
+  `serviceAccountName` (the CMP has no setting for one, so the pod runs as the namespace's default account, and only the projected
   token with audience `clearance` is mounted); `hostAliases` exactly the pinned one (none when the pin is empty); one
   read-only mount of the one projected token volume. The waiter mounts a clearance token, so anything that could
   redirect it is refused. It still needs an active grant to exist under Deny (the param resolves first). Envtest: the CMP's
@@ -1459,7 +1459,7 @@ The tenant-onboarding ApplicationSet sets the plugin's parameters (all strings; 
 paths in the gitops repo), `valuesJson`, `kustomizeDir`, and optionally `clusterScopedKinds`. The sidecar's
 environment: `CLEARANCE_URL`, `CLEARANCE_TOKEN_FILE` (default `/var/run/secrets/tokens/clearance`, read on every call),
 `CLEARANCE_WAIT_IMAGE`, `CLEARANCE_WAIT_HOST_ALIAS` (`ip=host`, for the Job's pod when the core is on another cluster),
-`CLEARANCE_WAIT_SERVICE_ACCOUNT`, `CLEARANCE_WAIT_TIMEOUT`, `CLEARANCE_CMP_CACHE_DIR`, `CLEARANCE_CMP_CACHE_TTL`.
+`CLEARANCE_WAIT_TIMEOUT`, `CLEARANCE_CMP_CACHE_DIR`, `CLEARANCE_CMP_CACHE_TTL`.
 Paths and the chart tag are validated (relative, no `..`, no leading `-`). The sidecar's `git` and `helm` run with a
 bare environment, so the clearance token is not in their reach.
 
@@ -1500,7 +1500,7 @@ The code does none of this; each line is a change to a values file or a manifest
 | --- | --- |
 | `CLEARANCE_FOREIGN_SERVICE_ACCOUNTS` (core) | `argocd-apps/argocd-apps-repo-server` (the plugin's identity: `hangar-prod/argocd-apps/argocd-apps-repo-server`); and the wait Job's account (below) |
 | `CLEARANCE_VERIFIERS` | `hangar-prod/argocd-apps/argocd-apps-repo-server`: the plugin registers changes (`POST /v1/clearances`) |
-| `CLEARANCE_PROVIDERS` | one entry for the wait Job, e.g. `argocd-wait`, principals `hangar-prod/app-*/default` and `hangar-prod/infra-*/default` (the Job runs in the destination namespace as its default account unless `CLEARANCE_WAIT_SERVICE_ACCOUNT` names another), **no kinds**: the wait route admits a registered provider or the verifier that registered the change, and a Job pod is neither the repo-server nor listed. Confirm a provider with no kinds is accepted, else a read-only variant is a core change |
+| `CLEARANCE_PROVIDERS` | one entry for the wait Job, e.g. `argocd-wait`, principals `hangar-prod/app-*/default` and `hangar-prod/infra-*/default` (the Job runs in the destination namespace as its default account: the CMP sets no `serviceAccountName`, and the admission policy refuses one), **no kinds**: the wait route admits a registered provider or the verifier that registered the change, and a Job pod is neither the repo-server nor listed. Confirm a provider with no kinds is accepted, else a read-only variant is a core change |
 | route allowlist (HTTPRoute `clearance-github-webhook`) | `Exact /v1/clearances` (POST, already reaching the core) and **`PathPrefix /v1/clearances/`** for `GET /v1/clearances/{id}` and `/wait` |
 
 **hangar-prod (apron, `clearance.gate`, and the repo-server and tenant namespaces):**

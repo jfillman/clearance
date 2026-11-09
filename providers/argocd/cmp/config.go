@@ -40,7 +40,6 @@ type Config struct {
 	WaitImage    string
 	WaitHost     string // "ip=host1,host2": a hostAlias for the wait Job's pod
 	WaitTimeout  time.Duration
-	WaitSAName   string
 	RegisterWait time.Duration // how long one call to the core may take
 }
 
@@ -63,7 +62,6 @@ func ParseConfig(get func(string) string) (Config, error) {
 		CoreURL: get("CLEARANCE_URL"), TokenFile: orDefault(get("CLEARANCE_TOKEN_FILE"), "/var/run/secrets/tokens/clearance"),
 		CacheDir:  orDefault(get("CLEARANCE_CMP_CACHE_DIR"), "/tmp/clearance-cmp-cache"),
 		WaitImage: get("CLEARANCE_WAIT_IMAGE"), WaitHost: get("CLEARANCE_WAIT_HOST_ALIAS"),
-		WaitSAName: get("CLEARANCE_WAIT_SERVICE_ACCOUNT"),
 	}
 	for _, f := range strings.Split(p("valueFiles"), ",") {
 		if f = strings.TrimSpace(f); f != "" {

@@ -66,6 +66,7 @@ type fakeGitHub struct {
 	files     []string
 	head      string
 	message   string
+	earlier   map[string]string // sha -> message of commits before the head in the PR
 	tokens    []map[string]any
 	checkRuns []map[string]any
 	reviews   []review
@@ -127,6 +128,13 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 		for _, x := range f.files {
 			out = append(out, map[string]any{"filename": x})
 		}
+		reply(200, out)
+	case strings.Contains(path, "/pulls/1/commits"):
+		var out []map[string]any
+		for sha, m := range f.earlier {
+			out = append(out, map[string]any{"sha": sha, "commit": map[string]any{"message": m}})
+		}
+		out = append(out, map[string]any{"sha": f.head, "commit": map[string]any{"message": f.message}})
 		reply(200, out)
 	case strings.Contains(path, "/commits/"+f.head):
 		reply(200, map[string]any{"commit": map[string]any{"message": f.message}})
@@ -396,6 +404,27 @@ func TestAnAICoauthoredPrGetsTwoNeutralChecks(t *testing.T) {
 	}
 	if title := forged.checkRuns[0]["output"].(map[string]any)["title"]; title != "Failed: unrecorded (AI001)" {
 		t.Fatal(title)
+	}
+}
+
+// The co-author scan covers every commit of the PR, not only the head: a person's last commit does not hide an
+// earlier agent commit.
+func TestAnAICoauthorOnAnEarlierCommitIsFound(t *testing.T) {
+	e := newEnv(t)
+	e.prov.Config.AgentLogins = []string{bot}
+	earlier := "ab12000000000000000000000000000000000000"
+	f := newFake(t, "jfillman", nil, head)
+	f.earlier = map[string]string{earlier: "first\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"}
+	runs, err := e.app(t, f, "off").Handle(context.Background(), "pull_request", decode(t, prEvent("opened")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(checks(runs), [][2]string{{githubapp.IdentityCheck, "neutral"}, {githubapp.ScopeCheck, "neutral"}}) {
+		t.Fatal(runs)
+	}
+	summary := f.checkRuns[0]["output"].(map[string]any)["summary"].(string)
+	if !strings.Contains(summary, "Commit `"+earlier[:12]+"` carries the trailer") {
+		t.Fatal(summary)
 	}
 }
 
