@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -323,4 +324,43 @@ type noKube struct{ Kube }
 func (noKube) Patch(context.Context, string, any) error { return nil }
 func (noKube) Get(context.Context, string) (map[string]any, error) {
 	return nil, errBoom
+}
+
+// A commit that fails once and is retried from the in-flight batch counts the batch exactly once.
+func TestFailedCommitRetryCountsOnce(t *testing.T) {
+	r := newRig(t)
+	r.push(auditEv(human, "kubectl/v1.36.0", "get", "pods", "shop", "p", 200, nil))
+	r.push(auditEv(human, "kubectl/v1.36.0", "update", "configmaps", "shop", "x", 200, map[string]any{"responseObject": configMap("shop", "x", "5", nil)}))
+	// make Commit fail once by closing the queue's cursor path
+	cur := r.dir + "/cursor.json.tmp"
+	if err := os.Mkdir(cur, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.c.ProcessOnce(context.Background()); err == nil {
+		t.Fatal("expected the commit to fail")
+	}
+	if c := r.c.Counters(); c.Events != 0 {
+		t.Fatalf("a failed commit changed the counters: %+v", c)
+	}
+	os.Remove(cur)
+	r.drain()
+	if c := r.c.Counters(); c.Events != 2 || c.NotWrites != 1 || c.Assessed != 1 {
+		t.Fatalf("counters %+v: the batch must count once", c)
+	}
+}
+
+func TestHealthLoopPrunesDeletedHistory(t *testing.T) {
+	r := newRig(t)
+	r.c.cache.Put("ConfigMap", "ADDED", configMap("shop", "gone", "1", map[string]any{"v": "1"}), t0, true)
+	r.c.cache.Put("ConfigMap", "DELETED", configMap("shop", "gone", "2", map[string]any{"v": "1"}), t0, false)
+	if r.c.cache.Before("ConfigMap", "shop", "gone", "", t0, true) == nil {
+		t.Fatal("history is kept for the delete's audit event")
+	}
+	r.advance(DeletedHistoryTTL + time.Minute)
+	if err := r.c.HealthOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if r.c.cache.Before("ConfigMap", "shop", "gone", "", t0, true) != nil {
+		t.Fatal("the health loop did not prune")
+	}
 }

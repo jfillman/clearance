@@ -30,6 +30,12 @@ const (
 	fallbackQuiet = 5 // health intervals a webhook with no heartbeat may be silent
 )
 
+// DeletedHistoryTTL is how long the history of a deleted object is kept for its delete's audit event. That event trails
+// the watch by the webhook's batch wait and the queue's lag (the queue-draining check allows 5 minutes, a managed source's
+// latency a few more), so an hour outlasts any lag the health check would not already be reporting, and the history of a
+// delete is small.
+const DeletedHistoryTTL = time.Hour
+
 // HealthOnce is one pass of the health loop: it reports the gaps that expired, refreshes the lookups, works out what
 // the collector can and cannot vouch for, and posts the observation.health record the core reads coverage from. The
 // state is blind when the collector cannot show that the audit path delivers (no heartbeat through the live policy),
@@ -51,6 +57,7 @@ func (c *Collector) HealthOnce(ctx context.Context) error {
 			c.cfg.Log.Warn("grants or break-glass windows not read; the last snapshot is used", "err", err)
 		}
 	}
+	c.cache.Prune(now, DeletedHistoryTTL)
 	checks := c.checks(ctx, now)
 	state := observe.Healthy
 	for _, ch := range checks {
@@ -113,7 +120,9 @@ func (c *Collector) clearReported(s Counters, now time.Time) error {
 	c.commitMu.Lock()
 	defer c.commitMu.Unlock()
 	c.mu.Lock()
-	cc := &c.meta.Counters
+	next := c.meta
+	cc := &next.Counters
+	cc.Filtered, cc.OutOfScope = copyMap(cc.Filtered), copyMap(cc.OutOfScope)
 	cc.Events -= s.Events
 	cc.Assessed -= s.Assessed
 	cc.NotWrites -= s.NotWrites
@@ -130,9 +139,16 @@ func (c *Collector) clearReported(s Counters, now time.Time) error {
 		}
 	}
 	cc.Since = now.UTC()
-	m, _ := json.Marshal(c.meta)
+	m, _ := json.Marshal(next)
 	c.mu.Unlock()
-	return c.d.Queue.Commit(c.d.Queue.Cursor(), m)
+	// applied to the live counters only after the commit: a failed commit leaves them to be reported again
+	if err := c.d.Queue.Commit(c.d.Queue.Cursor(), m); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.meta = next
+	c.mu.Unlock()
+	return nil
 }
 
 func ago(now, t time.Time) string {

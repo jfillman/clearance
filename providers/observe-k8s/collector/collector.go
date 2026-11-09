@@ -267,10 +267,19 @@ func (c *Collector) ProcessOnce(ctx context.Context) (int, error) {
 	c.mu.Lock()
 	c.postErrs = 0
 	c.lastPost = c.cfg.Now()
-	merge(&c.meta.Counters, b.delta)
-	m, _ := json.Marshal(c.meta)
+	// The counters are committed with the cursor: marshal a copy with the batch applied, and apply it to the live
+	// meta only once the commit succeeded, so a failed commit retried from inflight counts the batch once.
+	next := c.meta
+	next.Counters.Filtered, next.Counters.OutOfScope = copyMap(c.meta.Counters.Filtered), copyMap(c.meta.Counters.OutOfScope)
+	merge(&next.Counters, b.delta)
+	m, _ := json.Marshal(next)
 	c.mu.Unlock()
 	err := c.d.Queue.Commit(b.upTo, m)
+	if err == nil {
+		c.mu.Lock()
+		c.meta = next
+		c.mu.Unlock()
+	}
 	c.commitMu.Unlock()
 	if err != nil {
 		return 0, err
