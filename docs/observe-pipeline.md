@@ -60,8 +60,9 @@ runs, sessions, plans, apply windows). The orders in `default.yaml`:
 annotation with the live object's hash among the grant's rendered hashes (cleared; the stamp annotation is only a
 claim, the grant's own list is what matches); grant present and hash differing with a mutating webhook in the audit
 annotations (cleared, low); grant present and hash differing (out-of-band, **high**); a grant the store does not know
-(out-of-band, high); a live break-glass record (break-glass); the Argo service account with no grant (out-of-band,
-high, cross-referenced to Argo's own log); a federated identity with no `task_id` (observed-not-attributed); a
+(out-of-band, high); a live break-glass record (break-glass); the Argo service account naming a known grant when the
+event has no hash to compare, as with a delete (observed-not-attributed; "hash differing" needs a hash); the Argo
+service account with no grant (out-of-band, high, cross-referenced to Argo's own log); a federated identity with no `task_id` (observed-not-attributed); a
 federated identity with one, impersonation, a `kubectl` client, an unknown service account, a human (out-of-band, with
 the diff).
 

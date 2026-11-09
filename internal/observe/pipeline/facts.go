@@ -82,7 +82,7 @@ func (p *Pipeline) kubeFacts(e *Event) facts {
 	}
 	f["grant_known"] = known
 	f["hash_match"] = match
-	f["hash_differs"] = grant != "" && known && !match
+	f["hash_differs"] = grant != "" && known && e.AfterHash != "" && !match
 	webhook, vap := false, false
 	for k := range e.AuditAnnotations {
 		if strings.HasPrefix(k, "patch.webhook.admission.k8s.io/") || strings.HasPrefix(k, "mutation.webhook.admission.k8s.io/") {

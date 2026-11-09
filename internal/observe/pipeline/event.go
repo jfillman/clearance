@@ -367,11 +367,8 @@ func (rs *RuleSet) normalizeAWS(a map[string]any, r RawEvent) (*Event, error) {
 	issuer := obj(sc["sessionIssuer"])
 	e := &Event{Provider: AWS, Scope: r.Scope, ID: str(a["eventID"]), Verb: name, API: name, Write: true,
 		Time:    parseTime(str(a["eventTime"])),
-		Subject: str(ui["arn"]), Type: str(ui["type"]), Issuer: str(issuer["arn"]), SourceIdentity: str(ui["sourceIdentity"]),
+		Subject: str(ui["arn"]), Type: str(ui["type"]), Issuer: str(issuer["arn"]), SourceIdentity: str(sc["sourceIdentity"]),
 		UserAgent: str(a["userAgent"]), Region: str(a["awsRegion"]), ErrorCode: str(a["errorCode"])}
-	if sc != nil && sourceIdentityIn(sc) != "" && e.SourceIdentity == "" {
-		e.SourceIdentity = sourceIdentityIn(sc)
-	}
 	if e.Scope == "" {
 		e.Scope = str(a["recipientAccountId"])
 	}
@@ -405,8 +402,4 @@ func (rs *RuleSet) normalizeAWS(a map[string]any, r RawEvent) (*Event, error) {
 		e.ExecKey = "session:" + e.Subject
 	}
 	return e, nil
-}
-
-func sourceIdentityIn(sc map[string]any) string {
-	return str(obj(sc["sessionIssuer"])["sourceIdentity"])
 }

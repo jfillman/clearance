@@ -90,17 +90,28 @@ func TestBundleRefusesBadRules(t *testing.T) {
 // A rule that loads but whose evaluation goes over the cost limit is cut off, and for attribution that is an error,
 // never a pass.
 func TestRuntimeCostLimitCutsOffEvaluation(t *testing.T) {
-	// a bundle whose limit is exactly what its costliest rule needs would not cut off; one rule far over a tiny limit
-	// does not load at all. So exercise the program-level limit directly with a cheap limit and a costly expression.
+	const expr = `event.owners.all(o, o.name.startsWith("a") && o.kind.contains("b") && o.name.endsWith("c"))`
 	rs := mustRules(t)
 	rs.CostLimit = 5
-	prg, err := rs.compile("probe", `event.owners.all(o, o.name.startsWith("a") && o.kind.contains("b") && o.name.endsWith("c"))`)
-	if err == nil {
-		// the estimate allowed it (owners of unknown size are bounded by the estimator): then the runtime must cut it off
-		ev := &Event{Owners: make([]Owner, 200)}
-		if _, err := evalBool(prg, ev, nil); err == nil {
-			t.Fatal("an evaluation over the cost limit completed")
-		}
+	if _, err := rs.compile("probe", expr); err == nil {
+		t.Fatal("a rule whose worst-case estimate is over the limit loaded")
+	}
+	// The estimator assumes at most 64 owners: a limit set to that estimate loads, and more owners than that go over it.
+	rs.CostLimit = 1 << 30
+	if _, err := rs.compile("probe", expr); err != nil {
+		t.Fatal(err)
+	}
+	rs.CostLimit = rs.Costs["probe"]
+	prg, err := rs.compile("probe", expr)
+	if err != nil {
+		t.Fatalf("the limit equal to the estimate should load: %v", err)
+	}
+	ev := &Event{Owners: make([]Owner, 5000)}
+	for i := range ev.Owners {
+		ev.Owners[i] = Owner{Kind: "b", Name: "abc"}
+	}
+	if _, err := evalBool(prg, ev, nil); err == nil {
+		t.Fatal("an evaluation over the cost limit completed")
 	}
 }
 

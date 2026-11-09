@@ -105,6 +105,11 @@ attribute:
       outcome: break-glass
       severity: medium
       detail: written inside a live break-glass window
+    - signal: grant-annotation.no-hash
+      when: facts.grant_known && !facts.hash_match && !facts.hash_differs && facts.argo_controller
+      outcome: observed-not-attributed
+      severity: medium
+      detail: Argo CD's controller wrote an object naming a known grant, but the event has no hash to compare (a Secret recorded at Metadata, or a delete)
     - signal: argo-controller.no-grant
       when: facts.argo_controller
       outcome: out-of-band

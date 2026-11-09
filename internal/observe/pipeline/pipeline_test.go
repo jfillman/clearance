@@ -530,3 +530,42 @@ func TestFilteredLineMatchesThePacket(t *testing.T) {
 		t.Fatalf("%q %q", f.Line(), pf.Line())
 	}
 }
+
+// A delete names a known grant but has no after hash to compare: that is not a differing hash. Argo's write is seen and
+// not attributed; anyone else carrying the same stamp is still out-of-band.
+func TestKnownGrantWithNoHashIsNotAHashMismatch(t *testing.T) {
+	var base RawEvent
+	for _, r := range corpus(t, "kubernetes.jsonl") {
+		if strings.Contains(string(r.Raw), "7c1d0001") {
+			base = r
+		}
+	}
+	if len(base.Raw) == 0 {
+		t.Fatal("corpus event 7c1d0001 not found")
+	}
+	for _, c := range []struct{ name, user, agent, signal, outcome string }{
+		{"argo", "system:serviceaccount:argocd:argocd-application-controller", "argocd-application-controller/v3.1.0", "grant-annotation.no-hash", "observed-not-attributed"},
+		{"kubectl", "dana@example.com", "kubectl/v1.36.0", "kubectl-agent", "out-of-band"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var m map[string]any
+			if err := json.Unmarshal(base.Raw, &m); err != nil {
+				t.Fatal(err)
+			}
+			m["verb"], m["auditID"], m["userAgent"] = "delete", "7c1d00ff-"+c.name, c.agent
+			m["user"] = map[string]any{"username": c.user, "groups": []any{"system:authenticated"}}
+			raw, err := json.Marshal(m)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rs := mustRules(t)
+			a, _, _, err := New(rs, mustLookups(t, rs), vocab.Default()).Process(RawEvent{Provider: base.Provider, Scope: base.Scope, Raw: raw})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if a == nil || a.Signal != c.signal || a.Outcome != c.outcome {
+				t.Fatalf("got %+v, want %s/%s", a, c.signal, c.outcome)
+			}
+		})
+	}
+}

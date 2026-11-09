@@ -250,7 +250,7 @@ func Load(b []byte) (*RuleSet, error) {
 		return nil, fmt.Errorf("observe rules: %w", err)
 	}
 	if d.Schema != Schema {
-		return nil, fmt.Errorf("observe rules: schema is %q", Schema)
+		return nil, fmt.Errorf("observe rules: schema is %q, want %q", d.Schema, Schema)
 	}
 	if d.Name == "" || d.Version == "" {
 		return nil, errors.New("observe rules: name and version are required (every assessment names the rule set it was made under)")
