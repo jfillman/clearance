@@ -65,6 +65,12 @@ type Classification struct {
 }
 
 func objectTier(ch ObjectChange, pol Policy) Reason {
+	// Only what the release stamps on the object's own metadata: first, because it is no change to the object, however
+	// sensitive the kind. A stamp in a pod template restarts the pods, so it never counts as nothing on its own.
+	rest := withoutStamps(ch.Fields, pol.ReleaseStamps)
+	if ch.Op == "changed" && len(ch.Fields) > 0 && len(rest) == 0 && allMetadata(ch.Fields) {
+		return Reason{ch.Subject(), "release-stamp", 0}
+	}
 	if pol.Tier3Kinds[ch.Kind] {
 		return Reason{ch.Subject(), "kind:" + ch.Kind, 3}
 	}
@@ -76,17 +82,14 @@ func objectTier(ch ObjectChange, pol Policy) Reason {
 		}
 	}
 	if ch.Op == "changed" && len(ch.Fields) > 0 {
-		meta, image := true, true
-		for _, f := range ch.Fields {
-			if !strings.HasPrefix(f, metadataOnly[0]) && !strings.HasPrefix(f, metadataOnly[1]) {
-				meta = false
-			}
+		if allMetadata(ch.Fields) {
+			return Reason{ch.Subject(), "metadata-only", 0}
+		}
+		image := len(rest) > 0
+		for _, f := range rest {
 			if !imageField.MatchString(f) {
 				image = false
 			}
-		}
-		if meta {
-			return Reason{ch.Subject(), "metadata-only", 0}
 		}
 		if image {
 			if len(pol.TrustedRegistries) > 0 {
@@ -107,6 +110,25 @@ func objectTier(ch ObjectChange, pol Policy) Reason {
 		}
 	}
 	return Reason{ch.Subject(), "kind:" + ch.Kind, 2}
+}
+
+func allMetadata(fields []string) bool {
+	for _, f := range fields {
+		if !strings.HasPrefix(f, metadataOnly[0]) && !strings.HasPrefix(f, metadataOnly[1]) {
+			return false
+		}
+	}
+	return true
+}
+
+func withoutStamps(fields, stamps []string) []string {
+	rest := make([]string, 0, len(fields))
+	for _, f := range fields {
+		if !slices.Contains(stamps, f) {
+			rest = append(rest, f)
+		}
+	}
+	return rest
 }
 
 func maxTier(rs []Reason) int {

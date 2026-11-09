@@ -15,6 +15,9 @@
 //	CLEARANCE_GATE_OUTSIDE_GROUPS     the gate baseline's outside groups, group refs (default none)
 //	CLEARANCE_GATE_OWNER_FALLBACK     the owner group of a change nobody names an owner for, when there is no outside
 //	                                  group (default none: such a change has no owner group)
+//	CLEARANCE_GATE_RELEASE_STAMPS     JSON pointers of the fields a release stamps on what it renders (a version label, a
+//	                                  release id), which the gate does not count as changes (default the standard
+//	                                  app.kubernetes.io/version label, on the object and its pod template)
 //	CLEARANCE_V0_PROVIDER             name/version of the provider rows written before providers were recorded are
 //	                                  projected with (default unrecorded/unrecorded)
 //	CLEARANCE_AI_COAUTHORS            comma-separated matchers on a commit's Co-Authored-By, Assisted-by and
@@ -39,6 +42,7 @@ type Vocabulary struct {
 	BaselineDenyFields   []string
 	OutsideGroups        []string
 	OwnerFallback        string
+	GateReleaseStamps    []string
 	V0ProviderName       string
 	V0ProviderVersion    string
 	// AICoauthors match the commit trailers an AI coding agent outside Clearance leaves (empty: the check is off).
@@ -51,14 +55,15 @@ type Vocabulary struct {
 // EnvVars are the variables FromEnv reads.
 var EnvVars = []string{"CLEARANCE_ON_BEHALF_OF_HEADER", "CLEARANCE_TRAILER_PREFIX", "CLEARANCE_RUN_IDENTITY_NAMESPACE",
 	"CLEARANCE_BASELINE_DENY_PATHS", "CLEARANCE_BASELINE_DENY_FIELDS", "CLEARANCE_GATE_OUTSIDE_GROUPS",
-	"CLEARANCE_GATE_OWNER_FALLBACK", "CLEARANCE_V0_PROVIDER", "CLEARANCE_AI_COAUTHORS"}
+	"CLEARANCE_GATE_OWNER_FALLBACK", "CLEARANCE_GATE_RELEASE_STAMPS", "CLEARANCE_V0_PROVIDER", "CLEARANCE_AI_COAUTHORS"}
 
 // Default is Clearance's own vocabulary.
 func Default() Vocabulary {
 	return Vocabulary{
 		OnBehalfOfHeader: "X-Clearance-On-Behalf-Of", TrailerPrefix: "Clearance-", RunIdentityNamespace: "agent-runs",
 		BaselineDenyPaths: []string{"CODEOWNERS", "**/CODEOWNERS", ".github/**"}, BaselineDenyFields: []string{},
-		OutsideGroups: []string{}, V0ProviderName: "unrecorded", V0ProviderVersion: "unrecorded",
+		OutsideGroups: []string{}, GateReleaseStamps: []string{"/metadata/labels/app.kubernetes.io~1version", "/spec/template/metadata/labels/app.kubernetes.io~1version"},
+		V0ProviderName: "unrecorded", V0ProviderVersion: "unrecorded",
 		AICoauthors: DefaultAICoauthors(),
 		PRTools:     []string{"repo.pr.open", "repo.pr.open_upper"}, ProfileSections: []string{},
 	}
@@ -114,6 +119,9 @@ func FromEnv(get func(string) string) (Vocabulary, error) {
 	}
 	if s := get("CLEARANCE_GATE_OUTSIDE_GROUPS"); s != "" {
 		v.OutsideGroups = list(s)
+	}
+	if s := get("CLEARANCE_GATE_RELEASE_STAMPS"); s != "" {
+		v.GateReleaseStamps = list(s)
 	}
 	v.OwnerFallback = get("CLEARANCE_GATE_OWNER_FALLBACK")
 	if s := get("CLEARANCE_V0_PROVIDER"); s != "" {

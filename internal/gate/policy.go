@@ -92,6 +92,7 @@ type Policy struct {
 	TrustedRegistries []string // image prefixes a tier-1 bump may come from; empty = any registry
 	MaxLinesTier1     int
 	OutsideGroups     []string
+	ReleaseStamps     []string // JSON pointers a release stamps on what it renders: not changes (vocab.GateReleaseStamps)
 	TTLDays           int
 	Approvers         map[int]Approvers
 	RepoPolicyDigest  *string // set by Tightened: the clearance.yaml that shaped this policy
@@ -130,6 +131,7 @@ func DefaultPolicy() Policy {
 		NonruntimePaths: []string{"docs/**", "**/*.md", "*.md", "LICENSE", ".gitignore", "tests/**", "**/tests/**", ".github/**", "CODEOWNERS"},
 		MaxLinesTier1:   MaxLinesTier1,
 		OutsideGroups:   append([]string{}, vocab.Get().OutsideGroups...),
+		ReleaseStamps:   append([]string{}, vocab.Get().GateReleaseStamps...),
 		TTLDays:         DefaultTTLDays,
 		Approvers:       map[int]Approvers{2: {1, 0}, 3: {1, 1}},
 		Outage:          DefaultOutage,

@@ -153,6 +153,36 @@ func TestAnImageBumpWithGreenChecksIsTier1(t *testing.T) {
 	}
 }
 
+// What every release stamps (CLEARANCE_GATE_RELEASE_STAMPS) is not a change: a real Airframe image bump is tier 1 and
+// clears by policy, though the version label moved on every object, a ServiceAccount included.
+func TestReleaseStampsAreNotChanges(t *testing.T) {
+	const label, tmpl, img = "/metadata/labels/app.kubernetes.io~1version", "/spec/template/metadata/labels/app.kubernetes.io~1version", "/spec/template/spec/containers/0/image"
+	const rid = "/metadata/annotations/hangar.io~1release-id"
+	pol := baseline
+	pol.ReleaseStamps = []string{label, tmpl, rid}
+	stamped := func(kind, name string, api string, fields ...string) map[string]any {
+		return obj(kind, name, "changed", fields, nil, api)
+	}
+	release := objs(stamped("Rollout", "a", "argoproj.io/v1alpha1", rid, label, tmpl, img), stamped("ServiceAccount", "a", "v1", label), stamped("Service", "a", "v1", label))
+	if c := mustClassify(t, change(map[string]any{"objects": release}), pol); c.Tier != 1 || c.Decision != "clear" {
+		t.Fatalf("a release: %+v", c)
+	}
+	for name, tc := range map[string]struct {
+		o    map[string]any
+		tier int
+	}{
+		"a stamp in a pod template alone restarts pods": {stamped("Rollout", "a", "argoproj.io/v1alpha1", tmpl), 2},
+		"a Rollout image and replicas":                  {stamped("Rollout", "a", "argoproj.io/v1alpha1", label, img, "/spec/replicas"), 2},
+		"another label on a ServiceAccount":             {stamped("ServiceAccount", "a", "v1", label, "/metadata/labels/team"), 3},
+		"an annotation on a ServiceAccount":             {stamped("ServiceAccount", "a", "v1", "/metadata/annotations/eks.amazonaws.com~1role-arn"), 3},
+		"a stamp on a ServiceAccount being added":       {obj("ServiceAccount", "a", "added", []string{label}, nil, "v1"), 3},
+	} {
+		if c := mustClassify(t, change(map[string]any{"objects": objs(tc.o)}), pol); c.Tier != tc.tier {
+			t.Errorf("%s: tier %d, want %d (%v)", name, c.Tier, tc.tier, c.Reasons)
+		}
+	}
+}
+
 // Objects listed as unchanged (the whole rendered tree, so a grant covers it) add no risk: a Secret or a Rollout
 // that is only in the tree, not in the diff, does not raise the tier of an image bump.
 func TestUnchangedObjectsAreAcceptedAndNeverTiered(t *testing.T) {
