@@ -144,6 +144,8 @@ jobs:
           - {name: clearance-argocd-agent, dockerfile: providers/argocd/agent/Dockerfile}
           - {name: clearance-cmp, dockerfile: providers/argocd/cmp/Dockerfile}
           - {name: clearance-wait, dockerfile: providers/argocd/wait/Dockerfile}
+          # The AWS collector (O-4).
+          - {name: clearance-observe-aws, dockerfile: providers/observe-aws/Dockerfile}
           # The evidence ledger's witness (C-3): a separate image, so it can be run by someone else.
           - {name: clearance-witness, dockerfile: cmd/clearance-witness/Dockerfile}
     steps:
@@ -264,6 +266,40 @@ jobs:
           echo "$GH_TOKEN" | cosign login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           cosign sign --yes "ghcr.io/${owner}/charts/clearance-argocd-agent@${digest}"
 
+  # The AWS collector chart (charts/clearance-observe-aws) at the tag's version, pushed to
+  # oci://ghcr.io/jfillman/charts/clearance-observe-aws and signed keyless; its default image tag is this release's.
+  observe-aws-chart:
+    needs: [check, provider-images]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4.3.0
+        with:
+          version: v3.21.3
+      - uses: sigstore/cosign-installer@v4.1.1
+      - id: push
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "$GH_TOKEN" | helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          helm lint charts/clearance-observe-aws --strict -f charts/clearance-observe-aws/ci/minimal-values.yaml
+          helm package charts/clearance-observe-aws --version "$VERSION" --app-version "$VERSION" -d dist
+          helm push "dist/clearance-observe-aws-${VERSION}.tgz" "oci://ghcr.io/${owner}/charts" 2>&1 | tee push.log
+          digest=$(sed -n 's/^Digest: //p' push.log)
+          test -n "$digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "$GH_TOKEN" | cosign login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          cosign sign --yes "ghcr.io/${owner}/charts/clearance-observe-aws@${digest}"
+
   # The card's done bar on the published artifacts: helm install oci://ghcr.io/jfillman/charts/clearance on a fresh
   # kind cluster (no Airframe, no Glidepath) passes the install test, with the published image.
   install-test:
@@ -316,7 +352,7 @@ jobs:
         run: tools/chart-install-test/run.sh
 
   release:
-    needs: [check, wheel, image, chart, provider-images, agent-chart, install-test]
+    needs: [check, wheel, image, chart, provider-images, agent-chart, observe-aws-chart, install-test]
     runs-on: ubuntu-latest
     permissions:
       contents: write

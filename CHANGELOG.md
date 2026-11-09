@@ -10,6 +10,16 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 ## [Unreleased]
 
 ### Added
+
+- **The AWS collector, observe-aws** (O-4; `providers/observe-aws`, [docs/observe-aws.md](docs/observe-aws.md)). Three feeds
+  through one normalizer and the O-2 pipeline: CloudTrail writes and AWS Config items from an EventBridge queue, and the S3
+  trail read in batches with log-file integrity validation (each digest's RSA signature, its link to the previous digest
+  and each log file's hash, verified before extraction; the result is `integrity.sourceVerified`). A Config item and the
+  event that caused it are one exception (a correlation key, tested in both arrival orders). First-release scope is a
+  filter with tests; what is not evaluated is named in the health record. Per-account health. G-TF-5's untraced-apply and
+  drift detectors are now stages of it and the `terraform-detector` command is removed (same exceptions, same
+  once-only rule). Chart `clearance-observe-aws`, image `clearance-observe-aws`. Unverified against a real trail, queue and
+  Config recorder (see the doc).
 - **O-2: the observation pipeline (`internal/observe/pipeline`) and `clearance observe replay`.** Six stages over raw
   Kubernetes audit events and CloudTrail records: normalize, scope, noise, attribute, classify, correlate. The rules are
   CEL in a versioned bundle (`clearance.observe-rules/v1`) compiled once at load under a cost limit and named in every

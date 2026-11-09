@@ -46,12 +46,25 @@ func EnvCreds(ctx context.Context, hc *http.Client, region string) (Creds, error
 	if role == "" || file == "" {
 		return Creds{}, errors.New("no AWS credentials: set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or AWS_ROLE_ARN and AWS_WEB_IDENTITY_TOKEN_FILE")
 	}
+	return assumeWithToken(ctx, hc, region, role, file)
+}
+
+// WebIdentityCreds is a CredSource that assumes role with the token in file (a projected service account token whose
+// audience is sts.amazonaws.com), minted per run and never stored. A second role in another account reads the logging
+// account with the same token.
+func WebIdentityCreds(role, file string) CredSource {
+	return func(ctx context.Context, hc *http.Client, region string) (Creds, error) {
+		return assumeWithToken(ctx, hc, region, role, file)
+	}
+}
+
+func assumeWithToken(ctx context.Context, hc *http.Client, region, role, file string) (Creds, error) {
 	tok, err := os.ReadFile(file)
 	if err != nil {
 		return Creds{}, fmt.Errorf("reading the web identity token: %w", err)
 	}
 	q := url.Values{"Action": {"AssumeRoleWithWebIdentity"}, "Version": {"2011-06-15"}, "RoleArn": {role},
-		"RoleSessionName": {"terraform-detector"}, "DurationSeconds": {"900"},
+		"RoleSessionName": {"observe-aws"}, "DurationSeconds": {"900"},
 		"WebIdentityToken": {strings.TrimSpace(string(tok))}}
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://sts."+region+".amazonaws.com/", strings.NewReader(q.Encode()))
 	if err != nil {
@@ -242,19 +255,51 @@ func (a *AWS) now() time.Time {
 }
 
 func (a *AWS) send(ctx context.Context, req *http.Request, body []byte, service string) ([]byte, error) {
+	b, _, err := a.sendH(ctx, req, body, service)
+	return b, err
+}
+
+// sendH is send with the response headers (S3 keeps a CloudTrail digest's signature in x-amz-meta-signature).
+func (a *AWS) sendH(ctx context.Context, req *http.Request, body []byte, service string) ([]byte, http.Header, error) {
 	c, err := a.credentials(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	Sign(req, body, c, service, a.Region, a.now())
-	b, status, err := doAWS(a.client(), req)
+	resp, err := a.client().Do(req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if status != 200 {
-		return nil, fmt.Errorf("%s %s: %d %s", service, req.Method, status, clip(b))
+	defer resp.Body.Close()
+	b, err := io.ReadAll(io.LimitReader(resp.Body, maxAWSBody+1))
+	if err != nil {
+		return nil, nil, err
 	}
-	return b, nil
+	if len(b) > maxAWSBody {
+		return nil, nil, errors.New("the AWS answer is over the size cap")
+	}
+	if resp.StatusCode != 200 {
+		return nil, nil, &StatusError{Service: service, Method: req.Method, Status: resp.StatusCode, Body: clip(b)}
+	}
+	return b, resp.Header, nil
+}
+
+// StatusError is a non-200 answer from AWS.
+type StatusError struct {
+	Service, Method string
+	Status          int
+	Body            string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("%s %s: %d %s", e.Service, e.Method, e.Status, e.Body)
+}
+
+// Do signs and sends req for service in the client's region and returns the body of a 200 answer and its headers.
+// It is how the other stages of the collector reach S3, SQS, CloudTrail, Config and EventBridge with the one
+// credential source (never persisted, minted per run).
+func (a *AWS) Do(ctx context.Context, service string, req *http.Request, body []byte) ([]byte, http.Header, error) {
+	return a.sendH(ctx, req, body, service)
 }
 
 // StateVersion is one version of a state object.

@@ -132,7 +132,7 @@ laptop; `TestPerEventPathUnderOneMillisecond` holds it under the 1 ms bound).
 
 ## What the collectors still do
 
-The pipeline is wired to nothing yet. O-3 and O-4 read the sources, implement `Lookups` over the record store, post the
+O-4's collector ([observe-aws.md](observe-aws.md)) wires the AWS side; O-3's wires Kubernetes. They read the sources, implement `Lookups` over the record store, post the
 assessments and the exceptions, call `Healthy` on their next healthy record, persist the pipeline's counters (`Stats`)
 and pass the per-rule filtered counts to the packet job (`packet.Params.Filtered`); until a collector stores them the
 packet's "filtered" line is empty rather than zero. A Kubernetes collector supplies `before` from its watch cache (an

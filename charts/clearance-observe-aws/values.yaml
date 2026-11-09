@@ -1,0 +1,79 @@
+# Clearance's AWS collector (providers/observe-aws). One collector per observed account.
+image:
+  repository: ghcr.io/jfillman/clearance-observe-aws
+  # Empty: v plus the chart's appVersion (the image's release tag).
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# The collector's identity on the core is this service account: the core's CLEARANCE_FOREIGN_SERVICE_ACCOUNTS lists
+# <namespace>/<name>, and CLEARANCE_PROVIDERS registers observe-aws for it (kinds observation, assessment, resolution,
+# observation.health, deploy.exception).
+serviceAccount:
+  name: clearance-observe-aws
+
+# Clearance: clearance-api (outcomes, for the lookups and the detectors) and the core (records).
+apiURL: ""
+coreURL: ""
+tokenAudience: clearance
+
+# The observed account.
+account: ""
+region: us-east-1
+# The SQS queue the EventBridge rules deliver to (hangar-infra observe/lab output queue_url).
+queueURL: ""
+# The environment the account's cleared applies are recorded under (a cleared change's env).
+environment: ""
+
+# AWS: roles assumed with the pod's projected token (audience sts.amazonaws.com). Both are read-only.
+aws:
+  tokenAudience: sts.amazonaws.com
+  # In the observed account: the queue, AWS Config, EventBridge, the state bucket's versions.
+  roleARN: ""
+  # In the logging account: the organization trail's bucket and the CloudTrail describe calls. Empty: the S3 trail is
+  # not read (and the digest checks are not made).
+  trailRoleARN: ""
+
+# The S3 trail (the organization trail, delivered to the logging account).
+trail:
+  name: organization
+  bucket: ""
+  region: us-east-1
+  # AWSLogs/<organization id>/<account>/ for an organization trail, AWSLogs/<account>/ otherwise.
+  prefix: ""
+  regions: [us-east-1]
+
+# The buckets whose data events are assessed (state, artifact, secrets) and the rules that must be enabled.
+dataBuckets: []
+rules: [observe-aws-cloudtrail, observe-aws-config]
+# Evaluate the second wave too (VPC routing, Secrets Manager, Lambda configuration, EKS access, RDS).
+secondWave: false
+# How long an event waits for its Config item and for the apply outcome that clears it. Longer than the longest apply.
+settle: 10m
+
+# The Terraform workspaces the detector stages watch (state-bucket versions, scheduled plan). Empty: no stage runs.
+# Each: {name, key, bucket, dir, env}. The untraced-apply witness runs in the collector. The scheduled plan (drift) needs
+# the terraform binary and a checkout of the module, which this image does not have: it runs where they are, as
+# `observe-aws --stage drift` (a scheduled workflow), and is not scheduled here.
+workspaces: []
+untracedEvery: 30m
+driftEvery: 24h
+
+# A rule set bundle (clearance.observe-rules/v1) naming this deployment's apply roles, SSO admin roles and governed
+# accounts. Empty: the build's documentation-style default, which governs nothing real.
+rules_bundle: ""
+
+networkPolicy:
+  enabled: false
+  clearanceCIDRs: []
+  clearancePorts: [80, 443]
+hostAliases: []
+
+resources:
+  requests: {cpu: 20m, memory: 64Mi}
+  limits: {memory: 256Mi}
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []

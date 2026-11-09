@@ -13,6 +13,7 @@ nav:
   - Verifying a packet offline (C-4): verify.md
   - The provider protocol and conformance: provider-protocol.md
   - The observation pipeline (O-2): observe-pipeline.md
+  - The AWS collector (O-4): observe-aws.md
   - The provenance App (design pass): provenance-app.md
   - The Traefik Hub adapter (Unverified): federate-traefik-hub.md
 

@@ -194,3 +194,45 @@ func (e *HTTPEvidence) Reported(ctx context.Context, since time.Time) ([]Reporte
 	}
 	return out, nil
 }
+
+// Apply is a recorded apply: the change that was cleared for it (its id is the grant), the environment, the plan
+// digest it applied and its apply window. The collector's lookups are made from these.
+type Apply struct {
+	Change, Env, Digest string
+	Started, Finished   time.Time
+}
+
+// Applies is the deploy.outcome records since the time that report an applied plan.
+func (e *HTTPEvidence) Applies(ctx context.Context, since time.Time) ([]Apply, error) {
+	items, err := e.page(ctx, "/v1/evidence", url.Values{"tool": {"deploy.outcome"}, "since": {since.UTC().Format(time.RFC3339)}, "limit": {"200"}})
+	if err != nil {
+		return nil, err
+	}
+	var out []Apply
+	for _, r := range items {
+		s, err1 := time.Parse(time.RFC3339, str(r, "outcome", "started_at"))
+		f, err2 := time.Parse(time.RFC3339, str(r, "outcome", "finished_at"))
+		id := str(r, "change", "id")
+		if err1 != nil || err2 != nil || id == "" {
+			continue
+		}
+		env := str(r, "destination", "environment")
+		if env == "" {
+			env = str(r, "change", "env")
+		}
+		if ok, _ := lookup(r, "outcome", "applied").(bool); !ok {
+			continue
+		}
+		out = append(out, Apply{Change: id, Env: env, Digest: str(r, "outcome", "digests", "sha256"), Started: s, Finished: f})
+	}
+	return out, nil
+}
+
+func lookup(m map[string]any, k ...string) any {
+	var v any = m
+	for _, x := range k {
+		mm, _ := v.(map[string]any)
+		v = mm[x]
+	}
+	return v
+}

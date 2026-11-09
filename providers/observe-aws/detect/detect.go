@@ -25,7 +25,7 @@ import (
 )
 
 // ProviderName is the provider the core registers the detector as (CLEARANCE_PROVIDERS).
-const ProviderName = "terraform-detector"
+const ProviderName = "observe-aws"
 
 // Workspace is one protected Terraform workspace the detector watches.
 type Workspace struct {
@@ -133,7 +133,7 @@ func (d *Detector) log() *slog.Logger {
 	return slog.Default()
 }
 
-// Provider is the provider string of every record: terraform-detector/<version>.
+// Provider is the provider string of every record: observe-aws/<version>.
 func (d *Detector) Provider() string { return ProviderName + "/" + d.Cfg.Version }
 
 // Fingerprint is what a drift is called for de-duplication: the sha256 of its sorted addresses.

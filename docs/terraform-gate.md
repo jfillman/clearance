@@ -138,11 +138,15 @@ run in a job *before* the environment job (the App looks up the registered chang
 `terraform show -json` is run by the workflow and passed as `json` so `hold` need not run inside an initialized
 directory. The repository needs `autopilot.githubWorkflows: ["repo:jfillman/hangar-infra:*"]` in the cluster's config.
 
-## Exception detection (G-TF-5, Built, not deployed)
+## Exception detection (G-TF-5, Built; a stage of observe-aws since O-4)
 
-The gate only sees applies that go through it. `terraform-detector` (`providers/terraform/detect`, Go) looks at what
-goes around it, once per run, meant for a schedule. It posts `deploy.exception` through `POST /v1/records` as the
-registered provider `terraform-detector/<version>`, located by `destination.workspace` {backend, key, name}: a plan
+The two detectors are no longer a command of their own: they are stages of the AWS collector
+([observe-aws.md](observe-aws.md); `providers/observe-aws/detect`). The untraced-apply stage runs inside the collector
+every 30 minutes; the drift stage runs where the terraform binary is (`observe-aws --stage drift`, or in the collector
+when the binary is on its PATH). The text below describes the stages; read `terraform-detector` as `observe-aws` and
+`--only drift|untraced` as `--stage drift|untraced`. The gate only sees applies that go through it. The stages look at what
+goes around it. They post `deploy.exception` through `POST /v1/records` as the
+registered provider `observe-aws/<version>`, located by `destination.workspace` {backend, key, name}: a plan
 has no cluster, so the core accepts a workspace in its place (`where()` in `internal/gate/exception.go`; a gitops
 report keeps `destination.cluster` and `environment`, and a destination with both is refused).
 
@@ -195,8 +199,8 @@ the thing it watches for.
 **Registration** (the manager adds it to `CLEARANCE_PROVIDERS`; the principal is the detector's workload identity):
 
 ```json
-{"name": "terraform-detector", "version": "0.1.0", "principals": ["<detector principal>"],
- "kinds": ["deploy.exception"]}
+{"name": "observe-aws", "version": "0.1.0", "principals": ["<collector principal>"],
+ "kinds": ["deploy.exception", "observation", "assessment", "resolution", "observation.health"]}
 ```
 
 The same principal needs read access to evidence (`GET /v1/evidence`, `GET /v1/exceptions`: the auditor role) for the
@@ -205,9 +209,9 @@ outcome list and for de-duplication.
 **Schedule.** Run it more often than `--window`: every 30 to 60 minutes for untraced applies (with the default window,
 a missed run or two is covered, and a version already filed is skipped), and every few hours or nightly for drift
 (`--only drift`; a plan is slow and reads a lot). A scheduled GitHub Actions workflow in the hangar-infra repo
-(G-TF-4's repo) is the intended home: `on: schedule`, OIDC to AWS and to Clearance, `terraform-detector --config
-detectors.json`; it is not written yet. Status: **Built**, tested against a fake plan exit code and fake S3 and
-CloudTrail answers (`go test ./providers/terraform/...`, including the SigV4 published test vector);
+(G-TF-4's repo) is the intended home: `on: schedule`, OIDC to AWS and to Clearance, `observe-aws --stage drift --config
+observe.json`; it is not written yet. Status: **Built**, tested against a fake plan exit code and fake S3 and
+CloudTrail answers (`go test ./providers/observe-aws/...`, including the SigV4 published test vector);
 **Unverified** against a real bucket and trail.
 
 ## The HCP Terraform run task (G-TF-6, Built, not live-verified)

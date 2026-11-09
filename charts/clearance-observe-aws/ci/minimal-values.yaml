@@ -1,0 +1,20 @@
+account: "700017004810"
+coreURL: http://clearance.hangar-dev.local
+apiURL: http://clearance-api.hangar-dev.local
+queueURL: https://sqs.us-east-1.amazonaws.com/700017004810/observe-aws
+environment: lab
+aws:
+  roleARN: arn:aws:iam::700017004810:role/hangar-observe-aws-read
+  trailRoleARN: arn:aws:iam::158233516926:role/hangar-observe-aws-trail-read
+trail:
+  bucket: aws-cloudtrail-logs-158233516926-940c2499
+  prefix: AWSLogs/o-example1234/700017004810/
+dataBuckets: [hangar-lab-tfstate-700017004810]
+workspaces:
+  - {name: default, key: network/lab/terraform.tfstate, bucket: hangar-lab-tfstate-700017004810, dir: /work/network/lab, env: lab}
+networkPolicy:
+  enabled: true
+  clearanceCIDRs: [192.168.1.72/32]
+hostAliases:
+  - ip: 192.168.1.72
+    hostnames: [clearance.hangar-dev.local, clearance-api.hangar-dev.local]

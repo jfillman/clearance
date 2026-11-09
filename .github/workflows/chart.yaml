@@ -27,6 +27,7 @@ jobs:
       - run: helm lint charts/clearance --strict -f charts/clearance/ci/minimal-values.yaml
       - run: helm lint charts/clearance --strict -f charts/clearance/ci/full-values.yaml
       - run: helm lint charts/clearance-argocd-agent --strict -f charts/clearance-argocd-agent/ci/minimal-values.yaml
+      - run: helm lint charts/clearance-observe-aws --strict -f charts/clearance-observe-aws/ci/minimal-values.yaml
       - run: helm lint charts/clearance-witness --strict -f charts/clearance-witness/ci/minimal-values.yaml
       - name: render tests
         run: go test -v ./tools/charttest/

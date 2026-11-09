@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "observe.fullname" . }}
+  labels: {{- include "observe.labels" . | nindent 4 }}
+data:
+  config.json: |
+    {{- $c := dict "account" .Values.account "region" .Values.region "queueURL" .Values.queueURL "environment" .Values.environment
+        "dataBuckets" .Values.dataBuckets "rules" .Values.rules "secondWave" .Values.secondWave "settle" .Values.settle
+        "workspaces" .Values.workspaces "untracedEvery" .Values.untracedEvery "driftEvery" .Values.driftEvery }}
+    {{- if .Values.trail.bucket }}
+    {{- $_ := set $c "trailBucket" .Values.trail.bucket }}
+    {{- $_ := set $c "trailPrefix" .Values.trail.prefix }}
+    {{- $_ := set $c "trailRegion" .Values.trail.region }}
+    {{- $_ := set $c "trailName" .Values.trail.name }}
+    {{- $_ := set $c "regions" .Values.trail.regions }}
+    {{- end }}
+    {{ toJson $c }}
+{{- if .Values.rules_bundle }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "observe.fullname" . }}-rules
+  labels: {{- include "observe.labels" . | nindent 4 }}
+data:
+  rules.yaml: |
+    {{- .Values.rules_bundle | nindent 4 }}
+{{- end }}
