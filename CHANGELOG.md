@@ -9,6 +9,13 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.34.2] - 2026-11-08
+
+### Fixed
+- **The release install test runs on `ubuntu-24.04`.** `ubuntu-latest` moved to 26.04, where `kind load` fails on the
+  pulled multi-arch image, so v0.34.1's images and chart published but its GitHub Release did not. 0.34.2 carries
+  0.34.1's fixes and is the version to deploy.
+
 ## [0.34.1] - 2026-11-08
 
 ### Fixed
@@ -753,7 +760,8 @@ What the Autopilot gateway needs of the core before the hangar-dev cutover (R-3e
   scope, narrow-only limits, CEL policy, sessions, the hash-chained audit log and the gateway; the Hangar pack's
   `glidepath.*` and `airframe.*` tools over glidepath-api and a GET-only Kubernetes adapter.
 
-[Unreleased]: https://github.com/jfillman/clearance/compare/v0.34.1...HEAD
+[Unreleased]: https://github.com/jfillman/clearance/compare/v0.34.2...HEAD
+[0.34.2]: https://github.com/jfillman/clearance/compare/v0.34.1...v0.34.2
 [0.34.1]: https://github.com/jfillman/clearance/compare/v0.34.0...v0.34.1
 [0.34.0]: https://github.com/jfillman/clearance/compare/v0.33.0...v0.34.0
 [0.33.0]: https://github.com/jfillman/clearance/compare/v0.32.0...v0.33.0

@@ -266,7 +266,8 @@ jobs:
   # kind cluster (no Airframe, no Glidepath) passes the install test, with the published image.
   install-test:
     needs: [check, image, chart]
-    runs-on: ubuntu-latest
+    # Not ubuntu-latest: on ubuntu-26.04 `kind load` fails on the pulled multi-arch image ("content digest ...: not found").
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: read
