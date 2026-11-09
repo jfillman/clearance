@@ -626,6 +626,15 @@ type Change struct {
 	Outage string `json:"outage,omitempty"`
 	// Ended is the record that moved the change to degraded or exception.
 	Ended *Ended `json:"ended,omitempty"`
+	// EvidenceWait is set while an approved tier 3 change waits for evidence to be checkpointed (C-3).
+	EvidenceWait *EvidenceWait `json:"evidence_wait,omitempty"`
+}
+
+// EvidenceWait says why an approved tier 3 change is still holding: the evidence ledger cannot checkpoint.
+type EvidenceWait struct {
+	Since     string `json:"since"`
+	Assurance string `json:"assurance"` // waiting-for-checkpoint
+	Reason    string `json:"reason"`
 }
 
 // Ended names the provider record that took a change out of the main path.
@@ -808,6 +817,34 @@ type Ready struct {
 	Degraded []string `json:"degraded,omitempty"`
 	// Attestation is the change attestation signer's status (C-2): whether it runs, with which backend, or why it is off.
 	Attestation Attestation `json:"attestation"`
+	// Ledger is the evidence ledger's status (C-3); absent when the ledger is off.
+	Ledger *LedgerStatus `json:"ledger,omitempty"`
+}
+
+// LedgerStatus is the evidence ledger's status in GET /readyz (C-3).
+type LedgerStatus struct {
+	Enabled bool   `json:"enabled"`
+	Origin  string `json:"origin,omitempty"`
+	// State is current, checkpointing, witness-unavailable, witness-rejected or stalled.
+	State  string `json:"state,omitempty"`
+	Detail string `json:"detail,omitempty"`
+	// Chain is the number of chain records, Ledger how many the log holds, Witnessed how many are under a witnessed
+	// checkpoint.
+	Chain     int64 `json:"chain"`
+	Ledger    int64 `json:"ledger"`
+	Witnessed int64 `json:"witnessed"`
+	// Tier3Wait is the outage knob; Holding is whether a tier 3 change would wait right now.
+	Tier3Wait bool            `json:"tier3_wait"`
+	Holding   bool            `json:"holding"`
+	Witnesses []LedgerWitness `json:"witnesses,omitempty"`
+}
+
+// LedgerWitness is the last thing a witness did.
+type LedgerWitness struct {
+	URL    string `json:"url"`
+	State  string `json:"state"` // ok | unavailable | rejected
+	Detail string `json:"detail,omitempty"`
+	At     string `json:"at,omitempty"`
 }
 
 // Attestation is the change attestation signer's status in GET /readyz.

@@ -533,3 +533,81 @@ func TestAICoauthorsUnsetEmptyAndSet(t *testing.T) {
 		}
 	}
 }
+
+// The evidence ledger (C-3) is off unless configured: the default render has no volume, no environment and no mount
+// for it, and the same Deployment as before. On, it is a ReadWriteOnce claim for the one core replica, whose rollout
+// is Recreate, with the key from an existing Secret and never a value.
+func TestTheLedgerIsOffUnlessConfigured(t *testing.T) {
+	for _, f := range []string{"minimal-values.yaml", "install-values.yaml"} {
+		objs := render(t, "-f", valuesFile(f))
+		for _, o := range objs {
+			if strings.Contains(fmt.Sprint(o), "ledger") {
+				t.Errorf("%s renders something about the ledger with it off: %s/%v", f, o["kind"], get(o, "metadata", "name"))
+			}
+		}
+	}
+	objs := render(t, "-f", valuesFile("full-values.yaml"))
+	core := find(objs, "Deployment", "t-clearance-core")
+	if get(core, "spec", "strategy", "type") != "Recreate" || get(core, "spec", "replicas") != 1 {
+		t.Errorf("rollout %v replicas %v", get(core, "spec", "strategy"), get(core, "spec", "replicas"))
+	}
+	e := env(container(t, core))
+	if e["CLEARANCE_LEDGER_DIR"] != "/var/lib/clearance/ledger" || e["CLEARANCE_LEDGER_KEY_FILE"] != "/etc/clearance/ledger/ledger-key" ||
+		e["CLEARANCE_LEDGER_TIER3_WAIT"] != "true" || e["CLEARANCE_LEDGER_CHECKPOINT_INTERVAL"] != "30s" {
+		t.Errorf("ledger env %v", e)
+	}
+	for k, v := range e {
+		if strings.Contains(k, "LEDGER") && strings.Contains(v, "PRIVATE") {
+			t.Errorf("%s carries key material", k)
+		}
+	}
+	pvc := find(objs, "PersistentVolumeClaim", "t-clearance-core-ledger")
+	if pvc == nil || fmt.Sprint(get(pvc, "spec", "accessModes")) != "[ReadWriteOnce]" ||
+		get(pvc, "spec", "resources", "requests", "storage") != "2Gi" || get(pvc, "spec", "storageClassName") != "fast" {
+		t.Errorf("claim %v", pvc)
+	}
+	var key, claim bool
+	for _, v := range get(core, "spec", "template", "spec", "volumes").([]any) {
+		if get(v, "name") == "ledger-key" && get(v, "secret", "secretName") == "clearance-ledger-key" && get(v, "secret", "defaultMode") == 256 {
+			key = true
+		}
+		if get(v, "name") == "ledger" && get(v, "persistentVolumeClaim", "claimName") == "t-clearance-core-ledger" {
+			claim = true
+		}
+	}
+	if !key || !claim {
+		t.Errorf("volumes: key %v claim %v", key, claim)
+	}
+	cm := find(objs, "ConfigMap", "t-clearance-core-ledger")
+	if cm == nil || !strings.Contains(fmt.Sprint(get(cm, "data", "witness-policy")), "quorum lab") || get(cm, "data", "retired-keys") == nil {
+		t.Errorf("config %v", cm)
+	}
+	np := find(objs, "NetworkPolicy", "t-clearance-core")
+	if !strings.Contains(fmt.Sprint(get(np, "spec", "egress")), "witness-system") {
+		t.Errorf("no egress to the witness: %v", get(np, "spec", "egress"))
+	}
+	if api := find(objs, "NetworkPolicy", "t-clearance-api"); strings.Contains(fmt.Sprint(get(api, "spec", "egress")), "witness-system") {
+		t.Error("the api may reach the witness")
+	}
+	if strings.Contains(fmt.Sprint(find(objs, "Deployment", "t-clearance-api")), "ledger") {
+		t.Error("the api carries the ledger")
+	}
+}
+
+func TestTheLedgerNeedsItsKeyAndAWitness(t *testing.T) {
+	base := []string{"--set", "database.existingSecret=x", "--set", "ledger.enabled=true"}
+	for name, tc := range map[string]struct {
+		extra []string
+		want  string
+	}{
+		"no key":     {[]string{"--set", "ledger.witnessPolicy=quorum none"}, "ledger.existingSecret"},
+		"no witness": {[]string{"--set", "ledger.existingSecret=k"}, "ledger.witnessPolicy"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out, err := helm(t, append(append([]string(nil), base...), tc.extra...)...)
+			if err == nil || !strings.Contains(out, tc.want) {
+				t.Fatalf("%v: %s", err, out)
+			}
+		})
+	}
+}

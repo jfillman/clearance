@@ -9,8 +9,8 @@ Status: **Built** (R-6; v1.1, the observation kinds, O-1: [Observations](#observ
 `https://clearance.hangarplatform.dev/schemas/evidence/v1.json`, embedded in the Go binary as
 `github.com/jfillman/clearance/schemas.EvidenceV1`). The Go core is the one writer
 (`internal/evidence.Seal`, used by `store/memory` and `store/pg`). Until v0.29.0 the Python gateway (`audit.py`
-`seal`) wrote the same v1 envelope; that package left the repository in v0.30.0, and its fixtures below are frozen. The api projects v0-draft rows. Signing, the Tessera ledger and assurance states
-other than `recorded-not-checkpointed` are later packages (C-series); this page says where they attach.
+`seal`) wrote the same v1 envelope; that package left the repository in v0.30.0, and its fixtures below are frozen. The api projects v0-draft rows. The Tessera ledger and the `checkpointed` assurance state are built (C-3, off unless
+configured: [core.md](core.md#the-evidence-ledger-c-3)); record signing is a later package.
 
 ## What you get
 
@@ -35,7 +35,7 @@ other than `recorded-not-checkpointed` are later packages (C-series); this page 
   whitespace, UTF-8, only `"`, `\` and control characters escaped, floats in Python's repr
   (`internal/canon`, byte for byte `audit.canonical`).
 - The assurance state is **not** in the record. It is a column beside it (`clearance_evidence.assurance`), because
-  it changes after the record is written (`recorded-not-checkpointed` until a witnessed checkpoint covers it).
+  it changes after the record is written (`recorded-not-checkpointed` until a witnessed checkpoint covers it, then `checkpointed`: [the evidence ledger](core.md#the-evidence-ledger-c-3); always `recorded-not-checkpointed` while the ledger is off).
 
 ## The record
 

@@ -26,6 +26,19 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   the three-part statement (cleared and verified; seen, not cleared; could not see) with the health summary. A stale or
   missing health record makes the window `blind`, and a blind window is never clean.
 - The core contract and the Python client models are regenerated (`duplicate` on the record reference).
+- **The evidence ledger (C-3), off unless configured.** A Tessera log of the evidence chain's record hashes, checkpointed
+  and countersigned by a witness Clearance does not operate; a record's assurance state moves from
+  `recorded-not-checkpointed` to `checkpointed` when its hash is under a witnessed checkpoint. A witness that rejects a
+  checkpoint (a truncated, rewritten or forked log) stops its publication; an altered row is named; a lost volume is
+  rebuilt from the chain and must reach the root a witness signed, or the core does not serve. The outage knob
+  `CLEARANCE_LEDGER_TIER3_WAIT` (default on) makes a tier 3 change wait while evidence cannot be checkpointed
+  (`evidence_wait` on the change; it clears when the ledger recovers). `GET /readyz` reports `ledger`. Set
+  `CLEARANCE_LEDGER_DIR` (chart `ledger.enabled`) to turn it on; nothing changes without it. See
+  [docs/core.md](docs/core.md#the-evidence-ledger-c-3).
+- `clearance-witness`, the ledger's witness, in its own binary, image and chart (`charts/clearance-witness`), and
+  `clearance ledger keygen`.
+- The local anchored `Checkpoint` and `clearance chain verify --anchor` stay: they are the only protection against
+  truncation while the ledger is off.
 - **The HCP Terraform run task** (G-TF-6; `internal/hcprun`, `POST /v1/terraform/run-task`;
   [docs/terraform-gate.md](docs/terraform-gate.md#the-hcp-terraform-run-task-g-tf-6-built-not-live-verified)). Verifies
   HCP Terraform's `X-TFC-Task-Signature` (HMAC-SHA512, constant time, per-organization key from a file), reads the plan

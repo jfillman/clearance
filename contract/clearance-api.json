@@ -345,6 +345,16 @@
           "env": {
             "type": "string"
           },
+          "evidence_wait": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateEvidenceWait"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "expires_at": {
             "description": "Python datetime.isoformat() of an aware time",
             "type": "string"
@@ -1250,6 +1260,25 @@
         ],
         "type": "object"
       },
+      "GateEvidenceWait": {
+        "properties": {
+          "assurance": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "since": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "assurance",
+          "reason",
+          "since"
+        ],
+        "type": "object"
+      },
       "GateFeedToken": {
         "properties": {
           "change_id": {
@@ -1985,6 +2014,16 @@
           },
           "env": {
             "type": "string"
+          },
+          "evidence_wait": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateEvidenceWait"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "expires_at": {
             "description": "Python datetime.isoformat() of an aware time",

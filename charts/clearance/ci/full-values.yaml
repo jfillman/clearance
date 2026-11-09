@@ -59,6 +59,23 @@ signing:
   key: signing-key.pem
   # Render only: the core refuses a KMS reference until the KMS signer is built.
   kms: awskms:///arn:aws:kms:us-east-1:000000000000:key/00000000-0000-0000-0000-000000000000
+ledger:
+  enabled: true
+  existingSecret: clearance-ledger-key
+  key: ledger-key
+  witnessPolicy: |
+    witness lab lab-witness+0a1b2c3d+BHcz0Tn2iCWzy5s1yE0kSqYoUS4RzbxtJ8L4C1MvaiTs https://witness.example.test
+    quorum lab
+  retiredKeys: |
+    clearance-ledger+0a1b2c3d+AY4Qn1kGp2g9fU0y1z5Rz2gk8rrQeE8Gz0g1b9z4cE5L
+  checkpointInterval: 30s
+  tier3Wait: true
+  stallAfter: 5m
+  persistence: {size: 2Gi, storageClass: fast}
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: witness-system}}
+      ports: [{protocol: TCP, port: 8080}]
 token:
   ttl: 10m
   issuer: clearance-hangar-dev
