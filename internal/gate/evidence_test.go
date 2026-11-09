@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jfillman/clearance/internal/gate"
 )
@@ -77,4 +78,59 @@ func TestEvidenceWaitOnlyConcernsTier3AndALedger(t *testing.T) {
 	if out, err := g.svc.Clear(g.ctx, principals["root"], c3, ""); err != nil || out.State != "cleared" {
 		t.Fatalf("%+v %v", out, err)
 	}
+}
+
+// waiting registers a tier 3 change and gets it to wait on the ledger: both approvals in, the knob on.
+func waiting(t *testing.T, f *fixture, head string) string {
+	t.Helper()
+	knob := &holdKnob{}
+	f.svc.Evidence = knob
+	body := map[string]any{"objects": secret}
+	if head != "" {
+		body["head"] = head
+	}
+	cid := f.register(t, "ci", change(body)).ID
+	if _, err := f.svc.Clear(f.ctx, principals["erin"], cid, ""); err != nil {
+		t.Fatal(err)
+	}
+	knob.on.Store(true)
+	out, err := f.svc.Clear(f.ctx, principals["root"], cid, "")
+	if err != nil || out.EvidenceWait == nil {
+		t.Fatalf("the change should wait: %+v %v", out, err)
+	}
+	return cid
+}
+
+func requireNotWaiting(t *testing.T, f *fixture, cid, state string) {
+	t.Helper()
+	got := f.get(t, cid)
+	if got.State != state || got.EvidenceWait != nil {
+		t.Fatalf("want %s with no evidence_wait, got %s with %+v", state, got.State, got.EvidenceWait)
+	}
+}
+
+func TestAChangeThatEndsHoldingStopsWaitingForTheLedger(t *testing.T) {
+	t.Run("denied", func(t *testing.T) {
+		f := newGate(t)
+		cid := waiting(t, f, "")
+		if _, err := f.svc.Deny(f.ctx, principals["erin"], cid, "no", ""); err != nil {
+			t.Fatal(err)
+		}
+		requireNotWaiting(t, f, cid, "denied")
+	})
+	t.Run("expired", func(t *testing.T) {
+		f := newGate(t)
+		cid := waiting(t, f, "")
+		f.clock.advance(31 * 24 * time.Hour)
+		if ids, err := f.svc.Expire(f.ctx); err != nil || len(ids) != 1 {
+			t.Fatal(ids, err)
+		}
+		requireNotWaiting(t, f, cid, "expired")
+	})
+	t.Run("superseded", func(t *testing.T) {
+		f := newGate(t)
+		cid := waiting(t, f, "")
+		f.register(t, "ci", change(map[string]any{"objects": secret, "head": strings.Repeat("2", 40)}))
+		requireNotWaiting(t, f, cid, "superseded")
+	})
 }

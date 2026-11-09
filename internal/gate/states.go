@@ -73,6 +73,9 @@ func (w *writer) move(c *Change, to, why string, extra map[string]any) {
 		return
 	}
 	c.State = to
+	if to != StateHolding {
+		c.EvidenceWait = nil // a change that left holding is no longer waiting for the evidence ledger (C-3)
+	}
 	if from == StateCleared {
 		w.revoke(c, why, extra)
 	}
