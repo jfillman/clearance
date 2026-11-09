@@ -111,7 +111,7 @@ func PDF(pk *Packet) []byte {
 	for _, c := range pk.Changes {
 		// Printed only where the records carry it (I-1 adds it to every deploy record about a registered change).
 		if len(c.OperationalClass) > 0 {
-			d.para(c.ID + ": operational class " + strings.Join(c.OperationalClass, ", "))
+			d.para(c.ID + ": operational class " + strings.Join(c.OperationalClass, ", ") + orEmpty(c.ClassMapping, " (mapping ", ")"))
 		}
 	}
 
@@ -240,4 +240,11 @@ func causeSuffix(e Exception) string {
 		return " (" + e.Cause + ")"
 	}
 	return ""
+}
+
+func orEmpty(s, pre, post string) string {
+	if s == "" {
+		return ""
+	}
+	return pre + s + post
 }

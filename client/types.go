@@ -624,6 +624,10 @@ type Change struct {
 	PathsCount       int               `json:"paths_count"`
 	// Outage is allow-and-record or hold: what a provider does with the change while the core is unreachable.
 	Outage string `json:"outage,omitempty"`
+	// OperationalClass is what the change does, apart from its tier (I-1): one or more of availability, privilege,
+	// data-integrity, security-boundary, credential-exposure, or ["none"]; ClassMapping is the mapping version.
+	OperationalClass []string `json:"operational_class,omitempty"`
+	ClassMapping     string   `json:"class_mapping,omitempty"`
 	// Ended is the record that moved the change to degraded or exception.
 	Ended *Ended `json:"ended,omitempty"`
 	// EvidenceWait is set while an approved tier 3 change waits for evidence to be checkpointed (C-3).

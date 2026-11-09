@@ -23,6 +23,13 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   `soc2/2027-draft` CC7.1 first), published as an OSCAL component definition, signed as a DSSE envelope on request
   (`clearance packet oscal`). New in `internal/ledger`: `Tree` (inclusion proofs from the chain's record hashes alone,
   tested equal to `Log.Prove`) and `ParseCheckpointNote`. See [docs/packet.md](docs/packet.md).
+- **I-1: the operational class.** Beside the tier (the customer's policy), every `deploy.*` record about a registered
+  change carries `operational_class` (one or more of `availability`, `privilege`, `data-integrity`,
+  `security-boundary`, `credential-exposure`, or `["none"]` when nothing operational changed, such as release stamps
+  only) and `class_mapping` (`opclass/1`), computed from the rendered diff or the plan by a mapping shipped as data
+  (`internal/gate/opclass.json`) and stored on the change. Additive: `x-clearance-revision` 5, same schema file.
+  A Secret rotation is `credential-exposure`, an IAM policy change `privilege`, a Deployment image bump `availability`.
+  Tiers, requirements and verdicts are unchanged. The packet prints both later (C-5).
 - **The Terraform gate and the Argo CD gate pass the provider conformance suite** (G-TF-7, G-ARGO-9). Two further
   flows for a deployment provider (`info.flow`: `terraform-plan`, `pushed-tree`; `info.stamps`), and an adapter per gate
   in its own tests: `terraform-ci` (`clearance hold`, `release`, `report`) and `argocd-agent` (the plugin's `Generate` and

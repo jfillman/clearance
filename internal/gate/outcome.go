@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -126,6 +127,14 @@ func (s *Service) RecordOutcome(ctx context.Context, ev store.Event, wr evidence
 			ev["unattached"] = "the change is " + c.State + ", not cleared: the outcome is recorded, not attached"
 		default:
 			attach = true
+		}
+		if c != nil && !s.Config.Off {
+			stampClass(ev, c, s.Policy)
+			wr.Verified = maps.Clone(wr.Verified)
+			if wr.Verified == nil {
+				wr.Verified = maps.Clone(evidence.ProviderVerified)
+			}
+			wr.Verified["operational_class"], wr.Verified["class_mapping"] = true, true
 		}
 		rec, err := tx.Append(ctx, ev, wr)
 		if err != nil {

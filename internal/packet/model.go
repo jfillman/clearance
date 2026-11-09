@@ -233,17 +233,19 @@ type Change struct {
 	Subject *Subject `json:"subject"`
 	Tier    *int64   `json:"tier"`
 	// OperationalClass is the I-1 class (availability, privilege, ...), printed only when the records carry it.
-	OperationalClass []string     `json:"operational_class,omitempty"`
-	State            string       `json:"state"`
-	FirstTS          string       `json:"first_ts"`
-	Request          *int64       `json:"request_seq"`
-	Clear            *int64       `json:"clear_seq"`
-	ClearedBy        string       `json:"cleared_by,omitempty"`
-	Outcome          *Outcome     `json:"outcome"`
-	Failed           bool         `json:"failed"`
-	Exceptions       []int64      `json:"exception_seqs,omitempty"`
-	Attestation      *Attestation `json:"attestation,omitempty"`
-	Seqs             []int64      `json:"seqs"`
+	OperationalClass []string `json:"operational_class,omitempty"`
+	// ClassMapping is the version of the mapping that computed it (I-1, opclass/1).
+	ClassMapping string       `json:"class_mapping,omitempty"`
+	State        string       `json:"state"`
+	FirstTS      string       `json:"first_ts"`
+	Request      *int64       `json:"request_seq"`
+	Clear        *int64       `json:"clear_seq"`
+	ClearedBy    string       `json:"cleared_by,omitempty"`
+	Outcome      *Outcome     `json:"outcome"`
+	Failed       bool         `json:"failed"`
+	Exceptions   []int64      `json:"exception_seqs,omitempty"`
+	Attestation  *Attestation `json:"attestation,omitempty"`
+	Seqs         []int64      `json:"seqs"`
 	// ClearVerified: the clearing record's decision and tier were fields the core itself established.
 	ClearVerified bool `json:"clear_verified"`
 	// Agent is the agent that proposed the change, when one did (claimed by the registration).

@@ -540,7 +540,7 @@ func (b *builder) changesSection(pk *Packet) {
 			c.Tier = t
 		}
 		if oc := opClass(r); len(oc) > 0 {
-			c.OperationalClass = oc
+			c.OperationalClass, c.ClassMapping = oc, str(r, "class_mapping")
 		}
 		if a := str(r, "agent"); a != "" && c.Agent == "" {
 			c.Agent = a

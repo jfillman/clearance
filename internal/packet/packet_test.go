@@ -720,3 +720,41 @@ func TestHostileTextCannotBreakThePDF(t *testing.T) {
 		t.Fatal("no csv")
 	}
 }
+
+// A record written by the gate since I-1 carries operational_class (a list) and class_mapping beside the tier; the
+// Changes section prints them, and prints "none" for a change with nothing operational.
+func TestChangesPrintTheOperationalClassOfRealRecords(t *testing.T) {
+	st := miniChain(t, health("2026-10-09T00:00:00Z", "aws-111", "healthy", 5184000))
+	l := &labber{t: t, st: st}
+	l.add(coreW, gate("2026-10-20T00:00:00Z", "deploy.request", "gate-api", "prod", map[string]any{"change": change(chA, "gate-api", "prod", "hangar-prod", 2, "holding"),
+		"operational_class": []string{"privilege", "availability"}, "class_mapping": "opclass/1"}))
+	l.add(coreW, gate("2026-10-20T00:01:00Z", "deploy.request", "docs", "prod", map[string]any{"change": change(chB, "docs", "prod", "hangar-prod", 0, "holding"),
+		"operational_class": []string{"none"}, "class_mapping": "opclass/1"}))
+	l.add(coreW, gate("2026-10-20T00:02:00Z", "deploy.request", "old", "prod", map[string]any{"change": change(chC, "old", "prod", "hangar-prod", 0, "holding")}))
+	res, err := packet.Build(bg, st, packet.Params{From: mustTime(t, winFrom), To: mustTime(t, winTo), Now: mustTime(t, nowAt), Version: "test", Scopes: []string{"aws-111"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	by := map[string]packet.Change{}
+	for _, c := range res.Packet.Changes {
+		by[c.ID] = c
+	}
+	if got := strings.Join(by[chA].OperationalClass, ","); got != "privilege,availability" || by[chA].ClassMapping != "opclass/1" {
+		t.Errorf("A: %+v", by[chA])
+	}
+	if got := strings.Join(by[chB].OperationalClass, ","); got != "none" {
+		t.Errorf("B: %+v", by[chB])
+	}
+	if by[chC].OperationalClass != nil || by[chC].ClassMapping != "" {
+		t.Errorf("a record from before I-1 has none, and the packet prints none: %+v", by[chC])
+	}
+	text := pdfText(packet.PDF(res.Packet))
+	if !strings.Contains(text, "operational class privilege, availability (mapping opclass/1)") || !strings.Contains(text, "operational class none") ||
+		strings.Contains(text, chC+": operational class") {
+		t.Error("the PDF")
+	}
+	cs, _ := packet.CSVs(res.Packet)
+	if !strings.Contains(string(cs["changes.csv"]), "privilege availability") {
+		t.Error("csv")
+	}
+}

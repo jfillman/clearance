@@ -336,6 +336,10 @@ func (s *Service) Report(ctx context.Context, ev store.Event, wr evidence.Writer
 				verified["breakglass"] = true
 			}
 		}
+		if c != nil {
+			stampClass(ev, c, s.Policy)
+			verified["operational_class"], verified["class_mapping"] = true, true
+		}
 		if ev["tool"] == KindDegraded {
 			ev["outage_policy"] = s.outagePolicy(ev, c)
 			verified["outage_policy"] = true
