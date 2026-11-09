@@ -10,6 +10,18 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 ## [Unreleased]
 
 ### Added
+- **C-4: the offline verifier, `clearance verify` (also the standalone `clearance-verify`).** Checks an evidence packet
+  with no network and no call to Clearance: every record re-hashed from its original (an altered line is named, and so
+  is the record on either side of a broken `prev_hash` link), the checkpoint's log signature and the witnesses'
+  countersignatures against keys the verifier's user supplies (the packet's own copies are used only when none is
+  given, and the output says **SELF-VOUCHED**; a checkpoint signed by the log alone, which is what a truncated or
+  re-signed log looks like, fails; retired keys listed after the one in use keep old entries verifiable), an inclusion
+  proof for every record under the checkpoint, the packet's counted figures recounted, every attestation's Sigstore
+  signature, Rekor entry and inclusion proof under a TrustedRoot (from the bundle's own material; nothing is fetched),
+  and a local note of checkpoints seen that names a fork. A packet with no witnessed checkpoint reports NOT
+  CHECKPOINTED, not a pass. Exit 0 verified, 1 failed, 2 not fully established. The signing side of attestations
+  (`Attestor`, `BuildStatement`) moved from `internal/attest` to `internal/attestor` so the verifier's dependencies hold
+  no store or database. See [docs/verify.md](docs/verify.md).
 - **C-5: the evidence packet, `clearance packet`.** A date range and scope to one canonical JSON document, CSV projections
   and a PDF (standard library only), with the originals an offline verifier (C-4) needs: the stored records as hashed,
   an inclusion proof for each under the witnessed checkpoint, the checkpoint with its countersignatures, the public keys

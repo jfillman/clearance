@@ -7,7 +7,7 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
-	"github.com/jfillman/clearance/internal/attest"
+	"github.com/jfillman/clearance/internal/attestor"
 	"github.com/jfillman/clearance/schemas"
 )
 
@@ -36,7 +36,7 @@ func TestTheChangeAttestationSchemaMatchesTheStatement(t *testing.T) {
 		return sch.Validate(inst)
 	}
 	for name, rec := range map[string]map[string]any{"digest": map[string]any(outcomeRec(true, treeRoot)), "no digest": map[string]any(outcomeRec(true, ""))} {
-		st, err := attest.BuildStatement(manifestChange(), rec, "clearance")
+		st, err := attestor.BuildStatement(manifestChange(), rec, "clearance")
 		if err != nil {
 			t.Fatal(name, err)
 		}

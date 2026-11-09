@@ -1,4 +1,4 @@
-package attest
+package attestor
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jfillman/clearance/internal/attest"
 	"github.com/jfillman/clearance/internal/gate"
 	"github.com/jfillman/clearance/internal/store"
 )
@@ -28,7 +29,7 @@ const (
 // (from the outcome's write path, after its commit), Run signs the queue off the request path, so a slow Fulcio or
 // Rekor never holds a provider's POST. Signing is at most once per change: the first attestation stands.
 type Attestor struct {
-	Backend Backend
+	Backend attest.Backend
 	Store   store.Store
 	Gate    *gate.Service
 	Issuer  string // the token issuer the predicate's clearance block was decided under (gate.Tokens.Issuer)
@@ -264,7 +265,7 @@ func (a *Attestor) Process(ctx context.Context, id string, seq int64) error {
 		if err != nil {
 			return err
 		}
-		held = heldAttestation{seq: seq, att: store.Attestation{ChangeID: id, Digest: EnvelopeDigest(signed.Bundle.DSSEEnvelope),
+		held = heldAttestation{seq: seq, att: store.Attestation{ChangeID: id, Digest: attest.EnvelopeDigest(signed.Bundle.DSSEEnvelope),
 			Backend: signed.Backend, KeyID: signed.KeyID, RekorLogIndex: signed.RekorLogIndex, RekorUUID: signed.RekorUUID,
 			OutcomeSeq: seq, Bundle: bundle}}
 		a.mu.Lock()

@@ -82,6 +82,7 @@ import (
 	"time"
 
 	"github.com/jfillman/clearance/internal/attest"
+	"github.com/jfillman/clearance/internal/attestor"
 	"github.com/jfillman/clearance/internal/authn"
 	"github.com/jfillman/clearance/internal/bundles"
 	"github.com/jfillman/clearance/internal/decide"
@@ -359,7 +360,7 @@ type Core struct {
 	// RunTask is the HCP Terraform run task adapter (nil: off).
 	RunTask *hcprun.Service
 	// Attestor signs change attestations (nil: attestations are off).
-	Attestor *attest.Attestor
+	Attestor *attestor.Attestor
 	// Ledger is the evidence ledger (nil: off).
 	Ledger  *ledger.Service
 	clock   func() time.Time
@@ -518,7 +519,7 @@ func (c *Core) wire(ctx context.Context) error {
 	case cfg.Attest != nil && cfg.Gate.Off:
 		status.Detail = "off: the deployment gate is off, so there are no changes to attest"
 	case cfg.Attest != nil:
-		c.Attestor = &attest.Attestor{Backend: cfg.Attest, Store: c.Store, Gate: g, Issuer: cfg.TokenIssuer, Clock: c.clock, Log: c.log}
+		c.Attestor = &attestor.Attestor{Backend: cfg.Attest, Store: c.Store, Gate: g, Issuer: cfg.TokenIssuer, Clock: c.clock, Log: c.log}
 		g.OnOutcome = c.Attestor.Notify
 		onOutcome = c.Attestor.NotifyRecord
 		status = server.Attestation{Enabled: true, Backend: cfg.Attest.Name()}

@@ -175,11 +175,12 @@ func labChain(t testing.TB) (*memory.Store, map[string]int64) {
 	mark("outcomeA", l.add(argoW, gate("2026-10-12T08:20:00Z", "deploy.outcome", "gate-api", "prod", map[string]any{"change": map[string]any{"id": chA, "tree": hexOf('b')},
 		"principal": "hangar-prod/argocd/agent", "subject": manifestSubject('b'),
 		"outcome": map[string]any{"applied": true, "observed_revision": "r1", "digests": map[string]any{"sha256": hexOf('b')}, "health": "Healthy", "rollback": map[string]any{"available": true, "used": false}}})))
+	attBundle, attDigest := labAttestation(t, chA) // a real keyless bundle (C-4 verifies it offline)
 	mark("attestA", l.add(coreW, gate("2026-10-12T08:21:00Z", "deploy.attestation", "gate-api", "prod", map[string]any{"change": change(chA, "gate-api", "prod", "hangar-prod", 2, "cleared"),
-		"attestation": map[string]any{"digest": "sha256:" + hexOf('9'), "backend": "static", "outcome_seq": json.Number("0")}})))
+		"attestation": map[string]any{"digest": attDigest, "backend": "keyless", "outcome_seq": json.Number("0")}})))
 	if err := st.Atomic(bg, func(tx store.Tx) error {
-		return tx.PutAttestation(bg, store.Attestation{ChangeID: chA, Digest: "sha256:" + hexOf('9'), Backend: "static", KeyID: "k1", OutcomeSeq: 0,
-			RecordSeq: seq["attestA"], Bundle: json.RawMessage(`{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+json","dsseEnvelope":{"payloadType":"x","payload":"e30=","signatures":[]}}`)})
+		return tx.PutAttestation(bg, store.Attestation{ChangeID: chA, Digest: attDigest, Backend: "keyless", KeyID: "k1", OutcomeSeq: 0,
+			RecordSeq: seq["attestA"], Bundle: attBundle})
 	}); err != nil {
 		t.Fatal(err)
 	}

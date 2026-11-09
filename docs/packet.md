@@ -4,7 +4,7 @@ An auditor asks one question about a period: what changed, who or what cleared i
 and how do I know you would have seen it. The packet is the answer for a date range and scope, built from the evidence
 chain and nothing else, in three forms and with the originals needed to check it without asking Clearance.
 
-Status: **Built** (C-5; the offline verifier is C-4, the next package). Run it as a job: `clearance packet`.
+Status: **Built** (C-5; the offline verifier is C-4, built: [verify.md](verify.md)). Run it as a job: `clearance packet`.
 
 ## What you get
 
@@ -181,7 +181,7 @@ tree (entry *i* is record *i*'s hash): `internal/ledger.Tree` produces, for ever
 (tested against `Log.Prove`), and the job refuses to issue a packet whose chain does not hash to the checkpoint's root or
 whose proof does not verify. A verifier needs only the packet: recompute each hash from `records.jsonl`, check the
 `prev_hash` links where seqs are adjacent, check each proof against the checkpoint's root, and check the checkpoint's
-signatures under keys it trusts (`ledger.ParseCheckpointNote`).
+signatures under keys it trusts (`ledger.ParseCheckpointNote`). `clearance verify` does exactly this and more ([verify.md](verify.md)).
 
 What it cannot do: a record **after** the checkpoint is `recorded-not-checkpointed` and has no proof; with the ledger off
 nothing is checkpointed and the packet says the records show consistency, not that the chain was not rewritten as a
@@ -190,7 +190,6 @@ a record's *claimed* fields are what their writers said and are labelled so.
 
 ## Not yet
 
-- The offline verifier itself (C-4, the next package).
 - A scheduled job in the chart: the command is a batch job (it exits), but no `CronJob` template ships yet.
 - Fields the records do not carry: who proposed a change and whether the approver is its author (the gate's change view
   has it; the records do not), tests run (CI results), and the Terraform provider's `conformance` where it is not

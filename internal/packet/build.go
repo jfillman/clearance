@@ -277,7 +277,7 @@ func (b *builder) build(ctx context.Context, maps []Mapping) (*Result, error) {
 func (b *builder) header(pk *Packet, lo, hi int64, maps []Mapping) {
 	p := b.p
 	h := Header{View: p.View, Title: p.Title, GeneratedAt: evidence.ISO(p.Now), Producer: "clearance " + p.Version,
-		From: b.from, To: b.to, Scopes: b.scopes, Filter: Filter{App: p.App, Env: p.Env, Cluster: p.Cluster},
+		From: b.from, To: b.to, Scopes: b.scopes, ScopesNamed: len(p.Scopes) > 0, Filter: Filter{App: p.App, Env: p.Env, Cluster: p.Cluster},
 		Sections: sectionsByView[p.View],
 		Chain:    ChainRef{Count: b.c.head.Count, Head: b.c.head.Head, Verified: true, FirstSeq: lo, LastSeq: hi, Window: len(b.inWin)}}
 	if h.Scopes == nil {
