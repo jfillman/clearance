@@ -1,0 +1,15 @@
+apiVersion: v2
+name: clearance-witness
+description: >-
+  The witness for Clearance's evidence ledger (C-3): cosigns a log's checkpoint only when it extends the last one it
+  cosigned, so a truncated or rewritten ledger gets no countersignature. Install it where the log's operator does not
+  control it (for the lab, hangar-prod beside the clearance chart on hangar-dev).
+type: application
+# The release workflow packages the chart at the tag's version; these are the development placeholders.
+version: 0.0.0-dev
+appVersion: 0.0.0-dev
+kubeVersion: ">=1.27.0-0"
+home: https://github.com/jfillman/clearance
+sources:
+  - https://github.com/jfillman/clearance
+keywords: [clearance, evidence, transparency-log, witness]

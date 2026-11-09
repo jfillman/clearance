@@ -1,0 +1,46 @@
+# The witness for Clearance's evidence ledger (C-3). One replica: the witness is a small state machine (the latest
+# checkpoint it cosigned for each log) and two copies with their own state could each cosign a different history.
+image:
+  repository: ghcr.io/jfillman/clearance-witness
+  # Empty: the chart's appVersion.
+  tag: ""
+  # sha256:..., to pin by digest (the tag is then only a label).
+  digest: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# The witness's own signing key: an existing Secret holding a signed-note Ed25519 secret key, mounted read-only at
+# /etc/clearance-witness/key/<key> (--key-file). The chart never creates it and never prints it; make it with
+# `clearance ledger keygen --witness --name <witness name> --out <file>` and give the log's operator the public key
+# it prints (the witness policy lists it).
+existingSecret: ""
+key: witness-key
+
+# The logs this witness cosigns for: one vkey (public) per line, in a ConfigMap the chart makes (--logs-file). A log's
+# name is the origin of its checkpoints; several lines with one name are a key rotation in progress.
+logs: ""
+
+persistence:
+  # The witness's state file: the latest checkpoint cosigned per log. A witness that forgets can be rolled back, so
+  # this is a claim, not an emptyDir.
+  size: 64Mi
+  storageClass: ""
+  accessMode: ReadWriteOnce
+
+service:
+  type: ClusterIP
+  port: 8080
+
+resources:
+  requests: {cpu: 10m, memory: 32Mi}
+  limits: {memory: 128Mi}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podLabels: {}
+podAnnotations: {}
+
+# Ingress NetworkPolicy: who may reach the witness (the log's operator, the core). Empty with enabled: nothing may.
+networkPolicy:
+  enabled: false
+  from: []
