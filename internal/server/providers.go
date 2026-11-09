@@ -10,6 +10,7 @@ import (
 	"slices"
 
 	"github.com/jfillman/clearance/internal/evidence"
+	"github.com/jfillman/clearance/internal/observe"
 	"github.com/jfillman/clearance/internal/pycompat"
 )
 
@@ -23,8 +24,9 @@ import (
 //
 // name is the record's provider.name (the schema's pattern; never "clearance", the core's own); version is
 // provider.version. principals are fnmatch globs on the authenticated principal id; a caller is the first provider
-// whose globs match it. kinds narrows which POST /v1/records kinds the provider may write (default: all of
-// RecordKinds). intent_capture is "redacted" (default) or "full" for its records' intent text. definitions lets the
+// whose globs match it. kinds narrows which POST /v1/records kinds the provider may write (default: every kind of
+// RecordKinds but the observation kinds, which a provider writes only when its kinds name them: a registered
+// observed provider, O-1). intent_capture is "redacted" (default) or "full" for its records' intent text. definitions lets the
 // provider publish its cluster-pinned agent definitions (PUT /v1/definitions; default false). At most one provider
 // has it: a publish replaces the whole pinned set, so two publishers would undo each other. conformance is the
 // conformance suite the provider passed, as `clearance conformance` reports it, with the date
@@ -112,7 +114,10 @@ func (p *Provider) provider() evidence.Provider {
 func (p *Provider) matches(principal string) bool { return pycompat.MatchAny(principal, p.Principals) }
 
 func (p *Provider) mayWrite(kind string) bool {
-	return len(p.Kinds) == 0 || slices.Contains(p.Kinds, kind)
+	if len(p.Kinds) == 0 {
+		return !observe.Is(kind)
+	}
+	return slices.Contains(p.Kinds, kind)
 }
 
 // providerFor is the first provider whose globs match principal, or nil.

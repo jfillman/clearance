@@ -130,6 +130,22 @@ func (m *memStore) matches(r Record, f EvidenceFilter) bool {
 			return false
 		}
 	}
+	if f.Scope != "" {
+		if sc, _ := str(r["scope"]); sc != f.Scope {
+			return false
+		}
+	}
+	if f.Source != "" {
+		src, _ := r["source"].(map[string]any)
+		if n, _ := src["name"].(string); n != f.Source {
+			return false
+		}
+	}
+	if len(f.Tools) > 0 {
+		if tool, _ := str(r["tool"]); !in(f.Tools, tool) {
+			return false
+		}
+	}
 	if f.Kind != "" {
 		x, _ := r["exception"].(map[string]any)
 		if k, _ := x["kind"].(string); k != f.Kind {

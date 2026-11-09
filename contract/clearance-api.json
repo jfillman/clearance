@@ -2211,6 +2211,314 @@
         ],
         "type": "object"
       },
+      "ObserveCouldNotSee": {
+        "properties": {
+          "audit_gaps": {
+            "items": {
+              "$ref": "#/components/schemas/ObserveGap"
+            },
+            "type": "array"
+          },
+          "seconds": {
+            "type": "integer"
+          },
+          "segments": {
+            "items": {
+              "$ref": "#/components/schemas/ObserveSegment"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "audit_gaps",
+          "seconds",
+          "segments"
+        ],
+        "type": "object"
+      },
+      "ObserveGap": {
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "source": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "ts": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "seq",
+          "source",
+          "state",
+          "ts"
+        ],
+        "type": "object"
+      },
+      "ObserveHealth": {
+        "properties": {
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/ObserveSourceHealth"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "sources"
+        ],
+        "type": "object"
+      },
+      "ObserveItem": {
+        "properties": {
+          "api": {
+            "type": "string"
+          },
+          "assessment": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cause": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "completeness_supported": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "coverage": {
+            "type": "string"
+          },
+          "monitoring_protection": {
+            "type": "boolean"
+          },
+          "resolution": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resource": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "source": {
+            "type": "string"
+          },
+          "succeeded": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "tier": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ts": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "assessment",
+          "cause",
+          "coverage",
+          "resolution",
+          "seq",
+          "source",
+          "tier",
+          "ts"
+        ],
+        "type": "object"
+      },
+      "ObservePart": {
+        "properties": {
+          "by_coverage": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ObserveItem"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "by_coverage",
+          "count",
+          "items",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "ObserveSegment": {
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "seconds": {
+            "type": "integer"
+          },
+          "seq": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "reason",
+          "seconds",
+          "seq",
+          "source",
+          "state",
+          "to"
+        ],
+        "type": "object"
+      },
+      "ObserveSourceHealth": {
+        "properties": {
+          "blind_seconds": {
+            "type": "integer"
+          },
+          "degraded_seconds": {
+            "type": "integer"
+          },
+          "failed_checks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "last_seq": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "last_ts": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "now": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "blind_seconds",
+          "degraded_seconds",
+          "failed_checks",
+          "last_seq",
+          "last_ts",
+          "now",
+          "source",
+          "stale",
+          "state"
+        ],
+        "type": "object"
+      },
+      "ObserveStatement": {
+        "properties": {
+          "clean": {
+            "type": "boolean"
+          },
+          "cleared_and_verified": {
+            "$ref": "#/components/schemas/ObservePart"
+          },
+          "could_not_see": {
+            "$ref": "#/components/schemas/ObserveCouldNotSee"
+          },
+          "from": {
+            "type": "string"
+          },
+          "health": {
+            "$ref": "#/components/schemas/ObserveHealth"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "seen_not_cleared": {
+            "$ref": "#/components/schemas/ObservePart"
+          },
+          "state": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "clean",
+          "cleared_and_verified",
+          "could_not_see",
+          "from",
+          "health",
+          "scope",
+          "seen_not_cleared",
+          "state",
+          "text",
+          "to",
+          "truncated"
+        ],
+        "type": "object"
+      },
       "PolicyDoc": {
         "properties": {
           "packs": {
@@ -2997,6 +3305,98 @@
         ]
       }
     },
+    "/v1/coverage": {
+      "get": {
+        "operationId": "getCoverage",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObserveStatement"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The coverage statement for a scope and window (from and to, RFC 3339; default the last 24 hours): what was cleared and verified, what was seen and not cleared (by coverage state, with how each ended), what could not be seen (the stretches a feed was blind or degraded, and the audit gaps), and the health of each feed. clean is true only when nothing was seen uncleared and every feed was healthy for the whole window: a window with no healthy health record, or whose last record has gone stale, is blind and never clean. Auditors only",
+        "x-clearance-roles": [
+          "auditor"
+        ]
+      }
+    },
     "/v1/definitions": {
       "get": {
         "operationId": "listDefinitions",
@@ -3691,7 +4091,7 @@
             "bearer": []
           }
         ],
-        "summary": "The packet's exceptions, newest first; the cursor is seq: every deploy.exception (kind=out-of-band, drift, untraced-apply or digest-mismatch), every provider's degraded-mode report (deploy.degraded: what it did while the core was unreachable, with the outage policy it was held to), every break-glass window (breakglass.open, breakglass.close with what changed in it) and every runtime read allowed during an outage (tool.call, coverage-unavailable). tool narrows to one of those",
+        "summary": "The packet's exceptions, newest first; the cursor is seq: every deploy.exception (kind=out-of-band, drift, untraced-apply, digest-mismatch, attempted-refused or monitoring-protection), every provider's degraded-mode report (deploy.degraded: what it did while the core was unreachable, with the outage policy it was held to), every break-glass window (breakglass.open, breakglass.close with what changed in it) and every runtime read allowed during an outage (tool.call, coverage-unavailable). tool narrows to one of those",
         "x-clearance-roles": [
           "person",
           "delegate",
@@ -3873,6 +4273,246 @@
         "summary": "The clearance token verification keys, a JWKS (EC P-256, ES256, kid = the RFC 7638 thumbprint): the key the core signs with and keys retired within the last 24 hours. Public",
         "x-clearance-roles": [
           "any"
+        ]
+      }
+    },
+    "/v1/observations": {
+      "get": {
+        "operationId": "listObservations",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidencePage"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The observation records (clearance.evidence/v1.1) of one scope, newest first; the cursor is seq. kind=observation (default), assessment or resolution. scope is required: the account, cluster or workspace observed; source narrows to one feed. Auditors only",
+        "x-clearance-roles": [
+          "auditor"
+        ]
+      }
+    },
+    "/v1/observations/health": {
+      "get": {
+        "operationId": "listObservationHealth",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidencePage"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The health of the feeds behind a scope's observations, newest first: observation.health records (healthy, degraded or blind per source, with the checks that produced it) and the observation.audit-gap records written when a feed dropped. scope is required. Auditors only",
+        "x-clearance-roles": [
+          "auditor"
         ]
       }
     },

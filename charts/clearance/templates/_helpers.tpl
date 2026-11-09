@@ -148,7 +148,7 @@ app.kubernetes.io/component: {{ .component }}
 - name: CLEARANCE_APPROVER_ALIASES
   value: {{ join ";" . | quote }}
 {{- end }}
-{{- range $k, $env := dict "baselineDenyPaths" "CLEARANCE_BASELINE_DENY_PATHS" "baselineDenyFields" "CLEARANCE_BASELINE_DENY_FIELDS" "gateOutsideGroups" "CLEARANCE_GATE_OUTSIDE_GROUPS" "gateReleaseStamps" "CLEARANCE_GATE_RELEASE_STAMPS" "automationSubjects" "CLEARANCE_AUTOMATION_SUBJECTS" "automationIssuers" "CLEARANCE_AUTOMATION_ISSUERS" }}
+{{- range $k, $env := dict "baselineDenyPaths" "CLEARANCE_BASELINE_DENY_PATHS" "baselineDenyFields" "CLEARANCE_BASELINE_DENY_FIELDS" "gateOutsideGroups" "CLEARANCE_GATE_OUTSIDE_GROUPS" "gateReleaseStamps" "CLEARANCE_GATE_RELEASE_STAMPS" "automationSubjects" "CLEARANCE_AUTOMATION_SUBJECTS" "automationIssuers" "CLEARANCE_AUTOMATION_ISSUERS" "monitoringProtectionOps" "CLEARANCE_MONITORING_PROTECTION_OPS" }}
 {{- with index $.Values.vocabulary $k }}
 - name: {{ $env }}
   value: {{ include "clearance.csv" . | quote }}

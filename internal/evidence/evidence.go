@@ -36,18 +36,54 @@ const Genesis = "000000000000000000000000000000000000000000000000000000000000000
 // Schema names the record shape writers emit (audit.py EVIDENCE_SCHEMA).
 const Schema = "clearance.evidence/v1"
 
+// SchemaV1_1 is the additive revision of the shape (O-1): the observation kinds (ObservedKinds) and the coverage
+// states break-glass and attempted-refused. Only a record that uses one of them says v1.1; every other record is still
+// written as v1, byte for byte, and one chain holds both.
+const SchemaV1_1 = "clearance.evidence/v1.1"
+
+// The observation kinds (clearance.evidence/v1.1): a normalized event a registered observed provider saw, an
+// assessment of one, how it was resolved, a feed's health and the gap a feed dropping leaves.
+const (
+	KindObservation = "observation"
+	KindAssessment  = "assessment"
+	KindResolution  = "resolution"
+	KindHealth      = "observation.health"
+	KindAuditGap    = "observation.audit-gap"
+)
+
+// ObservedKinds are the kinds a record says v1.1 for.
+var ObservedKinds = []string{KindObservation, KindAssessment, KindResolution, KindHealth, KindAuditGap}
+
 // SchemaV0 is the draft shape of the rows written before the freeze (hangar-dev seq 0-611). They stay as written;
 // Project gives a reader their v1 shape.
 const SchemaV0 = "clearance.evidence/v0-draft"
 
 // The v1 enumerations (audit.py BOUNDARIES, COVERAGE, ASSURANCE, SUBJECT_KINDS, INTENT_CAPTURE).
 var (
-	Boundaries    = []string{"runtime", "deployment"}
-	Coverage      = []string{"authorized-and-verified", "observed-not-attributed", "out-of-band-detected", "coverage-unavailable"}
+	Boundaries = []string{"runtime", "deployment"}
+	Coverage   = []string{"authorized-and-verified", "observed-not-attributed", "out-of-band-detected", "coverage-unavailable",
+		CoverageBreakGlass, CoverageAttemptedRefused}
 	Assurance     = []string{"checkpointed", "recorded-not-checkpointed", "not-recorded"}
 	SubjectKinds  = []string{"tool-call", "manifest-tree", "terraform-plan", "definition", "model-call"}
 	IntentCapture = []string{"redacted", "full"}
 )
+
+// The two coverage states v1.1 adds.
+const (
+	CoverageAuthorizedAndVerified = "authorized-and-verified"
+	CoverageObservedNotAttributed = "observed-not-attributed"
+	CoverageBreakGlass            = "break-glass"
+	CoverageAttemptedRefused      = "attempted-refused"
+)
+
+// SchemaFor is the schema string a record built from event is written with: v1.1 when its kind is an observation
+// kind or its coverage is one of the two new states, else v1.
+func SchemaFor(event map[string]any) string {
+	if in(ObservedKinds, event["tool"]) || event["coverage"] == CoverageBreakGlass || event["coverage"] == CoverageAttemptedRefused {
+		return SchemaV1_1
+	}
+	return Schema
+}
 
 // Verified are the fields the Python gateway establishes itself for a runtime decision, the v0-draft set
 // (audit.py VERIFIED).
@@ -349,7 +385,7 @@ func Fields(event map[string]any, w Writer) (map[string]any, error) {
 			subjectVerified = subjectVerified && verified[k]
 		}
 	}
-	env := map[string]any{"schema": Schema, "boundary": boundary, "coverage": coverage,
+	env := map[string]any{"schema": SchemaFor(event), "boundary": boundary, "coverage": coverage,
 		"provider": w.Provider.value(), "subject": subject}
 	if t, ok := event["intent"]; ok {
 		it, err := intentOf(t, capture)

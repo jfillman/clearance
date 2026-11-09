@@ -108,6 +108,10 @@ type Server struct {
 	// outcomeMu serializes outcomes, so the has-an-outcome check and the record it guards are one step.
 	outcomeMu sync.Mutex
 	outcomes  map[int64]bool // decision seqs that have an outcome
+
+	// eventMu serializes the records that name the provider's own event (source.event_id), so the has-it-already
+	// check and the write it guards are one step (O-1: POST /v1/records de-duplicates).
+	eventMu sync.Mutex
 }
 
 // New builds the server and its outcome index (one pass over the chain).

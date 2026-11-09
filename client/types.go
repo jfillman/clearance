@@ -31,7 +31,8 @@ const (
 // RecordKinds are the kinds POST /v1/records takes (server.RecordKinds).
 var RecordKinds = []string{"session.open", "run.launch", "run.delete", "run.finish", "human.answer",
 	"session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome",
-	"deploy.exception", "deploy.degraded", "federated.decision"}
+	"deploy.exception", "deploy.degraded", "federated.decision",
+	"observation", "assessment", "resolution", "observation.health"}
 
 // CoverageUnavailable is a tool.call record's coverage: a T0 read the provider allowed while the core was
 // unreachable (the outage policy), posted once it answers.
@@ -265,6 +266,8 @@ type SourceRef struct {
 type RecordRef struct {
 	Seq  int64  `json:"seq"`
 	Hash string `json:"hash"`
+	// Duplicate: the provider's own event (source.event_id) was already recorded; this is that record's reference.
+	Duplicate bool `json:"duplicate,omitempty"`
 }
 
 // -- POST /v1/decisions/{id}/outcome -------------------------------------------------------------------------------
@@ -371,6 +374,22 @@ type ProviderEvent struct {
 	ModelVersion *string    `json:"model_version,omitempty"`
 	Preflight    *Preflight `json:"preflight,omitempty"`
 	Cost         *Cost      `json:"cost,omitempty"`
+
+	// The observation kinds' fields (clearance.evidence/v1.1, docs/evidence.md "Observations"): observation,
+	// assessment, resolution and observation.health, for a provider registered for them.
+	Scope       *string        `json:"scope,omitempty"`
+	Resource    map[string]any `json:"resource,omitempty"`
+	Actor       map[string]any `json:"actor,omitempty"`
+	Action      map[string]any `json:"action,omitempty"`
+	StateChange map[string]any `json:"state_change,omitempty"`
+	Correlation map[string]any `json:"correlation,omitempty"`
+	Integrity   map[string]any `json:"integrity,omitempty"`
+	Times       map[string]any `json:"times,omitempty"`
+	Health      map[string]any `json:"health,omitempty"`
+	About       map[string]any `json:"about,omitempty"`
+	RuleSet     map[string]any `json:"rule_set,omitempty"`
+	Attribution map[string]any `json:"attribution,omitempty"`
+	Resolution  map[string]any `json:"resolution,omitempty"`
 }
 
 // String is a pointer to s, for ProviderEvent's optional fields.

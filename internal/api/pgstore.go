@@ -91,6 +91,15 @@ func (b *q) evidenceFilter(f EvidenceFilter) {
 	if f.Kind != "" {
 		b.add("e.record->'exception'->>'kind' = " + b.arg(f.Kind))
 	}
+	if f.Scope != "" {
+		b.add("e.record->>'scope' = " + b.arg(f.Scope))
+	}
+	if f.Source != "" {
+		b.add("e.record->'source'->>'name' = " + b.arg(f.Source))
+	}
+	if len(f.Tools) > 0 {
+		b.add("e.record->>'tool' = ANY(" + b.arg(f.Tools) + ")")
+	}
 	switch f.Outcomes {
 	case OutcomesExclude:
 		b.add("NOT (e.record ? 'outcome_of')")
