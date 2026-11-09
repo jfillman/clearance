@@ -394,7 +394,9 @@ Glidepath's relay already lives with this (its doc: Rollouts and Argo notificati
 silently; the 15-minute heartbeat is the retry). An outcome record cannot wait for a heartbeat: it is what C-2
 signs. **The agent watches.** It keys each outcome by the operation's `finishedAt` and the Application's UID, posts
 it once (`deploy.outcome` through `POST /v1/records`, or the change-bound route when C-10 has it), and on restart
-reposts the last operation, which the core must answer idempotently.
+reposts the last operation, which the core must answer idempotently. It reports only an Application whose destination
+namespace is labelled protected: a project can hold an environment the gate doesn't protect, such as a staging beside a
+gated prod, and the agent has no read there.
 
 ### (e) How the CMP on hangar-prod reaches the core on hangar-dev
 

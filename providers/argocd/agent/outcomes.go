@@ -66,6 +66,16 @@ func (a *Agent) handleApp(ctx context.Context, app Application, force bool) erro
 	if !a.protectedProject(app.Project) || app.Op == nil || !Terminal(app.Op.Phase) || app.Op.StartedAt == "" {
 		return nil
 	}
+	// A project can hold environments the gate does not protect (a staging beside a gated prod). The agent may read only
+	// protected namespaces, so an operation elsewhere has no outcome for it to report.
+	protected, err := a.kube.ProtectedNamespaces(ctx)
+	if err != nil {
+		a.log.Warn("listing the protected namespaces failed (retried on the next list)", "err", err)
+		return err
+	}
+	if _, ok := protected[app.DestNS]; !ok {
+		return nil
+	}
 	appKey, opKey := app.Namespace+"/"+app.Name, OperationKey(app)
 	a.mu.Lock()
 	done := a.st.Outcomes[appKey] == opKey
