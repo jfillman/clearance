@@ -165,6 +165,10 @@ func PDF(pk *Packet) []byte {
 		d.blank()
 		d.bold("NOT A CLEAN LIST. " + ex.Unverified)
 	}
+	for _, f := range ex.Filtered {
+		d.blank()
+		d.para(f.Line())
+	}
 	for _, class := range ExceptionClasses {
 		var cr [][]string
 		for _, e := range ex.Rows {

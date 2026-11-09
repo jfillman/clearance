@@ -12,6 +12,7 @@ nav:
   - The evidence packet (C-5): packet.md
   - Verifying a packet offline (C-4): verify.md
   - The provider protocol and conformance: provider-protocol.md
+  - The observation pipeline (O-2): observe-pipeline.md
   - The provenance App (design pass): provenance-app.md
   - The Traefik Hub adapter (Unverified): federate-traefik-hub.md
 

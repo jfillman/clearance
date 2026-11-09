@@ -1,0 +1,148 @@
+{
+ "grants": [
+  {
+   "id": "clr_k8s_001",
+   "objects": [
+    {
+     "apiVersion": "v1",
+     "kind": "ConfigMap",
+     "metadata": {
+      "name": "web-config",
+      "namespace": "shop"
+     },
+     "data": {
+      "LOG_LEVEL": "info"
+     }
+    },
+    {
+     "apiVersion": "apps/v1",
+     "kind": "Deployment",
+     "metadata": {
+      "name": "web",
+      "namespace": "shop",
+      "labels": {
+       "app": "web"
+      }
+     },
+     "spec": {
+      "replicas": 2,
+      "selector": {
+       "matchLabels": {
+        "app": "web"
+       }
+      },
+      "template": {
+       "metadata": {
+        "labels": {
+         "app": "web"
+        }
+       },
+       "spec": {
+        "containers": [
+         {
+          "name": "web",
+          "image": "registry.example.com/shop/web:1.4.0",
+          "ports": [
+           {
+            "containerPort": 8080
+           }
+          ]
+         }
+        ]
+       }
+      }
+     }
+    },
+    {
+     "apiVersion": "apps/v1",
+     "kind": "Deployment",
+     "metadata": {
+      "name": "api",
+      "namespace": "shop",
+      "labels": {
+       "app": "api"
+      }
+     },
+     "spec": {
+      "replicas": 2,
+      "selector": {
+       "matchLabels": {
+        "app": "api"
+       }
+      },
+      "template": {
+       "metadata": {
+        "labels": {
+         "app": "api"
+        }
+       },
+       "spec": {
+        "containers": [
+         {
+          "name": "api",
+          "image": "registry.example.com/shop/api:2.0.1",
+          "ports": [
+           {
+            "containerPort": 8080
+           }
+          ]
+         }
+        ]
+       }
+      }
+     }
+    }
+   ]
+  }
+ ],
+ "break_glass": [
+  {
+   "id": "bg_7",
+   "scope": "prod-eu-1",
+   "from": "2026-11-05T10:09:00Z",
+   "to": "2026-11-05T10:15:00Z"
+  }
+ ],
+ "attestations": {
+  "3f9c0001-7a2d-4e8b-b1c0-d9e8f7a6b5c4": "clr_aws_001"
+ },
+ "runs": {
+  "gh-9912": "clr_aws_001"
+ },
+ "sessions": [
+  {
+   "issuer": "arn:aws:iam::111122223333:role/clearance-apply",
+   "session": "tf-run-8842",
+   "grant": "clr_aws_001"
+  }
+ ],
+ "plans": [
+  {
+   "digest": "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+   "grant": "clr_aws_002",
+   "changes": [
+    {
+     "resource": "orders-assets",
+     "apis": [
+      "PutBucketVersioning",
+      "PutBucketEncryption",
+      "PutBucketTagging"
+     ]
+    }
+   ]
+  },
+  {
+   "digest": "sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+   "grant": "clr_aws_003",
+   "changes": []
+  }
+ ],
+ "windows": [
+  {
+   "scope": "111122223333",
+   "grant": "clr_aws_004",
+   "from": "2026-11-05T11:30:00Z",
+   "to": "2026-11-05T11:40:00Z"
+  }
+ ]
+}

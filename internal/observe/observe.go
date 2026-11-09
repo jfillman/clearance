@@ -394,6 +394,11 @@ func checkObservation(ev map[string]any, v vocab.Vocabulary) (Result, error) {
 	return res, nil
 }
 
+// Monitoring says whether an observed operation matches the vocabulary's monitoring-protection globs (the same test
+// Check applies to an observation). The pipeline (internal/observe/pipeline) uses it next to its rule set's own
+// per-provider lists, so there is one vocabulary of what protects monitoring and not two.
+func Monitoring(v vocab.Vocabulary, source, api string) bool { return monitoring(v, source, api) }
+
 // monitoring says whether the observed operation matches a configured monitoring-protection glob: "<api>" or
 // "<source>:<api>".
 func monitoring(v vocab.Vocabulary, source, api string) bool {

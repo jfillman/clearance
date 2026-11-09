@@ -1,0 +1,835 @@
+{
+  "rule_set": {
+    "name": "observe-default",
+    "version": "2026.11.1",
+    "digest": "a5340485428e853074f07b139c6dbbe72c0c119e8a4a5a5ec3d299fbd05eca00"
+  },
+  "events": 18,
+  "not_writes": 2,
+  "out_of_scope": {
+    "999988887777": 1
+  },
+  "filtered": null,
+  "filtered_lines": [],
+  "assessments": [
+    {
+      "event_id": "3f9c0001-7a2d-4e8b-b1c0-d9e8f7a6b5c4",
+      "provider": "aws",
+      "scope": "111122223333",
+      "time": "2026-11-05T11:00:00Z",
+      "resource": "s3/orders-assets",
+      "verb": "PutBucketPolicy",
+      "succeeded": true,
+      "actor": "arn:aws:sts::111122223333:assumed-role/clearance-apply/tf-run-8841",
+      "outcome": "cleared",
+      "coverage": "authorized-and-verified",
+      "tier": 0,
+      "severity": "info",
+      "signal": "correlation.attestation",
+      "confidence": "strong",
+      "detail": "a signed execution attestation names this event",
+      "grant": "clr_aws_001",
+      "rule_set": {
+        "name": "observe-default",
+        "version": "2026.11.1",
+        "digest": "a5340485428e853074f07b139c6dbbe72c0c119e8a4a5a5ec3d299fbd05eca00"
+      }
+    },
+    {
+      "event_id": "3f9c0002-7a2d-4e8b-b1c0-d9e8f7a6b5c4",
+      "provider": "aws",
+      "scope": "111122223333",
+      "time": "2026-11-05T11:02:00Z",
+      "resource": "dynamodb/orders-index",
+      "verb": "CreateTable",
+      "succeeded": true,
+      "actor": "arn:aws:sts::111122223333:assumed-role/clearance-apply/tf-run-8870",
+      "actor_quoted": "run=gh-9912",
+      "outcome": "cleared",
+      "coverage": "authorized-and-verified",
+      "tier": 0,
+      "severity": "info",
+      "signal": "correlation.pipeline-run",
+      "confidence": "strong",
+      "detail": "a verified pipeline identity and run (the source identity) are the grant's",
+      "grant": "clr_aws_001",
+      "rule_set": {
+        "name": "observe-default",
+        "version": "2026.11.1",
+        "digest": "a5340485428e853074f07b139c6dbbe72c0c119e8a4a5a5ec3d299fbd05eca00"
+      }
+    },
+    {
+      "event_id": "3f9c0003-7a2d-4e8b-b1c0-d9e8f7a6b5c4",
+      "provider": "aws",
+      "scope": "111122223333",
+      "time": "2026-11-05T11:04:00Z",
+      "resource": "sqs/orders-events",
+      "verb": "CreateQueue",
+      "succeeded": true,
+      "actor": "arn:aws:sts::111122223333:assumed-role/clearance-apply/tf-run-8842",
+      "outcome": "cleared",
+      "coverage": "authorized-and-verified",
+      "tier": 0,
+      "severity": "info",
+      "signal": "correlation.apply-role-session",
+      "confidence": "medium",
+      "detail": "the apply role and the session it was issued under are the grant's",
+      "grant": "clr_aws_001",
+      "rule_set": {
+        "name": "observe-default",
+        "version": "2026.11.1",
+        "digest": "a5340485428e853074f07b139c6dbbe72c0c119e8a4a5a5ec3d299fbd05eca00"
+      }
+    },
+    {
+      "event_id": "3f9c0004-7a2d-4e8b-b1c0-d9e8f7a6b5c4",
+      "provider": "aws",
+      "scope": "111122223333",
+      "time": "2026-11-05T11:10:00Z",
+      "resource": "s3/orders-assets",
+      "verb": "PutBucketVersioning",
+      "succeeded": true,
+      "actor": "arn:aws:sts::111122223333:assumed-role/clearance-apply/tf-run-8843",
+      "outcome": "cleared",
+      "coverage": "authorized-and-verified",
+      "tier": 0,
+      "severity": "info",
+      "signal": "correlation.plan-change-set",
+      "confidence": "medium",
+      "detail": "the cleared plan's resource-change set includes this resource and action",
+      "grant": "clr_aws_002",
+      "rule_set": {
+        "name": "observe-default",
+        "version": "2026.11.1",
+        "digest": "a5340485428e853074f07b139c6dbbe72c0c119e8a4a5a5ec3d299fbd05eca00"
+      }
+    },
+    {
+      "event_id": "3f9c0005-7a2d-4e8b-b1c0-d9e8f7a6b5c4",
+      "provider": "aws",
+      "scope": "111122223333",
+      "time": "2026-11-05T11:10:02Z",
+      "resource": "s3/orders-assets",
+      "verb": "PutBucketEncryption",
+      "succeeded": true,
+      "actor": "arn:aws:sts::111122223333:assumed-role/clearance-apply/tf-run-8843",
+      "outcome": "cleared",
+      "coverage": "authorized-and-verified",
+      "tier": 0,
+      "severity": "info",
+      "signal": "correlation.plan-change-set",
+      "confidence": "medium",
+      "detail": "the cleared plan's resource-change set includes this resource and action",
+      "grant": "clr_aws_002",
+      "rule_set": {
+        "name": "observe-default",
+        "version": "2026.11.1",
+        "digest": "a5340485428e853074f07b139c6dbbe72c0c119e8a4a5a5ec3d299fbd05eca00"
+      }
+    },
+    {
+      "event_id": "3f9c0006-7a2d-4e8b-b1c0-d9e8f7a6b5c4",
+      "provider": "aws",
+      "scope": "111122223333",
+      "time": "2026-11-05T11:10:04Z",
+      "resource": "s3/orders-assets",
+      "verb": "PutBucketTagging",
+      "succeeded": true,
+      "actor": "arn:aws:sts::111122223333:assumed-role/clearance-apply/tf-run-8843",
+      "outcome": "cleared",
+      "coverage": "authorized-and-verified",
+      "tier": 0,
+      "severity": "info",
+      "signal": "correlation.plan-change-set",
+      "confidence": "medium",
+      "detail": "the cleared plan's resource-change set includes this resource and action",
+      "grant": "clr_aws_002",
+      "rule_set": {
+        "name": "observe-default",
+        "version": "2026.11.1",
+        "digest": "a5340485428e853074f07b139c6dbbe72c0c119e8a4a5a5ec3d299fbd05eca00"
+      }
+    },
+    {
+      "event_id": "3f9c0007-7a2d-4e8b-b1c0-d9e8f7a6b5c4",
+      "provider": "aws",
+      "scope": "111122223333",
+      "time": "2026-11-05T11:12:00Z",
+      "resource": "s3/payments-vault",
+      "verb": "PutBucketPolicy",
+      "succeeded": true,
+      "actor": "arn:aws:sts::111122223333:assumed-role/clearance-apply/tf-run-8843",
+      "outcome": "out-of-band",
+      "coverage": "out-of-band-detected",
+      "tier": 2,
+      "severity": "high",
+      "signal": "correlation.outside-plan",
+      "detail": "the apply role claims a cleared plan, but this resource and action are not in its change set",
+      "rule_set": {
+        "name": "observe-default",
+        "version": "2026.11.1",
+        "digest": "a5340485428e853074f07b139c6dbbe72c0c119e8a4a5a5ec3d299fbd05eca00"
+      }
+    },
+    {
+      "event_id": "3f9c0008-7a2d-4e8b-b1c0-d9e8f7a6b5c4",
+      "provider": "aws",
+      "scope": "111122223333",
+      "time": "2026-11-05T11:14:00Z",
+      "resource": "sqs/orders-dlq",
+      "verb": "CreateQueue",
+      "succeeded": true,
+      "actor": "arn:aws:sts::111122223333:assumed-role/clearance-apply/tf-run-8844",
+      "outcome": "cleared",
+      "coverage": "authorized-and-verified",
+      "tier": 0,
+      "severity": "low",
+      "signal": "correlation.plan-digest",
+      "confidence": "weak",
+      "detail": "the user agent's plan digest is a cleared plan's, which lists no change set to check this call against",
+      "grant": "clr_aws_003",
+      "rule_set": {
+        "name": "observe-default",
+        "version": "2026.11.1",
+        "digest": "a5340485428e853074f07b139c6dbbe72c0c119e8a4a5a5ec3d299fbd05eca00"
+      }
+    },
+    {
+      "event_id": "3f9c0009-7a2d-4e8b-b1c0-d9e8f7a6b5c4",
+      "provider": "aws",
+      "scope": "111122223333",
+      "time": "2026-11-05T11:35:00Z",
+      "resource": "sns/orders-alerts",
+      "verb": "CreateTopic",
+      "succeeded": true,
+      "actor": "arn:aws:sts::111122223333:assumed-role/clearance-apply/tf-run-8850",
+      "outcome": "cleared",
+      "coverage": "authorized-and-verified",
+      "tier": 0,
+      "severity": "low",
+      "signal": "correlation.apply-window",
+      "confidence": "window",
+      "detail": "the apply role acted inside a cleared apply window and nothing stronger ties the call to a grant",
+      "grant": "clr_aws_004",
+      "rule_set": {
+        "name": "observe-default",
+        "version": "2026.11.1",
+        "digest": "a5340485428e853074f07b139c6dbbe72c0c119e8a4a5a5ec3d299fbd05eca00"
+      }
+    },
+    {
+      "event_id": "3f9c000a-7a2d-4e8b-b1c0-d9e8f7a6b5c4",
+      "provider": "aws",
+      "scope": "111122223333",
+      "time": "2026-11-05T11:40:30Z",
+      "resource": "s3/orders-assets",
+      "verb": "DeleteBucketPolicy",
+      "succeeded": true,
+      "actor": "arn:aws:sts::111122223333:assumed-role/AWSReservedSSO_Admin_0123456789abcdef/dana@example.com",
+      "actor_quoted": "dana@example.com",
+      "outcome": "out-of-band",
+      "coverage": "out-of-band-detected",
+      "tier": 2,
+      "severity": "high",
+      "signal": "sessionIssuer.sso-admin",
+      "detail": "an SSO admin role changed the account with no grant; the actor is the source identity the record quotes",
+      "rule_set": {
+        "name": "observe-default",
+        "version": "2026.11.1",
+        "digest": "a5340485428e853074f07b139c6dbbe72c0c119e8a4a5a5ec3d299fbd05eca00"
+      }
+    },
+    {
+      "event_id": "3f9c000b-7a2d-4e8b-b1c0-d9e8f7a6b5c4",
+      "provider": "aws",
+      "scope": "111122223333",
+      "time": "2026-11-05T11:42:00Z",
+      "resource": "iam/batch-role",
+      "verb": "PutRolePolicy",
+      "succeeded": true,
+      "actor": "arn:aws:iam::111122223333:user/eve",
+      "outcome": "out-of-band",
+      "coverage": "out-of-band-detected",
+      "tier": 2,
+      "severity": "medium",
+      "signal": "principal.no-grant",
+      "detail": "no grant, attestation, run or plan ties this call to a clearance",
+      "rule_set": {
+        "name": "observe-default",
+        "version": "2026.11.1",
+        "digest": "a5340485428e853074f07b139c6dbbe72c0c119e8a4a5a5ec3d299fbd05eca00"
+      }
+    },
+    {
+      "event_id": "3f9c000c-7a2d-4e8b-b1c0-d9e8f7a6b5c4",
+      "provider": "aws",
+      "scope": "111122223333",
+      "time": "2026-11-05T11:44:00Z",
+      "resource": "iam/batch",
+      "verb": "CreateAccessKey",
+      "succeeded": true,
+      "actor": "arn:aws:iam::111122223333:root",
+      "outcome": "out-of-band",
+      "coverage": "out-of-band-detected",
+      "tier": 2,
+      "severity": "critical",
+      "signal": "userIdentity.root",
+      "detail": "the root user acted; Root is always an exception",
+      "rule_set": {
+        "name": "observe-default",
+        "version": "2026.11.1",
+        "digest": "a5340485428e853074f07b139c6dbbe72c0c119e8a4a5a5ec3d299fbd05eca00"
+      }
+    },
+    {
+      "event_id": "3f9c000d-7a2d-4e8b-b1c0-d9e8f7a6b5c4",
+      "provider": "aws",
+      "scope": "111122223333",
+      "time": "2026-11-05T11:46:00Z",
+      "resource": "s3/orders-assets",
+      "verb": "PutBucketPolicy",
+      "succeeded": false,
+      "actor": "arn:aws:iam::111122223333:user/frank",
+      "outcome": "attempted-refused",
+      "coverage": "attempted-refused",
+      "tier": 1,
+      "severity": "medium",
+      "signal": "errorCode",
+      "detail": "the record carries an errorCode; the call was refused and nothing landed",
+      "rule_set": {
+        "name": "observe-default",
+        "version": "2026.11.1",
+        "digest": "a5340485428e853074f07b139c6dbbe72c0c119e8a4a5a5ec3d299fbd05eca00"
+      }
+    },
+    {
+      "event_id": "3f9c000e-7a2d-4e8b-b1c0-d9e8f7a6b5c4",
+      "provider": "aws",
+      "scope": "111122223333",
+      "time": "2026-11-05T11:50:00Z",
+      "resource": "cloudtrail/org-trail",
+      "verb": "StopLogging",
+      "succeeded": false,
+      "actor": "arn:aws:iam::111122223333:user/eve",
+      "outcome": "monitoring-protection",
+      "coverage": "out-of-band-detected",
+      "tier": 3,
+      "severity": "critical",
+      "signal": "errorCode",
+      "detail": "operation on the controls that watch the environment: the record carries an errorCode; the call was refused and nothing landed",
+      "monitoring": true,
+      "rule_set": {
+        "name": "observe-default",
+        "version": "2026.11.1",
+        "digest": "a5340485428e853074f07b139c6dbbe72c0c119e8a4a5a5ec3d299fbd05eca00"
+      }
+    },
+    {
+      "event_id": "3f9c000f-7a2d-4e8b-b1c0-d9e8f7a6b5c4",
+      "provider": "aws",
+      "scope": "444455556666",
+      "time": "2026-11-05T11:52:00Z",
+      "resource": "cloudtrail/acct-trail",
+      "verb": "DeleteTrail",
+      "succeeded": true,
+      "actor": "arn:aws:sts::444455556666:assumed-role/AWSReservedSSO_Admin_0123456789abcdef/dana@example.com",
+      "outcome": "monitoring-protection",
+      "coverage": "out-of-band-detected",
+      "tier": 3,
+      "severity": "critical",
+      "signal": "principal.no-grant",
+      "detail": "operation on the controls that watch the environment: no grant, attestation, run or plan ties this call to a clearance",
+      "monitoring": true,
+      "rule_set": {
+        "name": "observe-default",
+        "version": "2026.11.1",
+        "digest": "a5340485428e853074f07b139c6dbbe72c0c119e8a4a5a5ec3d299fbd05eca00"
+      }
+    }
+  ],
+  "transactions": [
+    {
+      "id": "txn_27bf0e7abf73",
+      "scope": "111122223333",
+      "actor": "arn:aws:sts::111122223333:assumed-role/clearance-apply/tf-run-8841",
+      "context": "grant:clr_aws_001",
+      "from": "2026-11-05T11:00:00Z",
+      "to": "2026-11-05T11:00:00Z",
+      "events": [
+        "3f9c0001-7a2d-4e8b-b1c0-d9e8f7a6b5c4"
+      ],
+      "resources": [
+        "s3/orders-assets"
+      ],
+      "outcome": "cleared",
+      "coverage": "authorized-and-verified",
+      "tier": 0,
+      "severity": "info"
+    },
+    {
+      "id": "txn_3e8a3b6b272d",
+      "scope": "111122223333",
+      "actor": "arn:aws:sts::111122223333:assumed-role/clearance-apply/tf-run-8870",
+      "context": "session:arn:aws:sts::111122223333:assumed-role/clearance-apply/tf-run-8870",
+      "from": "2026-11-05T11:02:00Z",
+      "to": "2026-11-05T11:02:00Z",
+      "events": [
+        "3f9c0002-7a2d-4e8b-b1c0-d9e8f7a6b5c4"
+      ],
+      "resources": [
+        "dynamodb/orders-index"
+      ],
+      "outcome": "cleared",
+      "coverage": "authorized-and-verified",
+      "tier": 0,
+      "severity": "info"
+    },
+    {
+      "id": "txn_40a95be55afd",
+      "scope": "111122223333",
+      "actor": "arn:aws:sts::111122223333:assumed-role/clearance-apply/tf-run-8842",
+      "context": "session:arn:aws:sts::111122223333:assumed-role/clearance-apply/tf-run-8842",
+      "from": "2026-11-05T11:04:00Z",
+      "to": "2026-11-05T11:04:00Z",
+      "events": [
+        "3f9c0003-7a2d-4e8b-b1c0-d9e8f7a6b5c4"
+      ],
+      "resources": [
+        "sqs/orders-events"
+      ],
+      "outcome": "cleared",
+      "coverage": "authorized-and-verified",
+      "tier": 0,
+      "severity": "info"
+    },
+    {
+      "id": "txn_c95450461b2d",
+      "scope": "111122223333",
+      "actor": "arn:aws:sts::111122223333:assumed-role/clearance-apply/tf-run-8843",
+      "context": "grant:clr_aws_002",
+      "from": "2026-11-05T11:10:00Z",
+      "to": "2026-11-05T11:10:04Z",
+      "events": [
+        "3f9c0004-7a2d-4e8b-b1c0-d9e8f7a6b5c4",
+        "3f9c0005-7a2d-4e8b-b1c0-d9e8f7a6b5c4",
+        "3f9c0006-7a2d-4e8b-b1c0-d9e8f7a6b5c4"
+      ],
+      "resources": [
+        "s3/orders-assets"
+      ],
+      "outcome": "cleared",
+      "coverage": "authorized-and-verified",
+      "tier": 0,
+      "severity": "info"
+    },
+    {
+      "id": "txn_f3b6bbff8aa8",
+      "scope": "111122223333",
+      "actor": "arn:aws:sts::111122223333:assumed-role/clearance-apply/tf-run-8843",
+      "context": "grant:clr_aws_002",
+      "from": "2026-11-05T11:12:00Z",
+      "to": "2026-11-05T11:12:00Z",
+      "events": [
+        "3f9c0007-7a2d-4e8b-b1c0-d9e8f7a6b5c4"
+      ],
+      "resources": [
+        "s3/payments-vault"
+      ],
+      "outcome": "out-of-band",
+      "coverage": "out-of-band-detected",
+      "tier": 2,
+      "severity": "high"
+    },
+    {
+      "id": "txn_e01c268c245b",
+      "scope": "111122223333",
+      "actor": "arn:aws:sts::111122223333:assumed-role/clearance-apply/tf-run-8844",
+      "context": "grant:clr_aws_003",
+      "from": "2026-11-05T11:14:00Z",
+      "to": "2026-11-05T11:14:00Z",
+      "events": [
+        "3f9c0008-7a2d-4e8b-b1c0-d9e8f7a6b5c4"
+      ],
+      "resources": [
+        "sqs/orders-dlq"
+      ],
+      "outcome": "cleared",
+      "coverage": "authorized-and-verified",
+      "tier": 0,
+      "severity": "low"
+    },
+    {
+      "id": "txn_e82dc1159c06",
+      "scope": "111122223333",
+      "actor": "arn:aws:sts::111122223333:assumed-role/clearance-apply/tf-run-8850",
+      "context": "session:arn:aws:sts::111122223333:assumed-role/clearance-apply/tf-run-8850",
+      "from": "2026-11-05T11:35:00Z",
+      "to": "2026-11-05T11:35:00Z",
+      "events": [
+        "3f9c0009-7a2d-4e8b-b1c0-d9e8f7a6b5c4"
+      ],
+      "resources": [
+        "sns/orders-alerts"
+      ],
+      "outcome": "cleared",
+      "coverage": "authorized-and-verified",
+      "tier": 0,
+      "severity": "low"
+    },
+    {
+      "id": "txn_a6a2892aa64c",
+      "scope": "111122223333",
+      "actor": "arn:aws:sts::111122223333:assumed-role/AWSReservedSSO_Admin_0123456789abcdef/dana@example.com",
+      "context": "session:arn:aws:sts::111122223333:assumed-role/AWSReservedSSO_Admin_0123456789abcdef/dana@example.com",
+      "from": "2026-11-05T11:40:30Z",
+      "to": "2026-11-05T11:40:30Z",
+      "events": [
+        "3f9c000a-7a2d-4e8b-b1c0-d9e8f7a6b5c4"
+      ],
+      "resources": [
+        "s3/orders-assets"
+      ],
+      "outcome": "out-of-band",
+      "coverage": "out-of-band-detected",
+      "tier": 2,
+      "severity": "high"
+    },
+    {
+      "id": "txn_a452acfc8c1b",
+      "scope": "111122223333",
+      "actor": "arn:aws:iam::111122223333:user/eve",
+      "context": "session:arn:aws:iam::111122223333:user/eve",
+      "from": "2026-11-05T11:42:00Z",
+      "to": "2026-11-05T11:42:00Z",
+      "events": [
+        "3f9c000b-7a2d-4e8b-b1c0-d9e8f7a6b5c4"
+      ],
+      "resources": [
+        "iam/batch-role"
+      ],
+      "outcome": "out-of-band",
+      "coverage": "out-of-band-detected",
+      "tier": 2,
+      "severity": "medium"
+    },
+    {
+      "id": "txn_6c26f577c406",
+      "scope": "111122223333",
+      "actor": "arn:aws:iam::111122223333:root",
+      "context": "session:arn:aws:iam::111122223333:root",
+      "from": "2026-11-05T11:44:00Z",
+      "to": "2026-11-05T11:44:00Z",
+      "events": [
+        "3f9c000c-7a2d-4e8b-b1c0-d9e8f7a6b5c4"
+      ],
+      "resources": [
+        "iam/batch"
+      ],
+      "outcome": "out-of-band",
+      "coverage": "out-of-band-detected",
+      "tier": 2,
+      "severity": "critical"
+    },
+    {
+      "id": "txn_c155e983d782",
+      "scope": "111122223333",
+      "actor": "arn:aws:iam::111122223333:user/frank",
+      "context": "session:arn:aws:iam::111122223333:user/frank",
+      "from": "2026-11-05T11:46:00Z",
+      "to": "2026-11-05T11:46:00Z",
+      "events": [
+        "3f9c000d-7a2d-4e8b-b1c0-d9e8f7a6b5c4"
+      ],
+      "resources": [
+        "s3/orders-assets"
+      ],
+      "outcome": "attempted-refused",
+      "coverage": "attempted-refused",
+      "tier": 1,
+      "severity": "medium"
+    },
+    {
+      "id": "txn_7978f5c49c61",
+      "scope": "111122223333",
+      "actor": "arn:aws:iam::111122223333:user/eve",
+      "context": "session:arn:aws:iam::111122223333:user/eve",
+      "from": "2026-11-05T11:50:00Z",
+      "to": "2026-11-05T11:50:00Z",
+      "events": [
+        "3f9c000e-7a2d-4e8b-b1c0-d9e8f7a6b5c4"
+      ],
+      "resources": [
+        "cloudtrail/org-trail"
+      ],
+      "outcome": "monitoring-protection",
+      "coverage": "out-of-band-detected",
+      "tier": 3,
+      "severity": "critical"
+    },
+    {
+      "id": "txn_0bbc30ef66ff",
+      "scope": "444455556666",
+      "actor": "arn:aws:sts::444455556666:assumed-role/AWSReservedSSO_Admin_0123456789abcdef/dana@example.com",
+      "context": "session:arn:aws:sts::444455556666:assumed-role/AWSReservedSSO_Admin_0123456789abcdef/dana@example.com",
+      "from": "2026-11-05T11:52:00Z",
+      "to": "2026-11-05T11:52:00Z",
+      "events": [
+        "3f9c000f-7a2d-4e8b-b1c0-d9e8f7a6b5c4"
+      ],
+      "resources": [
+        "cloudtrail/acct-trail"
+      ],
+      "outcome": "monitoring-protection",
+      "coverage": "out-of-band-detected",
+      "tier": 3,
+      "severity": "critical"
+    }
+  ],
+  "exceptions": [
+    {
+      "id": "exc_5735033b50f0",
+      "kind": "monitoring-protection",
+      "scope": "444455556666",
+      "transaction": "txn_0bbc30ef66ff",
+      "resources": [
+        "cloudtrail/acct-trail"
+      ],
+      "actor": "arn:aws:sts::444455556666:assumed-role/AWSReservedSSO_Admin_0123456789abcdef/dana@example.com",
+      "coverage": "out-of-band-detected",
+      "tier": 3,
+      "severity": "critical",
+      "events": [
+        "3f9c000f-7a2d-4e8b-b1c0-d9e8f7a6b5c4"
+      ],
+      "reverted": false,
+      "resolution": "still-live",
+      "signals": [
+        "principal.no-grant"
+      ],
+      "rule_set": {
+        "name": "observe-default",
+        "version": "2026.11.1",
+        "digest": "a5340485428e853074f07b139c6dbbe72c0c119e8a4a5a5ec3d299fbd05eca00"
+      }
+    },
+    {
+      "id": "exc_bacafda2cf68",
+      "kind": "out-of-band",
+      "scope": "111122223333",
+      "transaction": "txn_6c26f577c406",
+      "resources": [
+        "iam/batch"
+      ],
+      "actor": "arn:aws:iam::111122223333:root",
+      "coverage": "out-of-band-detected",
+      "tier": 2,
+      "severity": "critical",
+      "events": [
+        "3f9c000c-7a2d-4e8b-b1c0-d9e8f7a6b5c4"
+      ],
+      "reverted": false,
+      "resolution": "still-live",
+      "signals": [
+        "userIdentity.root"
+      ],
+      "rule_set": {
+        "name": "observe-default",
+        "version": "2026.11.1",
+        "digest": "a5340485428e853074f07b139c6dbbe72c0c119e8a4a5a5ec3d299fbd05eca00"
+      }
+    },
+    {
+      "id": "exc_ed5b44639249",
+      "kind": "monitoring-protection",
+      "scope": "111122223333",
+      "transaction": "txn_7978f5c49c61",
+      "resources": [
+        "cloudtrail/org-trail"
+      ],
+      "actor": "arn:aws:iam::111122223333:user/eve",
+      "coverage": "out-of-band-detected",
+      "tier": 3,
+      "severity": "critical",
+      "events": [
+        "3f9c000e-7a2d-4e8b-b1c0-d9e8f7a6b5c4"
+      ],
+      "reverted": false,
+      "resolution": "still-live",
+      "signals": [
+        "errorCode"
+      ],
+      "rule_set": {
+        "name": "observe-default",
+        "version": "2026.11.1",
+        "digest": "a5340485428e853074f07b139c6dbbe72c0c119e8a4a5a5ec3d299fbd05eca00"
+      }
+    },
+    {
+      "id": "exc_aef114c76c86",
+      "kind": "out-of-band",
+      "scope": "111122223333",
+      "transaction": "txn_a452acfc8c1b",
+      "resources": [
+        "iam/batch-role"
+      ],
+      "actor": "arn:aws:iam::111122223333:user/eve",
+      "coverage": "out-of-band-detected",
+      "tier": 2,
+      "severity": "medium",
+      "events": [
+        "3f9c000b-7a2d-4e8b-b1c0-d9e8f7a6b5c4"
+      ],
+      "reverted": false,
+      "resolution": "still-live",
+      "signals": [
+        "principal.no-grant"
+      ],
+      "rule_set": {
+        "name": "observe-default",
+        "version": "2026.11.1",
+        "digest": "a5340485428e853074f07b139c6dbbe72c0c119e8a4a5a5ec3d299fbd05eca00"
+      }
+    },
+    {
+      "id": "exc_f412038e5b3e",
+      "kind": "out-of-band",
+      "scope": "111122223333",
+      "transaction": "txn_a6a2892aa64c",
+      "resources": [
+        "s3/orders-assets"
+      ],
+      "actor": "arn:aws:sts::111122223333:assumed-role/AWSReservedSSO_Admin_0123456789abcdef/dana@example.com",
+      "coverage": "out-of-band-detected",
+      "tier": 2,
+      "severity": "high",
+      "events": [
+        "3f9c000a-7a2d-4e8b-b1c0-d9e8f7a6b5c4"
+      ],
+      "reverted": false,
+      "resolution": "still-live",
+      "signals": [
+        "sessionIssuer.sso-admin"
+      ],
+      "rule_set": {
+        "name": "observe-default",
+        "version": "2026.11.1",
+        "digest": "a5340485428e853074f07b139c6dbbe72c0c119e8a4a5a5ec3d299fbd05eca00"
+      }
+    },
+    {
+      "id": "exc_39c84680135d",
+      "kind": "attempted-refused",
+      "scope": "111122223333",
+      "transaction": "txn_c155e983d782",
+      "resources": [
+        "s3/orders-assets"
+      ],
+      "actor": "arn:aws:iam::111122223333:user/frank",
+      "coverage": "attempted-refused",
+      "tier": 1,
+      "severity": "medium",
+      "events": [
+        "3f9c000d-7a2d-4e8b-b1c0-d9e8f7a6b5c4"
+      ],
+      "reverted": false,
+      "resolution": "still-live",
+      "signals": [
+        "errorCode"
+      ],
+      "rule_set": {
+        "name": "observe-default",
+        "version": "2026.11.1",
+        "digest": "a5340485428e853074f07b139c6dbbe72c0c119e8a4a5a5ec3d299fbd05eca00"
+      }
+    },
+    {
+      "id": "exc_f9dcf5346504",
+      "kind": "out-of-band",
+      "scope": "111122223333",
+      "transaction": "txn_f3b6bbff8aa8",
+      "resources": [
+        "s3/payments-vault"
+      ],
+      "actor": "arn:aws:sts::111122223333:assumed-role/clearance-apply/tf-run-8843",
+      "coverage": "out-of-band-detected",
+      "tier": 2,
+      "severity": "high",
+      "events": [
+        "3f9c0007-7a2d-4e8b-b1c0-d9e8f7a6b5c4"
+      ],
+      "reverted": false,
+      "resolution": "still-live",
+      "signals": [
+        "correlation.outside-plan"
+      ],
+      "rule_set": {
+        "name": "observe-default",
+        "version": "2026.11.1",
+        "digest": "a5340485428e853074f07b139c6dbbe72c0c119e8a4a5a5ec3d299fbd05eca00"
+      }
+    }
+  ],
+  "alerts": [
+    {
+      "scope": "111122223333",
+      "assessment": {
+        "event_id": "3f9c000e-7a2d-4e8b-b1c0-d9e8f7a6b5c4",
+        "provider": "aws",
+        "scope": "111122223333",
+        "time": "2026-11-05T11:50:00Z",
+        "resource": "cloudtrail/org-trail",
+        "verb": "StopLogging",
+        "succeeded": false,
+        "actor": "arn:aws:iam::111122223333:user/eve",
+        "outcome": "monitoring-protection",
+        "coverage": "out-of-band-detected",
+        "tier": 3,
+        "severity": "critical",
+        "signal": "errorCode",
+        "detail": "operation on the controls that watch the environment: the record carries an errorCode; the call was refused and nothing landed",
+        "monitoring": true,
+        "rule_set": {
+          "name": "observe-default",
+          "version": "2026.11.1",
+          "digest": "a5340485428e853074f07b139c6dbbe72c0c119e8a4a5a5ec3d299fbd05eca00"
+        }
+      },
+      "health": "degraded",
+      "check": "monitoring-protection",
+      "detail": "StopLogging cloudtrail/org-trail by arn:aws:iam::111122223333:user/eve (succeeded: false)"
+    },
+    {
+      "scope": "444455556666",
+      "assessment": {
+        "event_id": "3f9c000f-7a2d-4e8b-b1c0-d9e8f7a6b5c4",
+        "provider": "aws",
+        "scope": "444455556666",
+        "time": "2026-11-05T11:52:00Z",
+        "resource": "cloudtrail/acct-trail",
+        "verb": "DeleteTrail",
+        "succeeded": true,
+        "actor": "arn:aws:sts::444455556666:assumed-role/AWSReservedSSO_Admin_0123456789abcdef/dana@example.com",
+        "outcome": "monitoring-protection",
+        "coverage": "out-of-band-detected",
+        "tier": 3,
+        "severity": "critical",
+        "signal": "principal.no-grant",
+        "detail": "operation on the controls that watch the environment: no grant, attestation, run or plan ties this call to a clearance",
+        "monitoring": true,
+        "rule_set": {
+          "name": "observe-default",
+          "version": "2026.11.1",
+          "digest": "a5340485428e853074f07b139c6dbbe72c0c119e8a4a5a5ec3d299fbd05eca00"
+        }
+      },
+      "health": "blind",
+      "check": "monitoring-protection",
+      "detail": "DeleteTrail cloudtrail/acct-trail by arn:aws:sts::444455556666:assumed-role/AWSReservedSSO_Admin_0123456789abcdef/dana@example.com (succeeded: true)"
+    }
+  ],
+  "health": {
+    "111122223333": "degraded",
+    "444455556666": "blind"
+  }
+}

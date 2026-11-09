@@ -9,6 +9,7 @@ package packet
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/jfillman/clearance/internal/observe"
@@ -41,6 +42,10 @@ type Params struct {
 	Now time.Time
 	// Version is the build that made it.
 	Version string
+	// Filtered are the per-rule counts of events the observation pipeline's noise rules dropped in the window
+	// (internal/observe/pipeline). The chain does not hold them: a collector that stores the pipeline's counters
+	// (O-3, O-4) passes them in. Empty: the packet says nothing was reported, not that nothing was filtered.
+	Filtered []FilteredRule
 	// LogKeys and WitnessPolicy are the ledger's public verification material, when the job was given it: the
 	// checkpoint's signatures are checked with them and they are copied into the packet for the offline verifier.
 	// Receipts are the prior acceptance receipts to carry (P-1 supplies them; none until it exists).
@@ -308,6 +313,19 @@ type AIIdentity struct {
 	LastTS        string   `json:"last_ts"`
 }
 
+// FilteredRule is one noise rule's count: "filtered: N events under rule X".
+type FilteredRule struct {
+	Rule    string `json:"rule"`
+	RuleSet string `json:"rule_set"` // "<name>@<version>": the versioned allowlist bundle the rule is in
+	Count   int    `json:"count"`
+	Why     string `json:"why,omitempty"`
+}
+
+// Line is the sentence the packet prints for the rule (the same text as pipeline.FilteredCount.Line).
+func (f FilteredRule) Line() string {
+	return fmt.Sprintf("filtered: %d events under rule %s (%s)", f.Count, f.Rule, f.RuleSet)
+}
+
 // Exceptions is the exceptions section: one row per class.
 type Exceptions struct {
 	Count int `json:"count"`
@@ -317,6 +335,8 @@ type Exceptions struct {
 	Unverified string      `json:"not_clean_reason,omitempty"`
 	Rows       []Exception `json:"rows"`
 	ByClass    []Count     `json:"by_class"`
+	// Filtered is what the noise rules dropped, so an empty list is read beside what was not looked at.
+	Filtered []FilteredRule `json:"filtered,omitempty"`
 }
 
 // Exception classes, in the order the section prints them.

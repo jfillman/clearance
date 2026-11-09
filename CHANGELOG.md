@@ -9,6 +9,16 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Added
+- **O-2: the observation pipeline (`internal/observe/pipeline`) and `clearance observe replay`.** Six stages over raw
+  Kubernetes audit events and CloudTrail records: normalize, scope, noise, attribute, classify, correlate. The rules are
+  CEL in a versioned bundle (`clearance.observe-rules/v1`) compiled once at load under a cost limit and named in every
+  assessment; a rule that does not compile, is over the limit, or is a blanket noise rule (anything from a service
+  account) makes the bundle refuse to load. Attribution is an ordered signal list per provider; a burst is one change
+  transaction; an apply-and-revert is one exception; an operation on monitoring is tier 3, alerts and flips the scope's
+  health. The packet carries the per-rule `filtered: N events under rule X` counts when a collector supplies them
+  (`packet.Params.Filtered`). Documented in `docs/observe-pipeline.md`. Wired to no collector yet (O-3, O-4).
+
 ## [0.36.1] - 2026-11-09
 
 ### Fixed
