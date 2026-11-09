@@ -89,7 +89,8 @@ type Result struct {
 	Monitoring bool
 	// Succeeded is the observation's action.succeeded (monitoring flips to blind when it did, degraded when it did not).
 	Succeeded bool
-	// DedupeKey is the identity of a provider's own event (source.name, source.event_id); "" when it has none.
+	// Source and EventID are the provider's own identity for the event (source.name, source.event_id); the core
+	// de-duplicates on them. EventID is "" for a record that names none (a health record).
 	Source, EventID string
 }
 
