@@ -61,7 +61,7 @@ func (s *Service) SetResolution(ctx context.Context, p authn.Principal, about in
 	if err := s.gateOn(); err != nil {
 		return nil, err
 	}
-	person, via, who, err := s.admin(ctx, p, onBehalfOf)
+	person, via, who, err := s.admin(ctx, p, onBehalfOf, "DG-RESOLUTION", "Only an admin, or a delegate naming one, may set a resolution.")
 	if err != nil {
 		return nil, err
 	}

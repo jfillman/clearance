@@ -74,7 +74,9 @@ func TestAPersonSetsAResolutionCauseAndTheRecordNamesThem(t *testing.T) {
 	body := map[string]any{"state": "reverted", "cause": "human-initiated", "note": "Dana rolled it back from the console"}
 
 	// who may: a person who is an admin; another person, a service and a non-person are refused.
-	f.do("POST", path(about), "user:dana", body).want(t, 403, "not a Clearance admin")
+	if a := f.do("POST", path(about), "user:dana", body).want(t, 403, "not a Clearance admin"); a.body["rule"] != "DG-RESOLUTION" {
+		t.Fatalf("the refusal names rule %v, want DG-RESOLUTION", a.body["rule"])
+	}
 	f.do("POST", path(about), gw, body).want(t, 403, "")
 	f.do("POST", path(about), "", body).want(t, 401, "")
 	if n := countTool(f, "resolution"); n != 0 {

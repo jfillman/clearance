@@ -180,7 +180,7 @@ records, `clearance chain verify` ok).
 
 **Six kinds.** A provider posts five of them through `POST /v1/records`, and only when its registration names them in
 `kinds` (a provider with no `kinds` writes every kind *but* these: a registered observed provider is one that opted
-in). The fifth is the core's.
+in). The sixth is the core's.
 
 | Kind | Written by | What it is | Fields (all claimed unless noted) |
 | --- | --- | --- | --- |

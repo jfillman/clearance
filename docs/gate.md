@@ -908,6 +908,7 @@ partial index `clearance_evidence_exceptions`. Filters: `tool`, `kind` (an excep
 | `unprotected` | a change's reason (tier 0) | the environment is not on `CLEARANCE_PROTECTED_ENVIRONMENTS` |
 | `DG-POLICY` (outage) | `clearance.yaml` | an `outage:` entry that loosens the baseline, or not a tier 0 to 3 |
 | `DG-BREAKGLASS` | `POST /v1/breakglass`, `/close`, 403 | not an admin |
+| `DG-RESOLUTION` | `POST /v1/observations/{seq}/resolution`, 403 | not an admin |
 | `DG-BREAKGLASS-TTL` | `POST /v1/breakglass`, 400 | the TTL is not a Go duration from 1m to the deployment's maximum (at most 4h) |
 | `DG-BREAKGLASS-SCOPE` | `POST /v1/breakglass`, 400 | cluster, env or app are not names, or the environment is not protected |
 | `DG-BREAKGLASS-OPEN` | `POST /v1/breakglass`, 409 | a window is already open on that environment |
