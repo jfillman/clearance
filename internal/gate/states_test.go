@@ -44,6 +44,8 @@ func exceptionOf(f *fixture, kind, changeID string) store.Event {
 		x["addresses"] = []any{"aws_security_group.web"}
 	case "untraced-apply":
 		x["actor"] = "arn:aws:iam::123456789012:user/someone"
+	case "attempted-refused", "monitoring-protection":
+		x["actor"], x["detail"] = "arn:aws:iam::123456789012:user/someone", "StopLogging on trail org-trail"
 	case "digest-mismatch":
 		x["expected"], x["observed"] = "sha256:"+strings.Repeat("c", 64), "sha256:"+strings.Repeat("9", 64)
 	}
@@ -475,13 +477,15 @@ func TestEveryExceptionKindHasItsShapeAndCoverage(t *testing.T) {
 		}
 	}
 	for kind, x := range map[string]map[string]any{
-		"out-of-band":     {"kind": "out-of-band"},
-		"drift":           {"kind": "drift"},
-		"untraced-apply":  {"kind": "untraced-apply"},
-		"digest-mismatch": {"kind": "digest-mismatch", "expected": "a", "observed": "b"}, // no change.id
-		"unknown kind":    {"kind": "sideways"},
-		"unknown field":   {"kind": "drift", "addresses": []any{"x"}, "colour": "red"},
-		"bad object":      {"kind": "out-of-band", "objects": []any{map[string]any{"kind": "Deployment"}}},
+		"out-of-band":                            {"kind": "out-of-band"},
+		"drift":                                  {"kind": "drift"},
+		"untraced-apply":                         {"kind": "untraced-apply"},
+		"digest-mismatch":                        {"kind": "digest-mismatch", "expected": "a", "observed": "b"}, // no change.id
+		"attempted-refused without a detail":     {"kind": "attempted-refused", "actor": "someone"},
+		"monitoring-protection without an actor": {"kind": "monitoring-protection", "detail": "StopLogging"},
+		"unknown kind":                           {"kind": "sideways"},
+		"unknown field":                          {"kind": "drift", "addresses": []any{"x"}, "colour": "red"},
+		"bad object":                             {"kind": "out-of-band", "objects": []any{map[string]any{"kind": "Deployment"}}},
 	} {
 		e := exceptionOf(f, "drift", "")
 		e["exception"] = x
@@ -765,4 +769,24 @@ func TestReportLocatedByWorkspace(t *testing.T) {
 		}
 	}
 	f.report(t, exceptionOf(f, "drift", "")) // cluster + environment, as before
+}
+
+// An attempted-refused exception names a change and does not move it: nothing landed. Every other kind does.
+func TestAnAttemptedRefusedExceptionLeavesTheChangeAlone(t *testing.T) {
+	f := newGate(t)
+	c := f.register(t, "ci", change(map[string]any{"objects": imageBump}))
+	rec := f.report(t, exceptionOf(f, "attempted-refused", c.ID))
+	if rec["coverage"] != "attempted-refused" || rec["schema"] != evidence.SchemaV1_1 {
+		t.Fatalf("%v", rec)
+	}
+	if got := f.get(t, c.ID).State; got != gate.StateHolding && got != gate.StateCleared {
+		t.Fatalf("an attempt that was refused moved the change to %s", got)
+	}
+	rec = f.report(t, exceptionOf(f, "monitoring-protection", c.ID))
+	if rec["coverage"] != "out-of-band-detected" || rec["schema"] != evidence.Schema {
+		t.Fatalf("%v", rec)
+	}
+	if got := f.get(t, c.ID).State; got != gate.StateException {
+		t.Fatalf("an operation on monitoring left the change %s", got)
+	}
 }

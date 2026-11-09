@@ -16,9 +16,9 @@ from ._codec import Field, Model, Operation
 
 CONTRACT_VERSION = "1.0.0"
 
-RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "run.finish", "human.answer", "session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome", "deploy.exception", "deploy.degraded", "federated.decision")
+RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "run.finish", "human.answer", "session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome", "deploy.exception", "deploy.degraded", "federated.decision", "observation", "assessment", "resolution", "observation.health")
 
-__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateReason", "GateRequirement", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
+__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateReason", "GateRequirement", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -530,6 +530,7 @@ class GateChange(Model):
         Field("deployments", "deployments", ("list", ("ref", "GateDeployment")), True),
         Field("ended", "ended", ("nullable", ("ref", "GateEnded")), False),
         Field("env", "env", ("str",), True),
+        Field("evidence_wait", "evidence_wait", ("nullable", ("ref", "GateEvidenceWait")), False),
         Field("expires_at", "expires_at", ("str",), True),
         Field("head", "head", ("str",), True),
         Field("id", "id", ("str",), True),
@@ -577,6 +578,7 @@ class GateChange(Model):
     deployments: list[GateDeployment]
     ended: GateEnded | None = None
     env: str
+    evidence_wait: GateEvidenceWait | None = None
     expires_at: str
     head: str
     id: str
@@ -631,6 +633,7 @@ class GateChangeWithAuditSeq(Model):
         Field("deployments", "deployments", ("list", ("ref", "GateDeployment")), True),
         Field("ended", "ended", ("nullable", ("ref", "GateEnded")), False),
         Field("env", "env", ("str",), True),
+        Field("evidence_wait", "evidence_wait", ("nullable", ("ref", "GateEvidenceWait")), False),
         Field("expires_at", "expires_at", ("str",), True),
         Field("head", "head", ("str",), True),
         Field("id", "id", ("str",), True),
@@ -679,6 +682,7 @@ class GateChangeWithAuditSeq(Model):
     deployments: list[GateDeployment]
     ended: GateEnded | None = None
     env: str
+    evidence_wait: GateEvidenceWait | None = None
     expires_at: str
     head: str
     id: str
@@ -809,6 +813,22 @@ class GateErrorBody(Model):
     error: str
     hint: str
     rule: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class GateEvidenceWait(Model):
+    """Contract schema GateEvidenceWait."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("assurance", "assurance", ("str",), True),
+        Field("reason", "reason", ("str",), True),
+        Field("since", "since", ("str",), True),
+    )
+
+    assurance: str
+    reason: str
+    since: str
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -1138,6 +1158,54 @@ class Hold(Model):
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
+class LedgerStatus(Model):
+    """Contract schema LedgerStatus."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("chain", "chain", ("int",), True),
+        Field("detail", "detail", ("str",), False),
+        Field("enabled", "enabled", ("bool",), True),
+        Field("holding", "holding", ("bool",), True),
+        Field("ledger", "ledger", ("int",), True),
+        Field("origin", "origin", ("str",), False),
+        Field("state", "state", ("str",), False),
+        Field("tier3_wait", "tier3_wait", ("bool",), True),
+        Field("witnessed", "witnessed", ("int",), True),
+        Field("witnesses", "witnesses", ("list", ("ref", "LedgerWitnessStatus")), False),
+    )
+
+    chain: int
+    detail: str | None = None
+    enabled: bool
+    holding: bool
+    ledger: int
+    origin: str | None = None
+    state: str | None = None
+    tier3_wait: bool
+    witnessed: int
+    witnesses: list[LedgerWitnessStatus] | None = None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class LedgerWitnessStatus(Model):
+    """Contract schema LedgerWitnessStatus."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("at", "at", ("str",), False),
+        Field("detail", "detail", ("str",), False),
+        Field("state", "state", ("str",), True),
+        Field("url", "url", ("str",), True),
+    )
+
+    at: str | None = None
+    detail: str | None = None
+    state: str
+    url: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
 class Limits(Model):
     """Contract schema DecideLimits (a request type: unknown keys are refused by the core)."""
 
@@ -1397,17 +1465,24 @@ class ProviderEvent(Model):
 
     _STRICT: ClassVar[bool] = True
     _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("about", "about", ("map", ("any",)), False),
+        Field("action", "action", ("map", ("any",)), False),
+        Field("actor", "actor", ("map", ("any",)), False),
         Field("agent", "agent", ("nullable", ("str",)), False),
         Field("app", "app", ("nullable", ("str",)), False),
         Field("args_sha256", "args_sha256", ("nullable", ("str",)), False),
+        Field("attribution", "attribution", ("map", ("any",)), False),
         Field("change", "change", ("map", ("any",)), False),
+        Field("correlation", "correlation", ("map", ("any",)), False),
         Field("cost", "cost", ("nullable", ("ref", "Cost")), False),
         Field("coverage", "coverage", ("nullable", ("str",)), False),
         Field("decision", "decision", ("nullable", ("str",)), False),
         Field("destination", "destination", ("map", ("any",)), False),
         Field("effect", "effect", ("map", ("any",)), False),
         Field("exception", "exception", ("map", ("any",)), False),
+        Field("health", "health", ("map", ("any",)), False),
         Field("initiator", "initiator", ("map", ("any",)), False),
+        Field("integrity", "integrity", ("map", ("any",)), False),
         Field("intent", "intent", ("nullable", ("str",)), False),
         Field("model_version", "model_version", ("nullable", ("str",)), False),
         Field("outage", "outage", ("map", ("any",)), False),
@@ -1417,28 +1492,41 @@ class ProviderEvent(Model):
         Field("principal", "principal", ("nullable", ("str",)), False),
         Field("reason", "reason", ("nullable", ("str",)), False),
         Field("release", "release", ("map", ("any",)), False),
+        Field("resolution", "resolution", ("map", ("any",)), False),
+        Field("resource", "resource", ("map", ("any",)), False),
         Field("result", "result", ("nullable", ("str",)), False),
         Field("rule", "rule", ("nullable", ("str",)), False),
+        Field("rule_set", "rule_set", ("map", ("any",)), False),
+        Field("scope", "scope", ("nullable", ("str",)), False),
         Field("session", "session", ("nullable", ("str",)), False),
         Field("source", "source", ("map", ("any",)), False),
+        Field("state_change", "state_change", ("map", ("any",)), False),
         Field("subject", "subject", ("map", ("any",)), False),
         Field("target", "target", ("nullable", ("str",)), False),
         Field("task_id", "task_id", ("nullable", ("str",)), False),
         Field("tier", "tier", ("nullable", ("int",)), False),
+        Field("times", "times", ("map", ("any",)), False),
         Field("tool", "tool", ("nullable", ("str",)), False),
     )
 
+    about: dict[str, Any] | None = None
+    action: dict[str, Any] | None = None
+    actor: dict[str, Any] | None = None
     agent: str | None = None
     app: str | None = None
     args_sha256: str | None = None
+    attribution: dict[str, Any] | None = None
     change: dict[str, Any] | None = None
+    correlation: dict[str, Any] | None = None
     cost: Cost | None = None
     coverage: str | None = None
     decision: str | None = None
     destination: dict[str, Any] | None = None
     effect: dict[str, Any] | None = None
     exception: dict[str, Any] | None = None
+    health: dict[str, Any] | None = None
     initiator: dict[str, Any] | None = None
+    integrity: dict[str, Any] | None = None
     intent: str | None = None
     model_version: str | None = None
     outage: dict[str, Any] | None = None
@@ -1448,14 +1536,20 @@ class ProviderEvent(Model):
     principal: str | None = None
     reason: str | None = None
     release: dict[str, Any] | None = None
+    resolution: dict[str, Any] | None = None
+    resource: dict[str, Any] | None = None
     result: str | None = None
     rule: str | None = None
+    rule_set: dict[str, Any] | None = None
+    scope: str | None = None
     session: str | None = None
     source: dict[str, Any] | None = None
+    state_change: dict[str, Any] | None = None
     subject: dict[str, Any] | None = None
     target: str | None = None
     task_id: str | None = None
     tier: int | None = None
+    times: dict[str, Any] | None = None
     tool: str | None = None
 
 
@@ -1469,6 +1563,7 @@ class Ready(Model):
         Field("degraded", "degraded", ("list", ("str",)), False),
         Field("error", "error", ("str",), False),
         Field("head", "head", ("int",), True),
+        Field("ledger", "ledger", ("nullable", ("ref", "LedgerStatus")), False),
         Field("ok", "ok", ("bool",), True),
         Field("policy", "policy", ("ref", "PolicyRef"), True),
     )
@@ -1477,6 +1572,7 @@ class Ready(Model):
     degraded: list[str] | None = None
     error: str | None = None
     head: int
+    ledger: LedgerStatus | None = None
     ok: bool
     policy: PolicyRef
 
@@ -1487,10 +1583,12 @@ class RecordRef(Model):
 
     _STRICT: ClassVar[bool] = False
     _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("duplicate", "duplicate", ("bool",), False),
         Field("hash", "hash", ("str",), True),
         Field("seq", "seq", ("int",), True),
     )
 
+    duplicate: bool | None = None
     hash: str
     seq: int
 
@@ -1925,6 +2023,7 @@ MODELS: dict[str, type[Model]] = {
     "GateDeployment": GateDeployment,
     "GateEnded": GateEnded,
     "GateErrorBody": GateErrorBody,
+    "GateEvidenceWait": GateEvidenceWait,
     "GateObjectChange": GateObjectChange,
     "GateOutcome": GateOutcome,
     "GateOutcomeRequest": GateOutcomeRequest,
@@ -1941,6 +2040,8 @@ MODELS: dict[str, type[Model]] = {
     "HcprunAnswer": HcprunAnswer,
     "Health": Health,
     "Hold": Hold,
+    "LedgerStatus": LedgerStatus,
+    "LedgerWitnessStatus": LedgerWitnessStatus,
     "Limits": Limits,
     "Models": Models,
     "OutcomeRequest": OutcomeRequest,

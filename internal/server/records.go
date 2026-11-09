@@ -12,7 +12,9 @@ import (
 
 	"github.com/jfillman/clearance/internal/evidence"
 	"github.com/jfillman/clearance/internal/gate"
+	"github.com/jfillman/clearance/internal/observe"
 	"github.com/jfillman/clearance/internal/store"
+	"github.com/jfillman/clearance/internal/vocab"
 )
 
 // RecordKinds are the records a registered provider writes itself (POST /v1/records): the runtime's session and
@@ -28,7 +30,8 @@ import (
 // writer of each.
 var RecordKinds = []string{"session.open", "run.launch", "run.delete", "run.finish", "human.answer",
 	"session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome",
-	"deploy.exception", "deploy.degraded", FederatedKind}
+	"deploy.exception", "deploy.degraded", FederatedKind,
+	evidence.KindObservation, evidence.KindAssessment, evidence.KindResolution, evidence.KindHealth}
 
 // OutageKind is the record of a T0 read the provider allowed while the core was unreachable. Its tool is the tool
 // that was called (record.tool), its coverage is CoverageUnavailable, and everything in it is claimed: the core
@@ -70,6 +73,11 @@ var recordKinds = map[string]kindSpec{
 	"deploy.degraded": {[]string{"principal", "target", "app", "result", "decision", "coverage", "outage",
 		"destination"}, "deployment"},
 	FederatedKind: {[]string{"decision", "result", "coverage"}, "runtime"},
+	// The observation kinds (O-1); observe.Check holds each to its shape.
+	evidence.KindObservation: {[]string{"scope", "source", "resource", "actor", "action", "integrity", "times"}, "deployment"},
+	evidence.KindAssessment:  {[]string{"scope", "about", "coverage", "tier", "rule_set", "attribution"}, "deployment"},
+	evidence.KindResolution:  {[]string{"scope", "about", "resolution"}, "deployment"},
+	evidence.KindHealth:      {[]string{"scope", "source", "health"}, "deployment"},
 }
 
 // RecordRequest is POST /v1/records's body. provider must be the provider the caller authenticates as; kind is the
@@ -126,6 +134,27 @@ type ProviderEvent struct {
 	Preflight *Preflight `json:"preflight,omitempty"`
 	// Cost is the run's usage summary when it ends (AP-C2). run.finish only.
 	Cost *Cost `json:"cost,omitempty"`
+
+	// The observation kinds' fields (O-1, internal/observe): scope is the account, cluster or workspace observed. An
+	// observation carries resource, actor {subject, chain, issuer, client, attributes}, action {verb, api, succeeded,
+	// refused_reason}, state_change {before, after}, correlation {grant, plan, task_id, run_id, operation_id}, integrity
+	// {sourceVerified, completenessClaimed} and times {requested, observed, delivered}, and names its source as source
+	// {name, event_id}. An assessment or a resolution names the record it is about as about {seq}; an assessment carries
+	// coverage, tier, rule_set {version} and attribution {signal}; a resolution carries resolution {state, cause}. A
+	// health record carries source {name} and health {state, checks, interval_seconds}. Every one is claimed.
+	Scope       *string        `json:"scope,omitempty"`
+	Resource    map[string]any `json:"resource,omitempty"`
+	Actor       map[string]any `json:"actor,omitempty"`
+	Action      map[string]any `json:"action,omitempty"`
+	StateChange map[string]any `json:"state_change,omitempty"`
+	Correlation map[string]any `json:"correlation,omitempty"`
+	Integrity   map[string]any `json:"integrity,omitempty"`
+	Times       map[string]any `json:"times,omitempty"`
+	Health      map[string]any `json:"health,omitempty"`
+	About       map[string]any `json:"about,omitempty"`
+	RuleSet     map[string]any `json:"rule_set,omitempty"`
+	Attribution map[string]any `json:"attribution,omitempty"`
+	Resolution  map[string]any `json:"resolution,omitempty"`
 }
 
 var hexDigest = regexp.MustCompile(`^[0-9a-f]{64}\z`)
@@ -167,7 +196,7 @@ func (e *ProviderEvent) event(kind string, spec kindSpec, ts string) (store.Even
 	for _, f := range []struct {
 		k string
 		v *string
-	}{{"app", e.App}, {"reason", e.Reason}, {"coverage", e.Coverage}} {
+	}{{"app", e.App}, {"reason", e.Reason}, {"coverage", e.Coverage}, {"scope", e.Scope}} {
 		if f.v != nil {
 			if err := text(f.k, *f.v); err != nil {
 				return nil, err
@@ -194,7 +223,10 @@ func (e *ProviderEvent) event(kind string, spec kindSpec, ts string) (store.Even
 		v map[string]any
 	}{{"subject", e.Subject}, {"initiator", e.Initiator}, {"source", e.Source}, {"destination", e.Destination},
 		{"change", e.Change}, {"release", e.Release}, {"effect", e.Effect}, {"outcome", e.Outcome}, {"exception", e.Exception},
-		{"outage", e.Outage}} {
+		{"outage", e.Outage}, {"resource", e.Resource}, {"actor", e.Actor}, {"action", e.Action},
+		{"state_change", e.StateChange}, {"correlation", e.Correlation}, {"integrity", e.Integrity}, {"times", e.Times},
+		{"health", e.Health}, {"about", e.About}, {"rule_set", e.RuleSet}, {"attribution", e.Attribution},
+		{"resolution", e.Resolution}} {
 		if f.v != nil {
 			ev[f.k] = f.v
 		}
@@ -339,10 +371,38 @@ func (s *Server) records(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	res, err := observe.Check(body.Kind, ev, vocab.Get())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	wr := prov.Writer()
 	wr.Verified = recordVerified
 	var rec store.Record
-	if gate.IsReport(body.Kind) {
+	if source, id, keyed := eventKey(ev); keyed {
+		// The provider's own event id: de-duplicate (O-1, closes R-9). The lock makes the check and the write one step.
+		s.eventMu.Lock()
+		defer s.eventMu.Unlock()
+		prior, err := s.opt.Store.EventRecord(r.Context(), prov.Name, body.Kind, source, id)
+		switch {
+		case err == nil:
+			ref := refOf(prior)
+			ref.Duplicate = true
+			writeJSON(w, http.StatusOK, ref)
+			return
+		case !errors.Is(err, store.ErrNotFound):
+			s.log.ErrorContext(r.Context(), "records: reading the event failed", "error", err.Error())
+			writeError(w, http.StatusServiceUnavailable, "the record could not be recorded")
+			return
+		}
+	}
+	if observe.Is(body.Kind) {
+		err = s.opt.Store.Atomic(r.Context(), func(tx store.Tx) error {
+			var err error
+			rec, err = s.appendObserved(r.Context(), tx, body.Kind, ev, wr, res)
+			return err
+		})
+	} else if gate.IsReport(body.Kind) {
 		// An exception or an outage report: the gate checks it, records it and acts on the change it names in one
 		// transaction (gate.Service.Report). A core without the gate still checks its shape.
 		if s.opt.Gate != nil {

@@ -1237,6 +1237,16 @@
           "env": {
             "type": "string"
           },
+          "evidence_wait": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateEvidenceWait"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "expires_at": {
             "description": "Python datetime.isoformat() of an aware time",
             "type": "string"
@@ -1587,6 +1597,25 @@
           "error",
           "hint",
           "rule"
+        ],
+        "type": "object"
+      },
+      "GateEvidenceWait": {
+        "properties": {
+          "assurance": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "since": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "assurance",
+          "reason",
+          "since"
         ],
         "type": "object"
       },
@@ -2024,6 +2053,73 @@
         ],
         "type": "object"
       },
+      "LedgerStatus": {
+        "properties": {
+          "chain": {
+            "type": "integer"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "holding": {
+            "type": "boolean"
+          },
+          "ledger": {
+            "type": "integer"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "tier3_wait": {
+            "type": "boolean"
+          },
+          "witnessed": {
+            "type": "integer"
+          },
+          "witnesses": {
+            "items": {
+              "$ref": "#/components/schemas/LedgerWitnessStatus"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "chain",
+          "enabled",
+          "holding",
+          "ledger",
+          "tier3_wait",
+          "witnessed"
+        ],
+        "type": "object"
+      },
+      "LedgerWitnessStatus": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "url"
+        ],
+        "type": "object"
+      },
       "OutcomeRequest": {
         "additionalProperties": false,
         "properties": {
@@ -2304,6 +2400,18 @@
       "ProviderEvent": {
         "additionalProperties": false,
         "properties": {
+          "about": {
+            "additionalProperties": {},
+            "type": "object"
+          },
+          "action": {
+            "additionalProperties": {},
+            "type": "object"
+          },
+          "actor": {
+            "additionalProperties": {},
+            "type": "object"
+          },
           "agent": {
             "type": [
               "string",
@@ -2322,7 +2430,15 @@
               "null"
             ]
           },
+          "attribution": {
+            "additionalProperties": {},
+            "type": "object"
+          },
           "change": {
+            "additionalProperties": {},
+            "type": "object"
+          },
+          "correlation": {
             "additionalProperties": {},
             "type": "object"
           },
@@ -2360,7 +2476,15 @@
             "additionalProperties": {},
             "type": "object"
           },
+          "health": {
+            "additionalProperties": {},
+            "type": "object"
+          },
           "initiator": {
+            "additionalProperties": {},
+            "type": "object"
+          },
+          "integrity": {
             "additionalProperties": {},
             "type": "object"
           },
@@ -2416,6 +2540,14 @@
             "additionalProperties": {},
             "type": "object"
           },
+          "resolution": {
+            "additionalProperties": {},
+            "type": "object"
+          },
+          "resource": {
+            "additionalProperties": {},
+            "type": "object"
+          },
           "result": {
             "type": [
               "string",
@@ -2428,6 +2560,16 @@
               "null"
             ]
           },
+          "rule_set": {
+            "additionalProperties": {},
+            "type": "object"
+          },
+          "scope": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "session": {
             "type": [
               "string",
@@ -2435,6 +2577,10 @@
             ]
           },
           "source": {
+            "additionalProperties": {},
+            "type": "object"
+          },
+          "state_change": {
             "additionalProperties": {},
             "type": "object"
           },
@@ -2459,6 +2605,10 @@
               "integer",
               "null"
             ]
+          },
+          "times": {
+            "additionalProperties": {},
+            "type": "object"
           },
           "tool": {
             "type": [
@@ -2486,6 +2636,16 @@
           "head": {
             "type": "integer"
           },
+          "ledger": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LedgerStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "ok": {
             "type": "boolean"
           },
@@ -2503,6 +2663,9 @@
       },
       "RecordRef": {
         "properties": {
+          "duplicate": {
+            "type": "boolean"
+          },
           "hash": {
             "type": "string"
           },
@@ -4523,6 +4686,10 @@
     "deploy.outcome",
     "deploy.exception",
     "deploy.degraded",
-    "federated.decision"
+    "federated.decision",
+    "observation",
+    "assessment",
+    "resolution",
+    "observation.health"
   ]
 }

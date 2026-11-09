@@ -37,6 +37,7 @@ type Store struct {
 	feeds   map[string]store.Feed
 	atts    map[string]store.Attestation
 	glass   map[string]store.Breakglass
+	ledger  *store.LedgerCheckpoint // the latest witnessed checkpoint (C-3), nil when none
 	closed  bool
 }
 
@@ -323,6 +324,7 @@ type view struct {
 	feeds   map[string]store.Feed
 	atts    map[string]store.Attestation
 	glass   map[string]store.Breakglass
+	ledger  *store.LedgerCheckpoint
 }
 
 func (s *Store) view() (view, error) {
@@ -347,7 +349,7 @@ func (s *Store) view() (view, error) {
 	for k, v := range s.atts {
 		atts[k] = v
 	}
-	return view{head: s.head, records: s.records[:len(s.records):len(s.records)], changes: maps(s.changes), defs: s.defs,
+	return view{ledger: s.ledger, head: s.head, records: s.records[:len(s.records):len(s.records)], changes: maps(s.changes), defs: s.defs,
 		tokens: tokens, keys: s.keys, feeds: feeds, atts: atts, glass: glass}, nil
 }
 
@@ -449,6 +451,62 @@ func (v view) recordsFrom(from int64, limit int) ([]store.Record, error) {
 	return out, nil
 }
 
+func (s *Store) EventRecord(ctx context.Context, provider, kind, source, eventID string) (store.Record, error) {
+	v, err := s.view()
+	if err != nil {
+		return nil, err
+	}
+	return v.eventRecord(provider, kind, source, eventID)
+}
+
+func (t *tx) EventRecord(ctx context.Context, provider, kind, source, eventID string) (store.Record, error) {
+	v, err := t.view()
+	if err != nil {
+		return nil, err
+	}
+	return v.eventRecord(provider, kind, source, eventID)
+}
+
+func (v view) eventRecord(provider, kind, source, eventID string) (store.Record, error) {
+	for _, b := range v.records {
+		r := decode(b)
+		src, _ := r["source"].(map[string]any)
+		p, _ := r["provider"].(map[string]any)
+		name, _ := src["name"].(string)
+		if id, ok := src["event_id"].(string); ok && id == eventID && name == source && p["name"] == provider && r["tool"] == kind {
+			return r, nil
+		}
+	}
+	return nil, store.ErrNotFound
+}
+
+func (s *Store) LatestHealth(ctx context.Context, scope, source string) (store.Record, error) {
+	v, err := s.view()
+	if err != nil {
+		return nil, err
+	}
+	return v.latestHealth(scope, source)
+}
+
+func (t *tx) LatestHealth(ctx context.Context, scope, source string) (store.Record, error) {
+	v, err := t.view()
+	if err != nil {
+		return nil, err
+	}
+	return v.latestHealth(scope, source)
+}
+
+func (v view) latestHealth(scope, source string) (store.Record, error) {
+	for i := len(v.records) - 1; i >= 0; i-- {
+		r := decode(v.records[i])
+		src, _ := r["source"].(map[string]any)
+		if r["tool"] == "observation.health" && r["scope"] == scope && src["name"] == source {
+			return r, nil
+		}
+	}
+	return nil, store.ErrNotFound
+}
+
 func (s *Store) Receipts(ctx context.Context, repo string, pr int, tools []string) ([]store.Record, error) {
 	v, err := s.view()
 	if err != nil {
@@ -520,12 +578,16 @@ func (t *tx) Assurance(ctx context.Context, seq int64) (string, error) {
 	return v.assurance(seq)
 }
 
-// assurance: the in-memory store has no ledger, so every record is recorded-not-checkpointed (the pg default).
+// assurance: a record under the latest witnessed checkpoint (store.PutLedgerCheckpoint) is checkpointed, every
+// other is recorded-not-checkpointed (the pg default).
 func (v view) assurance(seq int64) (string, error) {
 	if seq < 0 || seq >= int64(len(v.records)) {
 		return "", store.ErrNotFound
 	}
-	return "recorded-not-checkpointed", nil
+	if v.ledger != nil && seq < v.ledger.Size {
+		return store.AssuranceCheckpointed, nil
+	}
+	return store.AssuranceRecorded, nil
 }
 
 func (s *Store) Change(ctx context.Context, id string) (store.Change, error) {
@@ -955,4 +1017,34 @@ func (v view) attestation(id string) (store.Attestation, error) {
 		return store.Attestation{}, store.ErrNotFound
 	}
 	return cloneAttestation(a), nil
+}
+
+var _ store.Ledger = (*Store)(nil)
+
+// LedgerCheckpoint is the latest witnessed checkpoint (store.ErrNotFound when none).
+func (s *Store) LedgerCheckpoint(ctx context.Context) (store.LedgerCheckpoint, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
+		return store.LedgerCheckpoint{}, ErrClosed
+	}
+	if s.ledger == nil {
+		return store.LedgerCheckpoint{}, store.ErrNotFound
+	}
+	return *s.ledger, nil
+}
+
+// PutLedgerCheckpoint records cp as the latest witnessed checkpoint; every record under it becomes checkpointed.
+func (s *Store) PutLedgerCheckpoint(ctx context.Context, cp store.LedgerCheckpoint) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return ErrClosed
+	}
+	if err := store.CheckLedgerCheckpoint(s.ledger, cp, int64(len(s.records))); err != nil {
+		return err
+	}
+	c := cp
+	s.ledger = &c
+	return nil
 }

@@ -59,7 +59,7 @@ func run() error {
 		grantGV   = fs.String("grant-api", env("CLEARANCE_GRANT_API", "clearance.hangar.io/v1"), "the ClearanceGrant CRD's group/version")
 		grantEvry = fs.Duration("grant-interval", 30*time.Second, "grant sync interval")
 		scanEvry  = fs.Duration("scan-interval", time.Minute, "exception scan interval")
-		repost    = fs.Bool("repost-on-start", false, "post each Application's last operation again on start (the core does not de-duplicate yet)")
+		repost    = fs.Bool("repost-on-start", false, "post each Application's last operation again on start (the core de-duplicates only on source.event_id, which the agent does not send yet)")
 		showVer   = fs.Bool("version", false, "print the version")
 	)
 	if err := fs.Parse(os.Args[1:]); err != nil {

@@ -1,0 +1,167 @@
+{{- if not .Values.existingSecret }}{{ fail "existingSecret is required: the Secret holding the witness's signing key (make it with `clearance ledger keygen --witness`)" }}{{ end -}}
+{{- if not .Values.logs }}{{ fail "logs is required: the verifier keys of the logs this witness cosigns for, one per line" }}{{ end -}}
+{{- if and .Values.image.digest (not (hasPrefix "sha256:" .Values.image.digest)) }}{{ fail "image.digest is sha256:<hex>" }}{{ end -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "witness.fullname" . }}
+  labels:
+    {{- include "witness.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "witness.fullname" . }}
+  labels:
+    {{- include "witness.labels" . | nindent 4 }}
+data:
+  logs: |
+    {{- .Values.logs | nindent 4 }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "witness.fullname" . }}-state
+  labels:
+    {{- include "witness.labels" . | nindent 4 }}
+  annotations:
+    # The witness's memory of what it cosigned: do not lose it with a helm uninstall by accident.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [{{ .Values.persistence.accessMode }}]
+  {{- with .Values.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "witness.fullname" . }}
+  labels:
+    {{- include "witness.labels" . | nindent 4 }}
+spec:
+  # One replica on a ReadWriteOnce claim; Recreate so an upgrade never runs two.
+  replicas: 1
+  strategy:
+    type: Recreate
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      {{- include "witness.selector" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "witness.selector" . | nindent 8 }}
+        {{- with .Values.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "witness.fullname" . }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: witness
+          image: {{ include "witness.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --listen=:8080
+            - --key-file=/etc/clearance-witness/key/{{ .Values.key }}
+            - --logs-file=/etc/clearance-witness/config/logs
+            - --state-file=/var/lib/clearance-witness/state.json
+          ports:
+            - {name: http, containerPort: 8080, protocol: TCP}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            privileged: false
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - {name: key, mountPath: /etc/clearance-witness/key, readOnly: true}
+            - {name: config, mountPath: /etc/clearance-witness/config, readOnly: true}
+            - {name: state, mountPath: /var/lib/clearance-witness}
+      volumes:
+        - name: key
+          secret:
+            secretName: {{ .Values.existingSecret }}
+            defaultMode: 0400
+            items:
+              - {key: {{ .Values.key | quote }}, path: {{ .Values.key | quote }}}
+        - name: config
+          configMap:
+            name: {{ include "witness.fullname" . }}
+        - name: state
+          persistentVolumeClaim:
+            claimName: {{ include "witness.fullname" . }}-state
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{ toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "witness.fullname" . }}
+  labels:
+    {{- include "witness.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "witness.selector" . | nindent 4 }}
+  ports:
+    - {name: http, port: {{ .Values.service.port }}, targetPort: http, protocol: TCP}
+{{- if .Values.networkPolicy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "witness.fullname" . }}
+  labels:
+    {{- include "witness.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "witness.selector" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    {{- with .Values.networkPolicy.from }}
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - {protocol: TCP, port: 8080}
+    {{- end }}
+  # The witness calls nothing: it only answers.
+  egress: []
+{{- end }}

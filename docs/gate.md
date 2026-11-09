@@ -834,6 +834,8 @@ A registered provider posts it through `POST /v1/records` (kind `deploy.exceptio
 | `drift` | `addresses` or `objects` (at least one) | `observed-not-attributed` | G-TF-5's scheduled `terraform plan -detailed-exitcode` (**Built**); live drift |
 | `untraced-apply` | `actor` (the principal behind the write) | `out-of-band-detected` | G-TF-5's state-backend watch: S3 object versions and CloudTrail (**Built**) |
 | `digest-mismatch` | `expected`, `observed` and `change.id` | `out-of-band-detected` | G-TF-2's outcome route; the CMP's applied-tree check |
+| `attempted-refused` | `actor` and `detail` (the operation) | `attempted-refused` | O-1: an operation something tried and a control refused. Nothing landed, so a change it names (`change.id`) is **not** moved to exception |
+| `monitoring-protection` | `actor` and `detail` (the operation) | `out-of-band-detected` | O-1: an operation on the controls that watch the environment (a trail, an audit policy, a recorder), tier 3 whether or not it succeeded ([evidence.md](evidence.md#observations-clearanceevidencev11-o-1)); moves a change it names to exception like any other |
 
 Optional on every kind: `state` {backend, key, version}, `detected_at` (RFC 3339), `detail`. Unknown fields are
 refused. A provider's `coverage` must be absent or the kind's. The core adds `breakglass` (verified) when an open
@@ -1028,11 +1030,13 @@ agent keeps them, and the tests hold it to them (`TestGrantSync`, `TestARotation
 inside a window like any other, names the window in `exception.detail`, and the core tags the record with it
 (`breakglass`, verified). Break-glass does not silence the scan: a change in the glass is still an exception.
 
-**The outcome's key and the core.** The design says the core answers a repeated outcome idempotently. It does not yet:
-`POST /v1/records` appends. The agent therefore keeps what it posted in its state ConfigMap
+**The outcome's key and the core.** The design says the core answers a repeated outcome idempotently. Since O-1 it does,
+for a provider that names its own event (`source.event_id`, [evidence.md](evidence.md)); the agent does not send one yet,
+so it still keeps what it posted in its state ConfigMap
 (`clearance-argocd-agent-state`: the feed epoch and seq, the last operation posted per Application, the exceptions
 reported), writes it only after the core answered, and a restart does not repost (`--repost-on-start` does, for a core
-that de-duplicates by `source.operation`; **descoped**: the core-side de-duplication). A crash between the core's answer
+that de-duplicates by `source.operation`; the core now de-duplicates on `source.event_id`, which the agent does not send
+yet). A crash between the core's answer
 and the state write posts that one outcome twice; both carry the same `source.operation`.
 
 **What the CMP and the CRD must agree with** (G-ARGO-2, G-ARGO-4; the agent holds them to nothing it cannot check):

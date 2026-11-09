@@ -102,7 +102,9 @@ record lands. A run stops at the first failed post, and the next run picks up fr
 Delivery is at least once. A key is marked after the core answers, so a record the core wrote but whose answer
 was lost is posted again by the next run. The alternative, marking before the post, would lose a record for good
 whenever the post never landed. A repeat is recognisable because it carries the same `subject.digests.decisionLine`.
-The core does not de-duplicate `POST /v1/records`. If it ever should, that is a core change, keyed on that digest.
+The core de-duplicates `POST /v1/records` on a provider's own `source.event_id` (O-1, [evidence.md](evidence.md)); this
+adapter does not send one, so a repeat is still recognised by that digest and its own state file. Sending the digest as
+`source.event_id` would make the core drop the repeat too (not done).
 
 ## Running it
 

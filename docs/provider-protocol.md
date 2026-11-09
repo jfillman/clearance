@@ -56,7 +56,9 @@ The core knows its providers from `CLEARANCE_PROVIDERS` (`server.Provider`):
 - `name` and `version` are what every record the provider writes carries as `provider` (verified: the core sets
   it from the registration, never from the request). `clearance` is the core's own name and is refused.
 - `principals` are globs on the authenticated principal. A caller is the first provider whose globs match it.
-- `kinds` narrows which `POST /v1/records` kinds it may write (default: all).
+- `kinds` narrows which `POST /v1/records` kinds it may write (default: all but the observation kinds, which a
+  provider writes only when it names them: `observation`, `assessment`, `resolution`, `observation.health`; see the
+  observed role below).
 - `definitions: true` lets it publish its cluster-pinned agent definitions (`PUT /v1/definitions`, below). At most
   one provider has it.
 - A deployment provider registers changes, so its principal must also match `CLEARANCE_VERIFIERS`.
@@ -233,6 +235,28 @@ correlation. Every field is claimed.
 
 The first source is the [Traefik Hub adapter](federate-traefik-hub.md) (Unverified). Register it with
 `"kinds": ["federated.decision"]`.
+
+## The observed role
+
+A provider that watches an environment without gating it (a cloud audit trail, a Kubernetes audit webhook, a
+configuration recorder) registers with `kinds` naming the observation kinds it writes and posts them through
+`POST /v1/records` ([evidence.md](evidence.md#observations-clearanceevidencev11-o-1)). Every field is claimed.
+
+- **`observation`** must carry `scope`, `source` {`name`, `event_id`}, `resource`, `actor`, `action`, `integrity` and
+  `times`. The core sets its coverage (`observed-not-attributed`) and refuses one the provider sets.
+- **Idempotency.** `source.event_id` is the provider's own id for the event. A repeat of the same provider, kind,
+  `source.name` and `event_id` is answered `200` with the first record's `{seq, hash}` and `duplicate: true`, and
+  nothing is written, so delivery can be at least once.
+- **Health.** Post an `observation.health` record per scope and source on a schedule (`interval_seconds`): the state
+  and the checks that produced it. A feed that stops reporting is blind after twice the interval.
+- **Secrets at Metadata.** An observation of a Secret says `source.level: Metadata` and carries no `state_change`; the
+  core refuses any observation that carries a Secret's body.
+- **Monitoring.** Mark an operation on the controls that watch the environment `action.protects_monitoring: true`, or
+  let the deployment's `CLEARANCE_MONITORING_PROTECTION_OPS` name it; the core makes it tier 3 and flips the scope's health.
+- **Assessments and resolutions** name the observation they are about (`about.seq`, the `seq` the post returned) and are
+  usually written by a correlating provider, not the one that saw the event.
+
+The conformance suite does not drive this role yet (descoped); `internal/server/observed_test.go` is the reference fake.
 
 ## Not served yet
 

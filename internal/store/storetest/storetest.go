@@ -43,6 +43,9 @@ func Run(t *testing.T, open Opener) {
 		{"Rejects", testRejects},
 		{"Receipts", testReceipts},
 		{"Assurance", testAssurance},
+		{"EventRecord", testEventRecord},
+		{"LatestHealth", testLatestHealth},
+		{"LedgerCheckpoints", testLedgerCheckpoints},
 		{"Changes", testChanges},
 		{"Definitions", testDefinitions},
 		{"Tokens", testTokens},
@@ -333,6 +336,82 @@ func testReceipts(t *testing.T, open Opener) {
 	}
 	if got, _ := s.Receipts(bg, "o/r", 7, nil); len(got) != 0 {
 		t.Fatalf("no tools should match nothing: %v", got)
+	}
+}
+
+// testEventRecord: a provider's own event is found by provider, kind, source and event id, in a transaction too.
+func testEventRecord(t *testing.T, open Opener) {
+	s := open(t, nil)
+	ev := func(tool, src, id string) store.Event {
+		e := store.Event{"tool": tool, "source": map[string]any{"event_id": id}}
+		if src != "" {
+			e["source"] = map[string]any{"name": src, "event_id": id}
+		}
+		return e
+	}
+	a := appendOne(t, s, ev("observation", "cloudtrail", "e-1"))
+	appendOne(t, s, ev("observation", "cloudtrail", "e-2"))
+	appendOne(t, s, ev("observation", "", "e-1"))
+	appendOne(t, s, ev("run.launch", "cloudtrail", "e-1"))
+	appendOne(t, s, store.Event{"tool": "observation", "source": map[string]any{"name": "cloudtrail"}}) // no event id
+	prov := Writer.Provider.Name
+	for name, c := range map[string]struct {
+		prov, kind, src, id string
+		want                string
+	}{
+		"found":          {prov, "observation", "cloudtrail", "e-1", a["hash"].(string)},
+		"no source":      {prov, "observation", "", "e-1", ""},
+		"another source": {prov, "observation", "audit-webhook", "e-1", "-"},
+		"another kind":   {prov, "deploy.outcome", "cloudtrail", "e-1", "-"},
+		"another id":     {prov, "observation", "cloudtrail", "e-9", "-"},
+		"another prov":   {"someone-else", "observation", "cloudtrail", "e-1", "-"},
+	} {
+		got, err := s.EventRecord(bg, c.prov, c.kind, c.src, c.id)
+		switch {
+		case c.want == "-" && !errors.Is(err, store.ErrNotFound):
+			t.Errorf("%s: %v, %v", name, got, err)
+		case c.want == "-":
+		case err != nil:
+			t.Errorf("%s: %v", name, err)
+		case c.want != "" && got["hash"] != c.want:
+			t.Errorf("%s: found seq %v", name, got["seq"])
+		}
+	}
+	// inside a transaction, its own writes are seen
+	if err := s.Atomic(bg, func(tx store.Tx) error {
+		if _, err := tx.EventRecord(bg, prov, "observation", "cloudtrail", "e-3"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("before: %v", err)
+		}
+		if _, err := tx.Append(bg, ev("observation", "cloudtrail", "e-3"), Writer); err != nil {
+			return err
+		}
+		if _, err := tx.EventRecord(bg, prov, "observation", "cloudtrail", "e-3"); err != nil {
+			t.Errorf("after: %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// testLatestHealth: the newest observation.health of a scope and source, whoever wrote it.
+func testLatestHealth(t *testing.T, open Opener) {
+	s := open(t, nil)
+	h := func(scope, src, state string) store.Event {
+		return store.Event{"tool": "observation.health", "scope": scope, "source": map[string]any{"name": src},
+			"health": map[string]any{"state": state}}
+	}
+	appendOne(t, s, h("a", "trail", "healthy"))
+	appendOne(t, s, h("b", "trail", "blind"))
+	appendOne(t, s, store.Event{"tool": "observation", "scope": "a", "source": map[string]any{"name": "trail"}})
+	last := appendOne(t, s, h("a", "trail", "degraded"))
+	appendOne(t, s, h("a", "recorder", "healthy"))
+	got, err := s.LatestHealth(bg, "a", "trail")
+	if err != nil || got["hash"] != last["hash"] {
+		t.Fatalf("%v, %v", got, err)
+	}
+	if _, err := s.LatestHealth(bg, "a", "nobody"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal(err)
 	}
 }
 
@@ -876,5 +955,65 @@ func testBreakglass(t *testing.T, open Opener) {
 	put(win("bg-1", "closed", time.Hour))
 	if got := names(s.BreakglassOpen(bg)); got != "bg-2 " {
 		t.Fatalf("after close: %q", got)
+	}
+}
+
+// testLedgerCheckpoints: a witnessed checkpoint moves the records under it to checkpointed and nothing else; one
+// that would shrink or fork the held checkpoint, or that covers records the chain lacks, is refused (C-3).
+func testLedgerCheckpoints(t *testing.T, open Opener) {
+	s := open(t, nil)
+	defer s.Close()
+	led, ok := s.(store.Ledger)
+	if !ok {
+		t.Fatal("the store does not implement store.Ledger")
+	}
+	if _, err := led.LedgerCheckpoint(bg); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a fresh store holds a checkpoint: %v", err)
+	}
+	for i := 0; i < 5; i++ {
+		appendOne(t, s, store.Event{"tool": "t", "i": i})
+	}
+	root := func(c string) string { return strings.Repeat(c, 64) }
+	cp := func(size int64, r string) store.LedgerCheckpoint {
+		return store.LedgerCheckpoint{Origin: "o", Size: size, Root: root(r), Note: []byte("note " + r), At: time.Unix(1700000000, 0).UTC()}
+	}
+	if err := led.PutLedgerCheckpoint(bg, cp(6, "a")); err == nil {
+		t.Fatal("a checkpoint over records the chain lacks was accepted")
+	}
+	if err := led.PutLedgerCheckpoint(bg, cp(3, "a")); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{store.AssuranceCheckpointed, store.AssuranceCheckpointed, store.AssuranceCheckpointed, store.AssuranceRecorded, store.AssuranceRecorded}
+	for i, w := range want {
+		if got, err := s.Assurance(bg, int64(i)); err != nil || got != w {
+			t.Fatalf("record %d: %q %v, want %q", i, got, err, w)
+		}
+	}
+	held, err := led.LedgerCheckpoint(bg)
+	if err != nil || held.Size != 3 || held.Root != root("a") || string(held.Note) != "note a" || held.Origin != "o" || !held.At.Equal(time.Unix(1700000000, 0)) {
+		t.Fatalf("%+v %v", held, err)
+	}
+	if err := led.PutLedgerCheckpoint(bg, cp(2, "b")); !errors.Is(err, store.ErrLedgerRegress) {
+		t.Fatalf("a smaller checkpoint: %v", err)
+	}
+	if err := led.PutLedgerCheckpoint(bg, cp(3, "b")); !errors.Is(err, store.ErrLedgerRegress) {
+		t.Fatalf("a forked checkpoint: %v", err)
+	}
+	if err := led.PutLedgerCheckpoint(bg, cp(3, "a")); err != nil {
+		t.Fatalf("the same checkpoint again: %v", err)
+	}
+	if err := led.PutLedgerCheckpoint(bg, cp(5, "c")); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Assurance(bg, 4); got != store.AssuranceCheckpointed {
+		t.Fatalf("record 4: %q", got)
+	}
+	// A record written after the checkpoint is recorded-not-checkpointed.
+	appendOne(t, s, store.Event{"tool": "t", "i": 5})
+	if got, _ := s.Assurance(bg, 5); got != store.AssuranceRecorded {
+		t.Fatalf("a new record: %q", got)
+	}
+	if held, _ := led.LedgerCheckpoint(bg); held.Size != 5 || held.Root != root("c") {
+		t.Fatalf("%+v", held)
 	}
 }

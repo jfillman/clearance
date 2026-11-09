@@ -51,8 +51,8 @@ type Config struct {
 	Ignore        []string   // Kind/name the scan skips (the objects every namespace gets)
 	// PolicyMarkers are the texts that mark an Argo CD sync message as the admission policy's refusal.
 	PolicyMarkers []string
-	// RepostOnStart posts each Application's last operation again on start. The core does not de-duplicate yet
-	// (docs/gate.md), so it is off; the state ConfigMap already stops a restart posting what was posted.
+	// RepostOnStart posts each Application's last operation again on start. The core de-duplicates only records that
+	// carry source.event_id (O-1), which the agent does not send yet (docs/gate.md), so it is off; the state ConfigMap already stops a restart posting what was posted.
 	RepostOnStart bool
 }
 

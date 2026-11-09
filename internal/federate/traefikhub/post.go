@@ -94,7 +94,7 @@ type PostStats struct {
 // Delivery is at least once: a key is marked after the core answers. If the core recorded a record and its answer
 // was lost, the next run posts it again. Marking first would make delivery at most once and lose that record for
 // good when the post never landed; in an evidence ledger a missing decision is worse than a repeated one, and a
-// repeat is recognisable (the same subject.digests.decisionLine). The core does not de-duplicate POST /v1/records.
+// repeat is recognisable (the same subject.digests.decisionLine). The core de-duplicates on source.event_id (O-1), which this adapter does not send.
 func Post(ctx context.Context, c *client.Client, recs []client.RecordRequest, state *State) error {
 	_, err := PostCounted(ctx, c, recs, state)
 	return err

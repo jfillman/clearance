@@ -14,6 +14,35 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   flows for a deployment provider (`info.flow`: `terraform-plan`, `pushed-tree`; `info.stamps`), and an adapter per gate
   in its own tests: `terraform-ci` (`clearance hold`, `release`, `report`) and `argocd-agent` (the plugin's `Generate` and
   the agent's outcome handling behind a fake Argo CD). The suite's assertions are unchanged (`clearance-conformance/v1`).
+- **O-1: `clearance.evidence/v1.1`, observations.** Additive: the schema file is the same (`x-clearance-revision` 4),
+  and a record says v1.1 only when it is an observation kind or its coverage is new; every other record is still v1.
+  Two new coverage states (`break-glass`, `attempted-refused`); five new kinds: `observation` (the normalized event,
+  with `integrity` splitting `sourceVerified` from `completenessClaimed`), `assessment`, `resolution` (with a cause on a
+  revert), `observation.health` (healthy, degraded or blind, with the checks) and the core's `observation.audit-gap`.
+  `deploy.exception` gains `attempted-refused` (does not move a change) and `monitoring-protection`.
+  Secrets are observed at Metadata only and an observation cannot carry a Secret body. An operation on monitoring
+  (`CLEARANCE_MONITORING_PROTECTION_OPS`, chart `vocabulary.monitoringProtectionOps`, default none) is tier 3 whether or
+  not it succeeded and flips its scope's health. A provider writes the observation kinds only when its `kinds` name them.
+- **`POST /v1/records` de-duplicates** a provider's own event by provider, kind, `source.name` and `source.event_id`: a
+  repeat answers 200 with the first record's reference and `duplicate: true` and writes nothing (closes the R-9 line).
+  New indexes `clearance_evidence_event` and `clearance_evidence_observed` (created on start).
+- **clearance-api** (auditors): `GET /v1/observations`, `GET /v1/observations/health` and `GET /v1/coverage?scope=&from=&to=`,
+  the three-part statement (cleared and verified; seen, not cleared; could not see) with the health summary. A stale or
+  missing health record makes the window `blind`, and a blind window is never clean.
+- The core contract and the Python client models are regenerated (`duplicate` on the record reference).
+- **The evidence ledger (C-3), off unless configured.** A Tessera log of the evidence chain's record hashes, checkpointed
+  and countersigned by a witness Clearance does not operate; a record's assurance state moves from
+  `recorded-not-checkpointed` to `checkpointed` when its hash is under a witnessed checkpoint. A witness that rejects a
+  checkpoint (a truncated, rewritten or forked log) stops its publication; an altered row is named; a lost volume is
+  rebuilt from the chain and must reach the root a witness signed, or the core does not serve. The outage knob
+  `CLEARANCE_LEDGER_TIER3_WAIT` (default on) makes a tier 3 change wait while evidence cannot be checkpointed
+  (`evidence_wait` on the change; it clears when the ledger recovers). `GET /readyz` reports `ledger`. Set
+  `CLEARANCE_LEDGER_DIR` (chart `ledger.enabled`) to turn it on; nothing changes without it. See
+  [docs/core.md](docs/core.md#the-evidence-ledger-c-3).
+- `clearance-witness`, the ledger's witness, in its own binary, image and chart (`charts/clearance-witness`), and
+  `clearance ledger keygen`.
+- The local anchored `Checkpoint` and `clearance chain verify --anchor` stay: they are the only protection against
+  truncation while the ledger is off.
 - **The HCP Terraform run task** (G-TF-6; `internal/hcprun`, `POST /v1/terraform/run-task`;
   [docs/terraform-gate.md](docs/terraform-gate.md#the-hcp-terraform-run-task-g-tf-6-built-not-live-verified)). Verifies
   HCP Terraform's `X-TFC-Task-Signature` (HMAC-SHA512, constant time, per-organization key from a file), reads the plan

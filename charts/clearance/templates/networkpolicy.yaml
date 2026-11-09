@@ -76,6 +76,12 @@ spec:
     # The policy bundles' sources (policy.egress)
     {{- toYaml . | nindent 4 }}
     {{- end }}
+    {{- if and (eq $component "core") $.Values.ledger.enabled }}
+    {{- with $.Values.ledger.egress }}
+    # The evidence ledger's witnesses (ledger.egress)
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- end }}
     {{- with $np.extraEgress }}
     {{- toYaml . | nindent 4 }}
     {{- end }}

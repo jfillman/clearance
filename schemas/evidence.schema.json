@@ -2,8 +2,8 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://clearance.hangarplatform.dev/schemas/evidence/v1.json",
   "title": "clearance.evidence/v1",
-  "description": "One Clearance evidence record (docs/evidence.md). Flat: every field is a top-level key, grouped by x-clearance-group into Identities, Source, Target, Provenance, Decision, Outcome, Coverage, Assurance, Intent and Integrity, and tagged verified or claimed by the record's own lists. Fields not listed here are allowed and are claimed unless the writer verified them. The chain rule is the same for every version.",
-  "x-clearance-revision": 3,
+  "description": "One Clearance evidence record (docs/evidence.md). Flat: every field is a top-level key, grouped by x-clearance-group into Identities, Source, Target, Provenance, Decision, Outcome, Coverage, Assurance, Intent and Integrity, and tagged verified or claimed by the record's own lists. Fields not listed here are allowed and are claimed unless the writer verified them. The chain rule is the same for every version. Revision 4 (O-1) is clearance.evidence/v1.1: additive, so the same file describes v1 and v1.1. A record says v1.1 only when it is an observation kind (observation, assessment, resolution, observation.health, observation.audit-gap) or its coverage is break-glass or attempted-refused; every other record is still written as v1.",
+  "x-clearance-revision": 4,
   "x-clearance-groups": [
     "identities",
     "source",
@@ -35,10 +35,11 @@
     "schema": {
       "enum": [
         "clearance.evidence/v1",
+        "clearance.evidence/v1.1",
         "clearance.evidence/v0-draft"
       ],
       "x-clearance-group": "integrity",
-      "description": "The record shape it was written in. Writers emit clearance.evidence/v1; v0-draft appears only on rows written before the freeze (seq 0-611 on hangar-dev), served projected."
+      "description": "The record shape it was written in. Writers emit clearance.evidence/v1, or clearance.evidence/v1.1 for a record that uses an observation kind or the coverage states break-glass and attempted-refused; v0-draft appears only on rows written before the freeze (seq 0-611 on hangar-dev), served projected."
     },
     "seq": {
       "type": "integer",
@@ -594,7 +595,9 @@
             "out-of-band",
             "drift",
             "untraced-apply",
-            "digest-mismatch"
+            "digest-mismatch",
+            "attempted-refused",
+            "monitoring-protection"
           ]
         },
         "objects": {
@@ -644,12 +647,12 @@
         }
       },
       "x-clearance-group": "outcome",
-      "description": "Revision 3 (C-6): on deploy.exception, what landed outside a clearance and how it was found: out-of-band (objects), drift (addresses or objects), untraced-apply (actor), digest-mismatch (expected, observed; the record names the change). Claimed; the core sets coverage from the kind."
+      "description": "Revision 3 (C-6): on deploy.exception, what landed outside a clearance and how it was found: out-of-band (objects), drift (addresses or objects), untraced-apply (actor), digest-mismatch (expected, observed; the record names the change). Claimed; the core sets coverage from the kind. Revision 4 (O-1): attempted-refused (actor, detail: refused, nothing landed; coverage attempted-refused) and monitoring-protection (actor, detail: an operation on the controls that watch the environment, tier 3 whether or not it succeeded)."
     },
     "coverage": {
       "type": "string",
       "x-clearance-group": "coverage",
-      "description": "How the event was observed: authorized-and-verified, observed-not-attributed, out-of-band-detected or coverage-unavailable (an enum in v1; v0-draft rows carry what they were written with)."
+      "description": "How the event was observed: authorized-and-verified, observed-not-attributed, out-of-band-detected, coverage-unavailable, and from v1.1 break-glass (inside a declared break-glass window) and attempted-refused (an operation something tried and a control refused) (an enum in v1; v0-draft rows carry what they were written with)."
     },
     "outage": {
       "type": "object",
@@ -845,6 +848,341 @@
       "x-clearance-group": "integrity",
       "readOnly": true,
       "description": "Added by a reader: the fields it derived for a v0-draft row (provider, subject). They are not covered by hash; drop them, assurance and projected before re-hashing."
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "x-clearance-group": "target",
+      "description": "Revision 4 (O-1): on the observation kinds, the account, cluster or workspace the record speaks for. Claimed."
+    },
+    "resource": {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "group": {
+          "type": "string"
+        },
+        "api_version": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        }
+      },
+      "x-clearance-group": "target",
+      "description": "Revision 4 (O-1): on an observation, what was acted on. A Secret is observed at Metadata only: its observation names it and carries no state_change and no body."
+    },
+    "actor": {
+      "type": "object",
+      "required": [
+        "subject"
+      ],
+      "properties": {
+        "subject": {
+          "type": "string",
+          "description": "The verified subject the source established."
+        },
+        "chain": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Who assumed whom, first to last."
+        },
+        "issuer": {
+          "type": "string"
+        },
+        "client": {
+          "type": "string",
+          "description": "Self-reported by the actor (a user agent, a tool name): never a basis for attribution."
+        },
+        "attributes": {
+          "type": "object"
+        }
+      },
+      "x-clearance-group": "identities",
+      "description": "Revision 4 (O-1): on an observation, who did it, split into the verified subject, the chain of identities it came through, the issuer, the self-reported client and attributes."
+    },
+    "action": {
+      "type": "object",
+      "required": [
+        "verb",
+        "api",
+        "succeeded"
+      ],
+      "properties": {
+        "verb": {
+          "type": "string"
+        },
+        "api": {
+          "type": "string"
+        },
+        "succeeded": {
+          "type": "boolean"
+        },
+        "refused_reason": {
+          "type": "string"
+        },
+        "protects_monitoring": {
+          "type": "boolean"
+        }
+      },
+      "x-clearance-group": "source",
+      "description": "Revision 4 (O-1): on an observation, what was done: the verb, the API called, whether it succeeded and, if refused, why. protects_monitoring marks an operation on the controls that watch the environment (configuration can mark them too, CLEARANCE_MONITORING_PROTECTION_OPS)."
+    },
+    "state_change": {
+      "type": "object",
+      "properties": {
+        "before": {},
+        "after": {}
+      },
+      "x-clearance-group": "outcome",
+      "description": "Revision 4 (O-1): on an observation, the resource's state before and after, where a state service has it. Never present on a Secret."
+    },
+    "correlation": {
+      "type": "object",
+      "properties": {
+        "grant": {
+          "type": "string"
+        },
+        "plan": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        }
+      },
+      "x-clearance-group": "provenance",
+      "description": "Revision 4 (O-1): on an observation, the clearance, plan, task, run and operation it correlates with, as the source reported them. Claimed."
+    },
+    "integrity": {
+      "type": "object",
+      "required": [
+        "sourceVerified",
+        "completenessClaimed"
+      ],
+      "properties": {
+        "sourceVerified": {
+          "type": "boolean",
+          "description": "The delivered log files were verified unaltered (for example a trail's digest chain)."
+        },
+        "completenessClaimed": {
+          "type": "boolean",
+          "description": "The provider claims the feed delivered everything for the period; supported only if the feed's health record says so."
+        },
+        "method": {
+          "type": "string"
+        },
+        "health_seq": {
+          "type": "integer"
+        }
+      },
+      "x-clearance-group": "integrity",
+      "description": "Revision 4 (O-1): on an observation, source integrity (sourceVerified) split from completeness (completenessClaimed). Whether the health record supports the completeness claim is the core's own conclusion, completeness_supported."
+    },
+    "completeness_supported": {
+      "type": "boolean",
+      "x-clearance-group": "integrity",
+      "description": "Revision 4 (O-1): on an observation, added and verified by the core: the scope and source's latest health record was healthy and not stale when the observation arrived."
+    },
+    "times": {
+      "type": "object",
+      "required": [
+        "observed"
+      ],
+      "properties": {
+        "requested": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "observed": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "delivered": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "x-clearance-group": "integrity",
+      "description": "Revision 4 (O-1): on an observation, when the action was requested, observed and delivered to the provider (RFC 3339). ts is when the core recorded it."
+    },
+    "health": {
+      "type": "object",
+      "required": [
+        "state",
+        "checks"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "healthy",
+            "degraded",
+            "blind"
+          ]
+        },
+        "checks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "ok"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "ok": {
+                "type": "boolean"
+              },
+              "detail": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "interval_seconds": {
+          "type": "integer",
+          "minimum": 10
+        }
+      },
+      "x-clearance-group": "coverage",
+      "description": "Revision 4 (O-1): on observation.health, a feed's state per scope and source and the checks that produced it. healthy only when every check passed. A health record older than twice interval_seconds (default 900) is stale, and a stale feed is blind."
+    },
+    "about": {
+      "type": "object",
+      "required": [
+        "seq"
+      ],
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "x-clearance-group": "source",
+      "description": "Revision 4 (O-1): on an assessment or a resolution, the record it is about (an observation; for a resolution also an assessment); on a health record the core derived, the observation that flipped it. The core checks the record exists and is in the same scope."
+    },
+    "rule_set": {
+      "type": "object",
+      "required": [
+        "version"
+      ],
+      "properties": {
+        "version": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "x-clearance-group": "decision",
+      "description": "Revision 4 (O-1): on an assessment, the version of the rule set that decided its coverage."
+    },
+    "attribution": {
+      "type": "object",
+      "required": [
+        "signal"
+      ],
+      "properties": {
+        "signal": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "grant": {
+          "type": "string"
+        }
+      },
+      "x-clearance-group": "decision",
+      "description": "Revision 4 (O-1): on an assessment, the attribution signal that decided its coverage (for example a grant match, a break-glass window, the absence of any grant)."
+    },
+    "resolution": {
+      "type": "object",
+      "required": [
+        "state"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "reverted",
+            "ratified",
+            "declared-break-glass",
+            "still-live"
+          ]
+        },
+        "cause": {
+          "enum": [
+            "agent-caused",
+            "policy-triggered",
+            "human-initiated",
+            "automated-remediation",
+            "requirement-changed",
+            "external-dependency",
+            "unattributed"
+          ]
+        },
+        "by": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "x-clearance-group": "outcome",
+      "description": "Revision 4 (O-1): on a resolution, how an observed change ended. A reverted resolution carries its cause; no other state does."
+    },
+    "gap": {
+      "type": "object",
+      "required": [
+        "state"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "degraded",
+            "blind"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "health_seq": {
+          "type": "integer"
+        },
+        "since": {
+          "type": "string"
+        }
+      },
+      "x-clearance-group": "coverage",
+      "description": "Revision 4 (O-1): on observation.audit-gap, written by the core when a scope and source's feed went from healthy (or unseen) to degraded or blind: the state, why and the health record that said so. Verified."
     }
   },
   "additionalProperties": true,
@@ -874,9 +1212,12 @@
           "authorized-and-verified",
           "observed-not-attributed",
           "out-of-band-detected",
-          "coverage-unavailable"
+          "coverage-unavailable",
+          "break-glass",
+          "attempted-refused"
         ]
       }
     }
-  }
+  },
+  "x-clearance-version": "1.1"
 }

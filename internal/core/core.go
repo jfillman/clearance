@@ -59,6 +59,8 @@
 //	                              keyless: the core's OIDC identity token, re-read per signing
 //	                              (default /var/run/clearance/attest-oidc-token)
 //	                              Neither a key nor Fulcio: attestations are off, and /readyz says so (docs/core.md)
+//	CLEARANCE_LEDGER_DIR, _KEY_FILE, _WITNESS_POLICY_FILE, _RETIRED_KEYS_FILE, _CHECKPOINT_INTERVAL, _TIER3_WAIT,
+//	_STALL_AFTER                  the evidence ledger (C-3, ledger.FromEnv): off unless CLEARANCE_LEDGER_DIR is set
 //
 // and the authenticator's (authn.EnvVars: CLEARANCE_AUDIENCE, CLEARANCE_OIDC_*, CLEARANCE_FOREIGN_*,
 // CLEARANCE_GITHUB_OIDC_*), and the deployment's vocabulary (vocab.EnvVars).
@@ -89,6 +91,7 @@ import (
 	"github.com/jfillman/clearance/internal/gate"
 	"github.com/jfillman/clearance/internal/githubapp"
 	"github.com/jfillman/clearance/internal/hcprun"
+	"github.com/jfillman/clearance/internal/ledger"
 	"github.com/jfillman/clearance/internal/profile"
 	"github.com/jfillman/clearance/internal/provenance"
 	"github.com/jfillman/clearance/internal/review"
@@ -139,6 +142,8 @@ type Config struct {
 	TokenIssuer string
 	// Attest signs change attestations after a deploy.outcome (C-2); nil: attestations are off (/readyz says so).
 	Attest attest.Backend
+	// Ledger is the evidence ledger (C-3); nil: off, and nothing about it runs.
+	Ledger *ledger.Config
 }
 
 // FromEnv reads Config from getenv, the authenticator included (authn.FromEnv).
@@ -262,6 +267,9 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	if cfg.Attest, err = attest.FromEnv(getenv); err != nil {
 		return cfg, err
 	}
+	if cfg.Ledger, err = ledger.FromEnv(getenv); err != nil {
+		return cfg, err
+	}
 	cfg.TokenIssuer = get("CLEARANCE_TOKEN_ISSUER", gate.DefaultTokenIssuer)
 	if len(cfg.TokenIssuer) > 200 || strings.ContainsAny(cfg.TokenIssuer, " \t\r\n") {
 		return cfg, errors.New("CLEARANCE_TOKEN_ISSUER is at most 200 characters, without spaces")
@@ -352,10 +360,12 @@ type Core struct {
 	RunTask *hcprun.Service
 	// Attestor signs change attestations (nil: attestations are off).
 	Attestor *attest.Attestor
-	clock    func() time.Time
-	log      *slog.Logger
-	closeFn  func()
-	once     sync.Once
+	// Ledger is the evidence ledger (nil: off).
+	Ledger  *ledger.Service
+	clock   func() time.Time
+	log     *slog.Logger
+	closeFn func()
+	once    sync.Once
 }
 
 // Build opens the store (memory or Postgres, verified from genesis), loads the policy (a rule that does not compile
@@ -397,7 +407,7 @@ func Build(ctx context.Context, cfg Config, clock func() time.Time, log *slog.Lo
 	}
 	c := &Core{Config: cfg, Store: st, Engine: eng, clock: clock, log: log, closeFn: st.Close}
 	if err := c.wire(ctx); err != nil {
-		st.Close()
+		c.Close()
 		return nil, err
 	}
 	return c, nil
@@ -470,6 +480,22 @@ func (c *Core) wire(ctx context.Context) error {
 	if !cfg.Gate.Off && len(cfg.Gate.Protected) == 0 {
 		c.log.InfoContext(ctx, "gate: no CLEARANCE_PROTECTED_ENVIRONMENTS, so every environment is protected")
 	}
+	if cfg.Ledger != nil {
+		lst, ok := c.Store.(store.Ledger)
+		if !ok {
+			return errors.New("core: the store cannot hold the evidence ledger's checkpoints")
+		}
+		led, err := ledger.Open(ctx, *cfg.Ledger, c.Store, lst, c.clock, c.log)
+		if err != nil {
+			return fmt.Errorf("core: the evidence ledger: %w", err)
+		}
+		c.Ledger = led
+		g.Evidence = led
+		c.log.InfoContext(ctx, "ledger: the evidence ledger is on", "origin", led.Status(ctx).Origin,
+			"tier3_wait", cfg.Ledger.Tier3Wait)
+	} else {
+		c.log.InfoContext(ctx, "ledger: the evidence ledger is off")
+	}
 	c.Gate = g
 	prov := &provenance.Service{Config: provenance.Config{Verifiers: cfg.Gate.Verifiers, AgentLogins: cfg.AgentLogins},
 		Store: c.Store, Clock: c.clock, Defs: reg, Writer: writer}
@@ -497,7 +523,13 @@ func (c *Core) wire(ctx context.Context) error {
 		onOutcome = c.Attestor.NotifyRecord
 		status = server.Attestation{Enabled: true, Backend: cfg.Attest.Name()}
 	}
-	srv, err := server.New(ctx, server.Options{OnOutcome: onOutcome, Attestation: status, Store: c.Store, Engine: c.Engine, Auth: cfg.Auth,
+	var led interface {
+		Status(context.Context) ledger.Status
+	} // a nil *Service in it would not be a nil interface
+	if c.Ledger != nil {
+		led = c.Ledger
+	}
+	srv, err := server.New(ctx, server.Options{Ledger: led, OnOutcome: onOutcome, Attestation: status, Store: c.Store, Engine: c.Engine, Auth: cfg.Auth,
 		Providers: cfg.Providers, Version: cfg.Version, Clock: c.clock, Log: c.log, MaxClockSkew: cfg.MaxClockSkew,
 		DevRecords:      cfg.DevRecords,
 		Definitions:     &definitions.Service{Registry: reg, Store: c.Store, Clock: c.clock, Writer: writer},
@@ -528,8 +560,17 @@ func (c *Core) useKey(ctx context.Context, s token.Signer) error {
 	return nil
 }
 
-// Close closes the store (once).
-func (c *Core) Close() { c.once.Do(c.closeFn) }
+// Close closes the evidence ledger, if any, and the store (once).
+func (c *Core) Close() {
+	c.once.Do(func() {
+		if c.Ledger != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = c.Ledger.Close(ctx)
+			cancel()
+		}
+		c.closeFn()
+	})
+}
 
 // Loops runs the background work until ctx ends: the gate's expiry every ExpireEvery, and the GitHub App's worker.
 func (c *Core) Loops(ctx context.Context) {
@@ -549,6 +590,11 @@ func (c *Core) Loops(ctx context.Context) {
 		c.log.InfoContext(ctx, "attest: signing change attestations", "backend", c.Attestor.Backend.Name())
 	} else {
 		c.log.InfoContext(ctx, "attest: change attestations are off")
+	}
+	if c.Ledger != nil {
+		ledgered := make(chan struct{})
+		go func() { c.Ledger.Run(ctx); close(ledgered) }()
+		defer func() { <-ledgered }()
 	}
 	// A degraded policy bundle loads once its source answers (bundles.Watch); the gate and records never wait on it.
 	watched := make(chan struct{})
@@ -582,7 +628,22 @@ func (c *Core) Loops(ctx context.Context) {
 			}
 			c.refresh(ctx)
 			c.reconcile(ctx)
+			c.settleEvidence(ctx)
 		}
+	}
+}
+
+// settleEvidence clears the tier 3 changes that waited for the evidence ledger once it can checkpoint again.
+func (c *Core) settleEvidence(ctx context.Context) {
+	if c.Ledger == nil {
+		return
+	}
+	ids, err := c.Gate.SettleEvidence(ctx)
+	switch {
+	case err != nil && ctx.Err() == nil:
+		c.log.ErrorContext(ctx, "gate: settling changes that waited for the ledger failed", "error", err.Error())
+	case len(ids) > 0:
+		c.log.InfoContext(ctx, "gate: changes that waited for the ledger cleared", "count", len(ids))
 	}
 }
 

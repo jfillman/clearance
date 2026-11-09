@@ -144,6 +144,8 @@ jobs:
           - {name: clearance-argocd-agent, dockerfile: providers/argocd/agent/Dockerfile}
           - {name: clearance-cmp, dockerfile: providers/argocd/cmp/Dockerfile}
           - {name: clearance-wait, dockerfile: providers/argocd/wait/Dockerfile}
+          # The evidence ledger's witness (C-3): a separate image, so it can be run by someone else.
+          - {name: clearance-witness, dockerfile: cmd/clearance-witness/Dockerfile}
     steps:
       - uses: actions/checkout@v4
       - id: ref

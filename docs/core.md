@@ -21,6 +21,7 @@ session. It is one Go module, `github.com/jfillman/clearance`, built as one stat
 | `clearance attest verify` | Verifies a change attestation bundle offline ([Change attestations](#change-attestations)): `--file` (the bundle, or `-` for stdin), `--subject <alg>:<hex>` (repeatable: digests the statement must name), and either `--key` (a static key's public half, PEM, or the core's JWKS) or `--trust-root`, `--identity`, `--issuer` and `--rekor-key` (keyless; `--trust-root` may be a Sigstore TrustedRoot JSON, which carries Rekor's keys, so no `--rekor-key`). Exit 0 verified, 1 not. | Built |
 | `clearance trust-root build` | Builds the Sigstore TrustedRoot JSON from public PEM chains and Rekor public keys, each with its validity window: `--fulcio <chain.pem>[,start=..,end=..,uri=..]` and `--rekor <key.pem>[,start=..,end=..,url=..]`, repeatable, `--out`. Checks each chain (one chain, ends self-signed) and orders it, so the same inputs give the same bytes. See [Trusted root](#trusted-root-c-2a). | Built |
 | `clearance chain verify` | Verifies an evidence chain from genesis, from a JSONL dump (`--file`, `-` for stdin) or a read-only Postgres connection (`--dsn`, default `$CLEARANCE_DSN`). `--anchor <count>:<head>` checks that a checkpoint taken elsewhere is still held, which catches truncation. | Built |
+| `clearance ledger keygen` | Makes a signing key for the evidence ledger's log (`--name <origin>`) or a witness (`--witness`): the secret key goes to `--out` (a new file, mode 0600; an existing file is never replaced) and only the public key is printed. See [The evidence ledger](#the-evidence-ledger-c-3). | Built (C-3) |
 | `clearance register` | A customer's CI registers what it deploys with the deployment gate (the diff of two rendered manifest directories), authenticated by the workflow's GitHub Actions OIDC token or `--token-file`. The flags of the Python command it replaced (v0.29.0 and before), except that `--paths-from-git` with a base is refused, because the binary does not shell out. The `register/action.yml` GitHub Action builds this binary at its own ref. Without it, the paths are the files that differ between `--before` and `--after`. | Built |
 | `clearance conformance` | `--provider <url> --role runtime\|deployment`: starts an in-memory core and a fake target, drives the provider through a fake call or a fake change, and proves hold, clear, release and an outcome whose digest matches the cleared subject, one PASS or FAIL line per rule ([provider-protocol.md](provider-protocol.md)). | Built (R-1f) |
 | `clearance version` | Prints the build version (`-ldflags "-X main.version=vX.Y.Z"`, else the module version). | Built |
@@ -35,7 +36,7 @@ The contract is [`contract/clearance-core.json`](https://github.com/jfillman/cle
 |---|---|---|
 | `POST /access/v1/evaluation` | a registered provider | Decide one AuthZEN 1.0 access evaluation (`tool.call`, `session.spawn`, `session.open`, `model.call`) and record the decision, sealed by the core. |
 | `POST /v1/decisions/{id}/outcome` | the provider that asked for the decision | The call's result, effect (a pull request's receipt) and receipt, once per allowed decision. |
-| `POST /v1/records` | a registered provider | One of the provider's own records: `session.open`, `run.launch`, `run.delete`, `run.finish`, `human.answer`, `session.freeze`, `session.end`, `trigger.hold`, `trigger.release`, `tool.call` (an outage read, `coverage-unavailable`), `deploy.outcome` (with `release: {id}`, and the gate sets the named change's `outcome`: [gate.md](gate.md#the-release-record-join-g-argo-6-built)), `deploy.exception`, `deploy.degraded` (the last two checked and acted on by the gate, C-6: [gate.md](gate.md#protected-environments-the-outage-policy-states-exceptions-and-break-glass-c-6-built)), `federated.decision` (another gateway's PDP decision, observed by a federated source such as the [Traefik Hub adapter](federate-traefik-hub.md); Unverified). |
+| `POST /v1/records` | a registered provider | One of the provider's own records: `session.open`, `run.launch`, `run.delete`, `run.finish`, `human.answer`, `session.freeze`, `session.end`, `trigger.hold`, `trigger.release`, `tool.call` (an outage read, `coverage-unavailable`), `deploy.outcome` (with `release: {id}`, and the gate sets the named change's `outcome`: [gate.md](gate.md#the-release-record-join-g-argo-6-built)), `deploy.exception`, `deploy.degraded` (the last two checked and acted on by the gate, C-6: [gate.md](gate.md#protected-environments-the-outage-policy-states-exceptions-and-break-glass-c-6-built)), `federated.decision` (another gateway's PDP decision, observed by a federated source such as the [Traefik Hub adapter](federate-traefik-hub.md); Unverified), and, for a provider registered for them, the observation kinds `observation`, `assessment`, `resolution`, `observation.health` ([evidence.md](evidence.md#observations-clearanceevidencev11-o-1)). A record that names its own event (`source.event_id`) is de-duplicated: a repeat answers `200` with the first record's reference and `duplicate: true`. |
 | `PUT /v1/definitions` | the provider registered with `definitions: true` | The provider's whole set of cluster-pinned agent definitions replaces the core's. The core decides each pin and records each change once (`definition.load`, `definition.unload`, `definition.reject`). |
 | `POST /v1/clearances`, `/v1/clearances/{change_id}/clear`, `/v1/clearances/{change_id}/deny` | a verifier; a person or a delegate | The deployment gate ([gate.md](gate.md)), at the Python core's paths. |
 | `GET /v1/clearances/{change_id}` | a registered provider, or the verifier that registered the change | The change's state and its live [clearance token](#the-clearance-token) (`null` when it has none). A token with under half its life left is re-issued first. People read changes through clearance-api. |
@@ -69,7 +70,7 @@ A JSON array (at most 64 KiB), strictly decoded. Without it no caller may evalua
   core's own name.
 - `version` is `provider.version`, 1 to 64 characters.
 - `principals` are fnmatch globs on the authenticated principal. A caller is the first provider whose globs match.
-- `kinds` narrows which `POST /v1/records` kinds the provider may write (default: all of them).
+- `kinds` narrows which `POST /v1/records` kinds the provider may write (default: all of them but the observation kinds, which a provider writes only when it names them).
 - `intent_capture` is `redacted` (the default) or `full`, for its records' intent text.
 - `definitions: true` lets the provider publish its cluster-pinned agent definitions (`PUT /v1/definitions`). At
   most one provider has it, because a publish replaces the whole set: two publishers would undo each other.
@@ -199,6 +200,18 @@ product-neutral default (`internal/vocab`).
 | `CLEARANCE_AUTOMATION_ISSUERS` | The same on an approver's issuer when they sign in themselves. | Kubernetes, GitHub Actions and ID-JAG issuers |
 | `CLEARANCE_APPROVER_ALIASES` | Groups of names that are one person, `a=b=c;d=e`. Two approvals resolving to one group are `DG-APPROVER-SAME`. | none |
 | `CLEARANCE_AI_COAUTHORS` | Comma-separated matchers, `<email>` or `Name <email>` (case-insensitive), on the `Co-Authored-By`, `Assisted-by` and `Generated-by` trailers an AI coding agent outside Clearance leaves. A PR with no record and no other agent signal where any of its commits carries one is `unattested`, a warning that never fails a check ([provenance-app.md](provenance-app.md#ai-co-author-trailers-agent-unattested-built)). `none` turns it off. | Claude Code, OpenAI Codex, Copilot CLI, Cursor, aider (by email) |
+
+The evidence ledger is **off unless `CLEARANCE_LEDGER_DIR` is set** ([The evidence ledger](#the-evidence-ledger-c-3)):
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `CLEARANCE_LEDGER_DIR` | The Tessera volume: a mounted, writable, single-writer directory. Setting it turns the ledger on and requires the next two. Any other `CLEARANCE_LEDGER_*` variable without it is refused (it would silently do nothing). | unset: off |
+| `CLEARANCE_LEDGER_KEY_FILE` | The log's signing key: a signed-note Ed25519 secret key, read from the file at start and never printed. Its name is the log's origin. | required |
+| `CLEARANCE_LEDGER_WITNESS_POLICY_FILE` | The witness policy: `witness <name> <vkey> <url>` per witness (the vkey is the witness's cosignature key, type 0x04), `group <name> <n\|any\|all> <members...>`, and `quorum <name>`. At least one witness; `quorum none` is refused. | required |
+| `CLEARANCE_LEDGER_RETIRED_KEYS_FILE` | vkeys of the log's retired signing keys (same name, other keys), one per line. | none |
+| `CLEARANCE_LEDGER_CHECKPOINT_INTERVAL` | A Go duration, 1s to 1h: how often a grown log is checkpointed and sent to the witnesses, and how often the witnesses are asked again when it has not grown. | `1m` |
+| `CLEARANCE_LEDGER_TIER3_WAIT` | `true` or `false`: a tier 3 change waits while evidence cannot be checkpointed. | `true` |
+| `CLEARANCE_LEDGER_STALL_AFTER` | A Go duration: how long records may wait for a witnessed checkpoint before the ledger counts as stalled. | three intervals plus the 20 s witness timeout |
 
 The source of truth is the package documentation of `internal/core`, `internal/bundles`, `internal/vocab` and
 `authn.EnvVars`. `clearance register`
@@ -467,6 +480,126 @@ The keyless backend goes live when the Hangar signing platform provides all of t
 | **Env and chart values** | `CLEARANCE_ATTEST_FULCIO_URL`, `CLEARANCE_ATTEST_REKOR_URL`, `CLEARANCE_ATTEST_OIDC_TOKEN_FILE` (set by the chart to the projected path); chart `attestation.keyless.fulcioUrl`, `attestation.keyless.audience`, `attestation.keyless.tokenExpirationSeconds`, `attestation.rekorUrl`. No Secret: the keyless backend holds no key |
 | **autopilot** | after a clearance release carries this, the autopilot version bump that pins it |
 
+## The evidence ledger (C-3)
+
+Status: **Built**, off unless configured. A transparency log of the evidence chain's record hashes and nothing else,
+checkpointed on a cadence, countersigned by a witness Clearance does not operate, and the assurance state that follows
+from it (`internal/ledger`). It answers one question the chain cannot answer about itself: has anyone with write access
+to the database cut the chain short or rewritten it and re-hashed the rest? The chain's own hashing catches an edited
+row; only a party outside the database catches a chain that was rebuilt consistently.
+
+### What it is made of
+
+- **The log** is a [Tessera](https://github.com/transparency-dev/tessera) v1 log (`github.com/transparency-dev/tessera`,
+  the POSIX driver). One entry per chain record: its 32-byte hash. Entry `i` is chain record `seq i`. The log learns
+  nothing the hashes do not already publish. Records are added by the core's own loop, a second or so after they are
+  written, never on the request path.
+- **Checkpoints** are [C2SP tlog-checkpoints](https://c2sp.org/tlog-checkpoint) signed by the log key (a signed-note
+  Ed25519 key; its name is the log's *origin*). Tessera signs one when the log has grown and its interval
+  (`CLEARANCE_LEDGER_CHECKPOINT_INTERVAL`, default a minute) has passed, and asks the witnesses again at the same cadence
+  when it has not, which is how an idle outage is noticed. A checkpoint is published only after the witness policy is
+  satisfied; the core additionally refuses to record one that is not.
+- **The witness** (`clearance-witness`, below) cosigns ([tlog-cosignature](https://c2sp.org/tlog-cosignature)) a
+  checkpoint only when it is consistent with the last one it cosigned. Clearance's witness client is Tessera's: it sends
+  `old <size>`, the consistency proof and the checkpoint, collects the countersignatures the policy asks for, and
+  **refuses to publish a checkpoint a witness rejected**: nothing is published and the ledger says why. A checkpoint of a
+  log that was truncated (a witness already cosigned more), rewritten (the same size, another root) or forked (an
+  inconsistent proof) is rejected however the log signed it.
+- **The assurance state** of a record, beside it and never hashed (`clearance_evidence.assurance`), moves from
+  `recorded-not-checkpointed` to `checkpointed` when its hash is under a witnessed checkpoint. The checkpoint is stored
+  in `clearance_ledger_checkpoints` and the rows under it are updated in one transaction. clearance-api and the record
+  views already read the column, so they show it.
+- **The outage knob** (`CLEARANCE_LEDGER_TIER3_WAIT`, default on): while evidence cannot be checkpointed, a **tier 3**
+  change whose approvals are all in does not clear. It stays `holding` with `evidence_wait` on the change
+  (`assurance: waiting-for-checkpoint` and the ledger's reason), its `deploy.clear` record says so, and the core's
+  expiry loop clears it (`deploy.clear` by policy, token issued) once the ledger can checkpoint again. A change that
+  reaches its TTL while waiting expires as any holding change does. Tiers 0 to 2 are not held by the ledger. Turn the knob
+  off and a tier 3 change clears whatever the ledger says; the ledger still reports.
+
+"Cannot be checkpointed" is: every witness's last answer was a failure (down, timing out, 5xx), or a witness rejected the
+log's checkpoint, or records have waited longer than `CLEARANCE_LEDGER_STALL_AFTER` for a witnessed checkpoint. With
+several witnesses and a quorum below all of them, one witness down does not hold anything unless checkpoints stop
+advancing (the stall clock).
+
+### The state, in `GET /readyz`
+
+`ledger` is absent when the ledger is off, and never makes the core unready (a witness outage holds tier 3 changes, it
+does not take the core out of service):
+
+```json
+"ledger": {"enabled": true, "origin": "clearance-ledger", "state": "witness-unavailable",
+  "detail": "no witness answered the log's last checkpoint request",
+  "chain": 9120, "ledger": 9120, "witnessed": 9087, "tier3_wait": true, "holding": true,
+  "witnesses": [{"url": "https://witness.example/add-checkpoint", "state": "unavailable", "detail": "HTTP 503"}]}
+```
+
+`state` is `current` (every record is under a witnessed checkpoint), `checkpointing`, `witness-unavailable`,
+`witness-rejected` or `stalled`. `holding` is whether a tier 3 change would wait right now.
+
+### The volume, and rebuilding it
+
+Tessera has no PostgreSQL driver, so the log's tiles are files on a volume. **The chain in PostgreSQL stays the source
+of truth and the volume is a rebuildable copy of its hashes.** On start (`ledger.Open`) the core:
+
+1. refuses if the chain holds fewer records than the last checkpoint a witness signed (the chain was truncated or restored
+   from an older copy: `ErrChainBehind`), or fewer than the volume holds;
+2. compares every entry the volume holds with the chain's record hash of the same seq and **names the first altered row**
+   (`*AlteredRow`: seq, the hash the chain holds, the hash the ledger committed to);
+3. writes the chain's record hashes the volume lacks to it, in seq order, until it matches the chain: an empty or lost
+   volume is rebuilt entirely, a stale one is caught up. The root the volume computes must equal the root computed from
+   the chain independently;
+4. computes the root of the chain's first *N* records, where *N* is the last witnessed checkpoint's size, and **refuses to
+   serve if it disagrees with that checkpoint's root** (`ErrRootMismatch`): a rebuilt volume reaches the same root, so the
+   checkpoint a witness already signed still matches; a chain that was rewritten does not.
+
+The core does not start with an inconsistent ledger. A witness that is merely down does not stop a start (the checkpoint
+of the rebuilt tree is sent when it returns; the witness answers with its own size and the log sends the proof from there).
+The checkpoints in `clearance_ledger_checkpoints` are what lets a lost volume be checked: they live with the chain.
+
+The core is one replica on a ReadWriteOnce claim, so the chart's Deployment is `Recreate` (it always was: the chain's
+single writer). With `ledger.enabled=false` the chart renders exactly what it did before: no claim, no variable, no mount.
+
+### Keys
+
+Never generated by the core and never printed. `clearance ledger keygen --name <origin> --out <file>` writes the log key
+(mode 0600, never over an existing file) and prints the public key; the chart mounts the Secret read-only. **Rotating the
+log key** keeps the name and changes the key: put the old vkey in `CLEARANCE_LEDGER_RETIRED_KEYS_FILE`, add the new vkey
+to every witness's logs file *first*, then switch `CLEARANCE_LEDGER_KEY_FILE`. Checkpoints the old key signed still verify
+(the retired vkey), the witnesses accept both, and every old entry is provable against a checkpoint the new key signed
+(`Log.Prove`, `ledger.VerifyProof`): the entries and the tree do not change, only who signs the head.
+
+### The witness (`clearance-witness`)
+
+A C2SP tlog-witness in its own binary and image (`ghcr.io/jfillman/clearance-witness`, `cmd/clearance-witness`), because
+it is worth something only run by someone the log's operator does not control. It holds, per log it knows, the latest
+checkpoint it cosigned (a state file on a volume, written atomically; a witness that forgets can be rolled back) and
+answers `POST /add-checkpoint`: 200 with the cosignature when the checkpoint extends the one it holds (a valid
+consistency proof) or repeats it; 409 with its size (`text/x.tlog.size`) when the sender's idea of that size is wrong,
+or plain 409 for another tree of a size it already cosigned; 400 for a checkpoint older than the sender claims to hold;
+403 when no log signature under a trusted key verifies; 404 for an unknown log; 422 for a bad proof. Its signing key is
+a signed-note secret key in a mounted file (`--key-file`); `--logs-file` lists the logs' vkeys, `--state-file` the
+state. The chart is `charts/clearance-witness`. For the lab: one witness on hangar-prod, with its own key, run from the
+apron prod profile; the policy on hangar-dev lists it as `witness <name> <its cosignature vkey> https://<host>`.
+
+### The local anchored checkpoint
+
+`evidence.Checkpoint` (count and head) is **not retired**: it is the chain verifier's own state, and
+`clearance chain verify --anchor <count>:<head>` and `evidence.VerifyAgainst` are the only defence against truncation
+while the ledger is off, which is the default. Removing them with the ledger off would remove a protection from a running
+deployment. With the ledger on they are superseded (the witness anchors the chain from outside the database) and still
+work. Retiring them is a decision for a release after the ledger has been on in the lab.
+
+### What is not built
+
+- **No "every N records" trigger.** Tessera's checkpoint cadence is a time interval; a checkpoint is signed when the log
+  has grown and the interval has passed. The brief's "every N records or every minute" is the minute.
+- **A `clearance ledger verify` command** (an offline audit of a volume against a database). The audit runs at start, and
+  `Log.Audit` is the same check in process.
+- **One witness protocol only**: the add-checkpoint form Tessera's client speaks. A witness network's other protocol
+  versions are not implemented.
+- **The log is not served.** The tiles are on the volume; nothing publishes them over HTTP yet, so a third party cannot
+  fetch a proof from Clearance (`Log.Prove` is in process).
+
 ## The decision engine (`internal/decide`)
 
 The runtime decision is a pure function. It takes an AuthZEN evaluation to a decision with its rule id, name,
@@ -603,6 +736,10 @@ vocabulary (`vocabulary.*`): see [install.md](install.md).
   (`internal/canon`: `json.dumps(sort_keys=True, separators=(",", ":"), ensure_ascii=False)`).
 - **Read-only mode** (`pg.OpenReader`) is for clearance-api and `clearance chain verify --dsn`: no lock, no
   migration, every session read-only. Every statement runs under a statement timeout and a context deadline.
+- **The ledger's checkpoints** (C-3) are `clearance_ledger_checkpoints` (size, origin, root, the signed note, time), created
+  the same way; `store.Ledger` is the interface, implemented by `store/pg` and `store/memory`
+  (`PutLedgerCheckpoint` also sets `assurance = 'checkpointed'` on the rows under it, in one transaction, and refuses
+  a checkpoint that would shrink or fork the one held).
 - `store/memory` is the same interface in memory, for `clearance core --memory` and tests.
 
 ## Building and testing
