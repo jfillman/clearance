@@ -460,6 +460,13 @@ func TestAnApplicationOutsideAProtectedNamespaceIsSkipped(t *testing.T) {
 	if n := len(w.core.of("deploy.outcome")); n != 0 {
 		t.Fatalf("%d outcomes for an unprotected namespace", n)
 	}
+	lists := w.kube.nsLists
+	if err := w.a.HandleApplication(bg, staging); err != nil {
+		t.Fatal(err)
+	}
+	if lists == 0 || w.kube.nsLists != lists {
+		t.Fatalf("a second status change inside the window listed the namespaces again: %d then %d", lists, w.kube.nsLists)
+	}
 	if err := w.a.HandleApplication(bg, webApp(succeeded("2026-11-07T12:00:00Z"))); err != nil {
 		t.Fatal(err)
 	}

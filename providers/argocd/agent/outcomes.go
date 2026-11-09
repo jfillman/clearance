@@ -15,6 +15,25 @@ func (a *Agent) protectedProject(p string) bool {
 	return slices.Contains(a.cfg.Projects, "*") || slices.Contains(a.cfg.Projects, p)
 }
 
+// protectedTTL bounds how stale handleApp's view of the protected namespaces can be. A namespace labelled inside the
+// window is picked up on the next list, because an operation not yet reported stays unreported until then.
+const protectedTTL = 30 * time.Second
+
+// protectedNamespaces caches ProtectedNamespaces: a watch delivers every status change of every Application in a
+// protected project, and each would otherwise list the namespaces. A failed list is not cached.
+func (a *Agent) protectedNamespaces(ctx context.Context) (map[string]map[string]string, error) {
+	a.protMu.Lock()
+	defer a.protMu.Unlock()
+	if now := a.now(); a.prot == nil || !now.Before(a.protUpTo) {
+		p, err := a.kube.ProtectedNamespaces(ctx)
+		if err != nil {
+			return nil, err
+		}
+		a.prot, a.protUpTo = p, now.Add(protectedTTL)
+	}
+	return a.prot, nil
+}
+
 // RunOutcomes lists the Applications, handles each, and watches them from the list's resourceVersion. A watch ends
 // at ResyncEvery, on a break or when its version is gone; the loop lists again, so a restarted agent (or a post that
 // failed) catches up from state, and nothing waits for a notification that was lost (docs/gate.md, "The outcome
@@ -68,7 +87,7 @@ func (a *Agent) handleApp(ctx context.Context, app Application, force bool) erro
 	}
 	// A project can hold environments the gate does not protect (a staging beside a gated prod). The agent may read only
 	// protected namespaces, so an operation elsewhere has no outcome for it to report.
-	protected, err := a.kube.ProtectedNamespaces(ctx)
+	protected, err := a.protectedNamespaces(ctx)
 	if err != nil {
 		a.log.Warn("listing the protected namespaces failed (retried on the next list)", "err", err)
 		return err
