@@ -142,6 +142,9 @@ func (a *OIDCAuthenticator) Authenticate(ctx context.Context, token string) (Pri
 	if sub, ok := claims["sub"].(string); ok && sub != "" {
 		id["sub"] = sub
 	}
+	if sid, ok := claims["sid"].(string); ok && sid != "" {
+		id["sid"] = sid
+	}
 	return Principal{ID: "user:" + who, Kind: KindPerson, Claims: id}, nil
 }
 

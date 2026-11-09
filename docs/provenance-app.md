@@ -229,7 +229,7 @@ the `<prefix>*` trailers (`CLEARANCE_TRAILER_PREFIX`, `Hangar-` on Hangar), or a
 authored it. The user's decision of 2026-11-04 ("option 1, warn-only"): recognise AI co-author trailers as agent work
 Clearance has no record of, report it, and never fail a check on it.
 
-**The verdict.** When none of those signals is present but the head commit carries a `Co-Authored-By`, `Assisted-by`
+**The verdict.** When none of those signals is present but any commit of the PR carries a `Co-Authored-By`, `Assisted-by`
 or `Generated-by` trailer that an AI co-author matcher matches, both verdicts are `unattested`:
 
 - `ok: true`, no rule, `agent_pr: true`, and `coauthor: {commit, trailer}` naming the first trailer that matched. The
@@ -246,11 +246,13 @@ or `Generated-by` trailer that an AI co-author matcher matches, both verdicts ar
 one AI002, and a PR Clearance does hold a record of is decided by the record (confirmed, AI003, AI004). The AI
 co-author trailer is only read when nothing else says "agent".
 
-**Which commits.** The head commit only, as for the `<prefix>*` trailers: Gather already reads it, and a Claude Code
-session puts the trailer on every commit it makes. A PR whose last commit is a person's (a merge from main, say) is
-therefore `not-agent` again. `POST /v1/provenance` takes `coauthors: [{commit, trailer}]` (at most 200, each one line
-of at most 1,024 characters whose key is one of the three) so a caller that scans every commit may send them all;
-Glidepath's `agent-gates-` sends none yet, so its verdicts are unchanged.
+**Which commits.** Every commit of the PR. The App's Gather reads the PR's commit list (GitHub returns at most 250
+commits, three pages of 100) and sends every co-author trailer it finds, so an agent's commit under a person's later
+commit, or a merge from main, no longer turns the PR back into `not-agent`. The head commit's trailers are listed first,
+so the verdict names the head when it matches. The `<prefix>*` trailers are still read from the head commit only.
+`POST /v1/provenance` takes `coauthors: [{commit, trailer}]` (at most 200, each one line of at most 1,024 characters
+whose key is one of the three) so a caller that scans every commit may send them all; Glidepath's `agent-gates-` sends
+the head commit's only until its task is changed to send all of them.
 
 **The matchers** are vocabulary, `CLEARANCE_AI_COAUTHORS` (chart `vocabulary.aiCoauthors`): comma-separated `<email>`
 (any name) or `Name <email>`, compared case-insensitively with whitespace collapsed. Unset: the default below. `none`

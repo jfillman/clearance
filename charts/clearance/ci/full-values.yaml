@@ -38,6 +38,9 @@ vocabulary:
   gateReleaseStamps: ["/metadata/labels/app.kubernetes.io~1version"]
   gateOwnerFallback: "group:default/admins"
   monitoringProtectionOps: ["StopLogging", "DeleteTrail", "UpdateTrail", "PutEventSelectors", "StopConfigurationRecorder", "DeleteConfigRule"]
+  automationSubjects: ["*[bot]", "agent:*"]
+  automationIssuers: ["https://id-jag.acme.dev*"]
+  approverAliases: ["user:riley=riley@acme.dev"]
   v0Provider: autopilot-gateway/unrecorded
   aiCoauthors: ["<noreply@anthropic.com>", "Acme Agent <agent@acme.dev>"]
 gate:
@@ -78,6 +81,11 @@ githubApp:
   appId: "123456"
   comments: agent-failures
   api: https://api.github.com
+hcpRunTask:
+  enabled: true
+  existingSecret: hcp-run-task-keys
+  installations:
+    - {organization: acme, environment: prod, secretKey: acme-hmac-key}
 backstage:
   url: http://backstage.backstage.svc:7007
 cnpg:

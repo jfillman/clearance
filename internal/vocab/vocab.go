@@ -30,6 +30,13 @@
 //	                                  (case-insensitive, whitespace collapsed). A PR Clearance has no record of whose
 //	                                  head commit carries one is agent-unattested, a warning (provenance). Default
 //	                                  DefaultAICoauthors; "none" turns the check off
+//	CLEARANCE_AUTOMATION_SUBJECTS     comma-separated wildcard patterns (* only, case-insensitive) on an approver's name
+//	                                  or subject that mark automation: a bot account, a service or agent identity. The
+//	                                  approval route refuses a match with DG-APPROVER-AUTOMATION. Default
+//	                                  DefaultAutomationSubjects; "none" turns the list off
+//	CLEARANCE_AUTOMATION_ISSUERS      the same on an approver's issuer (default DefaultAutomationIssuers; "none")
+//	CLEARANCE_APPROVER_ALIASES        groups of names that are one person, "a=b=c;d=e" (names, emails, subjects). Two
+//	                                  approvals that resolve to one group are DG-APPROVER-SAME (default none)
 package vocab
 
 import (
@@ -54,6 +61,10 @@ type Vocabulary struct {
 	MonitoringProtectionOps []string
 	// AICoauthors match the commit trailers an AI coding agent outside Clearance leaves (empty: the check is off).
 	AICoauthors []Coauthor
+	// AutomationSubjects and AutomationIssuers are the wildcard patterns that mark an approver as automation.
+	AutomationSubjects, AutomationIssuers []string
+	// ApproverAliases are groups of names that are one person.
+	ApproverAliases [][]string
 	// From the policy bundles (decide.Engine), not the environment.
 	PRTools         []string
 	ProfileSections []string
@@ -63,6 +74,7 @@ type Vocabulary struct {
 var EnvVars = []string{"CLEARANCE_ON_BEHALF_OF_HEADER", "CLEARANCE_TRAILER_PREFIX", "CLEARANCE_RUN_IDENTITY_NAMESPACE",
 	"CLEARANCE_BASELINE_DENY_PATHS", "CLEARANCE_BASELINE_DENY_FIELDS", "CLEARANCE_GATE_OUTSIDE_GROUPS",
 	"CLEARANCE_GATE_OWNER_FALLBACK", "CLEARANCE_GATE_RELEASE_STAMPS", "CLEARANCE_V0_PROVIDER", "CLEARANCE_AI_COAUTHORS",
+	"CLEARANCE_AUTOMATION_SUBJECTS", "CLEARANCE_AUTOMATION_ISSUERS", "CLEARANCE_APPROVER_ALIASES",
 	"CLEARANCE_MONITORING_PROTECTION_OPS"}
 
 // Default is Clearance's own vocabulary.
@@ -72,8 +84,8 @@ func Default() Vocabulary {
 		BaselineDenyPaths: []string{"CODEOWNERS", "**/CODEOWNERS", ".github/**"}, BaselineDenyFields: []string{},
 		OutsideGroups: []string{}, GateReleaseStamps: []string{"/metadata/labels/app.kubernetes.io~1version", "/spec/template/metadata/labels/app.kubernetes.io~1version"},
 		V0ProviderName: "unrecorded", V0ProviderVersion: "unrecorded", MonitoringProtectionOps: []string{},
-		AICoauthors: DefaultAICoauthors(),
-		PRTools:     []string{"repo.pr.open", "repo.pr.open_upper"}, ProfileSections: []string{},
+		AICoauthors: DefaultAICoauthors(), AutomationSubjects: DefaultAutomationSubjects(), AutomationIssuers: DefaultAutomationIssuers(),
+		PRTools: []string{"repo.pr.open", "repo.pr.open_upper"}, ProfileSections: []string{},
 	}
 }
 
@@ -148,6 +160,26 @@ func FromEnv(get func(string) string) (Vocabulary, error) {
 			return v, fmt.Errorf("CLEARANCE_AI_COAUTHORS: %w", err)
 		}
 		v.AICoauthors = cs
+	}
+	if s := get("CLEARANCE_AUTOMATION_SUBJECTS"); s != "" {
+		v.AutomationSubjects = noneIsEmpty(s)
+	}
+	if s := get("CLEARANCE_AUTOMATION_ISSUERS"); s != "" {
+		v.AutomationIssuers = noneIsEmpty(s)
+	}
+	if s := get("CLEARANCE_APPROVER_ALIASES"); s != "" {
+		for _, g := range strings.Split(s, ";") {
+			var names []string
+			for _, n := range strings.Split(g, "=") {
+				if n = strings.TrimSpace(n); n != "" {
+					names = append(names, n)
+				}
+			}
+			if len(names) < 2 {
+				return v, fmt.Errorf("CLEARANCE_APPROVER_ALIASES: %q names fewer than two names", strings.TrimSpace(g))
+			}
+			v.ApproverAliases = append(v.ApproverAliases, names)
+		}
 	}
 	return v, nil
 }

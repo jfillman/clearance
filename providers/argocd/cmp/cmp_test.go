@@ -239,6 +239,10 @@ func TestHeldForPeopleEmitsTheManifestsAndAPreSyncWaitJob(t *testing.T) {
 	if c["image"] != "ghcr.io/jfillman/clearance-wait:test" || string(args) != `["--change","ch-held","--timeout","1h0m0s"]` {
 		t.Fatalf("%v", c)
 	}
+	pod := job["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	if _, set := pod["serviceAccountName"]; set || pod["automountServiceAccountToken"] != false {
+		t.Fatalf("the wait Job sets no serviceAccountName (the admission allowlist refuses one) and mounts no default token: %v", pod)
+	}
 	if md["labels"].(map[string]any)["clearance.hangar.io/injected"] != "wait" {
 		t.Fatal("the injected Job is labelled so admission can tell it from tenant objects")
 	}

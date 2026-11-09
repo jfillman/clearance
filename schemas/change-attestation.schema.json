@@ -79,6 +79,7 @@
               "iss": {"type": "string"},
               "person": {"type": "string"},
               "via": {"type": "string"},
+              "kind": {"description": "person: the approval route checked the approver is a person, not automation (GATE-APPROVER-001). Absent on approvals recorded before it.", "enum": ["person"]},
               "role": {"type": "string"},
               "at": {"type": "string"}
             }
