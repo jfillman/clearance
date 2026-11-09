@@ -73,9 +73,11 @@ func OperationalClasses(c *Change, pol Policy) []string {
 	switch {
 	case c.Subject != nil && c.Subject.Kind == KindDefinition:
 		// An agent definition's release: any change in what the agent may do is a change of privilege. The reasons
-		// carry review.Classify's changes; provenance and tree notes are not changes.
+		// carry review.Classify's changes, whose subject is "agent <name>: <field>". Provenance and tree notes, a
+		// definition that would not load (DG-DEFINITION) and a loosening clearance.yaml (policy:loosens) are not
+		// changes of authority: the definition never took effect.
 		for _, r := range c.Reasons {
-			if !strings.HasPrefix(r.Rule, "provenance:") && !strings.HasPrefix(r.Rule, "tree:") {
+			if strings.HasPrefix(r.Subject, "agent ") && strings.Contains(r.Subject, ": ") {
 				add([]string{ClassPrivilege})
 			}
 		}
