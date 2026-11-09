@@ -14,6 +14,21 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   flows for a deployment provider (`info.flow`: `terraform-plan`, `pushed-tree`; `info.stamps`), and an adapter per gate
   in its own tests: `terraform-ci` (`clearance hold`, `release`, `report`) and `argocd-agent` (the plugin's `Generate` and
   the agent's outcome handling behind a fake Argo CD). The suite's assertions are unchanged (`clearance-conformance/v1`).
+- **The HCP Terraform run task** (G-TF-6; `internal/hcprun`, `POST /v1/terraform/run-task`;
+  [docs/terraform-gate.md](docs/terraform-gate.md#the-hcp-terraform-run-task-g-tf-6-built-not-live-verified)). Verifies
+  HCP Terraform's `X-TFC-Task-Signature` (HMAC-SHA512, constant time, per-organization key from a file), reads the plan
+  JSON with the run's access token, registers the terraform-plan subject, and reports `running`, then `passed` or
+  `failed` to the run task callback. Off unless `CLEARANCE_HCP_RUN_TASK_CONFIG_FILE` is set. The plan and callback URLs
+  are restricted to the configured HCP Terraform host. Contract tests use HashiCorp's published payload; not
+  verified against a real organization. Targeted plans are not detectable from the payload. Atlantis and Spacelift
+  adapters are deferred.
+- **Tier 3 approvers are people (C-14, rule `GATE-APPROVER-001`).** The clear route refuses an approver that is
+  automation (a service account, GitHub Actions, a bot account, an ID-JAG agent identity, or a delegate naming one) with
+  `DG-APPROVER-AUTOMATION` 403, and a second approval that resolves to the same subject, alias or session with
+  `DG-APPROVER-SAME` 409. Approvals record and carry `kind: person` (change, token, `deploy.clear`, attestation).
+  Patterns are configuration: `CLEARANCE_AUTOMATION_SUBJECTS`, `CLEARANCE_AUTOMATION_ISSUERS`,
+  `CLEARANCE_APPROVER_ALIASES`. A non-person principal calling clear without naming a person now gets
+  `DG-APPROVER-AUTOMATION`, where it got `DG-PERSON`.
 
 ### Changed
 - **The outcome of a terraform-plan change names the provider its caller is registered as.** `POST

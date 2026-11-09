@@ -982,10 +982,16 @@
           "iss": {
             "type": "string"
           },
+          "kind": {
+            "type": "string"
+          },
           "person": {
             "type": "string"
           },
           "role": {
+            "type": "string"
+          },
+          "session": {
             "type": "string"
           },
           "sub": {
@@ -1990,6 +1996,20 @@
           "backend",
           "key",
           "name"
+        ],
+        "type": "object"
+      },
+      "HcprunAnswer": {
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "result": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
         ],
         "type": "object"
       },
@@ -4404,6 +4424,88 @@
         "summary": "A registered provider's own record (one of RecordKinds), sealed with that provider's name and version; only provider and ts are verified.",
         "x-clearance-auth": "provider",
         "x-clearance-max-body": 262144
+      }
+    },
+    "/v1/terraform/run-task": {
+      "post": {
+        "operationId": "hcpRunTask",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "description": "an HCP Terraform run task payload, payload_version 1 (stage post_plan or pre_apply carries plan_json_api_url)",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HcprunAnswer"
+                }
+              }
+            },
+            "description": "accepted (or verified: HCP Terraform's check of the URL)"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HcprunAnswer"
+                }
+              }
+            },
+            "description": "a payload the adapter refuses, or a URL that is not on the configured HCP Terraform host"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HcprunAnswer"
+                }
+              }
+            },
+            "description": "a bad signature, or an organization that is not configured"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "this Clearance runs no HCP Terraform run task"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is over the route's cap"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HcprunAnswer"
+                }
+              }
+            },
+            "description": "busy, or the HMAC key is unreadable: HCP Terraform retries"
+          }
+        },
+        "security": [],
+        "summary": "An HCP Terraform run task (G-TF-6): verified by its HMAC-SHA512 signature (X-TFC-Task-Signature), the plan JSON is read with the run's access token, the plan is registered as a terraform-plan change, and the run task's result is reported to HCP Terraform (running, then passed or failed). Answered 200 at once.",
+        "x-clearance-auth": "hcp-signature",
+        "x-clearance-max-body": 65536
       }
     }
   },

@@ -18,7 +18,7 @@ CONTRACT_VERSION = "1.0.0"
 
 RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "run.finish", "human.answer", "session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome", "deploy.exception", "deploy.degraded", "federated.decision")
 
-__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateReason", "GateRequirement", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "Health", "Hold", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
+__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateReason", "GateRequirement", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -425,16 +425,20 @@ class GateApproval(Model):
     _FIELDS: ClassVar[tuple[Field, ...]] = (
         Field("at", "at", ("str",), True),
         Field("iss", "iss", ("str",), False),
+        Field("kind", "kind", ("str",), False),
         Field("person", "person", ("str",), True),
         Field("role", "role", ("str",), True),
+        Field("session", "session", ("str",), False),
         Field("sub", "sub", ("str",), False),
         Field("via", "via", ("nullable", ("str",)), True),
     )
 
     at: str
     iss: str | None = None
+    kind: str | None = None
     person: str
     role: str
+    session: str | None = None
     sub: str | None = None
     via: str | None
 
@@ -1089,6 +1093,20 @@ class Grant(Model):
     principal: str
     session: str
     task_id: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class HcprunAnswer(Model):
+    """Contract schema HcprunAnswer."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("reason", "reason", ("str",), False),
+        Field("result", "result", ("str",), True),
+    )
+
+    reason: str | None = None
+    result: str
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -1920,6 +1938,7 @@ MODELS: dict[str, type[Model]] = {
     "GateVersions": GateVersions,
     "GateWorkspace": GateWorkspace,
     "Grant": Grant,
+    "HcprunAnswer": HcprunAnswer,
     "Health": Health,
     "Hold": Hold,
     "Limits": Limits,
@@ -1981,4 +2000,5 @@ OPERATIONS: dict[str, Operation] = {
     "getKeys": Operation("GET", "/v1/keys", "none", 65536, None, TokenJWKS),
     "verifyProvenance": Operation("POST", "/v1/provenance", "bearer", 4194304, None, ProvenanceVerdict),
     "appendRecord": Operation("POST", "/v1/records", "provider", 262144, RecordRequest, RecordRef),
+    "hcpRunTask": Operation("POST", "/v1/terraform/run-task", "hcp-signature", 65536, None, HcprunAnswer),
 }

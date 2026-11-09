@@ -166,6 +166,7 @@ All configuration comes from the environment. An empty variable counts as unset.
 | `CLEARANCE_TOKEN_TTL` | Each token's life, a Go duration (default `15m`; `1m` to `24h`, and at least four times `CLEARANCE_EXPIRE_SECONDS`, the refresh interval). |
 | `CLEARANCE_TOKEN_ISSUER` | The tokens' `iss`, which verifiers check (default `clearance`). |
 | `CLEARANCE_GITHUB_APP_ID`, `CLEARANCE_GITHUB_APP_KEY_FILE`, `CLEARANCE_GITHUB_APP_WEBHOOK_SECRET_FILE` | The Clearance GitHub App. Set all three or none. The key and secret are read from files. |
+| `CLEARANCE_HCP_RUN_TASK_CONFIG_FILE` | The HCP Terraform run task (G-TF-6): a JSON file of installations `{organization, host, hmacKeyFile, environment}` ([docs/terraform-gate.md](terraform-gate.md#the-hcp-terraform-run-task-g-tf-6-built-not-live-verified)). Unset: `POST /v1/terraform/run-task` answers 404. Needs `hcp-run-task:*` in `CLEARANCE_VERIFIERS`. |
 | `CLEARANCE_GITHUB_APP_COMMENTS` | `off` (default) or `agent-failures`. |
 | `CLEARANCE_GITHUB_API` | The GitHub API base (default `https://api.github.com`). |
 | `CLEARANCE_AUDIENCE` | The TokenReview audience for this cluster's workloads, and the audience of the foreign cluster's tokens (default `clearance`). |
@@ -194,7 +195,10 @@ product-neutral default (`internal/vocab`).
 | `CLEARANCE_ATTEST_FULCIO_URL` | Change attestations, **keyless** backend: the Fulcio base URL (https; http only for loopback or an in-cluster Service name, `<svc>.<ns>.svc`). Needs `CLEARANCE_ATTEST_REKOR_URL`. | unset |
 | `CLEARANCE_ATTEST_REKOR_URL` | The Rekor v1 log: required with Fulcio, optional with a static key (unlogged without). | unset |
 | `CLEARANCE_ATTEST_OIDC_TOKEN_FILE` | Keyless: the core's OIDC identity token, re-read on every signing and never cached. | `/var/run/clearance/attest-oidc-token` |
-| `CLEARANCE_AI_COAUTHORS` | Comma-separated matchers, `<email>` or `Name <email>` (case-insensitive), on the `Co-Authored-By`, `Assisted-by` and `Generated-by` trailers an AI coding agent outside Clearance leaves. A PR with no record and no other agent signal whose head commit carries one is `unattested`, a warning that never fails a check ([provenance-app.md](provenance-app.md#ai-co-author-trailers-agent-unattested-built)). `none` turns it off. | Claude Code, OpenAI Codex, Copilot CLI, Cursor, aider (by email) |
+| `CLEARANCE_AUTOMATION_SUBJECTS` | Comma-separated patterns (`*` the only wildcard, case-insensitive) on an approver's name or subject that mark automation: a bot account, a service or agent identity. A match is refused `DG-APPROVER-AUTOMATION` ([gate.md](gate.md#tier-3-approvers-are-people-c-14-built)). `none` empties the list. | `*[bot]`, `*-bot`, `bot-*`, `agent:*`, `system:*`, `svc-*`, ... (see gate.md) |
+| `CLEARANCE_AUTOMATION_ISSUERS` | The same on an approver's issuer when they sign in themselves. | Kubernetes, GitHub Actions and ID-JAG issuers |
+| `CLEARANCE_APPROVER_ALIASES` | Groups of names that are one person, `a=b=c;d=e`. Two approvals resolving to one group are `DG-APPROVER-SAME`. | none |
+| `CLEARANCE_AI_COAUTHORS` | Comma-separated matchers, `<email>` or `Name <email>` (case-insensitive), on the `Co-Authored-By`, `Assisted-by` and `Generated-by` trailers an AI coding agent outside Clearance leaves. A PR with no record and no other agent signal where any of its commits carries one is `unattested`, a warning that never fails a check ([provenance-app.md](provenance-app.md#ai-co-author-trailers-agent-unattested-built)). `none` turns it off. | Claude Code, OpenAI Codex, Copilot CLI, Cursor, aider (by email) |
 
 The source of truth is the package documentation of `internal/core`, `internal/bundles`, `internal/vocab` and
 `authn.EnvVars`. `clearance register`

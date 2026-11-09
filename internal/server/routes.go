@@ -7,6 +7,7 @@ import (
 	"github.com/jfillman/clearance/internal/decide"
 	"github.com/jfillman/clearance/internal/gate"
 	"github.com/jfillman/clearance/internal/githubapp"
+	"github.com/jfillman/clearance/internal/hcprun"
 	"github.com/jfillman/clearance/internal/provenance"
 	"github.com/jfillman/clearance/internal/review"
 	"github.com/jfillman/clearance/internal/token"
@@ -18,6 +19,7 @@ const (
 	AuthBearer    = "bearer"           // any principal the Authenticator accepts; the handler decides who may
 	AuthProvider  = "provider"         // a bearer token whose principal is a registered provider
 	AuthSignature = "github-signature" // the GitHub App's HMAC (X-Hub-Signature-256), no bearer token
+	AuthHCP       = "hcp-signature"    // the HCP Terraform run task's HMAC (X-TFC-Task-Signature), no bearer token
 )
 
 // Body caps of this package's routes; the R-1c routes keep their own.
@@ -299,7 +301,26 @@ var routeTable = []Route{
 			{413, "the body is over the route's cap", ErrorResponse{}}, {503, "the queue is full", WebhookAnswer{}},
 		},
 	},
+	{
+		Method: "POST", Path: hcprun.Path, OperationID: "hcpRunTask", Auth: AuthHCP,
+		MaxBody: hcprun.MaxBody,
+		Summary: "An HCP Terraform run task (G-TF-6): verified by its HMAC-SHA512 signature (X-TFC-Task-Signature), the " +
+			"plan JSON is read with the run's access token, the plan is registered as a terraform-plan change, and the " +
+			"run task's result is reported to HCP Terraform (running, then passed or failed). Answered 200 at once.",
+		RequestNote: "an HCP Terraform run task payload, payload_version 1 (stage post_plan or pre_apply carries plan_json_api_url)",
+		Responses: []Response{
+			{200, "accepted (or verified: HCP Terraform's check of the URL)", RunTaskAnswer{}},
+			{400, "a payload the adapter refuses, or a URL that is not on the configured HCP Terraform host", RunTaskAnswer{}},
+			{401, "a bad signature, or an organization that is not configured", RunTaskAnswer{}},
+			{404, "this Clearance runs no HCP Terraform run task", ErrorResponse{}},
+			{413, "the body is over the route's cap", ErrorResponse{}},
+			{503, "busy, or the HMAC key is unreadable: HCP Terraform retries", RunTaskAnswer{}},
+		},
+	},
 }
+
+// RunTaskAnswer is the run task route's body: {"result": "accepted" | "verified" | ..., "reason"?}.
+type RunTaskAnswer = hcprun.Answer
 
 // WebhookAnswer is the webhook's body: {"result": "queued" | "ignored" | ...}.
 type WebhookAnswer struct {
