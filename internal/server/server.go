@@ -36,6 +36,7 @@ import (
 	"github.com/jfillman/clearance/internal/definitions"
 	"github.com/jfillman/clearance/internal/gate"
 	"github.com/jfillman/clearance/internal/githubapp"
+	"github.com/jfillman/clearance/internal/hcprun"
 	"github.com/jfillman/clearance/internal/httpjson"
 	"github.com/jfillman/clearance/internal/ledger"
 	"github.com/jfillman/clearance/internal/provenance"
@@ -93,6 +94,8 @@ type Options struct {
 	Review     *review.Handler
 	Provenance *provenance.Service
 	App        *githubapp.App
+	// RunTask is the HCP Terraform run task adapter (G-TF-6); nil answers the route 404.
+	RunTask *hcprun.Service
 }
 
 // Server is the HTTP API. Build it with New.
@@ -152,6 +155,7 @@ func (s *Server) mountServices() {
 		(&provenance.Handler{Svc: s.opt.Provenance, Log: s.log}).Routes(s.mux)
 	}
 	(&githubapp.Handler{App: s.opt.App}).Routes(s.mux)
+	(&hcprun.Handler{Svc: s.opt.RunTask}).Routes(s.mux)
 }
 
 // unauthenticated are the requests no bearer token is asked of.
@@ -161,6 +165,8 @@ func unauthenticated(r *http.Request) bool {
 		return true
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/github/webhook":
 		return true // the payload's HMAC signature authenticates it (githubapp.App.Accept)
+	case r.Method == http.MethodPost && r.URL.Path == hcprun.Path:
+		return true // the payload's HMAC signature authenticates it (hcprun.Service.Accept)
 	}
 	return false
 }

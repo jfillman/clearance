@@ -151,6 +151,10 @@ spec:
               value: {{ . | quote }}
             {{- end }}
             {{- end }}
+            {{- if .Values.hcpRunTask.enabled }}
+            - name: CLEARANCE_HCP_RUN_TASK_CONFIG_FILE
+              value: /etc/clearance/hcp-run-task-config/config.json
+            {{- end }}
             {{- include "clearance.sharedEnv" . | nindent 12 }}
             {{- with .Values.core.extraEnv }}
             {{- toYaml . | nindent 12 }}
@@ -165,6 +169,14 @@ spec:
             {{- if .Values.githubApp.enabled }}
             - name: github-app
               mountPath: /etc/clearance/github-app
+              readOnly: true
+            {{- end }}
+            {{- if .Values.hcpRunTask.enabled }}
+            - name: hcp-run-task
+              mountPath: /etc/clearance/hcp-run-task
+              readOnly: true
+            - name: hcp-run-task-config
+              mountPath: /etc/clearance/hcp-run-task-config
               readOnly: true
             {{- end }}
             {{- if .Values.signing.existingSecret }}
@@ -205,6 +217,19 @@ spec:
             items:
               - {key: {{ .Values.githubApp.privateKeyKey | quote }}, path: {{ .Values.githubApp.privateKeyKey | quote }}}
               - {key: {{ .Values.githubApp.webhookSecretKey | quote }}, path: {{ .Values.githubApp.webhookSecretKey | quote }}}
+        {{- end }}
+        {{- if .Values.hcpRunTask.enabled }}
+        - name: hcp-run-task
+          secret:
+            secretName: {{ required "hcpRunTask.existingSecret is required with hcpRunTask.enabled" .Values.hcpRunTask.existingSecret }}
+            defaultMode: 0400
+            items:
+              {{- range .Values.hcpRunTask.installations }}
+              - {key: {{ required "hcpRunTask.installations[].secretKey is required" .secretKey | quote }}, path: {{ .secretKey | quote }}}
+              {{- end }}
+        - name: hcp-run-task-config
+          configMap:
+            name: {{ include "clearance.fullname" . }}-hcp-run-task
         {{- end }}
         {{- if .Values.signing.existingSecret }}
         - name: signing-key
