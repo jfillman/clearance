@@ -53,6 +53,31 @@ spec:
                     properties:
                       rendered: {type: string, minLength: 1, maxLength: 80}
                       changed: {type: boolean, description: "In the diff this grant clears (display only; unchanged objects stay admitted)."}
+                carried:
+                  type: array
+                  maxItems: 16
+                  description: >-
+                    On the ACTIVE grant only: the other cleared trees of the namespace that are still live (each admitted at
+                    its own hashes), so the tree that is still running, or was cleared and has not merged, is not refused
+                    while a newer change is the active one. The agent writes an entry only while its change is in the signed
+                    feed and drops it at its own expiresAt (admission has no clock). Admission reads objects here exactly as
+                    it reads spec.objects. docs/gate.md, "The running tree and the active grant".
+                  items:
+                    type: object
+                    required: [change, expiresAt, objects]
+                    properties:
+                      change: {type: string, maxLength: 64}
+                      tree: {type: string, maxLength: 71}
+                      expiresAt: {type: string, format: date-time, description: "The agent drops the entry at this time; admission never reads it."}
+                      objects:
+                        type: object
+                        maxProperties: 2000
+                        additionalProperties:
+                          type: object
+                          required: [rendered]
+                          properties:
+                            rendered: {type: string, minLength: 1, maxLength: 80}
+                            changed: {type: boolean}
                 expiresAt: {type: string, format: date-time, description: "The agent enforces it (status.valid); admission never reads it."}
                 clearance:
                   type: object

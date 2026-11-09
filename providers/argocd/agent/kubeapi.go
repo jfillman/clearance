@@ -219,6 +219,9 @@ func (a *API) ApplyGrant(ctx context.Context, g Grant) error {
 		objs = map[string]any{}
 		spec["objects"] = objs
 	}
+	if len(g.Spec.Carried) == 0 {
+		spec["carried"] = nil // a merge patch keeps a list it is not told to clear
+	}
 	for k := range cur.Spec.Objects {
 		if _, ok := g.Spec.Objects[k]; !ok {
 			objs[k] = nil

@@ -3,6 +3,7 @@ package agent_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -247,5 +248,116 @@ func TestARotationThatFailsKeepsTheActiveGrant(t *testing.T) {
 	w.kube.failName = nil
 	if err := w.sync(); err != nil || w.grant("app-a", ch1).Active() || !w.grant("app-a", ch2).Active() {
 		t.Errorf("recovery: %v", err)
+	}
+}
+
+// The running tree stays admissible beside a newer change: the active grant (the newest cleared change) carries the
+// other live cleared trees of the namespace, and only while each one's own clearance lasts.
+func TestTheActiveGrantCarriesTheRunningTree(t *testing.T) {
+	w := newWorld(t)
+	w.kube.protect("app-a", nil)
+	// ch1 is the tree prod runs (cleared and merged earlier); ch2 is a newer change cleared on its PR, not merged.
+	w.feeds.claims = []token.Claims{
+		claim(w.feeds, ch1, "app-a", t0.Add(-10*time.Minute), deploy("web", hex("a")), cmap("cfg", hex("b"))),
+		claim(w.feeds, ch2, "app-a", t0, deploy("web", hex("c")), cmap("cfg", hex("b"))),
+	}
+	w.feeds.publish()
+	if err := w.sync(); err != nil {
+		t.Fatal(err)
+	}
+	g1, g2 := w.grant("app-a", ch1), w.grant("app-a", ch2)
+	if g1.Active() || !g2.Active() || len(g1.Spec.Carried) != 0 {
+		t.Fatalf("the newest is active and only it carries: %v %v %+v", g1.Labels, g2.Labels, g1.Spec.Carried)
+	}
+	// Self-heal of the running tree: web at hash a is carried. cfg is at b in both, so it is not said twice.
+	if len(g2.Spec.Carried) != 1 || g2.Spec.Carried[0].Change != ch1 ||
+		g2.Spec.Carried[0].Objects["apps/Deployment/web"].Rendered != hex("a") || len(g2.Spec.Carried[0].Objects) != 1 {
+		t.Fatalf("carried: %+v", g2.Spec.Carried)
+	}
+	if g2.Spec.Objects["apps/Deployment/web"].Rendered != hex("c") {
+		t.Errorf("the active grant's own objects stay the newest tree's: %+v", g2.Spec.Objects)
+	}
+	ops := w.kube.grantOps
+	if err := w.sync(); err != nil || w.kube.grantOps != ops {
+		t.Errorf("an unchanged feed wrote: %v", err)
+	}
+
+	// Hub path down: the carried tree's own clearance runs out first (ch1 was cleared 10 minutes before ch2), and the
+	// agent drops it on its own clock while the active grant stays valid.
+	w.feeds.down = true
+	w.clock.add(6 * time.Minute) // ch1 expires at t0+5m; ch2 at t0+15m
+	if err := w.sync(); err == nil {
+		t.Fatal("still unreachable")
+	}
+	if g := w.grant("app-a", ch2); !g.Active() || len(g.Spec.Carried) != 0 || g.Valid == nil || !*g.Valid {
+		t.Errorf("the expired tree is dropped, the active grant stays: %+v", g)
+	}
+	w.clock.add(10 * time.Minute) // ch2 expires too: nothing is active (Deny freezes the namespace until the path is back)
+	if err := w.sync(); err == nil {
+		t.Fatal("still unreachable")
+	}
+	if g := w.grant("app-a", ch2); g.Active() || g.Valid == nil || *g.Valid {
+		t.Errorf("the hub path stayed down past the last token: %+v", g)
+	}
+	// The path returns with fresh tokens: the grant is valid and active again with no operator action.
+	w.feeds.down = false
+	w.feeds.claims = []token.Claims{
+		claim(w.feeds, ch1, "app-a", w.clock.now().Add(-2*time.Minute), deploy("web", hex("a")), cmap("cfg", hex("b"))),
+		claim(w.feeds, ch2, "app-a", w.clock.now(), deploy("web", hex("c")), cmap("cfg", hex("b"))),
+	}
+	w.feeds.publish()
+	if err := w.sync(); err != nil {
+		t.Fatal(err)
+	}
+	if g := w.grant("app-a", ch2); !g.Active() || g.Valid == nil || !*g.Valid || len(g.Spec.Carried) != 1 {
+		t.Errorf("recovery: %+v", g)
+	}
+
+	// A revoked or superseded change leaves the feed: its hashes are carried no longer. And a change cleared and never
+	// merged does not matter to the running tree: dropping ch2 makes ch1 the active grant, carrying nothing.
+	w.feeds.claims = w.feeds.claims[:1]
+	w.feeds.publish()
+	if err := w.sync(); err != nil {
+		t.Fatal(err)
+	}
+	if g := w.grant("app-a", ch1); !g.Active() || len(g.Spec.Carried) != 0 {
+		t.Errorf("after ch2 left the feed: %+v", g)
+	}
+	// A tree that is revoked while a newer one is active is dropped from the carried list at the next feed.
+	w.feeds.claims = []token.Claims{
+		claim(w.feeds, ch1, "app-a", w.clock.now().Add(-2*time.Minute), deploy("web", hex("a")), cmap("cfg", hex("b"))),
+		claim(w.feeds, ch4, "app-a", w.clock.now(), deploy("web", hex("e")), cmap("cfg", hex("b"))),
+	}
+	w.feeds.publish()
+	if err := w.sync(); err != nil || len(w.grant("app-a", ch4).Spec.Carried) != 1 {
+		t.Fatalf("carried again: %v %+v", err, w.grant("app-a", ch4).Spec.Carried)
+	}
+	w.feeds.claims = w.feeds.claims[1:]
+	w.feeds.publish()
+	if err := w.sync(); err != nil || len(w.grant("app-a", ch4).Spec.Carried) != 0 {
+		t.Errorf("revoked: %v %+v", err, w.grant("app-a", ch4).Spec.Carried)
+	}
+}
+
+// Only a namespace's own trees are carried, and no more than MaxCarried.
+func TestCarriedIsPerNamespaceAndBounded(t *testing.T) {
+	w := newWorld(t)
+	w.kube.protect("app-a", nil)
+	var cs []token.Claims
+	for i := 0; i < agent.MaxCarried+4; i++ {
+		cs = append(cs, claim(w.feeds, fmt.Sprintf("ch-%016d", i), "app-a", t0.Add(-time.Minute+time.Duration(i)*time.Second),
+			deploy("web", hex("a")[:60]+fmt.Sprintf("%04d", i))))
+	}
+	cs = append(cs, claim(w.feeds, ch3, "elsewhere", t0.Add(-time.Second), deploy("web", hex("d"))))
+	w.feeds.claims = cs
+	w.feeds.publish()
+	if err := w.sync(); err != nil {
+		t.Fatal(err)
+	}
+	if g := w.grant("app-a", fmt.Sprintf("ch-%016d", agent.MaxCarried+3)); len(g.Spec.Carried) > agent.MaxCarried {
+		t.Errorf("carried %d", len(g.Spec.Carried))
+	}
+	if g := w.grant("elsewhere", ch3); len(g.Spec.Carried) != 0 {
+		t.Errorf("another namespace's trees are not carried: %+v", g.Spec.Carried)
 	}
 }
