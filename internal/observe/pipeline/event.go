@@ -343,7 +343,8 @@ var awsReadPrefixes = []string{"Get", "List", "Describe", "Lookup", "Head", "Bat
 
 // resourceKeys are the request parameters that name the resource a CloudTrail record is about, in the order tried.
 var resourceKeys = []string{"name", "trailName", "trailARN", "bucketName", "functionName", "roleName", "userName", "groupName",
-	"policyArn", "instanceId", "resourceId", "ruleName", "configurationRecorderName", "keyId", "tableName", "clusterName", "DBInstanceIdentifier", "dBInstanceIdentifier"}
+	"policyArn", "instanceId", "resourceId", "ruleName", "configurationRecorderName", "keyId", "tableName", "clusterName", "DBInstanceIdentifier", "dBInstanceIdentifier",
+	"groupId", "securityGroupId", "routeTableId", "secretId"}
 
 func (rs *RuleSet) normalizeAWS(a map[string]any, r RawEvent) (*Event, error) {
 	name := str(a["eventName"])

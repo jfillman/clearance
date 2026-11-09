@@ -139,7 +139,7 @@ over the cluster's `ClearanceGrant`s and the core's break-glass windows, posts t
 assessed event, gives an apply-and-revert its `reverted` resolution, calls `Healthy` on its next healthy health record, and
 reports the pipeline's per-rule counters in the `noise-filtered` check of that health record (`observe.FilteredSchema`),
 which the packet sums over its window into `packet.Params.Filtered` (the *"filtered: N events under rule X"* line). The
-AWS collector (O-4) does the same for CloudTrail.
+AWS collector ([observe-aws.md](observe-aws.md), O-4) does the same for CloudTrail.
 
 `Lookups` has one optional extension, `ObjectGrants`: an event with no object (a Secret at Metadata, a delete) carries no
 grant annotation, so for Argo CD's controller only the pipeline asks which active grant lists that namespace, kind and name,

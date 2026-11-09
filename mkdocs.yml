@@ -15,6 +15,7 @@ nav:
   - The observation pipeline (O-2): observe-pipeline.md
   - The Kubernetes audit collector (O-3): observe-k8s.md
   - Operator runbook, kube-apiserver audit flags (O-3): observe-k8s-runbook.md
+  - The AWS collector (O-4): observe-aws.md
   - The provenance App (design pass): provenance-app.md
   - The Traefik Hub adapter (Unverified): federate-traefik-hub.md
 

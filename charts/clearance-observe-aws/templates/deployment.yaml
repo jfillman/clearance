@@ -1,0 +1,113 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "observe.fullname" . }}
+  labels: {{- include "observe.labels" . | nindent 4 }}
+spec:
+  # One collector per account: two would each read the queue (harmless: the core de-duplicates) and double the load.
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {{- include "observe.selector" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "observe.selector" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.hostAliases }}
+      hostAliases: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: collector
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag | default (printf "v%s" .Chart.AppVersion) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --config=/etc/observe-aws/config.json
+            - --api-url={{ .Values.apiURL }}
+            - --core-url={{ .Values.coreURL }}
+            - --token-file=/var/run/secrets/tokens/clearance
+            {{- if .Values.rules_bundle }}
+            - --rules=/etc/observe-aws/rules/rules.yaml
+            {{- end }}
+          env:
+            - {name: AWS_REGION, value: {{ .Values.region | quote }}}
+            - {name: AWS_ROLE_ARN, value: {{ .Values.aws.roleARN | quote }}}
+            - {name: AWS_WEB_IDENTITY_TOKEN_FILE, value: /var/run/secrets/tokens/aws}
+            {{- if .Values.aws.trailRoleARN }}
+            - {name: OBSERVE_TRAIL_ROLE_ARN, value: {{ .Values.aws.trailRoleARN | quote }}}
+            {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - {name: tokens, mountPath: /var/run/secrets/tokens, readOnly: true}
+            - {name: config, mountPath: /etc/observe-aws, readOnly: true}
+            {{- if .Values.rules_bundle }}
+            - {name: rules, mountPath: /etc/observe-aws/rules, readOnly: true}
+            {{- end }}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        # The whole credential: two short-lived tokens, one bound to the audience Clearance checks and one to the audience
+        # AWS STS checks, rotated by the kubelet and read fresh for each use. Nothing is stored.
+        - name: tokens
+          projected:
+            sources:
+              - serviceAccountToken: {path: clearance, audience: {{ .Values.tokenAudience }}, expirationSeconds: 3600}
+              - serviceAccountToken: {path: aws, audience: {{ .Values.aws.tokenAudience }}, expirationSeconds: 3600}
+        - name: config
+          configMap:
+            name: {{ include "observe.fullname" . }}
+            items: [{key: config.json, path: config.json}]
+        {{- if .Values.rules_bundle }}
+        - name: rules
+          configMap:
+            name: {{ include "observe.fullname" . }}-rules
+        {{- end }}
+        - {name: tmp, emptyDir: {}}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+{{- if .Values.networkPolicy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "observe.fullname" . }}
+  labels: {{- include "observe.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "observe.selector" . | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    - to: [{namespaceSelector: {}}]
+      ports: [{port: 53, protocol: UDP}, {port: 53, protocol: TCP}]
+    # AWS APIs (SQS, S3, STS, CloudTrail, Config, EventBridge) are public HTTPS endpoints.
+    - to: [{ipBlock: {cidr: 0.0.0.0/0, except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]}}]
+      ports: [{port: 443, protocol: TCP}]
+    - to:
+        {{- range .Values.networkPolicy.clearanceCIDRs }}
+        - ipBlock: {cidr: {{ . }}}
+        {{- end }}
+      ports:
+        {{- range .Values.networkPolicy.clearancePorts }}
+        - {port: {{ . }}, protocol: TCP}
+        {{- end }}
+{{- end }}
