@@ -438,7 +438,7 @@ func (s *Service) definitionProblems(req ChangeRequest) []review.Problem {
 
 // identity is who approved, at their identity provider: the subject and issuer of the ID token they signed in
 // with, or, through a delegate, the person as the delegate named them and the delegate as the issuer.
-type identity struct{ sub, iss string }
+type identity struct{ sub, iss, sid string }
 
 // UnattestedIssuer is the iss of a person whose principal carries no issuer (an authenticator that does not say,
 // such as `clearance core --insecure-dev-auth`).
@@ -466,6 +466,9 @@ func (s *Service) person(ctx context.Context, p authn.Principal, onBehalfOf stri
 		}
 		if v, ok := p.Claims["iss"].(string); ok && v != "" {
 			who.iss = v
+		}
+		if v, ok := p.Claims["sid"].(string); ok {
+			who.sid = v
 		}
 	}
 	groups := map[string]bool{}
@@ -511,6 +514,9 @@ func (s *Service) Clear(ctx context.Context, p authn.Principal, changeID, onBeha
 		if c == nil {
 			return gerr("DG-UNKNOWN", "no such change", "", 404)
 		}
+		if onBehalfOf == "" && !p.IsPerson() {
+			return automationRefusal(p.ID, "a "+p.Kind+" principal")
+		}
 		person, via, groups, who, err := s.person(ctx, p, onBehalfOf)
 		if err != nil {
 			return err
@@ -519,12 +525,18 @@ func (s *Service) Clear(ctx context.Context, p authn.Principal, changeID, onBeha
 			s.expire(w, c)
 			return gerr("DG-STATE", "this change has expired; a new push registers it again", "", 409)
 		}
+		if err := checkApproverKind(onBehalfOf, person, who); err != nil {
+			return err
+		}
 		role, err := RoleFor(person, groups, c)
 		if err != nil {
 			return err
 		}
+		if err := checkApproverDistinct(c, person, who, sessionDigest(who.iss, who.sid), onBehalfOf != ""); err != nil {
+			return err
+		}
 		now := PyTime{w.now}
-		c.Approvals = append(c.Approvals, Approval{person, via, role, pycompat.ISO(w.now), who.sub, who.iss})
+		c.Approvals = append(c.Approvals, Approval{person, via, role, pycompat.ISO(w.now), who.sub, who.iss, KindPerson, sessionDigest(who.iss, who.sid)})
 		c.UpdatedAt = now
 		req := c.RequirementObj()
 		done := req != nil && req.Satisfied(c.Approvals)
