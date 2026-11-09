@@ -18,6 +18,18 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   transaction; an apply-and-revert is one exception; an operation on monitoring is tier 3, alerts and flips the scope's
   health. The packet carries the per-rule `filtered: N events under rule X` counts when a collector supplies them
   (`packet.Params.Filtered`). Documented in `docs/observe-pipeline.md`. Wired to no collector yet (O-3, O-4).
+- **O-3: the Kubernetes audit collector (`providers/observe-k8s`), its image (`clearance-observe-k8s`) and chart
+  (`clearance-observe-k8s`).** The webhook receiver for the API server's audit backend (mutual TLS with a name allowlist,
+  Secret bodies cut before anything is written, acknowledged only after an fsynced append to a durable queue on a
+  volume); the processor (pipeline, observation and assessment records, reverted resolutions, lookups over the grants and
+  break-glass windows, a watch cache for the object before each change); audit-gap records for a watch change no audit
+  event reported; a health record per minute (a heartbeat and a canary Secret through the live policy, the queue, the
+  watches, the gaps) that makes a stopped collector blind, not clean; readers for EKS, GKE and AKS exports (fixture-tested
+  only). The audit policy ships as a template with a build-failing test that no rule records a Secret body
+  (`observe-k8s policy render|check`). The packet folds the Argo CD agent's `deploy.exception` and the collector's
+  observation of the same object into one exception row, and prints the pipeline's `filtered: N events under rule X`
+  counts from the collectors' health records. `pipeline.ObjectGrants` resolves an object-less Argo write (a Secret, a
+  prune) through the grants' object lists. Docs: `docs/observe-k8s.md`, `docs/observe-k8s-runbook.md`.
 
 ## [0.36.1] - 2026-11-09
 

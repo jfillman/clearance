@@ -1,0 +1,15 @@
+apiVersion: v2
+name: clearance-observe-k8s
+description: >-
+  Clearance's Kubernetes audit collector for a protected cluster: the receiver for the API server's audit webhook, a
+  durable queue on a volume, the observation pipeline, the heartbeat and the health record. It reads no Secret and
+  writes only its own heartbeat objects.
+type: application
+# The release workflow packages the chart at the tag's version; these are the development placeholders.
+version: 0.0.0-dev
+appVersion: 0.0.0-dev
+kubeVersion: ">=1.30.0-0"
+home: https://github.com/jfillman/clearance
+sources:
+  - https://github.com/jfillman/clearance
+keywords: [clearance, kubernetes, audit, observation]

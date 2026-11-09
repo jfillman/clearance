@@ -43,8 +43,9 @@ type Params struct {
 	// Version is the build that made it.
 	Version string
 	// Filtered are the per-rule counts of events the observation pipeline's noise rules dropped in the window
-	// (internal/observe/pipeline). The chain does not hold them: a collector that stores the pipeline's counters
-	// (O-3, O-4) passes them in. Empty: the packet says nothing was reported, not that nothing was filtered.
+	// (internal/observe/pipeline). A collector reports them in the noise-filtered check of its health records, which
+	// are in the chain: when Filtered is nil the packet sums those over its window (chainFiltered); counts the caller
+	// supplies are used as they are. Empty: the packet says nothing was reported, not that nothing was filtered.
 	Filtered []FilteredRule
 	// LogKeys and WitnessPolicy are the ledger's public verification material, when the job was given it: the
 	// checkpoint's signatures are checked with them and they are copied into the packet for the offline verifier.
@@ -371,6 +372,14 @@ type Exception struct {
 	Coverage         string   `json:"coverage,omitempty"`
 	Window           string   `json:"break_glass_window,omitempty"`
 	OperationalClass []string `json:"operational_class,omitempty"`
+	// AlsoSeq are the seqs of other reporters' records of the same change folded into this row: a collector's
+	// observation and the Argo CD agent's deploy.exception of one kubectl apply are one exception, not two.
+	AlsoSeq []int64 `json:"also_reported_seq,omitempty"`
+
+	// keys are the Kubernetes objects a gate exception names (observe.KubeObjectKey); key is the object an observation
+	// is about. Both are only for folding.
+	keys []string
+	key  string
 }
 
 // PolicyEvent is a change in the policy in force or in the definitions a gate holds.

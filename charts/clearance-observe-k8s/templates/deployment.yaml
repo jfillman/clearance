@@ -1,0 +1,103 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "observe.fullname" . }}
+  labels: {{- include "observe.labels" . | nindent 4 }}
+spec:
+  # One collector: it is the only reader of its queue, and the volume is ReadWriteOnce.
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {{- include "observe.selector" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "observe.selector" . | nindent 8 }}
+      annotations:
+        checksum/rules: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.hostAliases }}
+      hostAliases: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: collector
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag | default (printf "v%s" .Chart.AppVersion) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - run
+            - --cluster={{ .Values.cluster }}
+            - --core-url={{ .Values.coreURL }}
+            - --rules=/etc/observe-k8s/rules/observe-rules.yaml
+            - --data-dir=/var/lib/observe-k8s
+            - --queue-max-bytes={{ int64 .Values.queue.maxBytes }}
+            - --listen=:{{ .Values.webhook.port }}
+            - --allowed-client={{ join "," .Values.webhook.allowedClients }}
+            - --grant-api={{ .Values.grantAPI }}
+            - --heartbeat-configmap={{ .Values.heartbeat.configMapName }}
+            - --heartbeat-interval={{ .Values.heartbeat.interval }}
+            - --health-interval={{ .Values.healthInterval }}
+            - --gap-grace={{ .Values.gapGrace }}
+            {{- if .Values.heartbeat.canarySecret.enabled }}
+            - --canary-secret={{ .Values.heartbeat.canarySecret.name }}
+            {{- end }}
+            {{- with .Values.auditPolicyMirror }}
+            - --policy-configmap={{ . }}
+            {{- end }}
+            {{- if .Values.watch.enabled }}
+            - --watch-namespaces={{ include "observe.watchNamespaces" . }}
+            - --watch={{ range $i, $w := .Values.watch.resources }}{{ if $i }};{{ end }}{{ if $w.group }}{{ $w.group }}/{{ end }}{{ $w.version }}/{{ $w.resource }}={{ $w.kind }}{{ if not $w.namespaced }},cluster{{ end }}{{ end }}
+            {{- end }}
+          env:
+            - name: POD_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            - name: POD_SERVICE_ACCOUNT
+              valueFrom: {fieldRef: {fieldPath: spec.serviceAccountName}}
+          ports:
+            - {name: audit, containerPort: {{ .Values.webhook.port }}}
+            - {name: health, containerPort: 8080}
+          readinessProbe:
+            httpGet: {path: /readyz, port: health}
+          livenessProbe:
+            httpGet: {path: /healthz, port: health}
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - {name: clearance-token, mountPath: /var/run/secrets/tokens, readOnly: true}
+            - {name: tls, mountPath: /etc/observe-k8s/tls, readOnly: true}
+            - {name: rules, mountPath: /etc/observe-k8s/rules, readOnly: true}
+            - {name: queue, mountPath: /var/lib/observe-k8s}
+      volumes:
+        # The collector's whole credential on the core: a short-lived token bound to the audience the core checks, rotated
+        # by the kubelet and read fresh for each request. Nothing is stored.
+        - name: clearance-token
+          projected:
+            sources:
+              - serviceAccountToken: {path: clearance, audience: {{ .Values.tokenAudience }}, expirationSeconds: 3600}
+        - name: tls
+          secret: {secretName: {{ .Values.webhook.tlsSecret }}, defaultMode: 0440}
+        - name: rules
+          configMap: {name: {{ include "observe.fullname" . }}-rules}
+        - name: queue
+          persistentVolumeClaim: {claimName: {{ .Values.persistence.existingClaim | default (include "observe.fullname" .) }}}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{ toYaml . | nindent 8 }}
+      {{- end }}

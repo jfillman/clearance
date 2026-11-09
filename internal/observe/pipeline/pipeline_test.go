@@ -569,3 +569,43 @@ func TestKnownGrantWithNoHashIsNotAHashMismatch(t *testing.T) {
 		})
 	}
 }
+
+// A Secret is recorded at Metadata: no object, so no grant annotation. Argo's write of a Secret a grant lists (found
+// through ObjectGrants) is observed-not-attributed, not an exception; Argo's write of one no grant lists, and anyone
+// else's write of the listed one, is out-of-band. The same holds for Argo's delete of a listed object.
+func TestSecretWriteResolvesThroughTheGrantsObjectList(t *testing.T) {
+	const argo = "system:serviceaccount:argocd:argocd-application-controller"
+	rs := mustRules(t)
+	lk := mustLookups(t, rs)
+	lk.Listed = map[string]string{"prod-1/shop/Secret/db-creds": "clr_k8s_001", "prod-1/shop/Deployment/web": "clr_k8s_001"}
+	secret := func(user, ua, verb, resource, name string) RawEvent {
+		m := map[string]any{"auditID": "s-" + user + verb + name, "stage": "ResponseComplete", "verb": verb, "level": "Metadata",
+			"user": map[string]any{"username": user}, "userAgent": ua, "stageTimestamp": "2026-11-09T10:00:00Z",
+			"objectRef":      map[string]any{"resource": resource, "namespace": "shop", "name": name},
+			"responseStatus": map[string]any{"code": 200}}
+		raw, _ := json.Marshal(m)
+		return RawEvent{Provider: Kubernetes, Scope: "prod-1", Raw: raw}
+	}
+	for _, c := range []struct {
+		name    string
+		ev      RawEvent
+		signal  string
+		outcome string
+	}{
+		{"argo listed secret", secret(argo, "argocd-application-controller/v3", "update", "secrets", "db-creds"), "grant-annotation.no-hash", OutcomeNotAttributed},
+		{"argo unlisted secret", secret(argo, "argocd-application-controller/v3", "update", "secrets", "other"), "argo-controller.no-grant", OutcomeOutOfBand},
+		{"human listed secret", secret("dana@example.com", "kubectl/v1.36", "update", "secrets", "db-creds"), "kubectl-agent", OutcomeOutOfBand},
+		{"argo prune of a listed object", secret(argo, "argocd-application-controller/v3", "delete", "deployments", "web"), "grant-annotation.no-hash", OutcomeNotAttributed},
+		{"argo prune of an unlisted object", secret(argo, "argocd-application-controller/v3", "delete", "deployments", "api"), "argo-controller.no-grant", OutcomeOutOfBand},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			a, disp, _, err := New(rs, lk, vocab.Default()).Process(c.ev)
+			if err != nil || disp != Assessed {
+				t.Fatalf("%v %v", disp, err)
+			}
+			if a.Signal != c.signal || a.Outcome != c.outcome {
+				t.Fatalf("got %s/%s, want %s/%s", a.Signal, a.Outcome, c.signal, c.outcome)
+			}
+		})
+	}
+}

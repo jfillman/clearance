@@ -2,8 +2,10 @@ package packet
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jfillman/clearance/internal/evidence"
 	"github.com/jfillman/clearance/internal/gate"
@@ -34,7 +36,6 @@ func (b *builder) exceptionsSection(pk *Packet) {
 		tool, seq := str(r, "tool"), seqOf(r)
 		cluster, env := place(r)
 		subj := strings.Trim(str(r, "app")+" "+env, " ")
-		_ = cluster
 		switch tool {
 		case gate.KindException:
 			x := obj(r, "exception")
@@ -42,6 +43,14 @@ func (b *builder) exceptionsSection(pk *Packet) {
 			row := Exception{Seq: seq, TS: b.ts(r), Kind: kind, Source: "gate", Subject: subj, Actor: str(x, "actor"),
 				Coverage: str(r, "coverage"), Detail: short(x["detail"], 200), OperationalClass: opClass(r)}
 			row.Diff = exceptionDiff(x)
+			if l, ok := x["objects"].([]any); ok {
+				for _, o := range l {
+					m, _ := o.(map[string]any)
+					if k, n := str(m, "kind"), str(m, "name"); k != "" && n != "" && cluster != "" {
+						row.keys = append(row.keys, observe.KubeObjectKey(cluster, k, str(m, "namespace"), n))
+					}
+				}
+			}
 			switch kind {
 			case gate.KindAttemptedRefused:
 				row.Class = ClassRefused
@@ -99,7 +108,7 @@ func (b *builder) exceptionsSection(pk *Packet) {
 			}
 		}
 	}
-	rows = append(rows, b.observationRows()...)
+	rows = foldSameChange(append(rows, b.observationRows()...))
 	sort.SliceStable(rows, func(i, j int) bool {
 		ci, cj := classIndex(rows[i].Class), classIndex(rows[j].Class)
 		if ci != cj {
@@ -206,6 +215,7 @@ func (b *builder) observationRows() []Exception {
 		row := Exception{Seq: seq, TS: b.ts(r), Source: "observation", Scope: str(r, "scope"), Subject: res, Actor: str(act, "subject"),
 			Kind: cov, Coverage: cov, OperationalClass: opClass(r)}
 		row.Diff = strings.TrimSpace(str(ac, "api") + " " + short(r["state_change"], 160))
+		row.key = observe.KubeObjectKey(str(r, "scope"), str(rs, "kind"), str(rs, "namespace"), orDefault(str(rs, "name"), str(rs, "id")))
 		if ok, has := ac["succeeded"].(bool); has && !ok {
 			row.Detail = "the operation did not succeed: " + str(ac, "refused_reason")
 		}
@@ -239,5 +249,60 @@ func (b *builder) observationRows() []Exception {
 }
 
 var _ = observe.Healthy
+
+// sameChangeWindow is how far apart a gate exception and an observation of the same object may be and still be one
+// change: the Argo CD agent scans every minute and an audit collector's queue can trail, so a quarter of an hour.
+const sameChangeWindow = 15 * time.Minute
+
+// foldSameChange makes a gate exception (the Argo CD agent's deploy.exception, which names objects) and an
+// observation of the same object (the audit collector's, which names who and what changed) one row: the
+// observation's, with the gate record's seq in AlsoSeq and its detail appended. Both orders of arrival fold the same,
+// since this reads the finished chain. A gate exception that names several objects is folded away only when every one
+// of them has an observation; otherwise it stays, and says which were seen by the collector too. Only out-of-band
+// rows fold: a refusal, a monitoring operation and a break-glass window are never merged into another row.
+func foldSameChange(rows []Exception) []Exception {
+	at := func(r Exception) time.Time { t, _ := time.Parse(time.RFC3339, r.TS); return t }
+	drop := map[int]bool{}
+	for gi, g := range rows {
+		if g.Source != "gate" || g.Class != ClassOutOfBand || len(g.keys) == 0 {
+			continue
+		}
+		matched := map[string]bool{}
+		for oi, o := range rows {
+			if o.Source != "observation" || o.Class != ClassOutOfBand || o.key == "" || !slices.Contains(g.keys, o.key) {
+				continue
+			}
+			d := at(g).Sub(at(o))
+			if d < 0 {
+				d = -d
+			}
+			if d > sameChangeWindow {
+				continue
+			}
+			matched[o.key] = true
+			rows[oi].AlsoSeq = append(rows[oi].AlsoSeq, g.Seq)
+			note := fmt.Sprintf("also reported by the gate's agent (seq %d)", g.Seq)
+			if g.Detail != "" {
+				note += ": " + g.Detail
+			}
+			rows[oi].Detail = strings.TrimSpace(rows[oi].Detail + " " + note)
+		}
+		if len(matched) == len(g.keys) {
+			drop[gi] = true
+		} else if len(matched) > 0 {
+			rows[gi].Detail = strings.TrimSpace(rows[gi].Detail + fmt.Sprintf(" (%d of its %d objects were also observed by the audit collector)", len(matched), len(g.keys)))
+		}
+	}
+	if len(drop) == 0 {
+		return rows
+	}
+	out := rows[:0:0]
+	for i, r := range rows {
+		if !drop[i] {
+			out = append(out, r)
+		}
+	}
+	return out
+}
 
 const coverageUnavailable = "coverage-unavailable"

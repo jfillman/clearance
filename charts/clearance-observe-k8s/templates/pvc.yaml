@@ -1,0 +1,18 @@
+{{- if not .Values.persistence.existingClaim }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "observe.fullname" . }}
+  labels: {{- include "observe.labels" . | nindent 4 }}
+  annotations:
+    # Helm must never delete the queue with the release: what is in it was acknowledged to the API server.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with .Values.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size }}
+{{- end }}

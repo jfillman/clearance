@@ -50,6 +50,15 @@ type Lookups interface {
 	Window(scope string, t time.Time) (string, bool)
 }
 
+// ObjectGrants is an optional part of Lookups for an event that carries no object, so no grant annotation: a Secret
+// (recorded at Metadata) and a delete. It answers which active grant lists the object by namespace, kind and name.
+// The pipeline asks it only for Argo CD's controller (the rest of the world's write of such an object is out-of-band
+// whatever a grant lists), and only when the event itself names no grant; the answer feeds the same facts the
+// annotation would (grant, grant_known), so the event reaches grant-annotation.no-hash and not argo-controller.no-grant.
+type ObjectGrants interface {
+	ObjectGrant(scope, namespace, kind, name string) (grant string, ok bool)
+}
+
 // facts are what the attribution rules read besides the event.
 type facts struct {
 	m     map[string]any
@@ -69,6 +78,14 @@ func (p *Pipeline) kubeFacts(e *Event) facts {
 	ids := p.rs.ids
 	f := map[string]any{}
 	grant := e.ObjAnnotations[p.rs.ann.Grant]
+	argo := contains(ids.ArgoController, e.Subject)
+	if grant == "" && argo && e.AfterHash == "" && (e.Kind == "Secret" || e.Verb == "delete" || e.Verb == "deletecollection") {
+		if og, ok := p.lk.(ObjectGrants); ok {
+			if id, found := og.ObjectGrant(e.Scope, e.Namespace, e.Kind, e.Name); found {
+				grant = id
+			}
+		}
+	}
 	f["grant"] = grant
 	f["stamped_hash"] = e.ObjAnnotations[p.rs.ann.Rendered]
 	known, match := false, false
@@ -95,7 +112,7 @@ func (p *Pipeline) kubeFacts(e *Event) facts {
 	f["mutating_webhook"] = webhook
 	f["vap_denial"] = vap && !e.Succeeded
 	f["refused"] = !e.Succeeded
-	f["argo_controller"] = contains(ids.ArgoController, e.Subject)
+	f["argo_controller"] = argo
 	fed := false
 	for _, pre := range ids.FederatedPrefix {
 		if pre != "" && strings.HasPrefix(e.Subject, pre) {
@@ -221,6 +238,9 @@ type StaticLookups struct {
 	Sessions     map[[2]string]string
 	Plans        map[string]Plan
 	Windows      []span
+	// Listed is the objects the grants list, by "<scope>/<namespace>/<kind>/<name>" (see ObjectGrants); not part of the
+	// JSON form.
+	Listed map[string]string
 }
 
 type span struct {
@@ -315,4 +335,10 @@ func LoadLookups(b []byte, rs *RuleSet) (StaticLookups, error) {
 		s.Windows = append(s.Windows, span{w.Grant, w.Scope, w.From, w.To})
 	}
 	return s, nil
+}
+
+// ObjectGrant makes StaticLookups an ObjectGrants: Listed maps "<scope>/<namespace>/<kind>/<name>" to a grant id.
+func (s StaticLookups) ObjectGrant(scope, namespace, kind, name string) (string, bool) {
+	g, ok := s.Listed[scope+"/"+namespace+"/"+kind+"/"+name]
+	return g, ok
 }
