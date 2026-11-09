@@ -37,6 +37,9 @@ vocabulary:
   gateOutsideGroups: ["group:default/admins"]
   gateReleaseStamps: ["/metadata/labels/app.kubernetes.io~1version"]
   gateOwnerFallback: "group:default/admins"
+  automationSubjects: ["*[bot]", "agent:*"]
+  automationIssuers: ["https://id-jag.acme.dev*"]
+  approverAliases: ["user:riley=riley@acme.dev"]
   v0Provider: autopilot-gateway/unrecorded
   aiCoauthors: ["<noreply@anthropic.com>", "Acme Agent <agent@acme.dev>"]
 gate:

@@ -425,16 +425,20 @@ class GateApproval(Model):
     _FIELDS: ClassVar[tuple[Field, ...]] = (
         Field("at", "at", ("str",), True),
         Field("iss", "iss", ("str",), False),
+        Field("kind", "kind", ("str",), False),
         Field("person", "person", ("str",), True),
         Field("role", "role", ("str",), True),
+        Field("session", "session", ("str",), False),
         Field("sub", "sub", ("str",), False),
         Field("via", "via", ("nullable", ("str",)), True),
     )
 
     at: str
     iss: str | None = None
+    kind: str | None = None
     person: str
     role: str
+    session: str | None = None
     sub: str | None = None
     via: str | None
 

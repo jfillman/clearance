@@ -80,6 +80,13 @@ vocabulary:
   # (default the app.kubernetes.io/version label, on the object and its pod template)
   gateReleaseStamps: []
   gateOwnerFallback: ""
+  # CLEARANCE_AUTOMATION_SUBJECTS / CLEARANCE_AUTOMATION_ISSUERS: wildcard patterns (*) marking an approver as automation
+  # (bot, service or agent identity); a match is refused DG-APPROVER-AUTOMATION. Default: the core's product-neutral
+  # patterns (docs/gate.md, Tier 3 approvers are people). Put the platform's bot and agent names here.
+  automationSubjects: []
+  automationIssuers: []
+  # CLEARANCE_APPROVER_ALIASES: each entry names one person by all the names they sign in under, "a=b=c" (default none)
+  approverAliases: []
   # CLEARANCE_V0_PROVIDER: name/version for rows written before providers were recorded (default unrecorded/unrecorded)
   v0Provider: ""
   # CLEARANCE_AI_COAUTHORS: matchers on the Co-Authored-By, Assisted-by and Generated-by trailers an AI coding agent

@@ -167,8 +167,8 @@ func TestPeopleClearingIssuesATokenNamingThePersonAtTheirIdP(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []token.Approval{
-		{Sub: "CgRlcmluEgZnaXRodWI", Iss: "https://dex.example", Person: "user:erin", Role: "owner", At: "2026-09-26T12:00:00Z"},
-		{Sub: "user:root", Iss: "delegate:" + tower, Person: "user:root", Via: tower, Role: "outside", At: "2026-09-26T12:01:00Z"},
+		{Sub: "CgRlcmluEgZnaXRodWI", Iss: "https://dex.example", Person: "user:erin", Role: "owner", At: "2026-09-26T12:00:00Z", Kind: "person"},
+		{Sub: "user:root", Iss: "delegate:" + tower, Person: "user:root", Via: tower, Role: "outside", At: "2026-09-26T12:01:00Z", Kind: "person"},
 	}
 	if len(cl.Approvals) != 2 || cl.Approvals[0] != want[0] || cl.Approvals[1] != want[1] {
 		t.Fatalf("approvals %+v", cl.Approvals)

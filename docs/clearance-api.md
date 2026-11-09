@@ -362,7 +362,7 @@ The second boundary ([gate.md](gate.md)). Writes are gateway routes: `POST /v1/c
 change (a **verifier's** token, like `/v1/provenance`: the `clearance-gate-` check), `POST /v1/clearances/{id}/clear`
 and `POST /v1/clearances/{id}/deny` `{reason}` are people's, through the delegate model. Refusals carry `DG-*` rules
 (`DG-PROPOSER` 403, `DG-TWICE` 409, `DG-FILLED` 409, `DG-FORBIDDEN` 403, `DG-STATE` 409, `DG-REASON` 400,
-`DG-UNKNOWN` 404, `DG-OFF` 404; `DG-POLICY` and `DG-PROVENANCE` deny the change by policy).
+`DG-APPROVER-AUTOMATION` 403 and `DG-APPROVER-SAME` 409 (the approver is automation, or the same subject as another approval: [gate.md](gate.md#tier-3-approvers-are-people-c-14-built)), `DG-UNKNOWN` 404, `DG-OFF` 404; `DG-POLICY` and `DG-PROVENANCE` deny the change by policy).
 
 Reads here: `GET /v1/clearances` (filters `app`, `env`, `state` holding|cleared|denied|expired|superseded, `repo`, `pr`,
 `tier`, `since`; cursor `updated_at`), `GET /v1/clearances/counts?by=state|tier|app|env|cleared_by`,

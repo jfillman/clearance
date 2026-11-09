@@ -982,10 +982,16 @@
           "iss": {
             "type": "string"
           },
+          "kind": {
+            "type": "string"
+          },
           "person": {
             "type": "string"
           },
           "role": {
+            "type": "string"
+          },
+          "session": {
             "type": "string"
           },
           "sub": {
