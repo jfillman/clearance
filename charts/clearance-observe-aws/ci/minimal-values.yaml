@@ -1,17 +1,17 @@
-account: "700017004810"
+account: "111122223333"
 coreURL: http://clearance.hangar-dev.local
 apiURL: http://clearance-api.hangar-dev.local
-queueURL: https://sqs.us-east-1.amazonaws.com/700017004810/observe-aws
+queueURL: https://sqs.us-east-1.amazonaws.com/111122223333/observe-aws
 environment: lab
 aws:
-  roleARN: arn:aws:iam::700017004810:role/hangar-observe-aws-read
-  trailRoleARN: arn:aws:iam::158233516926:role/hangar-observe-aws-trail-read
+  roleARN: arn:aws:iam::111122223333:role/hangar-observe-aws-read
+  trailRoleARN: arn:aws:iam::444455556666:role/hangar-observe-aws-trail-read
 trail:
-  bucket: aws-cloudtrail-logs-158233516926-940c2499
-  prefix: AWSLogs/o-example1234/700017004810/
-dataBuckets: [hangar-lab-tfstate-700017004810]
+  bucket: aws-cloudtrail-logs-444455556666-example
+  prefix: AWSLogs/o-example1234/111122223333/
+dataBuckets: [example-tfstate-111122223333]
 workspaces:
-  - {name: default, key: network/lab/terraform.tfstate, bucket: hangar-lab-tfstate-700017004810, dir: /work/network/lab, env: lab}
+  - {name: default, key: network/lab/terraform.tfstate, bucket: example-tfstate-111122223333, dir: /work/network/lab, env: lab}
 networkPolicy:
   enabled: true
   clearanceCIDRs: [192.168.1.72/32]
@@ -19,5 +19,5 @@ hostAliases:
   - ip: 192.168.1.72
     hostnames: [clearance.hangar-dev.local, clearance-api.hangar-dev.local]
 ruleset:
-  applyRoles: [arn:aws:iam::700017004810:role/hangar-lab-apply]
-  ssoAdminRoles: ["arn:aws:iam::700017004810:role/aws-reserved/sso.amazonaws.com/*AWSReservedSSO_Admin_*"]
+  applyRoles: [arn:aws:iam::111122223333:role/hangar-lab-apply]
+  ssoAdminRoles: ["arn:aws:iam::111122223333:role/aws-reserved/sso.amazonaws.com/*AWSReservedSSO_Admin_*"]

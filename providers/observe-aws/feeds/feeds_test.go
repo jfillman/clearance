@@ -192,11 +192,11 @@ func TestTrailsInSkipsTrailsOfOtherAccounts(t *testing.T) {
 		switch target(r) {
 		case trailTarget + "DescribeTrails":
 			json.NewEncoder(w).Encode(map[string]any{"trailList": []map[string]any{
-				{"Name": "organization", "TrailARN": "arn:aws:cloudtrail:us-east-1:158233516926:trail/organization", "IsOrganizationTrail": true},
-				{"Name": "observe-data", "TrailARN": "arn:aws:cloudtrail:us-east-1:700017004810:trail/observe-data", "LogFileValidationEnabled": true}}})
+				{"Name": "organization", "TrailARN": "arn:aws:cloudtrail:us-east-1:444455556666:trail/organization", "IsOrganizationTrail": true},
+				{"Name": "observe-data", "TrailARN": "arn:aws:cloudtrail:us-east-1:111122223333:trail/observe-data", "LogFileValidationEnabled": true}}})
 		case trailTarget + "GetTrailStatus":
 			b, _ := io.ReadAll(r.Body)
-			if strings.Contains(string(b), "158233516926") {
+			if strings.Contains(string(b), "444455556666") {
 				http.Error(w, "the owner's", 403)
 				return
 			}
@@ -207,7 +207,7 @@ func TestTrailsInSkipsTrailsOfOtherAccounts(t *testing.T) {
 			http.Error(w, target(r), 400)
 		}
 	})
-	ts, err := a.TrailsIn(context.Background(), "700017004810")
+	ts, err := a.TrailsIn(context.Background(), "111122223333")
 	if err != nil || len(ts) != 1 || ts[0].Name != "observe-data" || !ts[0].Logging || strings.Join(ts[0].DataBuckets, ",") != "tf-state" {
 		t.Fatal(ts, err)
 	}

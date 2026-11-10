@@ -53,7 +53,7 @@ func (f *fixture) digest(t *testing.T, hour int, logs map[string][]byte, prev *s
 		d.LogFiles = append(d.LogFiles, LogFile{S3Bucket: bucket, S3Object: name, HashValue: hexSum(body), HashAlgorithm: "SHA-256"})
 	}
 	content, _ := json.Marshal(d)
-	sum := sha256.Sum256([]byte(SignedString(end, bucket, obj, hexSum(content), prevSig)))
+	sum := sha256.Sum256([]byte(SignedString(d.EndTime, bucket, obj, hexSum(content), prevSig)))
 	sig, err := rsa.SignPKCS1v15(rand.Reader, f.key, crypto.SHA256, sum[:])
 	if err != nil {
 		t.Fatal(err)

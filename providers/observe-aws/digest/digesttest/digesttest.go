@@ -85,7 +85,7 @@ func (tr *Trail) Digest(end time.Time, logs []string, skipPrev bool) string {
 		d.LogFiles = append(d.LogFiles, digest.LogFile{S3Bucket: tr.Bucket, S3Object: l, HashValue: hexSum(tr.Objects[l].Content), HashAlgorithm: "SHA-256"})
 	}
 	content, _ := json.Marshal(d)
-	sum := sha256.Sum256([]byte(digest.SignedString(end, tr.Bucket, key, hexSum(content), prevSig)))
+	sum := sha256.Sum256([]byte(digest.SignedString(d.EndTime, tr.Bucket, key, hexSum(content), prevSig)))
 	sig, err := rsa.SignPKCS1v15(rand.Reader, tr.Key, crypto.SHA256, sum[:])
 	if err != nil {
 		tr.T.Fatal(err)
