@@ -339,3 +339,54 @@ func TestCollectorWithoutTheVerificationKindKeepsWorking(t *testing.T) {
 		t.Fatalf("%d observations", n)
 	}
 }
+
+// A person resolves a gate exception (a deploy.exception that landed) through the same route as an observation: the
+// resolution is scoped to the exception's destination cluster; refused and monitoring exceptions and other records 404.
+func TestAPersonResolvesAGateException(t *testing.T) {
+	f := memFixture(t)
+	post := func(rec map[string]any) int64 {
+		t.Helper()
+		f.do("POST", "/v1/records", argo, map[string]any{"provider": "argo-gate", "kind": "deploy.exception", "record": rec}).want(t, 200, "")
+		recs := f.records()
+		return seqOfRec(recs[len(recs)-1])
+	}
+	oob := outOfBand()["record"].(map[string]any)
+	ex := post(oob)
+	refused := post(map[string]any{"principal": "dana", "target": "t", "result": "refused", "app": "gate-api",
+		"exception": map[string]any{"kind": "attempted-refused", "actor": "dana", "detail": "refused by policy"}, "destination": oob["destination"]})
+	path := func(seq int64) string { return "/v1/observations/" + jsonInt(seq) + "/resolution" }
+	body := map[string]any{"state": "ratified", "note": "a false out-of-band report"}
+
+	f.do("POST", path(ex), "user:dana", body).want(t, 403, "not a Clearance admin")
+	f.do("POST", path(ex), "", body).want(t, 401, "")
+	f.do("POST", path(ex), "user:admin", map[string]any{"state": "reverted"}).want(t, 400, "cause")
+	f.do("POST", path(refused), "user:admin", body).want(t, 404, "attempted-refused")
+	f.do("POST", path(ex+1000), "user:admin", body).want(t, 404, "")
+	f.do("POST", "/v1/records", argo, degraded("allow", "")).want(t, 200, "")
+	recs := f.records()
+	f.do("POST", path(seqOfRec(recs[len(recs)-1])), "user:admin", body).want(t, 404, "not an observation")
+	if n := countTool(f, "resolution"); n != 0 {
+		t.Fatalf("refused calls wrote %d resolution records", n)
+	}
+
+	first := f.do("POST", path(ex), "user:admin", body).want(t, 200, "")
+	if first.body["by"] != "user:admin" || first.body["state"] != "ratified" || first.body["scope"] != "hangar-prod" || first.body["about"] != float64(ex) {
+		t.Fatalf("answer: %v", first.body)
+	}
+	f.do("POST", path(ex), "user:admin", map[string]any{"state": "reverted", "cause": "human-initiated"}).want(t, 200, "")
+	var rs []store.Record
+	for _, r := range f.records() {
+		if r["tool"] == "resolution" {
+			rs = append(rs, r)
+		}
+	}
+	if len(rs) != 2 {
+		t.Fatalf("%d resolution records, want 2 (an edit is another record)", len(rs))
+	}
+	r := rs[0]
+	res := r["resolution"].(map[string]any)
+	if r["scope"] != "hangar-prod" || r["principal"] != "user:admin" || res["by"] != "user:admin" || res["state"] != "ratified" ||
+		r["initiator"].(map[string]any)["sub"] != "user:admin" || r["about"].(map[string]any)["seq"] == nil {
+		t.Fatalf("the record names the person and scope: %v", r)
+	}
+}

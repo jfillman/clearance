@@ -74,7 +74,14 @@ func (s *Server) appendObserved(ctx context.Context, tx store.Tx, kind string, e
 		if seq, _ := gate.SeqInt(a["seq"]); seq != about {
 			return nil, bad("about.seq %d is not a record", about)
 		}
+		aScope := a["scope"]
 		ok := a["tool"] == evidence.KindObservation || (kind == evidence.KindResolution && a["tool"] == evidence.KindAssessment)
+		if kind == evidence.KindResolution && a["tool"] == gate.KindException { // scope: its destination (gate.ExceptionScope)
+			xk, _ := a["exception"].(map[string]any)["kind"].(string)
+			if sc, has := gate.ExceptionScope(a); has && gate.ResolvableExceptionKind(xk) {
+				ok, aScope = true, sc
+			}
+		}
 		if !ok {
 			if kind == evidence.KindVerification {
 				return nil, bad("about.seq %d is a %v record: a verification is about an observation", about, a["tool"])
@@ -89,8 +96,8 @@ func (s *Server) appendObserved(ctx context.Context, tx store.Tx, kind string, e
 				return nil, bad("about.seq %d was reported by source %v: a feed verifies only its own observations", about, src["name"])
 			}
 		}
-		if a["scope"] != scope {
-			return nil, bad("about.seq %d is in scope %v, not %s", about, a["scope"], scope)
+		if aScope != scope {
+			return nil, bad("about.seq %d is in scope %v, not %s", about, aScope, scope)
 		}
 	case evidence.KindHealth:
 		// below

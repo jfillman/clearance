@@ -9,6 +9,16 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Added
+
+- A person (an admin, or a delegate naming one) can record a resolution on a gate exception, the way they can on an
+  observation: `POST /v1/observations/{seq}/resolution` now also takes the seq of a `deploy.exception` of kind
+  out-of-band, drift, untraced-apply or digest-mismatch (attempted-refused and monitoring-protection stay 404). The
+  resolution is scoped to the exception's destination (cluster, else workspace `backend/key#name`), is append-only
+  and names the person. The packet's Exceptions row shows the newest resolution instead of "none recorded", and a
+  provider's `resolution` about such an exception is accepted in that scope. `contract/clearance-core.json` changes
+  (route text only).
+
 ## [0.39.3] - 2026-11-10
 
 ### Added

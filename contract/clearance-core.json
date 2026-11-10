@@ -4589,7 +4589,7 @@
                 }
               }
             },
-            "description": "no such observation (the seq is not an observation record), or a Clearance that keeps no changes (DG-OFF)"
+            "description": "no such observation (the seq is neither an observation nor a resolvable gate exception), or a Clearance that keeps no changes (DG-OFF)"
           },
           "413": {
             "content": {
@@ -4607,7 +4607,7 @@
             "bearer": []
           }
         ],
-        "summary": "A person (an admin, CLEARANCE_ADMINS, or a delegate naming one in the on-behalf-of header) sets how an observed change ended: state (reverted, ratified, declared-break-glass, still-live) and, for reverted, its cause (agent-caused, policy-triggered, human-initiated, automated-remediation, requirement-changed, external-dependency, unattributed), with an optional note. Recorded as a resolution record about the observation, naming the person (principal, initiator, resolution.by). Append-only: an edit is another record about the same seq, and the newest wins when it is read; the earlier ones stay in the chain.",
+        "summary": "A person (an admin, CLEARANCE_ADMINS, or a delegate naming one in the on-behalf-of header) sets how an observed change ended: state (reverted, ratified, declared-break-glass, still-live) and, for reverted, its cause (agent-caused, policy-triggered, human-initiated, automated-remediation, requirement-changed, external-dependency, unattributed), with an optional note. Recorded as a resolution record about the observation, naming the person (principal, initiator, resolution.by). Append-only: an edit is another record about the same seq, and the newest wins when it is read; the earlier ones stay in the chain. The seq may also be a gate exception (deploy.exception of kind out-of-band, drift, untraced-apply or digest-mismatch), resolved in the scope of its destination (cluster, else workspace backend/key#name); attempted-refused and monitoring-protection exceptions are not resolved this way.",
         "x-clearance-auth": "bearer",
         "x-clearance-max-body": 16384
       }
