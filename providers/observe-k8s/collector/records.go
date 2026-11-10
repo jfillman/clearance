@@ -162,6 +162,13 @@ func resolutionReverted(scope string, seq int64, note string) *client.RecordRequ
 		Resolution: map[string]any{"state": "reverted", "cause": "unattributed", "by": ProviderName, "note": cut(note, 3900)}}}
 }
 
+// resolutionStillLive is the collector's own first resolution of a change it did not see put back.
+func resolutionStillLive(scope string, seq int64) *client.RecordRequest {
+	return &client.RecordRequest{Kind: "resolution", Record: client.ProviderEvent{
+		Scope: client.String(scope), About: map[string]any{"seq": seq},
+		Resolution: map[string]any{"state": "still-live", "by": ProviderName}}}
+}
+
 // HealthCheck is one check of a health record.
 type HealthCheck struct {
 	Name   string
