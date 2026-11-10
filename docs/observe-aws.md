@@ -45,7 +45,7 @@ verification (403), the collector counts it (`verifications_refused`) and logs o
 ### Digest-chain validation (`digest`)
 
 Per AWS's description of log file integrity validation: each digest carries an RSA signature (SHA256withRSA, in the S3 object
-metadata) over `<digestEndTime as yyyymmddThhmmssZ> \n <bucket>/<key> \n <sha256 of the digest file> \n <previous digest's
+metadata) over `<digestEndTime exactly as the digest writes it, e.g. 2026-11-10T21:33:00Z> \n <bucket>/<key> \n <sha256 of the digest file> \n <previous digest's
 signature>`; the key is found by the digest's fingerprint (`cloudtrail:ListPublicKeys`). The collector verifies, in this order:
 
 1. the digest's signature (a tampered digest fails here and nothing of it is extracted);
@@ -56,9 +56,10 @@ signature>`; the key is found by the digest's fingerprint (`cloudtrail:ListPubli
 The first digest of a run is linked to the previous digest object, fetched for the purpose. S3 stores these objects gzipped with `Content-Encoding: gzip`, and Go's HTTP transport decompresses such a response unless the
 request sets `Accept-Encoding`; `S3.Get` sets it, and `digest.Content` also accepts a body that is already decompressed. Every hash
 AWS records (a log file's `hashValue`, `previousDigestHashValue`, the hash in the digest's signed string) is over the
-**uncompressed** content, so it is computed over the same bytes either way. The signing string follows AWS's
-documentation and is tested against a key generated for the test; it has not yet been checked against a digest AWS signed. If
-the first live read reports `digest-signature-invalid` on every digest, suspect the signing string before the trail.
+**uncompressed** content, so it is computed over the same bytes either way. The signing string was checked on
+2026-11-10 against a digest AWS signed (a real organization trail's digest, verified with the key
+`ListPublicKeys` returned for its fingerprint): the end time is signed as the digest writes it (RFC 3339), not in the compact
+`yyyymmddThhmmssZ` form the first build used, which made every live digest `digest-signature-invalid`.
 
 ### The reconciler: one change, one exception
 

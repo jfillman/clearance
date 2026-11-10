@@ -24,6 +24,9 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 - **observe-aws: AWS Config's first discovery is a baseline, not an unexplained change.** A `ResourceDiscovered` item with no
   related event whose `resourceCreationTime` is more than an hour before its capture is counted as baseline and not posted;
   a resource really created without a CloudTrail event stays a `config.item-without-event` exception.
+- **observe-aws: every real digest failed `digest-signature-invalid`.** The signed string put `digestEndTime` in the compact
+  `yyyymmddThhmmssZ` form; AWS signs the end time exactly as the digest writes it (`2026-11-10T21:33:00Z`). Checked against
+  a digest AWS signed for the Hangar lab account: the old form does not verify, the new one does.
 
 ## [0.40.0] - 2026-11-10
 
