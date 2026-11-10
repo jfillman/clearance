@@ -99,7 +99,7 @@ not-writes) are held with the queue cursor, reported each health interval in the
 record (`observe.FilteredSchema`: since, until, rule set, per-rule counts and their `why`) and cleared when the health record
 is posted. They are in the chain, so the packet sums those whose time falls in its window and passes them as
 `packet.Params.Filtered` (`packet.chainFiltered`; a caller's own counts win): *"filtered: N events under rule X
-(observe-hangar@2026.11.2)"*.
+(observe-hangar@2026.11.3)"*.
 
 **Blind window.** The collector posts a health record with `interval_seconds`; the core holds it for twice that, then the
 feed is blind until the next. The coverage route and the packet read it the same way (`observe.Build`): a collector that is

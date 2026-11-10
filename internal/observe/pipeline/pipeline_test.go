@@ -701,6 +701,7 @@ func TestMonitoringExemptionsAreValidatedAtLoad(t *testing.T) {
 		t.Fatalf("the well-formed entry loads: %v", err)
 	}
 	bad := map[string]string{
+		"duplicate name":       entry + entry,
 		"empty subject":        strings.Replace(entry, `subject: "system:serviceaccount:kyverno:kyverno-admission-controller"`, `subject: ""`, 1),
 		"pattern subject":      strings.Replace(entry, "kyverno:kyverno-admission-controller", "kyverno:*", 1),
 		"group subject":        strings.Replace(entry, "system:serviceaccount:kyverno:kyverno-admission-controller", "system:serviceaccounts:kyverno", 1),

@@ -397,10 +397,15 @@ func (rs *RuleSet) loadNoise(d doc) error {
 var webhookKinds = []string{"ValidatingWebhookConfiguration", "MutatingWebhookConfiguration"}
 
 func (rs *RuleSet) loadExempt() error {
+	seen := map[string]bool{}
 	for i, x := range rs.monitoring.KubernetesExempt {
 		if err := validateExempt(x); err != nil {
 			return fmt.Errorf("observe rules: monitoring.kubernetes_exempt[%d]: %w", i, err)
 		}
+		if seen[x.Name] { // the name is the filtered-count key: two entries would share one line of the health record
+			return fmt.Errorf("observe rules: monitoring.kubernetes_exempt[%d]: name %q is used twice", i, x.Name)
+		}
+		seen[x.Name] = true
 	}
 	return nil
 }
