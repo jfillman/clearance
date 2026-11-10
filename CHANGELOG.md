@@ -11,6 +11,12 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ### Fixed
 
+- **The Argo CD agent no longer sends creates the API server refuses.** Writing a grant, the agent POSTed it, got 409
+  AlreadyExists for a grant that was already there, then PATCHed it, so every pass left an `attempted-refused` row in the
+  Kubernetes audit collector (215 in 6 hours on hangar-prod). It now creates only a grant it listed as absent, patches one
+  that exists and differs (no create first), writes nothing for an equal grant, and writes its state ConfigMap by a patch
+  (a create only after a 404). A create that loses a race reads the grant and writes only if it differs. The `Kube`
+  interface's `ApplyGrant` is replaced by `CreateGrant` and `UpdateGrant`.
 - **An applied change stays valid for its stamps until its successor applies.** A new pushed head superseded the older
   change for the same app, environment and cluster even when that change was already applied, and revoked its token, so
   its `ClearanceGrant` left the cluster and the Argo CD agent raised a false `deploy.exception` ("hash listed by no

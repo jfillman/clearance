@@ -333,7 +333,13 @@ func (a *Agent) reconcile(ctx context.Context, want, have []Grant) error {
 		if ok && reflect.DeepEqual(h.Spec, hold.Spec) && sameLabels(h.Labels, hold.Labels) {
 			continue
 		}
-		if step("writing", w, a.kube.ApplyGrant(ctx, hold)) {
+		var werr error
+		if ok {
+			werr = a.kube.UpdateGrant(ctx, hold, h)
+		} else {
+			werr = a.kube.CreateGrant(ctx, hold)
+		}
+		if step("writing", w, werr) {
 			a.log.Info("grant written", "grant", gkey(w), "active", hold.Active())
 			haveBy[gkey(w)] = Grant{Namespace: w.Namespace, Name: w.Name, Labels: hold.Labels, Spec: hold.Spec, Valid: h.Valid}
 		}
@@ -356,12 +362,17 @@ func (a *Agent) reconcile(ctx context.Context, want, have []Grant) error {
 				continue
 			}
 			if old, ok := wantBy[gkey(h)]; ok {
-				if !step("deactivating", old, a.kube.ApplyGrant(ctx, old)) {
+				if !step("deactivating", old, a.kube.UpdateGrant(ctx, old, h)) {
 					break
 				}
 			} else {
-				delete(h.Labels, LabelActive)
-				if !step("deactivating", h, a.kube.ApplyGrant(ctx, h)) {
+				off := h
+				off.Labels = map[string]string{}
+				for k, v := range h.Labels {
+					off.Labels[k] = v
+				}
+				delete(off.Labels, LabelActive)
+				if !step("deactivating", h, a.kube.UpdateGrant(ctx, off, h)) {
 					break
 				}
 			}
@@ -369,7 +380,7 @@ func (a *Agent) reconcile(ctx context.Context, want, have []Grant) error {
 		if failed[w.Namespace] {
 			continue
 		}
-		if step("activating", w, a.kube.ApplyGrant(ctx, w)) {
+		if step("activating", w, a.kube.UpdateGrant(ctx, w, haveBy[gkey(w)])) {
 			a.log.Info("grant activated", "grant", gkey(w))
 		}
 	}
@@ -416,7 +427,7 @@ func (a *Agent) expireGrants(ctx context.Context) error {
 			}
 			if len(keep) != len(g.Spec.Carried) {
 				g.Spec.Carried = keep
-				if err := a.kube.ApplyGrant(ctx, g); err != nil {
+				if err := a.kube.UpdateGrant(ctx, g, g); err != nil {
 					errs = append(errs, fmt.Errorf("dropping expired carried trees of grant %s: %w", gkey(g), err))
 					continue
 				}
@@ -433,7 +444,7 @@ func (a *Agent) expireGrants(ctx context.Context) error {
 		}
 		if g.Active() {
 			delete(g.Labels, LabelActive)
-			if err := a.kube.ApplyGrant(ctx, g); err != nil {
+			if err := a.kube.UpdateGrant(ctx, g, g); err != nil {
 				errs = append(errs, fmt.Errorf("deactivating expired grant %s: %w", gkey(g), err))
 			}
 		}

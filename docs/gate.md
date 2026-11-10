@@ -1026,6 +1026,17 @@ seq it had. Every pass it also expires, on its own clock, the grants whose `spec
 false` and the active label removed, the grant kept for the record. The agent never creates, updates or deletes a
 workload, and its RBAC cannot (list on the scanned kinds, no Secret).
 
+**Writes only on a difference, and never a refused one.** The agent lists its grants each pass and compares each with
+what the feed wants (spec and labels); a grant that is equal gets no request at all, not a patch and not a create. A grant
+that does not exist is created (`POST`); one that exists and differs is patched (`PATCH`, never a create first); a grant
+no entry names is deleted; `status.valid` is written only when it is not already true; the state ConfigMap
+(`clearance-argocd-agent-state`) is written only when the feed's epoch or seq moved, by a patch (a create only after a
+404). The one create that can still meet a 409 is a race (something created the grant since the list): the agent reads
+the grant and writes only if it differs. This matters to the audit trail: the Kubernetes collector records every refused
+request as `attempted-refused`, and refused attempts are never noise, so an agent that created grants blindly (409, then
+patch, every pass) filled the packet's refused section with its own writes. A grant whose spec really changes (a new
+token for the change, a carried tree that came or went) is still one patch.
+
 **Namespace invariants** (G-ARGO-2: with a Deny binding the API server resolves `paramRef` before `matchConditions`, so a
 protected namespace with no active, valid grant refuses every matched write; a second active grant is refused). The
 agent keeps them, and the tests hold it to them (`TestGrantSync`, `TestARotationThatFailsKeepsTheActiveGrant`):

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -188,9 +189,9 @@ func (a *API) ListGrants(ctx context.Context) ([]Grant, error) {
 	return out, nil
 }
 
-// ApplyGrant implements Kube: create, and on a conflict replace spec and labels with a merge patch. A removed
-// active label must be sent as null, so the patch names every label the agent owns.
-func (a *API) ApplyGrant(ctx context.Context, g Grant) error {
+// CreateGrant implements Kube: a POST for a grant that is absent. On a conflict (something created it since the
+// list) it reads the grant, and patches only if spec or labels differ.
+func (a *API) CreateGrant(ctx context.Context, g Grant) error {
 	meta := map[string]any{"name": g.Name, "namespace": g.Namespace, "labels": g.Labels}
 	obj := map[string]any{"apiVersion": a.Grants.Group + "/" + a.Grants.Version, "kind": "ClearanceGrant",
 		"metadata": meta, "spec": g.Spec}
@@ -199,18 +200,24 @@ func (a *API) ApplyGrant(ctx context.Context, g Grant) error {
 	if !errors.As(err, &se) || se.Code != http.StatusConflict {
 		return err
 	}
-	labels := map[string]any{}
-	for _, k := range []string{LabelActive} {
-		labels[k] = nil
-	}
-	for k, v := range g.Labels {
-		labels[k] = v
-	}
-	// A merge patch only adds and replaces keys: spec.objects keys the new spec lacks are sent as null, so the stored
-	// map ends up exactly the token's objects.
 	var cur grantWire
 	if err := a.call(ctx, "GET", a.grantPath(g.Namespace, g.Name), "", nil, &cur); err != nil {
 		return err
+	}
+	have := Grant{Namespace: g.Namespace, Name: g.Name, Labels: cur.Metadata.Labels, Spec: cur.Spec}
+	if reflect.DeepEqual(have.Spec, g.Spec) && sameLabels(have.Labels, g.Labels) {
+		return nil
+	}
+	return a.UpdateGrant(ctx, g, have)
+}
+
+// UpdateGrant implements Kube: a merge patch of spec and labels. A removed active label must be sent as null, so the
+// patch names every label the agent owns; spec.objects keys the new spec lacks are sent as null (a merge patch only
+// adds and replaces keys), so the stored map ends up exactly the token's objects.
+func (a *API) UpdateGrant(ctx context.Context, g, cur Grant) error {
+	labels := map[string]any{LabelActive: nil}
+	for k, v := range g.Labels {
+		labels[k] = v
 	}
 	spec := map[string]any{}
 	_ = json.Unmarshal(rawJSON(g.Spec), &spec)
@@ -469,14 +476,22 @@ func (a *API) GetData(ctx context.Context, ns, name string) (map[string]string, 
 	return cm.Data, err
 }
 
-// PutData implements Kube: create, or replace the data.
+// PutData implements Kube: patch the data of the ConfigMap that is there, and create it only when it is not (a 404),
+// so the steady state never sends a create that the API server refuses.
 func (a *API) PutData(ctx context.Context, ns, name string, data map[string]string) error {
 	path := "/api/v1/namespaces/" + url.PathEscape(ns) + "/configmaps"
-	err := a.call(ctx, "POST", path, "application/json", map[string]any{"apiVersion": "v1", "kind": "ConfigMap",
-		"metadata": map[string]any{"name": name, "labels": map[string]string{LabelManagedBy: ManagedBy}}, "data": data}, nil)
-	var se *StatusError
-	if errors.As(err, &se) && se.Code == http.StatusConflict {
+	patch := func() error {
 		return a.call(ctx, "PATCH", path+"/"+url.PathEscape(name), merge, map[string]any{"data": data}, nil)
+	}
+	err := patch()
+	var se *StatusError
+	if !errors.As(err, &se) || se.Code != http.StatusNotFound {
+		return err
+	}
+	err = a.call(ctx, "POST", path, "application/json", map[string]any{"apiVersion": "v1", "kind": "ConfigMap",
+		"metadata": map[string]any{"name": name, "labels": map[string]string{LabelManagedBy: ManagedBy}}, "data": data}, nil)
+	if errors.As(err, &se) && se.Code == http.StatusConflict { // created since the patch
+		return patch()
 	}
 	return err
 }
