@@ -1,6 +1,8 @@
 package feeds
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -161,5 +163,52 @@ func TestTrailsRecordersAndRules(t *testing.T) {
 	ru, err := a.Rules(context.Background(), []string{"observe-aws-cloudtrail", "missing"})
 	if err != nil || len(ru) != 2 || ru[0].State != "ENABLED" || ru[1].State != "" {
 		t.Fatal(ru, err)
+	}
+}
+
+// S3 serves CloudTrail objects with Content-Encoding: gzip. Go's transport decompresses them unless the request sets
+// Accept-Encoding itself; Get does, so the collector receives the stored bytes (gzip magic), as the digest code expects.
+func TestS3GetDoesNotLetTheTransportDecompress(t *testing.T) {
+	var zb bytes.Buffer
+	zw := gzip.NewWriter(&zb)
+	zw.Write([]byte(`{"digest":true}`))
+	zw.Close()
+	a := api(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			w.Header().Set("Content-Encoding", "gzip")
+		}
+		w.Write(zb.Bytes())
+	})
+	b, _, err := (S3{API: a}).Get(context.Background(), "trail", "k.json.gz")
+	if err != nil || len(b) < 2 || b[0] != 0x1f || b[1] != 0x8b {
+		t.Fatalf("%x %v", b, err)
+	}
+}
+
+// A member account sees the organization trail (a shadow of the management account's) but cannot read its status: the
+// account's reader leaves it out and reads the trail the account owns.
+func TestTrailsInSkipsTrailsOfOtherAccounts(t *testing.T) {
+	a := api(t, func(w http.ResponseWriter, r *http.Request) {
+		switch target(r) {
+		case trailTarget + "DescribeTrails":
+			json.NewEncoder(w).Encode(map[string]any{"trailList": []map[string]any{
+				{"Name": "organization", "TrailARN": "arn:aws:cloudtrail:us-east-1:158233516926:trail/organization", "IsOrganizationTrail": true},
+				{"Name": "observe-data", "TrailARN": "arn:aws:cloudtrail:us-east-1:700017004810:trail/observe-data", "LogFileValidationEnabled": true}}})
+		case trailTarget + "GetTrailStatus":
+			b, _ := io.ReadAll(r.Body)
+			if strings.Contains(string(b), "158233516926") {
+				http.Error(w, "the owner's", 403)
+				return
+			}
+			w.Write([]byte(`{"IsLogging": true}`))
+		case trailTarget + "GetEventSelectors":
+			w.Write([]byte(`{"EventSelectors":[{"IncludeManagementEvents":false,"DataResources":[{"Type":"AWS::S3::Object","Values":["arn:aws:s3:::tf-state/"]}]}]}`))
+		default:
+			http.Error(w, target(r), 400)
+		}
+	})
+	ts, err := a.TrailsIn(context.Background(), "700017004810")
+	if err != nil || len(ts) != 1 || ts[0].Name != "observe-data" || !ts[0].Logging || strings.Join(ts[0].DataBuckets, ",") != "tf-state" {
+		t.Fatal(ts, err)
 	}
 }

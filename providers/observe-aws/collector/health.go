@@ -40,9 +40,13 @@ type RuleState struct{ Name, State string }
 // Control reads the controls that watch an account, read-only. Any may be nil: that check is then not made (and is not
 // claimed).
 type Control struct {
-	Trails    func(ctx context.Context) ([]TrailState, error)
-	Recorders func(ctx context.Context) ([]RecorderState, error)
-	Rules     func(ctx context.Context, names []string) ([]RuleState, error)
+	Trails func(ctx context.Context) ([]TrailState, error)
+	// DataTrails are the trails the observed account owns, read with the observed account's own role (the main trail
+	// is an organization trail owned by the management account, which Trails reads). A data bucket's events may be
+	// recorded by either.
+	DataTrails func(ctx context.Context) ([]TrailState, error)
+	Recorders  func(ctx context.Context) ([]RecorderState, error)
+	Rules      func(ctx context.Context, names []string) ([]RuleState, error)
 }
 
 // HealthConfig is what the account's feeds are expected to look like.
@@ -50,6 +54,9 @@ type HealthConfig struct {
 	Account string
 	// Trail is the name of the trail expected (empty: any logging trail satisfies trail-enabled).
 	Trail string
+	// DataTrail is the name of the account's own trail expected to record the data buckets' events (empty: any trail in
+	// the account, or the main trail, that records them satisfies event-selectors).
+	DataTrail string
 	// MustCoverRegions are the regions the trail must cover: a multi-region (or organization) trail covers all of them.
 	MustCoverRegions []string
 	// DataBuckets are the buckets whose data events the selectors must include.
@@ -126,7 +133,12 @@ func (h *Health) Checks(ctx context.Context) []check {
 	var out []check
 	if h.Ctl.Trails != nil {
 		trails, err := h.Ctl.Trails(ctx)
-		out = append(out, trailChecks(c, trails, err)...)
+		var own []TrailState
+		var ownErr error
+		if h.Ctl.DataTrails != nil {
+			own, ownErr = h.Ctl.DataTrails(ctx)
+		}
+		out = append(out, trailChecks(c, trails, err, own, ownErr, h.Ctl.DataTrails != nil)...)
 	}
 	if h.Trail != nil {
 		newest := h.Trail.Newest()
@@ -178,7 +190,11 @@ func (h *Health) Checks(ctx context.Context) []check {
 	return out
 }
 
-func trailChecks(c HealthConfig, trails []TrailState, err error) []check {
+// The main trail (c.Trail, the organization trail) carries the management events and trail-enabled. The data buckets'
+// events may be recorded by it or by a trail the observed account owns (own, read with that account's role): each
+// bucket needs one logging trail, with log file validation on, that records it. A trail that records a bucket and is
+// not logging (or has validation off) is named in the detail, so a StopLogging shows on the next health record.
+func trailChecks(c HealthConfig, trails []TrailState, err error, own []TrailState, ownErr error, ownRead bool) []check {
 	if err != nil {
 		return []check{{"trail-enabled", false, "the trail could not be read: " + err.Error(), true}}
 	}
@@ -217,11 +233,7 @@ func trailChecks(c HealthConfig, trails []TrailState, err error) []check {
 	if t.ReadWrite != "" && t.ReadWrite != "All" && t.ReadWrite != "WriteOnly" {
 		bad = append(bad, "ReadWriteType is "+t.ReadWrite+": writes are not recorded")
 	}
-	for _, b := range c.DataBuckets {
-		if !slices.Contains(t.DataBuckets, b) {
-			bad = append(bad, "no data events for bucket "+b)
-		}
-	}
+	bad = append(bad, dataTrailProblems(c, t, own, ownErr, ownRead)...)
 	if !t.LogValidation {
 		bad = append(bad, "log file validation is off")
 	}
@@ -229,7 +241,7 @@ func trailChecks(c HealthConfig, trails []TrailState, err error) []check {
 		bad = append(bad, "latest delivery error: "+t.DeliveryError)
 	}
 	if len(bad) == 0 {
-		out = append(out, check{name: "event-selectors", ok: true, detail: "management events and the expected data events are recorded; log file validation on"})
+		out = append(out, check{name: "event-selectors", ok: true, detail: "management events and the expected data events are recorded; log file validation on" + trailsDetail(t, c, own)})
 	} else {
 		out = append(out, check{name: "event-selectors", detail: strings.Join(bad, "; ")})
 	}
@@ -320,4 +332,91 @@ func (h *Health) Start() {
 	if h.started.IsZero() {
 		h.started = h.now()
 	}
+}
+
+// dataTrailProblems is what keeps the data buckets from being recorded by a logging, validated trail.
+func dataTrailProblems(c HealthConfig, main TrailState, own []TrailState, ownErr error, ownRead bool) []string {
+	var cands []TrailState // every trail that may satisfy a data bucket: the main trail, then the account's own
+	cands = append(cands, main)
+	var bad []string
+	if ownRead && c.DataTrail != "" {
+		found := false
+		for _, t := range own {
+			if t.Name == c.DataTrail {
+				found = true
+				if !t.Logging {
+					bad = append(bad, "data trail "+t.Name+" is not logging")
+				}
+				if t.DeliveryError != "" {
+					bad = append(bad, "data trail "+t.Name+" latest delivery error: "+t.DeliveryError)
+				}
+			}
+		}
+		if !found && ownErr == nil {
+			bad = append(bad, "data trail "+c.DataTrail+" does not exist in the account")
+		}
+	}
+	for _, t := range own {
+		if c.DataTrail == "" || t.Name == c.DataTrail {
+			cands = append(cands, t)
+		}
+	}
+	for _, b := range c.DataBuckets {
+		var why []string
+		ok := false
+		for _, t := range cands {
+			if !slices.Contains(t.DataBuckets, b) {
+				continue
+			}
+			switch {
+			case !t.Logging:
+				why = append(why, "data trail "+t.Name+" is not logging")
+			case !t.LogValidation:
+				why = append(why, "data trail "+t.Name+" has log file validation off")
+			default:
+				ok = true
+			}
+		}
+		switch {
+		case ok:
+		case len(why) > 0:
+			bad = append(bad, why...)
+		case ownErr != nil:
+			bad = append(bad, "no data events for bucket "+b+" on trail "+main.Name+" and the account's trails could not be read: "+ownErr.Error())
+		case !ownRead:
+			bad = append(bad, "no data events for bucket "+b)
+		default:
+			bad = append(bad, "no data events for bucket "+b+" on any logging trail ("+trailNames(cands)+")")
+		}
+	}
+	// the same trail can explain several buckets
+	var out []string
+	for _, m := range bad {
+		if !slices.Contains(out, m) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func trailNames(ts []TrailState) string {
+	var n []string
+	for _, t := range ts {
+		n = append(n, t.Name)
+	}
+	return strings.Join(n, ", ")
+}
+
+// trailsDetail reports each trail that carries a data bucket's events.
+func trailsDetail(main TrailState, c HealthConfig, own []TrailState) string {
+	var parts []string
+	for _, t := range append([]TrailState{main}, own...) {
+		if len(t.DataBuckets) > 0 && (t.Name == main.Name || c.DataTrail == "" || t.Name == c.DataTrail) {
+			parts = append(parts, fmt.Sprintf("%s (logging %t, validation %t: %s)", t.Name, t.Logging, t.LogValidation, strings.Join(t.DataBuckets, ", ")))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "; data events: " + strings.Join(parts, "; ")
 }

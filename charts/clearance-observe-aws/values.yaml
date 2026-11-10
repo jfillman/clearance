@@ -39,6 +39,10 @@ aws:
 # The S3 trail (the organization trail, delivered to the logging account).
 trail:
   name: organization
+  # The observed account's own trail that records the data buckets' events (hangar-infra: observe-data). Empty: any logging
+  # trail in the account, or the main trail, that records them satisfies event-selectors. Read with the account's role, which
+  # needs cloudtrail:DescribeTrails, GetTrailStatus and GetEventSelectors.
+  dataTrail: ""
   bucket: ""
   region: us-east-1
   # AWSLogs/<organization id>/<account>/ for an organization trail, AWSLogs/<account>/ otherwise.

@@ -175,3 +175,22 @@ func TestGunzipAndParsePublicKey(t *testing.T) {
 		t.Fatal("expected an error")
 	}
 }
+
+func TestContentAcceptsGzipAndPlain(t *testing.T) {
+	var b bytes.Buffer
+	zw := gzip.NewWriter(&b)
+	zw.Write([]byte(`{"a":1}`))
+	zw.Close()
+	if out, err := Content(b.Bytes()); err != nil || string(out) != `{"a":1}` {
+		t.Fatal(string(out), err)
+	}
+	if out, err := Content([]byte(`{"a":1}`)); err != nil || string(out) != `{"a":1}` {
+		t.Fatal("a body the transport already decompressed is content:", string(out), err)
+	}
+	if _, err := Content(append([]byte{0x1f, 0x8b}, "truncated"...)); err == nil {
+		t.Fatal("a corrupt gzip body is an error")
+	}
+	if _, err := Content(make([]byte, MaxFile+1)); err == nil {
+		t.Fatal("plain content is bounded")
+	}
+}
