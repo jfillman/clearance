@@ -187,7 +187,7 @@ func PDF(pk *Packet) []byte {
 				continue
 			}
 			who := orDash(e.Actor)
-			cr = append(cr, []string{fmt.Sprint(e.Seq), e.TS, e.Kind, who, orDash(e.Diff), e.Resolution + causeSuffix(e) + resolvedBySuffix(e)})
+			cr = append(cr, []string{fmt.Sprint(e.Seq), e.TS, e.Kind, who, orDash(e.Diff), e.Resolution + causeSuffix(e) + resolvedBySuffix(e) + orEmpty(short(e.ResolutionNote, 200), ": ", "")})
 		}
 		if len(cr) == 0 {
 			continue
@@ -208,7 +208,7 @@ func PDF(pk *Packet) []byte {
 			if o.SourceVerified {
 				ver = "yes (" + o.VerifiedBy + ")"
 			}
-			res := o.Resolution + orEmpty(o.Cause, " (", ")") + orEmpty(o.ResolvedBy, " by ", "")
+			res := o.Resolution + orEmpty(o.Cause, " (", ")") + orEmpty(o.ResolvedBy, " by ", "") + orEmpty(short(o.ResolutionNote, 200), ": ", "")
 			rows = append(rows, []string{fmt.Sprint(o.Seq), o.TS, o.Scope, orDash(o.Actor), o.Resource + " " + o.API, o.Coverage, res, ver})
 		}
 		d.table([]string{"seq", "ts", "scope", "actor", "what", "coverage", "resolution", "verified"}, []int{5, 20, 12, 16, 22, 14, 18, 0}, rows)

@@ -108,6 +108,8 @@ type ObservedChange struct {
 	Resolution string `json:"resolution"`
 	Cause      string `json:"cause,omitempty"`
 	ResolvedBy string `json:"resolved_by,omitempty"`
+	// ResolutionNote is the newest resolution's note, in full (the CSV and PDF cut it to 200 characters).
+	ResolutionNote string `json:"resolution_note,omitempty"`
 	// SourceVerified and VerifiedBy ("self": the observation's own integrity; "later": a verification record) say
 	// whether the delivery was verified unaltered.
 	SourceVerified bool   `json:"source_verified"`
@@ -410,6 +412,8 @@ type Exception struct {
 	// provider) it names; an edit is a newer record about the same seq and this is its latest.
 	ResolutionSeq *int64 `json:"resolution_seq,omitempty"`
 	ResolvedBy    string `json:"resolved_by,omitempty"`
+	// ResolutionNote is the newest resolution's note, in full (the CSV and PDF cut it to 200 characters).
+	ResolutionNote string `json:"resolution_note,omitempty"`
 	// SourceVerified and VerifiedBy: see ObservedChange.
 	SourceVerified   bool     `json:"source_verified,omitempty"`
 	VerifiedBy       string   `json:"verified_by,omitempty"`
