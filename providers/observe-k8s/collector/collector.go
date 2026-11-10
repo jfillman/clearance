@@ -442,28 +442,46 @@ func (c *Collector) post(ctx context.Context, b *batch) error {
 }
 
 // Flush closes the pipeline's open transactions: each apply-and-revert it folded into one exception gets a `reverted`
-// resolution on the observation of the change that was undone. Called on a timer and at shutdown.
+// resolution on the observation of the change that was undone, and each observation of any other change that landed gets
+// `still-live` (a person can set a later one). Called on a timer and at shutdown.
 func (c *Collector) Flush(ctx context.Context) error {
 	txs, excs := c.pipe.Flush()
 	var errs []error
 	for _, x := range excs {
 		c.cfg.Log.Info("exception", "id", x.ID, "kind", x.Kind, "actor", x.Actor, "resources", x.Resources, "severity", x.Severity, "resolution", x.Resolution)
-		if !x.Reverted || len(x.Events) == 0 {
+		if len(x.Events) == 0 {
 			continue
 		}
-		c.mu.Lock()
-		seq, ok := c.seqs[x.Events[0]]
-		c.mu.Unlock()
-		if !ok {
-			continue // not posted in this run (a restart in between): the exception stays still-live, the cautious answer
+		if x.Reverted {
+			seq, ok := c.seqOf(x.Events[0])
+			if !ok {
+				continue // not posted in this run (a restart in between): no resolution is recorded, the cautious answer
+			}
+			if _, err := c.d.Core.Record(ctx, resolutionReverted(x.Scope, seq, fmt.Sprintf("applied and put back within the revert window (events %s)", strings.Join(x.Events, ", ")))); err != nil {
+				errs = append(errs, err)
+			}
+			continue
 		}
-		_, err := c.d.Core.Record(ctx, resolutionReverted(x.Scope, seq, fmt.Sprintf("applied and put back within the revert window (events %s)", strings.Join(x.Events, ", "))))
-		if err != nil {
-			errs = append(errs, err)
+		for _, ev := range x.Landed {
+			seq, ok := c.seqOf(ev)
+			if !ok {
+				continue
+			}
+			if _, err := c.d.Core.Record(ctx, resolutionStillLive(x.Scope, seq)); err != nil {
+				errs = append(errs, err)
+			}
 		}
 	}
 	c.cfg.Log.Info("transactions closed", "count", len(txs), "exceptions", len(excs))
 	return errors.Join(errs...)
+}
+
+// seqOf is the core's seq of the observation posted for an audit event, if this run posted it.
+func (c *Collector) seqOf(event string) (int64, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	seq, ok := c.seqs[event]
+	return seq, ok
 }
 
 // Run drains the queue until ctx ends: it waits for an append, processes batches, and backs off on an error. The

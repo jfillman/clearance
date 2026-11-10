@@ -32,22 +32,25 @@ type Transaction struct {
 // Exception is a change that landed outside a clearance (or an operation on monitoring, or a refused attempt), once.
 // Events lists every event it folds: the several of one transaction, or the apply and the revert.
 type Exception struct {
-	ID          string     `json:"id"`
-	Kind        string     `json:"kind"` // gate.ExceptionKinds: out-of-band, attempted-refused, monitoring-protection, drift
-	Scope       string     `json:"scope"`
-	Transaction string     `json:"transaction"`
-	Resources   []string   `json:"resources"`
-	Actor       string     `json:"actor"`
-	Coverage    string     `json:"coverage"`
-	Tier        int        `json:"tier"`
-	Severity    string     `json:"severity"`
-	Events      []string   `json:"events"`
-	Reverted    bool       `json:"reverted"`
-	Resolution  string     `json:"resolution"` // still-live, or reverted (an apply and its revert: observe.ResolutionStates)
-	Cause       string     `json:"cause,omitempty"`
-	Signals     []string   `json:"signals"`
-	Diff        []string   `json:"diff,omitempty"`
-	RuleSet     RuleSetRef `json:"rule_set"`
+	ID          string   `json:"id"`
+	Kind        string   `json:"kind"` // gate.ExceptionKinds: out-of-band, attempted-refused, monitoring-protection, drift
+	Scope       string   `json:"scope"`
+	Transaction string   `json:"transaction"`
+	Resources   []string `json:"resources"`
+	Actor       string   `json:"actor"`
+	Coverage    string   `json:"coverage"`
+	Tier        int      `json:"tier"`
+	Severity    string   `json:"severity"`
+	Events      []string `json:"events"`
+	// Landed is the events that took effect: succeeded, and neither a refused attempt nor a break-glass window. Not part of
+	// the exception's JSON: it says which observations the collector resolves.
+	Landed     []string   `json:"-"`
+	Reverted   bool       `json:"reverted"`
+	Resolution string     `json:"resolution"` // still-live, or reverted (an apply and its revert: observe.ResolutionStates)
+	Cause      string     `json:"cause,omitempty"`
+	Signals    []string   `json:"signals"`
+	Diff       []string   `json:"diff,omitempty"`
+	RuleSet    RuleSetRef `json:"rule_set"`
 }
 
 // Correlator groups assessments. It holds open transactions; Flush closes them all.
@@ -256,6 +259,9 @@ func buildException(t *Transaction, as []*Assessment, reverted bool) *Exception 
 	}
 	for _, a := range as {
 		ex.Events = append(ex.Events, a.EventID)
+		if a.Succeeded && a.Outcome != OutcomeRefused && a.Outcome != OutcomeBreakGlass {
+			ex.Landed = append(ex.Landed, a.EventID)
+		}
 		if !slices.Contains(ex.Resources, a.Resource) {
 			ex.Resources = append(ex.Resources, a.Resource)
 		}

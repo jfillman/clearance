@@ -282,6 +282,68 @@ func TestRevertGetsAResolution(t *testing.T) {
 	}
 }
 
+// A change that stays, and a refused attempt: only the change gets the collector's still-live resolution.
+func TestStillLiveResolution(t *testing.T) {
+	r := newRig(t)
+	r.c.cache.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "1", map[string]any{"k": "orig"}), t0.Add(-time.Hour), true)
+	r.c.cache.Put("ConfigMap", "MODIFIED", configMap("shop", "web-config", "2", map[string]any{"k": "new"}), t0, false)
+	r.push(auditEv(human, "kubectl/v1.36.0", "update", "configmaps", "shop", "web-config", 200, map[string]any{
+		"stageTimestamp": t0.Format(time.RFC3339Nano), "responseObject": configMap("shop", "web-config", "2", map[string]any{"k": "new"})}))
+	r.drain()
+	if err := r.c.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	res := r.core.kind("resolution")
+	if len(res) != 1 || sub(res[0], "resolution")["state"] != "still-live" || sub(res[0], "resolution")["cause"] != nil {
+		t.Fatalf("resolutions %v", res)
+	}
+}
+
+func TestRefusedAttemptHasNoResolution(t *testing.T) {
+	r := newRig(t)
+	r.push(auditEv(human, "kubectl/v1.36.0", "update", "configmaps", "shop", "web-config", 403, map[string]any{
+		"stageTimestamp": t0.Format(time.RFC3339Nano)}))
+	r.drain()
+	if err := r.c.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if res := r.core.kind("resolution"); len(res) != 0 {
+		t.Fatalf("a refused attempt landed nothing: %v", res)
+	}
+}
+
+// One transaction, a change that landed and an attempt that was refused: only the change is still live.
+func TestStillLiveSkipsTheRefusedEventOfATransaction(t *testing.T) {
+	r := newRig(t)
+	r.c.cache.Put("ConfigMap", "MODIFIED", configMap("shop", "web-config", "2", map[string]any{"k": "new"}), t0, false)
+	r.push(
+		auditEv(human, "kubectl/v1.36.0", "update", "configmaps", "shop", "web-config", 200, map[string]any{
+			"stageTimestamp": t0.Format(time.RFC3339Nano), "responseObject": configMap("shop", "web-config", "2", map[string]any{"k": "new"})}),
+		auditEv(human, "kubectl/v1.36.0", "update", "configmaps", "shop", "other-config", 403, map[string]any{
+			"stageTimestamp": t0.Add(time.Second).Format(time.RFC3339Nano)}))
+	r.drain()
+	if err := r.c.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if res := r.core.kind("resolution"); len(res) != 1 || sub(res[0], "resolution")["state"] != "still-live" {
+		t.Fatalf("one resolution, for the change that landed: %v", res)
+	}
+}
+
+// A refused write to a webhook configuration is a monitoring operation and landed nothing.
+func TestRefusedMonitoringOperationHasNoResolution(t *testing.T) {
+	r := newRig(t)
+	r.push(auditEv(human, "kubectl/v1.36.0", "delete", "validatingwebhookconfigurations", "", "guard", 403, map[string]any{
+		"stageTimestamp": t0.Format(time.RFC3339Nano)}))
+	r.drain()
+	if err := r.c.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if res := r.core.kind("resolution"); len(res) != 0 {
+		t.Fatalf("a refused monitoring operation landed nothing: %v", res)
+	}
+}
+
 // The stale-health rule: a collector that stops reporting is blind, not clean, from the core's own statement. The
 // record the collector posted is the O-1 health record, and observe.Build (the coverage route and the packet) reads it.
 func TestStoppedCollectorIsBlindNotClean(t *testing.T) {
