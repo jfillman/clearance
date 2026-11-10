@@ -474,3 +474,30 @@ func TestAnApplicationOutsideAProtectedNamespaceIsSkipped(t *testing.T) {
 		t.Fatalf("%d outcomes for the protected namespace, want 1", n)
 	}
 }
+
+// A change that was applied and then superseded by a head that still holds stays in the signed feed (the core keeps
+// its token live until a successor applies): its grant stays valid, and the objects it stamped are no exception.
+func TestObjectsOfASupersededAppliedChangeAreNoException(t *testing.T) {
+	w := newWorld(t)
+	w.kube.protect("app-a", map[string]string{agent.LabelEnvironment: "prod"})
+	d, dHash := stamped(t, "Deployment", "web", "app-a", "web", ch2, hex("c"))
+	w.feeds.claims = []token.Claims{claim(w.feeds, ch2, "app-a", t0, deploy("web", dHash))}
+	w.feeds.publish()
+	if err := w.sync(); err != nil {
+		t.Fatal(err)
+	}
+	// A newer head registers and holds: the feed still lists ch2 (and not the holding head, which has no token).
+	w.clock.add(time.Minute)
+	w.feeds.publish()
+	if err := w.sync(); err != nil {
+		t.Fatal(err)
+	}
+	w.kube.objs["app-a"] = []agent.ObjectDetail{d}
+	w.core.windows = nil
+	if err := w.a.ScanExceptions(bg); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.core.of("deploy.exception"); len(got) != 0 {
+		t.Fatalf("objects of a live change were reported: %d exceptions", len(got))
+	}
+}

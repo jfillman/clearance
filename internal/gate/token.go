@@ -156,9 +156,10 @@ func (t *Tokens) Claims(c *Change, nonce string, now, exp time.Time) token.Claim
 
 // mint signs c's token for nonce at now; ok is false when c is past its horizon (no token can be issued).
 func (t *Tokens) mint(ctx context.Context, c *Change, nonce string, now time.Time) (store.Token, bool, error) {
-	hz := horizon(c)
 	exp := now.Add(t.ttl())
-	if hz.Before(exp) {
+	// An applied, superseded change's token is kept live while its objects are (see move), which no horizon bounds:
+	// the horizon is how long a change may wait to be applied.
+	if hz := horizon(c); hz.Before(exp) && c.State != StateSuperseded {
 		exp = hz
 	}
 	// NumericDate is whole seconds: a token that would expire within its first second is not worth issuing.
@@ -299,7 +300,7 @@ func (s *Service) refreshOne(tx store.Tx, w *writer, tk store.Token) (bool, erro
 	if err != nil {
 		return false, err
 	}
-	if c != nil && c.State == StateCleared {
+	if c != nil && (c.State == StateCleared || (c.State == StateSuperseded && applied(c))) {
 		row, ok, err := s.Tokens.mint(w.ctx, c, tk.Nonce, w.now)
 		if err != nil {
 			return false, fmt.Errorf("gate: re-issuing the clearance token: %w", err)
@@ -363,7 +364,8 @@ func (s *Service) Clearance(ctx context.Context, id string) (*Change, *store.Tok
 			return nil, nil, err
 		}
 	}
-	if tk.RevokedAt != nil || !now.Before(tk.ExpiresAt) {
+	// A superseded change's token that stays in the grant feed (it was applied) is no clearance: not served.
+	if tk.RevokedAt != nil || !now.Before(tk.ExpiresAt) || c.State != StateCleared {
 		return c.View(), nil, nil
 	}
 	return c.View(), &tk, nil

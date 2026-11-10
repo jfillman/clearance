@@ -810,7 +810,7 @@ This is the deployment boundary's outage policy. The runtime gateway's (R-3: fai
 | `holding` | `superseded` | a new head registers (same PR; for a push, same app, env and cluster) | none |
 | `holding` | `degraded` | a provider reports it let the change land during an outage (`deploy.degraded`, `allow`) | none |
 | `holding` | `exception` | a `deploy.exception` names it | none |
-| `cleared` | `superseded` | a new head registers | **revoked** (`deploy.revoke`) |
+| `cleared` | `superseded` | a new head registers | **revoked** (`deploy.revoke`), unless the change was applied (below) |
 | `cleared` | `exception` | a `deploy.exception` names it (drift, a digest mismatch, out of band) | **revoked** (`deploy.revoke` "token revoked: exception: <kind>") |
 
 `denied`, `expired`, `superseded`, `degraded` and `exception` are final: nothing moves a change out of them, and a new
@@ -819,6 +819,18 @@ outage (`deploy.degraded`, `deny`) leaves its state as it was. A cleared change 
 outage stays cleared. `gate.Transitions` is the table; any other move is a bug the gate refuses to write (the
 operation fails and nothing commits). The GitHub App's deployment answer for `degraded` and `exception` is
 `rejected`, with the reason in the comment.
+
+**An applied change stays valid for the objects it stamped until its successor applies.** When a new head supersedes a
+cleared change that already has a recorded `deploy.outcome` (applied), its objects are live on the cluster and carry its
+stamps. The change moves to `superseded` and its token stops being a clearance (the clearance read serves none; the
+nonce check refuses it as a replay, so the old head cannot re-sync or render as cleared), but the token is not revoked
+yet: it stays in the signed grant feed, re-issued like any live token and past the change's horizon, so the agent's
+`ClearanceGrant` for it stays and its stamps stay listed by a valid grant. The Argo CD agent therefore raises no
+`deploy.exception` for live objects while the newer head still holds. When a later change for the same app,
+environment and cluster records an applied `deploy.outcome`, the older change's token is revoked (`deploy.revoke`,
+"successor <id> applied") and its stamps stop being valid. A change superseded without an applied outcome is revoked
+at once, as before. Everything that reads the feed's grants (the Argo CD agent, the observe-k8s collector's
+`ClearanceGrant` lookups) follows this with no change of its own: the feed's shape and signature are unchanged.
 
 Two behaviour changes from C-1, both to keep the token consistent with the state: a new head now moves a **cleared**
 older head to `superseded` (it stayed `cleared` with a revoked token), so a GitHub deployment of the old head is

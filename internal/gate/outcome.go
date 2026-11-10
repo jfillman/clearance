@@ -170,6 +170,10 @@ func (s *Service) RecordOutcome(ctx context.Context, ev store.Event, wr evidence
 			At: at, Digest: digest, Release: relID, Hash: hash, Provider: prov}
 		c.UpdatedAt = PyTime{w.now}
 		w.put(c)
+		if applied {
+			// The objects this change applied replace those of the older applied change that was kept live.
+			w.retireSuperseded(c)
+		}
 		return nil
 	})
 	if err != nil {
