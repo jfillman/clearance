@@ -63,6 +63,9 @@ type ObjectGrants interface {
 type facts struct {
 	m     map[string]any
 	grant string
+	// derived is the grant a write is attributed to through the object's listing or its owner chain (SignalOwnerGrant,
+	// SignalListedGrant), which is what the assessment names when one of those decides.
+	derived string
 }
 
 func (p *Pipeline) facts(e *Event) facts {
@@ -127,7 +130,26 @@ func (p *Pipeline) kubeFacts(e *Event) facts {
 	bg, live := p.lk.BreakGlass(e.Scope, e.Time)
 	f["break_glass"] = live
 	f["break_glass_id"] = bg
-	return facts{f, grant}
+	// A controller is a service account or a system identity acting as itself: no kubectl client, no impersonation, no
+	// federated agent. Derived objects (owner_grant) and status of listed objects (listed_grant) are attributed only
+	// to one, and only when nothing the event says is about a rendered field: see the rules in default.yaml.
+	controller := (e.Type == "serviceaccount" || e.Type == "system") && !f["kubectl"].(bool) && !f["impersonated"].(bool) && !fed
+	f["controller"] = controller
+	listed, owner := "", ""
+	if controller && e.Succeeded {
+		listed, owner = p.derivedGrants(e)
+	}
+	f["listed_grant"], f["owner_grant"] = listed, owner
+	// A controller's write that leaves the object, as the grant hashes one, as it was before: status and the controller's own
+	// bookkeeping, nothing rendered. Only for an object that names a grant the store knows, and only when the before-state is
+	// known (the collector's watch cache), because the live object's hash may never equal the render's (a controller or the
+	// CRD defaults a field the render leaves out), which is why hash_match cannot say it.
+	f["desired_unchanged"] = controller && e.Succeeded && known && e.BeforeHash != "" && e.BeforeHash == e.AfterHash
+	derived := listed
+	if derived == "" {
+		derived = owner
+	}
+	return facts{f, grant, derived}
 }
 
 func (p *Pipeline) awsFacts(e *Event) facts {
@@ -200,7 +222,7 @@ func (p *Pipeline) awsFacts(e *Event) facts {
 		grant = g
 	}
 	f["grant"] = grant
-	return facts{f, grant}
+	return facts{f, grant, ""}
 }
 
 // runID is the pipeline run a source identity quotes: "clearance-run/<id>" or "run=<id>".

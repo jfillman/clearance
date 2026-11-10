@@ -16,6 +16,24 @@ attribute:
       outcome: cleared
       severity: info
       detail: the live object's hash is one the grant listed
+    - signal: owner-grant
+      when: facts.owner_grant != ""
+      outcome: cleared
+      severity: info
+      confidence: derived
+      detail: a controller wrote an object that a granted object owns (its ownerReferences reach an object a valid grant lists), so it is that grant taking effect
+    - signal: listed-grant
+      when: facts.listed_grant != "" && event.subresource == "status"
+      outcome: cleared
+      severity: info
+      confidence: derived
+      detail: a controller wrote the status of an object a valid grant lists; status is not a rendered field
+    - signal: grant-annotation+unchanged
+      when: facts.desired_unchanged
+      outcome: cleared
+      severity: info
+      confidence: derived
+      detail: a controller wrote an object that names a known grant and left it as it was before, as the grant hashes an object (status, a controller's own bookkeeping), so nothing a grant renders changed
     - signal: grant-annotation+mutating-webhook
       when: facts.hash_differs && facts.mutating_webhook
       outcome: cleared

@@ -53,6 +53,13 @@ type Config struct {
 	FlushInterval     time.Duration // default 20m
 	MaxQueueAge       time.Duration // the queue is not draining past this; default 5m
 	BatchSize         int           // default 200
+	// GrantSettle: a write that names a grant the collector's lookups do not know is held this long, the lookups are
+	// re-read, and only then is it decided. A grant is cleared a moment before Argo CD stamps and applies its objects, and
+	// the Argo CD agent writes the ClearanceGrant up to its --grant-interval (30s) later; the collector's own snapshot is
+	// re-read every health interval (1m) and on a miss. Default 3m, past both. Negative: decide at once.
+	GrantSettle time.Duration
+	// MaxHeld bounds how many events wait at once (default 1000); past it an event is decided at once.
+	MaxHeld int
 	// Latency is how far behind the source this reader is by design (CloudWatch, Log Analytics): a watch change waits
 	// this much longer for its audit event. Webhook: 0.
 	Latency time.Duration
@@ -79,6 +86,12 @@ func (c *Config) defaults() {
 	}
 	if c.BatchSize <= 0 {
 		c.BatchSize = 200
+	}
+	if c.GrantSettle == 0 {
+		c.GrantSettle = 3 * time.Minute
+	}
+	if c.MaxHeld <= 0 {
+		c.MaxHeld = 1000
 	}
 	if c.Log == nil {
 		c.Log = slog.New(slog.NewTextHandler(discard{}, nil))
@@ -125,7 +138,23 @@ func (c *Counters) empty() bool {
 
 type meta struct {
 	Counters Counters `json:"counters"`
+	// Held are the events waiting out the grant settle window. They are past the queue's cursor, so they are kept here,
+	// committed with it: a restart decides them when they fall due, and none is lost.
+	Held []heldEvent `json:"held,omitempty"`
 }
+
+// heldEvent is an audit event whose write names a grant the lookups did not know when it arrived.
+type heldEvent struct {
+	ID      string          `json:"id"`
+	Grant   string          `json:"grant"`
+	Payload json.RawMessage `json:"payload"`
+	Before  json.RawMessage `json:"before,omitempty"` // the object before the change, kept when small
+	At      time.Time       `json:"at"`               // when the queue received it
+	Due     time.Time       `json:"due"`
+}
+
+// maxHeldBefore is the largest before-image kept with a held event (the cursor file is rewritten at every commit).
+const maxHeldBefore = 32 << 10
 
 // Collector is one source's engine.
 type Collector struct {
@@ -151,6 +180,7 @@ type Collector struct {
 	watchWant int
 	hbErr     error
 	lkErr     error
+	held      []heldEvent // events waiting out the settle window; the committed copy is meta.Held
 }
 
 type heartbeatState struct {
@@ -173,6 +203,8 @@ func New(cfg Config, d Deps) (*Collector, error) {
 			return nil, fmt.Errorf("collector: the queue's meta: %w", err)
 		}
 	}
+	c.held = append(c.held, c.meta.Held...)
+	d.Pipeline.HoldUnknownGrants(cfg.GrantSettle > 0)
 	if c.meta.Counters.Since.IsZero() {
 		c.meta.Counters.Since = cfg.Now().UTC()
 	}
@@ -230,6 +262,10 @@ type batch struct {
 	upTo  uint64
 	items []item
 	delta Counters
+	// newHeld are the events this batch put on hold, and released the ones it decided (by id): applied to the held list
+	// and to the committed meta together.
+	newHeld  []heldEvent
+	released map[string]bool
 }
 
 type item struct {
@@ -246,11 +282,24 @@ func (c *Collector) ProcessOnce(ctx context.Context) (int, error) {
 		if err != nil {
 			return 0, err
 		}
-		if len(es) == 0 {
+		due := c.dueHeld(c.cfg.Now())
+		if len(es) == 0 && len(due) == 0 {
 			return 0, nil
 		}
-		b := &batch{upTo: es[len(es)-1].Seq + 1}
+		b := &batch{upTo: c.d.Queue.Cursor(), released: map[string]bool{}}
+		if len(es) > 0 {
+			b.upTo = es[len(es)-1].Seq + 1
+		}
 		b.delta.Filtered, b.delta.OutOfScope = map[string]int{}, map[string]int{}
+		if len(due) > 0 && c.d.Lookups != nil {
+			// the settle window is over: ask the grants again before deciding, not on the miss throttle's say-so
+			if err := c.d.Lookups.Refresh(ctx); err != nil {
+				c.cfg.Log.Warn("grants not re-read after the settle window; deciding on the last snapshot", "err", err)
+			}
+		}
+		for _, h := range due {
+			c.release(h, b)
+		}
 		for _, e := range es {
 			c.handle(e.Payload, e.At, b)
 		}
@@ -272,12 +321,14 @@ func (c *Collector) ProcessOnce(ctx context.Context) (int, error) {
 	next := c.meta
 	next.Counters.Filtered, next.Counters.OutOfScope = copyMap(c.meta.Counters.Filtered), copyMap(c.meta.Counters.OutOfScope)
 	merge(&next.Counters, b.delta)
+	next.Held = c.heldAfter(b)
 	m, _ := json.Marshal(next)
 	c.mu.Unlock()
 	err := c.d.Queue.Commit(b.upTo, m)
 	if err == nil {
 		c.mu.Lock()
 		c.meta = next
+		c.held = append([]heldEvent(nil), next.Held...)
 		c.mu.Unlock()
 	}
 	c.commitMu.Unlock()
@@ -334,6 +385,12 @@ func (c *Collector) handle(payload []byte, at time.Time, b *batch) {
 		deleted := ev.Verb == "delete"
 		raw.Before = JSON(c.cache.Before(kind, ev.ObjectRef.Namespace, ev.ObjectRef.Name, ev.ResponseObject.Metadata.ResourceVersion, when, deleted))
 	}
+	c.decide(&ev, raw, at, b)
+}
+
+// decide runs the event through the pipeline and files the outcome in the batch. An event the pipeline holds (it names
+// a grant not yet known) is put on the held list, due after the settle window, unless the list is full.
+func (c *Collector) decide(ev *auditEvent, raw pipeline.RawEvent, at time.Time, b *batch) {
 	a, disp, detail, err := c.pipe.Process(raw)
 	if err != nil {
 		b.delta.Malformed++
@@ -344,6 +401,21 @@ func (c *Collector) handle(payload []byte, at time.Time, b *batch) {
 	case pipeline.Assessed:
 		b.delta.Assessed++
 		b.items = append(b.items, item{a, levelOf(map[string]any{"level": ev.Level})})
+	case pipeline.Held:
+		c.mu.Lock()
+		full := len(c.held)+len(b.newHeld) >= c.cfg.MaxHeld
+		c.mu.Unlock()
+		if full {
+			raw.Final = true // no room to wait: decide it as it stands (out-of-band, the cautious answer)
+			c.decide(ev, raw, at, b)
+			return
+		}
+		h := heldEvent{ID: ev.AuditID, Grant: detail, Payload: raw.Raw, At: at, Due: c.cfg.Now().Add(c.cfg.GrantSettle)}
+		if len(raw.Before) <= maxHeldBefore {
+			h.Before = raw.Before
+		}
+		b.newHeld = append(b.newHeld, h)
+		c.cfg.Log.Debug("held: the grant is not known yet", "audit_id", ev.AuditID, "grant", detail, "due", h.Due)
 	case pipeline.Filtered:
 		b.delta.Filtered[detail]++
 	case pipeline.OutOfScope:
@@ -351,6 +423,43 @@ func (c *Collector) handle(payload []byte, at time.Time, b *batch) {
 	case pipeline.NotWrite:
 		b.delta.NotWrites++
 	}
+}
+
+// dueHeld is the held events whose settle window is over.
+func (c *Collector) dueHeld(now time.Time) []heldEvent {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var due []heldEvent
+	for _, h := range c.held {
+		if !now.Before(h.Due) {
+			due = append(due, h)
+		}
+	}
+	return due
+}
+
+// release decides a held event for good: the lookups were re-read, so a grant that became known attributes it
+// normally, and one that did not is the unknown grant it looked like.
+func (c *Collector) release(h heldEvent, b *batch) {
+	b.released[h.ID+"|"+h.At.UTC().Format(time.RFC3339Nano)] = true
+	var ev auditEvent
+	if err := json.Unmarshal(h.Payload, &ev); err != nil {
+		b.delta.Malformed++
+		return
+	}
+	raw := pipeline.RawEvent{Provider: pipeline.Kubernetes, Scope: c.cfg.Cluster, Raw: h.Payload, Before: h.Before, Final: true}
+	c.decide(&ev, raw, h.At, b)
+}
+
+// heldAfter is the held list once b is committed: what was held, less what b released, plus what b put on hold.
+func (c *Collector) heldAfter(b *batch) []heldEvent {
+	var out []heldEvent
+	for _, h := range c.held {
+		if !b.released[h.ID+"|"+h.At.UTC().Format(time.RFC3339Nano)] {
+			out = append(out, h)
+		}
+	}
+	return append(out, b.newHeld...)
 }
 
 // kindOf is the Kind of a resource the watches know (so the cache key matches), else the pipeline's own guess is used

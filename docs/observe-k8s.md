@@ -84,6 +84,47 @@ writing a Secret a grant lists, or pruning (deleting) an object a grant lists, r
 grant lists, is out-of-band. A break-glass window is matched as open *now*; an event that trailed a window's close is not
 matched to it.
 
+**Settle window for a grant not known yet.** The grants come from the cluster's `ClearanceGrant` objects (the Argo CD agent
+creates one when a change is cleared, within its `--grant-interval`, 30 s by default, and Argo CD stamps and applies the
+objects at about the same moment), and the snapshot is re-read at start, on a miss older than 5 s and every health interval. A
+write that names a grant the snapshot does not know is therefore not decided at once: it is **held** (`--grant-settle`,
+chart `grantSettle`, default 3 m, longer than the agent's interval plus the health interval; negative turns it off), the
+grants are re-read when the window is over, and then it is decided: attributed normally if the grant is known now,
+`grant-annotation.unknown` (out-of-band, high) if not. Held events are stored in the queue's cursor file with the counters
+(a restart loses none; at most 1000, and the before-image is kept only when it is under 32 KiB). They are counted when they
+are decided, so a held event shows as neither assessed nor filtered meanwhile. The cost is that a real forged stamp is
+flagged one window later. A refused write and an operation on monitoring are never held.
+
+**Derived objects.** A controller's write to an object that a granted object owns (a ReplicaSet of a granted Rollout, a Pod of
+that ReplicaSet, a Job's Pod) is attributed to the owner's grant (`owner-grant`) instead of being out-of-band; so is a
+controller's `status` write to an object a valid grant lists (`listed-grant`), and a controller's bookkeeping write to a
+granted object that leaves it as it was before (`grant-annotation+unchanged`: the chart watches Rollouts for the
+before-state; a deployment that overrides `watch.resources` adds it). The stamp comparison covers rendered fields only: no
+status, and none of the annotations and labels in `rules.annotations.controllerOwned` and `controllerLabels` (Argo Rollouts'
+`rollout.argoproj.io/*`, `deployment.kubernetes.io/*`, `notified.notifications.argoproj.io`). A controller is a service
+account or system identity acting as itself; a person, a `kubectl` client, an impersonation or a federated agent editing the
+same object is still out-of-band, and so is a rendered field changed by a controller. See
+[observe-pipeline.md](observe-pipeline.md).
+
+**Routine writers (noise rules the chart generates).** Each is one exact identity and the exact shape it writes, only a
+succeeded write (a refused attempt is never noise), in the governed namespaces (`protectedNamespaces`, the Argo CD
+namespace, `rules.extraGovernedNamespaces`). The audit policy records some of these at Metadata, so the kind is derived from
+the resource name and both spellings are listed (`ClearanceGrant` and `Clearancegrant`).
+
+| rule | identity | shape |
+|---|---|---|
+| `calico-cni-pod-status` | `kube-system:calico-cni-plugin` | patch of the `status` subresource of Pods (the annotation shape is not visible at Metadata) |
+| `clearance-argocd-agent-grants` | `rules.grantAgentSubject` | create, update, patch or delete of `ClearanceGrant`s |
+| `crossplane-composite-resources` | `rules.crossplaneSubject` | update or patch of `rules.crossplaneCompositeKinds` (default `RolloutWatch`) carrying the `crossplane.io/composite` label |
+| `crossplane-composed-resources` | `rules.crossplaneSubject` | create, update or patch of `rules.crossplaneComposedKinds` (default `ServiceAccount`) owned by one of those composites |
+| `disruption-controller-status` | `kube-system:disruption-controller` | update of the `status` subresource of PodDisruptionBudgets |
+| `external-secrets-status` | `rules.externalSecretsSubject` | update of the `status` subresource of ExternalSecrets (the Secrets it writes are not covered) |
+| `job-controller-wait-job` | `kube-system:job-controller` | the PreSync wait Job `clearance-awaiting-approval` and its pods |
+| `applicationset-status` (since 0.39.1) | the ApplicationSet controller in `argocd.namespace` | update of the `status` subresource of ApplicationSets |
+
+Accepted: the grant agent's writes of its own `ClearanceGrant` objects are not watched here (the agent is the trusted source
+of the grants; its refused creates, AlreadyExists, stay visible as attempted-refused).
+
 **One exception, not two.** The Argo CD agent's `deploy.exception` (it names objects and the cluster) and the
 collector's observation (it names who and the diff) of the same change are folded into one row of the packet's
 exceptions section. The correlation key is `observe.KubeObjectKey(scope, kind, namespace, name)`: the cluster's name,

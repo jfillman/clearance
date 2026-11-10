@@ -23,7 +23,12 @@ scopes); a deployment supplies its own with the same schema (`clearance.observe-
 **Normalize** flattens an event (`Event`: the actor as the source verified it and as the actor reported it, the
 resource, the verb, whether it succeeded) and canonicalizes the stored object: no `status`, no server-managed
 metadata, none of the gate's own annotations (named in the bundle's `annotations`, so a deployment sets its stamp names; the default bundle uses `clearance.example.com/grant`, `/rendered`, `/tree`, `/release`, and Argo's
-tracking id). Its digest is `render.ObjectDigest`, the hash the gate computes for a rendered object, so a live object
+tracking id), and none of the annotations and labels a controller keeps on an object it manages
+(`annotations.controller_owned` and `controller_labels`; an entry ending in `/` is a prefix; the default bundle lists
+`rollout.argoproj.io/`, `rollouts.argoproj.io/`, `deployment.kubernetes.io/`, `notified.notifications.argoproj.io` and the
+`rollouts-pod-template-hash` and `pod-template-hash` labels). The gate never renders any of those, so dropping them leaves the
+rendered hash unchanged; what remains is the fields a grant covers, which a controller does not write. The hash covers no
+status. Its digest is `render.ObjectDigest`, the hash the gate computes for a rendered object, so a live object
 and a grant's render compare directly. A **Secret** is never carried: its body, before or after, is not read into the
 event, hashed or diffed (`TestSecretBodiesNeverLeaveNormalize`). Reads and non-final audit stages are counted, not
 assessed.
@@ -46,6 +51,10 @@ unconditional `when`, a kind that is a monitoring control. "Anything from a serv
 | `cert-manager-secret-rotation` | cert-manager | create, update or patch of a `Secret` owned by a `Certificate` |
 | `hpa-scale` | the HorizontalPodAutoscaler | update or patch of the `scale` subresource of workloads |
 
+A deployment adds its own (the observe-k8s chart's are in [observe-k8s.md](observe-k8s.md)). A person, a `kubectl`
+client, an impersonation or a refused attempt is never matched by the derived-object signals above: a write to a rendered
+field by anyone who is not the gate stays out-of-band.
+
 The Argo rule is deliberately narrow. The objects Argo *applies* are what attribution must verify (a write with no
 grant is out-of-band), so they are not filtered; only Argo's bookkeeping on its own `Application` objects is. The
 packet prints the count per rule: **`filtered: N events under rule X (<rule set>@<version>)`**
@@ -58,7 +67,16 @@ runs, sessions, plans, apply windows). The orders in `default.yaml`:
 
 *Kubernetes*: a 403 with a VAP denial in the audit annotations (attempted-refused); any other refusal; the grant
 annotation with the live object's hash among the grant's rendered hashes (cleared; the stamp annotation is only a
-claim, the grant's own list is what matches); grant present and hash differing with a mutating webhook in the audit
+claim, the grant's own list is what matches); **`owner-grant`**, a controller (a service account or system identity: not a
+`kubectl` client, not impersonation, not a federated agent) writing an object whose `ownerReferences` chain reaches an
+object a valid grant lists (a ReplicaSet of a granted Rollout, a Pod of that ReplicaSet), attributed to that grant (cleared,
+and the assessment names the owner's grant; the chain is walked through `ObjectGrants`, up to four hops, with the owners the
+pipeline has seen of each object in a bounded in-process memory, so a delete with no body and the second hop work; a restart
+forgets it and an unwalkable chain stays out-of-band); **`listed-grant`**, a controller writing the `status` subresource of
+an object a valid grant lists (cleared); **`grant-annotation+unchanged`**, a controller's write to an object that names a
+known grant and leaves it, as the grant hashes an object, as it was before (cleared; needs the before-state, so the kind
+must be watched: a live Rollout carries fields its render leaves out, so its own hash may never equal the render's);
+grant present and hash differing with a mutating webhook in the audit
 annotations (cleared, low); grant present and hash differing (out-of-band, **high**); a grant the store does not know
 (out-of-band, high); a live break-glass record (break-glass); the Argo service account naming a known grant when the
 event has no hash to compare, as with a delete (observed-not-attributed; "hash differing" needs a hash); the Argo
@@ -87,6 +105,12 @@ after-hash is the first's before-hash, or it deletes what the first created) is 
 naming both events. A refused attempt and a monitoring operation are never folded away. Exception kinds are the gate's
 (`out-of-band`, `attempted-refused`, `monitoring-protection`, `drift` for observed-not-attributed) and `break-glass`,
 the packet's class of that name.
+
+**Settling an unknown grant.** A grant is cleared a moment before Argo CD stamps and applies its objects, and the
+collector learns of it a sync later. `Pipeline.HoldUnknownGrants(true)` makes `Process` answer `Held` (nothing counted, nothing
+correlated, no record) for a write that would be `grant-annotation.unknown`; the collector holds it for a settle window, re-reads
+its lookups, and processes it again with `RawEvent.Final` set, which decides at once. A refusal and an operation on monitoring
+are never held. See [observe-k8s.md](observe-k8s.md).
 
 ## Operations on monitoring
 

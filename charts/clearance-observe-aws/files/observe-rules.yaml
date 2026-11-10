@@ -17,6 +17,9 @@ annotations:
   grant: clearance.example.com/grant
   rendered: clearance.example.com/rendered
   strip: [clearance.example.com/tree, clearance.example.com/release, argocd.argoproj.io/tracking-id]
+  # What a controller keeps on an object it manages is not a rendered field: hashing ignores it. An entry ending in "/" is a prefix.
+  controller_owned: [rollout.argoproj.io/, rollouts.argoproj.io/, deployment.kubernetes.io/, notified.notifications.argoproj.io]
+  controller_labels: [rollouts-pod-template-hash, pod-template-hash]
 
 scope:
   governed:

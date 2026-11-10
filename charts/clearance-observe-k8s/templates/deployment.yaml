@@ -49,6 +49,7 @@ spec:
             - --heartbeat-interval={{ .Values.heartbeat.interval }}
             - --health-interval={{ .Values.healthInterval }}
             - --gap-grace={{ .Values.gapGrace }}
+            - --grant-settle={{ .Values.grantSettle }}
             {{- if .Values.heartbeat.canarySecret.enabled }}
             - --canary-secret={{ .Values.heartbeat.canarySecret.name }}
             {{- end }}

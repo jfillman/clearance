@@ -2,7 +2,9 @@ package charttest
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -14,6 +16,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/jfillman/clearance/internal/observe/pipeline"
+	"github.com/jfillman/clearance/internal/vocab"
 )
 
 const observeChartDir = "../../charts/clearance-observe-k8s"
@@ -177,7 +180,7 @@ func TestObserveK8sChartRulesLoadInThePipeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the rendered rule set does not load: %v\n%s", err, doc)
 	}
-	if rs.Ref.Name != "observe-hangar" || rs.Ref.Version != "2026.11.4" {
+	if rs.Ref.Name != "observe-hangar" || rs.Ref.Version != "2026.11.5" {
 		t.Errorf("%+v", rs.Ref)
 	}
 	if !strings.Contains(doc, "hangar-prod") || !strings.Contains(doc, "app-gate-api-prod") || !strings.Contains(doc, "argocd-apps") {
@@ -224,5 +227,129 @@ func TestObserveK8sChartRefusesWhatWouldBeUnsafe(t *testing.T) {
 				t.Fatalf("got %v %q, want a refusal naming %q", err, out, c.want)
 			}
 		})
+	}
+}
+
+// The routine writers the chart gives exact noise rules (live shapes from hangar-prod): each rule drops its one identity's
+// succeeded write of exactly its shape, and nothing a step to the side of it: another verb, subresource, kind or owner,
+// another identity, a refused attempt.
+func TestObserveK8sChartNoiseRulesAreExact(t *testing.T) {
+	objs := renderObserve(t)
+	doc, _ := get(find(objs, "ConfigMap", "clearance-observe-k8s-rules"), "data", "observe-rules.yaml").(string)
+	rs, err := pipeline.Load([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		ns         = "app-gate-api-prod"
+		calico     = "system:serviceaccount:kube-system:calico-cni-plugin"
+		agentSA    = "system:serviceaccount:clearance-system:clearance-argocd-agent"
+		crossplane = "system:serviceaccount:crossplane-system:crossplane"
+		disrupt    = "system:serviceaccount:kube-system:disruption-controller"
+		eso        = "system:serviceaccount:external-secrets:external-secrets"
+		jobCtl     = "system:serviceaccount:kube-system:job-controller"
+	)
+	owner := func(kind, name string) []any {
+		return []any{map[string]any{"kind": kind, "name": name, "controller": true}}
+	}
+	obj := func(kind, name string, labels map[string]any, owners []any) map[string]any {
+		md := map[string]any{"name": name, "namespace": ns, "labels": labels}
+		if owners != nil {
+			md["ownerReferences"] = owners
+		}
+		return map[string]any{"kind": kind, "metadata": md}
+	}
+	type c struct {
+		name, user, verb, resource, objName, sub, ns string
+		code                                         int
+		obj                                          map[string]any
+		want                                         string // the noise rule, or "" for an assessment
+	}
+	composite := map[string]any{"crossplane.io/composite": "gate-api"}
+	cases := []c{
+		{name: "calico pod status", user: calico, verb: "patch", resource: "pods", objName: "web-1", sub: "status", want: "calico-cni-pod-status"},
+		{name: "calico pod status, kube-system", user: calico, verb: "patch", resource: "pods", objName: "web-1", sub: "status", ns: "kube-system", want: "calico-cni-pod-status"},
+		{name: "calico update", user: calico, verb: "update", resource: "pods", objName: "web-1", sub: "status"},
+		{name: "calico pod body", user: calico, verb: "patch", resource: "pods", objName: "web-1"},
+		{name: "calico configmap", user: calico, verb: "patch", resource: "configmaps", objName: "x", sub: "status"},
+		{name: "calico refused", user: calico, verb: "patch", resource: "pods", objName: "web-1", sub: "status", code: 409},
+		{name: "person patching pod status", user: "dana@example.com", verb: "patch", resource: "pods", objName: "web-1", sub: "status"},
+
+		{name: "agent creates a grant", user: agentSA, verb: "create", resource: "clearancegrants", objName: "g", obj: map[string]any{"kind": "ClearanceGrant"}, want: "clearance-argocd-agent-grants"},
+		{name: "agent patches a grant, Metadata level", user: agentSA, verb: "patch", resource: "clearancegrants", objName: "g", want: "clearance-argocd-agent-grants"},
+		{name: "agent patches grant status", user: agentSA, verb: "patch", resource: "clearancegrants", objName: "g", sub: "status", want: "clearance-argocd-agent-grants"},
+		{name: "agent deletes a grant", user: agentSA, verb: "delete", resource: "clearancegrants", objName: "g", want: "clearance-argocd-agent-grants"},
+		{name: "agent's refused create (AlreadyExists)", user: agentSA, verb: "create", resource: "clearancegrants", objName: "g", code: 409},
+		{name: "agent writing a configmap", user: agentSA, verb: "patch", resource: "configmaps", objName: "g"},
+		{name: "person writing a grant", user: "dana@example.com", verb: "patch", resource: "clearancegrants", objName: "g"},
+
+		{name: "crossplane patches its composite", user: crossplane, verb: "patch", resource: "rolloutwatches", objName: "gate-api", obj: obj("RolloutWatch", "gate-api", composite, nil), want: "crossplane-composite-resources"},
+		{name: "crossplane patches its composite status", user: crossplane, verb: "patch", resource: "rolloutwatches", objName: "gate-api", sub: "status", obj: obj("RolloutWatch", "gate-api", composite, nil), want: "crossplane-composite-resources"},
+		{name: "crossplane patches a RolloutWatch it does not compose", user: crossplane, verb: "patch", resource: "rolloutwatches", objName: "gate-api", obj: obj("RolloutWatch", "gate-api", map[string]any{}, nil)},
+		{name: "crossplane deletes its composite", user: crossplane, verb: "delete", resource: "rolloutwatches", objName: "gate-api", obj: obj("RolloutWatch", "gate-api", composite, nil)},
+		{name: "crossplane patches another kind", user: crossplane, verb: "patch", resource: "deployments", objName: "web", obj: obj("Deployment", "web", composite, nil)},
+		{name: "crossplane patches the SA of the composite", user: crossplane, verb: "patch", resource: "serviceaccounts", objName: "diagnosis-dispatch", obj: obj("ServiceAccount", "diagnosis-dispatch", composite, owner("RolloutWatch", "gate-api")), want: "crossplane-composed-resources"},
+		{name: "crossplane patches an SA owned by something else", user: crossplane, verb: "patch", resource: "serviceaccounts", objName: "x", obj: obj("ServiceAccount", "x", composite, owner("Deployment", "web"))},
+		{name: "crossplane patches an SA with no owner", user: crossplane, verb: "patch", resource: "serviceaccounts", objName: "x", obj: obj("ServiceAccount", "x", composite, nil)},
+		{name: "crossplane deletes the composed SA", user: crossplane, verb: "delete", resource: "serviceaccounts", objName: "diagnosis-dispatch", obj: obj("ServiceAccount", "diagnosis-dispatch", composite, owner("RolloutWatch", "gate-api"))},
+		{name: "another SA patches the composite", user: "system:serviceaccount:default:default", verb: "patch", resource: "rolloutwatches", objName: "gate-api", obj: obj("RolloutWatch", "gate-api", composite, nil)},
+
+		{name: "disruption controller PDB status", user: disrupt, verb: "update", resource: "poddisruptionbudgets", objName: "coredns", sub: "status", ns: "kube-system", want: "disruption-controller-status"},
+		{name: "disruption controller PDB body", user: disrupt, verb: "update", resource: "poddisruptionbudgets", objName: "coredns", ns: "kube-system"},
+		{name: "disruption controller patch", user: disrupt, verb: "patch", resource: "poddisruptionbudgets", objName: "coredns", sub: "status", ns: "kube-system"},
+		{name: "person writes PDB status", user: "dana@example.com", verb: "update", resource: "poddisruptionbudgets", objName: "coredns", sub: "status", ns: "kube-system"},
+
+		{name: "ESO ExternalSecret status", user: eso, verb: "update", resource: "externalsecrets", objName: "registry-credentials", sub: "status", want: "external-secrets-status"},
+		{name: "ESO ExternalSecret status, argocd namespace", user: eso, verb: "update", resource: "externalsecrets", objName: "x", sub: "status", ns: "argocd-apps", want: "external-secrets-status"},
+		{name: "ESO ExternalSecret body", user: eso, verb: "update", resource: "externalsecrets", objName: "registry-credentials"},
+		{name: "ESO writes a Secret", user: eso, verb: "update", resource: "secrets", objName: "registry-credentials"},
+		{name: "ESO ExternalSecret status refused", user: eso, verb: "update", resource: "externalsecrets", objName: "x", sub: "status", code: 409},
+
+		{name: "job controller, the wait Job", user: jobCtl, verb: "update", resource: "jobs", objName: "clearance-awaiting-approval", sub: "status", want: "job-controller-wait-job"},
+		{name: "job controller, the wait Job's pod", user: jobCtl, verb: "create", resource: "pods", objName: "clearance-awaiting-approval-mjd76", want: "job-controller-wait-job"},
+		{name: "job controller, another Job", user: jobCtl, verb: "update", resource: "jobs", objName: "migrate", sub: "status"},
+		{name: "job controller, a name that only starts alike", user: jobCtl, verb: "create", resource: "pods", objName: "clearance-awaiting-approvals"},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.code == 0 {
+				tc.code = 200
+			}
+			space := tc.ns
+			if space == "" {
+				space = ns
+			}
+			m := map[string]any{"auditID": fmt.Sprintf("n%d", i), "stage": "ResponseComplete", "verb": tc.verb, "level": "Metadata",
+				"stageTimestamp": "2026-11-10T21:12:23Z", "user": map[string]any{"username": tc.user},
+				"objectRef":      map[string]any{"resource": tc.resource, "namespace": space, "name": tc.objName, "subresource": tc.sub},
+				"responseStatus": map[string]any{"code": tc.code}}
+			if tc.obj != nil {
+				m["level"], m["responseObject"] = "RequestResponse", tc.obj
+				if md, ok := tc.obj["metadata"].(map[string]any); ok {
+					md["namespace"] = space
+				}
+			}
+			raw, _ := json.Marshal(m)
+			a, disp, rule, err := pipeline.New(rs, nil, vocab.Default()).Process(pipeline.RawEvent{Provider: pipeline.Kubernetes, Scope: "hangar-prod", Raw: raw})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.want != "" {
+				if disp != pipeline.Filtered || rule != tc.want {
+					t.Fatalf("got %v %q (%+v), want filtered under %s", disp, rule, a, tc.want)
+				}
+				return
+			}
+			if disp != pipeline.Assessed {
+				t.Fatalf("got %v %q, want an assessment: this shape is not noise", disp, rule)
+			}
+		})
+	}
+	// every new rule says why, and loads as exact (no pattern, no group)
+	for _, name := range []string{"calico-cni-pod-status", "clearance-argocd-agent-grants", "crossplane-composite-resources", "crossplane-composed-resources",
+		"disruption-controller-status", "external-secrets-status", "job-controller-wait-job"} {
+		if pipeline.New(rs, nil, vocab.Default()).NoiseWhy(name) == "" {
+			t.Errorf("rule %s is missing or has no why", name)
+		}
 	}
 }
