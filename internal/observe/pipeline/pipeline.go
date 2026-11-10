@@ -136,9 +136,19 @@ func (p *Pipeline) Process(raw RawEvent) (*Assessment, Disposition, string, erro
 		return nil, "", "", err
 	}
 	ev.Monitoring = p.monitoring(ev)
+	exempt := ""
+	if ev.Monitoring {
+		if exempt = p.exempt(ev); exempt != "" {
+			ev.Monitoring = false
+		}
+	}
 	if !p.inScope(ev) {
 		p.stats.OutOfScope[ev.Scope]++
 		return nil, OutOfScope, ev.Scope, nil
+	}
+	if exempt != "" {
+		p.stats.Filtered[exempt]++
+		return nil, Filtered, exempt, nil
 	}
 	if !ev.Monitoring {
 		if rule := p.noise(ev); rule != "" {
@@ -187,6 +197,9 @@ func (p *Pipeline) filteredCounts() []FilteredCount {
 	why := map[string]string{}
 	for _, r := range p.rs.noise {
 		why[r.name] = r.why
+	}
+	for _, x := range p.rs.monitoring.KubernetesExempt {
+		why["monitoring-exempt:"+x.Name] = x.Why
 	}
 	for rule, n := range p.stats.Filtered {
 		out = append(out, FilteredCount{rule, n, p.rs.Ref.Name + "@" + p.rs.Ref.Version, why[rule]})
@@ -262,6 +275,22 @@ func (p *Pipeline) monitoring(e *Event) bool {
 	return pycompat.MatchAny(e.API, m.AWS) || pycompat.MatchAny(e.API, m.Azure) || pycompat.MatchAny(e.API, m.Google)
 }
 
+// exempt returns the name of the monitoring exemption that covers e ("monitoring-exempt:<name>"), or "". The one
+// carve-out from monitoring-protection: a succeeded write by an exactly named controller to its own webhook
+// configurations. A refused attempt is never exempt, and nothing else (audit-policy, other kinds) is reachable here.
+func (p *Pipeline) exempt(e *Event) string {
+	if e.Provider != Kubernetes || !e.Succeeded {
+		return ""
+	}
+	for _, x := range p.rs.monitoring.KubernetesExempt {
+		if x.Subject == e.Subject && slices.Contains(x.Verbs, e.Verb) && slices.Contains(x.Kinds, e.Kind) &&
+			e.Subresource == "" && pycompat.MatchAny(e.Name, x.Names) {
+			return "monitoring-exempt:" + x.Name
+		}
+	}
+	return ""
+}
+
 // ---- scope ------------------------------------------------------------------------------------------------------
 
 func (p *Pipeline) inScope(e *Event) bool {
@@ -288,7 +317,7 @@ func (p *Pipeline) inScope(e *Event) bool {
 // ---- noise ------------------------------------------------------------------------------------------------------
 
 // noise returns the name of the rule that drops e, or "". A refused attempt is never noise (nothing a controller does
-// legitimately is refused, and a refusal is what a coverage statement should show), and neither is monitoring.
+// legitimately is refused, and a refusal is what a coverage statement should show), and neither is monitoring (the named exemptions are checked before this stage and never reach it).
 func (p *Pipeline) noise(e *Event) string {
 	if !e.Succeeded {
 		return ""
@@ -392,7 +421,8 @@ func (p *Pipeline) attribute(e *Event) (*Assessment, error) {
 	}
 	if e.Monitoring {
 		// An operation on monitoring is tier 3 whether or not it succeeded, whatever signal explains it: the signal
-		// is kept (who did it, under which grant), the outcome is not up to a rule.
+		// is kept (who did it, under which grant), the outcome is not up to a rule. The one carve-out is the rule set's named
+		// monitoring.kubernetes_exempt entries, which Process applies before this point (they never reach here).
 		a.Outcome, a.Severity = OutcomeMonitoring, "critical"
 		a.Detail = "operation on the controls that watch the environment: " + a.Detail
 	}

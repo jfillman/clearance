@@ -134,6 +134,20 @@ type MonitoringOps struct {
 	Google     []string `yaml:"google"`     // method names
 	Kubernetes []string `yaml:"kubernetes"` // kinds whose change is a change to the audit/webhook controls
 	ConfigMaps []string `yaml:"kubernetes_configmaps"`
+	// KubernetesExempt are the named carve-outs from Kubernetes monitoring-protection: a controller that maintains
+	// its own webhook configurations. See validateExempt.
+	KubernetesExempt []ExemptDoc `yaml:"kubernetes_exempt"`
+}
+
+// ExemptDoc is one named exception: a succeeded write by exactly this subject, with one of these verbs, to a webhook
+// configuration of one of these kinds whose name matches one of these globs, is routine noise, not monitoring-protection.
+type ExemptDoc struct {
+	Name    string   `yaml:"name"`
+	Why     string   `yaml:"why"`
+	Subject string   `yaml:"subject"` // exact; never a pattern
+	Verbs   []string `yaml:"verbs"`   // exact
+	Kinds   []string `yaml:"kinds"`   // the webhook configuration kinds only
+	Names   []string `yaml:"names"`   // fnmatch globs on the object name ("*" is any)
 }
 
 type sigDoc struct {
@@ -281,6 +295,9 @@ func Load(b []byte) (*RuleSet, error) {
 	if err := rs.loadNoise(d); err != nil {
 		return nil, err
 	}
+	if err := rs.loadExempt(); err != nil {
+		return nil, err
+	}
 	if err := rs.loadAttribute(d); err != nil {
 		return nil, err
 	}
@@ -372,6 +389,70 @@ func (rs *RuleSet) loadNoise(d doc) error {
 		key := n.Provider + "\x00" + n.Identity.Subject + "\x00" + n.Identity.Issuer
 		rs.noiseBySub[key] = append(rs.noiseBySub[key], len(rs.noise))
 		rs.noise = append(rs.noise, r)
+	}
+	return nil
+}
+
+// webhookKinds are the only kinds a monitoring exemption may name.
+var webhookKinds = []string{"ValidatingWebhookConfiguration", "MutatingWebhookConfiguration"}
+
+func (rs *RuleSet) loadExempt() error {
+	seen := map[string]bool{}
+	for i, x := range rs.monitoring.KubernetesExempt {
+		if err := validateExempt(x); err != nil {
+			return fmt.Errorf("observe rules: monitoring.kubernetes_exempt[%d]: %w", i, err)
+		}
+		if seen[x.Name] { // the name is the filtered-count key: two entries would share one line of the health record
+			return fmt.Errorf("observe rules: monitoring.kubernetes_exempt[%d]: name %q is used twice", i, x.Name)
+		}
+		seen[x.Name] = true
+	}
+	return nil
+}
+
+// validateExempt refuses an exemption that is not one exact subject, with exact verbs, restricted to the webhook
+// configuration kinds and to named objects.
+func validateExempt(x ExemptDoc) error {
+	if x.Name == "" || x.Why == "" {
+		return errors.New("name it and say why")
+	}
+	s := x.Subject
+	switch {
+	case s == "":
+		return errors.New("subject is the one subject the exemption is for")
+	case strings.ContainsAny(s, "*?[]"):
+		return fmt.Errorf("subject %q is a pattern: an identity is exact", s)
+	case strings.HasPrefix(s, "system:serviceaccounts") || s == "system:serviceaccount" || s == "system:authenticated" ||
+		s == "system:unauthenticated" || strings.HasPrefix(s, "system:masters"):
+		return fmt.Errorf("subject %q is a group, not an identity", s)
+	case strings.HasPrefix(s, "system:serviceaccount:"):
+		if p := strings.Split(s, ":"); len(p) != 4 || p[2] == "" || p[3] == "" {
+			return fmt.Errorf("subject %q is not one service account", s)
+		}
+	}
+	if len(x.Verbs) == 0 {
+		return errors.New("verbs name how the subject may write")
+	}
+	for _, v := range x.Verbs {
+		if v == "" || strings.ContainsAny(v, "*?[]") {
+			return fmt.Errorf("verbs are exact (%q)", v)
+		}
+	}
+	if len(x.Kinds) == 0 {
+		return errors.New("kinds must name the webhook configuration kinds the subject may write")
+	}
+	for _, k := range x.Kinds {
+		if !slices.Contains(webhookKinds, k) {
+			return fmt.Errorf("kinds names %q: an exemption covers only %v", k, webhookKinds)
+		}
+	}
+	if len(x.Names) == 0 {
+		return errors.New("names are globs on the object name (\"*\" for any)")
+	}
+	for _, n := range x.Names {
+		if n == "" {
+			return errors.New("names has an empty entry")
+		}
 	}
 	return nil
 }

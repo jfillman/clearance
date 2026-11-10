@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -607,5 +608,116 @@ func TestSecretWriteResolvesThroughTheGrantsObjectList(t *testing.T) {
 				t.Fatalf("got %s/%s, want %s/%s", a.Signal, a.Outcome, c.signal, c.outcome)
 			}
 		})
+	}
+}
+
+// The named monitoring exemptions: routine noise for exactly the listed writes, monitoring-protection for the rest.
+func TestMonitoringExemptions(t *testing.T) {
+	const kyverno = "system:serviceaccount:kyverno:kyverno-admission-controller"
+	const cainjector = "system:serviceaccount:cert-manager:cert-manager-cainjector"
+	rs := mustRules(t)
+	cases := []struct {
+		name, user, verb, resource, kind, obj, ns string
+		code                                      int
+		exempt                                    bool
+	}{
+		{"kyverno update of its validating config", kyverno, "update", "validatingwebhookconfigurations", "ValidatingWebhookConfiguration", "kyverno-resource-validating-webhook-cfg", "", 200, true},
+		{"kyverno update of its mutating config", kyverno, "update", "mutatingwebhookconfigurations", "MutatingWebhookConfiguration", "kyverno-resource-mutating-webhook-cfg", "", 200, true},
+		{"kyverno patch of a kyverno-* config", kyverno, "patch", "validatingwebhookconfigurations", "ValidatingWebhookConfiguration", "kyverno-policy-validating-webhook-cfg", "", 200, true},
+		{"cainjector patch of another product's config", cainjector, "patch", "mutatingwebhookconfigurations", "MutatingWebhookConfiguration", "istio-sidecar-injector", "", 200, true},
+		{"person updating the kyverno config", "dana", "update", "validatingwebhookconfigurations", "ValidatingWebhookConfiguration", "kyverno-resource-validating-webhook-cfg", "", 200, false},
+		{"kyverno updating a config not named kyverno-*", kyverno, "update", "validatingwebhookconfigurations", "ValidatingWebhookConfiguration", "payments-guard", "", 200, false},
+		{"kyverno deleting its own config", kyverno, "delete", "validatingwebhookconfigurations", "ValidatingWebhookConfiguration", "kyverno-resource-validating-webhook-cfg", "", 200, false},
+		{"kyverno create of its own config", kyverno, "create", "validatingwebhookconfigurations", "ValidatingWebhookConfiguration", "kyverno-resource-validating-webhook-cfg", "", 200, false},
+		{"cainjector update", cainjector, "update", "validatingwebhookconfigurations", "ValidatingWebhookConfiguration", "istio-validator", "", 200, false},
+		{"cainjector delete", cainjector, "delete", "validatingwebhookconfigurations", "ValidatingWebhookConfiguration", "istio-validator", "", 200, false},
+		{"refused kyverno update", kyverno, "update", "validatingwebhookconfigurations", "ValidatingWebhookConfiguration", "kyverno-resource-validating-webhook-cfg", "", 403, false},
+		{"kyverno writing the audit policy", kyverno, "update", "configmaps", "ConfigMap", "audit-policy", "kube-system", 200, false},
+		{"kyverno patching the audit policy", kyverno, "patch", "configmaps", "ConfigMap", "audit-policy", "kube-system", 200, false},
+		{"cainjector patching the audit policy", cainjector, "patch", "configmaps", "ConfigMap", "audit-policy", "kube-system", 200, false},
+	}
+	for i, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ns := ""
+			if c.ns != "" {
+				ns = `"namespace":"` + c.ns + `",`
+			}
+			raw := fmt.Sprintf(`{"auditID":"ex%d","stage":"ResponseComplete","verb":%q,"stageTimestamp":"2026-11-05T12:00:00Z",
+			 "user":{"username":%q},"objectRef":{"resource":%q,%s"name":%q},"responseStatus":{"code":%d},
+			 "responseObject":{"kind":%q,"apiVersion":"v1","metadata":{"name":%q}}}`,
+				i, c.verb, c.user, c.resource, ns, c.obj, c.code, c.kind, c.obj)
+			var alerts []Alert
+			p := New(rs, nil, vocab.Default())
+			p.OnAlert = func(a Alert) { alerts = append(alerts, a) }
+			a, d, rule, err := p.Process(RawEvent{Provider: Kubernetes, Scope: "prod-eu-1", Raw: json.RawMessage(raw)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.exempt {
+				if d != Filtered || !strings.HasPrefix(rule, "monitoring-exempt:") || a != nil {
+					t.Fatalf("an exempted write is routine noise: %v %q %+v", d, rule, a)
+				}
+				if h := p.Health("prod-eu-1"); h != observe.Healthy || len(alerts) != 0 {
+					t.Fatalf("no flip, no alert: %s %+v", h, alerts)
+				}
+				if st := p.Stats(); st.Filtered[rule] != 1 || st.Assessed != 0 {
+					t.Fatalf("counted as filtered: %+v", st)
+				}
+				if _, exs := p.Flush(); len(exs) != 0 {
+					t.Fatalf("no exception: %+v", exs)
+				}
+				return
+			}
+			if d != Assessed || a == nil || !a.Monitoring || a.Outcome != OutcomeMonitoring || a.Tier != 3 {
+				t.Fatalf("still monitoring-protection: %v %+v", d, a)
+			}
+			want := observe.Blind
+			if c.code != 200 {
+				want = observe.Degraded
+			}
+			if h := p.Health("prod-eu-1"); h != want || len(alerts) != 1 {
+				t.Fatalf("flips health and alerts: %s %+v", h, alerts)
+			}
+		})
+	}
+}
+
+func TestMonitoringExemptionsAreValidatedAtLoad(t *testing.T) {
+	const entry = `    - name: x
+      why: a fixture exemption.
+      subject: "system:serviceaccount:kyverno:kyverno-admission-controller"
+      verbs: [update]
+      kinds: [ValidatingWebhookConfiguration]
+      names: ["kyverno-*"]
+`
+	base := string(DefaultRules())
+	if !strings.Contains(base, "  kubernetes_exempt:\n") {
+		t.Fatal("the default rules carry no exemptions")
+	}
+	with := func(e string) string {
+		return strings.Replace(base, "  kubernetes_exempt:\n", "  kubernetes_exempt:\n"+e, 1)
+	}
+	if _, err := Load([]byte(with(entry))); err != nil {
+		t.Fatalf("the well-formed entry loads: %v", err)
+	}
+	bad := map[string]string{
+		"duplicate name":       entry + entry,
+		"empty subject":        strings.Replace(entry, `subject: "system:serviceaccount:kyverno:kyverno-admission-controller"`, `subject: ""`, 1),
+		"pattern subject":      strings.Replace(entry, "kyverno:kyverno-admission-controller", "kyverno:*", 1),
+		"group subject":        strings.Replace(entry, "system:serviceaccount:kyverno:kyverno-admission-controller", "system:serviceaccounts:kyverno", 1),
+		"empty verbs":          strings.Replace(entry, "verbs: [update]", "verbs: []", 1),
+		"no kinds":             strings.Replace(entry, "kinds: [ValidatingWebhookConfiguration]", "kinds: []", 1),
+		"kind not a webhook":   strings.Replace(entry, "kinds: [ValidatingWebhookConfiguration]", "kinds: [ConfigMap]", 1),
+		"a webhook and a kind": strings.Replace(entry, "kinds: [ValidatingWebhookConfiguration]", "kinds: [ValidatingWebhookConfiguration, ClusterRole]", 1),
+		"no names":             strings.Replace(entry, `names: ["kyverno-*"]`, "names: []", 1),
+		"no why":               strings.Replace(entry, "why: a fixture exemption.", "why: \"\"", 1),
+	}
+	for name, e := range bad {
+		if e == entry {
+			t.Fatalf("%s: the fixture did not change", name)
+		}
+		if _, err := Load([]byte(with(e))); err == nil {
+			t.Errorf("%s: the loader accepted it", name)
+		}
 	}
 }

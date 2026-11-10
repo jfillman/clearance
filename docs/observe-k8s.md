@@ -99,7 +99,7 @@ not-writes) are held with the queue cursor, reported each health interval in the
 record (`observe.FilteredSchema`: since, until, rule set, per-rule counts and their `why`) and cleared when the health record
 is posted. They are in the chain, so the packet sums those whose time falls in its window and passes them as
 `packet.Params.Filtered` (`packet.chainFiltered`; a caller's own counts win): *"filtered: N events under rule X
-(observe-hangar@2026.11.2)"*.
+(observe-hangar@2026.11.3)"*.
 
 **Blind window.** The collector posts a health record with `interval_seconds`; the core holds it for twice that, then the
 feed is blind until the next. The coverage route and the packet read it the same way (`observe.Build`): a collector that is
@@ -131,7 +131,11 @@ heartbeat must have come back *after* the operation, or the feed stays blind.
 ## Gaps and the watch cache
 
 The collector lists and watches the configured kinds (never Secrets): namespaced kinds in the protected namespaces and the
-Argo CD namespace, cluster-scoped ones (RBAC, admission configuration, CRDs) once. The cache keeps the last four versions
+Argo CD namespace, cluster-scoped ones (RBAC, admission configuration) once. **CustomResourceDefinitions are not
+watched by default**: the cache keeps whole objects, and a cluster with hundreds of CRDs is tens of MB of JSON (the hangar-dev
+rehearsal, about 470 CRDs, was OOMKilled at the 256Mi limit). `CustomResourceDefinition` stays in `rules.governedKinds`, so a CRD
+write is still observed through its audit event; it just has no before-object (no diff) and no watch-based audit-gap
+detection. A deployment that wants them back adds the resource to `watch.resources` and raises the memory limit. The cache keeps the last four versions
 of each object: with the `resourceVersion` of the audit event's response object the object before is exact; without one
 (a Metadata event) it is the second newest if the newest was seen at about the event's time. A watch change to *desired
 state* (canonical hash differs; a status write does not count) waits for an audit event for the same object (by
