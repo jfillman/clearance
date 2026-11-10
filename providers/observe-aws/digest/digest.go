@@ -158,11 +158,15 @@ func fail(reason, format string, a ...any) *Failure {
 func hexSum(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
 
 // SignedString is the data a digest's signature covers.
-func SignedString(end time.Time, bucket, object, contentHash, prevSignature string) string {
+//
+// endTime is the digest's digestEndTime exactly as the digest file writes it (e.g. 2026-11-10T21:33:00Z): AWS signs
+// that string, not a reformatted time. Checked 2026-11-10 against a digest AWS signed (the organization trail of
+// 700017004810, key fingerprint 93d8149d...): the compact yyyymmddThhmmssZ form does not verify; this one does.
+func SignedString(endTime, bucket, object, contentHash, prevSignature string) string {
 	if prevSignature == "" {
 		prevSignature = "null"
 	}
-	return end.UTC().Format("20060102T150405Z") + "\n" + bucket + "/" + object + "\n" + contentHash + "\n" + prevSignature
+	return endTime + "\n" + bucket + "/" + object + "\n" + contentHash + "\n" + prevSignature
 }
 
 // VerifyDigest checks one digest file: content is its decompressed bytes, bucket and object are where it was read
@@ -192,7 +196,7 @@ func VerifyDigest(content []byte, bucket, object, signatureHex, algorithm string
 		return nil, fail(ReasonKey, "%v", err)
 	}
 	hash := hexSum(content)
-	signed := sha256.Sum256([]byte(SignedString(end, bucket, object, hash, d.PrevSignature)))
+	signed := sha256.Sum256([]byte(SignedString(d.EndTime, bucket, object, hash, d.PrevSignature)))
 	if err := rsa.VerifyPKCS1v15(key, crypto.SHA256, signed[:], sig); err != nil {
 		return nil, fail(ReasonSignature, "the signature of %s/%s does not verify under key %s", bucket, object, d.Fingerprint)
 	}
