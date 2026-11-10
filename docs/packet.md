@@ -132,7 +132,7 @@ changes it proposed, the provenance levels, and the model versions (claimed by t
 
 | Class | Rows |
 | --- | --- |
-| `out-of-band` | `deploy.exception` of kind out-of-band, drift, untraced-apply or digest-mismatch, and observations seen and not cleared: actor, the diff (expected and observed digests, objects or addresses, the state or the operation), and the resolution (inside a break-glass window, re-cleared at a seq, an observation's `reverted`/`ratified`/... with its cause, or "none recorded") |
+| `out-of-band` | `deploy.exception` of kind out-of-band, drift, untraced-apply or digest-mismatch, and observations seen and not cleared: actor, the diff (expected and observed digests, objects or addresses, the state or the operation), and the resolution (inside a break-glass window, re-cleared at a seq, an observation's or a person's `reverted`/`ratified`/... with its cause, or "none recorded"). A person's resolution of a gate exception (`POST /v1/observations/{seq}/resolution`, newest wins) is the row's resolution, with `cause`, `resolved_by` and `resolution_seq` as an observation row has; a break-glass window still shows in `window` |
 | `break-glass` | One row per window: who opened it, until when, and how it closed (`breakglass.close`'s report) |
 | `attempted-refused` | An operation something tried and a control refused: nothing landed |
 | `monitoring-protection` | An operation on the controls that watch the environment, whether or not it succeeded |

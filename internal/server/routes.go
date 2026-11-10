@@ -266,12 +266,15 @@ var routeTable = []Route{
 			"cause (agent-caused, policy-triggered, human-initiated, automated-remediation, requirement-changed, " +
 			"external-dependency, unattributed), with an optional note. Recorded as a resolution record about the " +
 			"observation, naming the person (principal, initiator, resolution.by). Append-only: an edit is another " +
-			"record about the same seq, and the newest wins when it is read; the earlier ones stay in the chain.",
+			"record about the same seq, and the newest wins when it is read; the earlier ones stay in the chain. The seq may " +
+			"also be a gate exception (deploy.exception of kind out-of-band, drift, untraced-apply or digest-mismatch), " +
+			"resolved in the scope of its destination (cluster, else workspace backend/key#name); attempted-refused and " +
+			"monitoring-protection exceptions are not resolved this way.",
 		Request: gate.ResolutionRequest{},
 		Responses: []Response{{200, "the record written, naming the person", gate.ResolutionRecorded{}},
 			{400, "a state or cause outside the vocabulary, or a body that is not {state, cause?, note?}", gate.ErrorBody{}},
 			errs(401)[0], {403, "not an admin, or a delegate naming none", gate.ErrorBody{}},
-			{404, "no such observation (the seq is not an observation record), or a Clearance that keeps no changes (DG-OFF)", gate.ErrorBody{}},
+			{404, "no such observation (the seq is neither an observation nor a resolvable gate exception), or a Clearance that keeps no changes (DG-OFF)", gate.ErrorBody{}},
 			errs(413)[0]},
 	},
 	{

@@ -68,6 +68,18 @@ func (b *builder) exceptionsSection(pk *Packet) {
 			default:
 				row.Resolution = "none recorded"
 			}
+			// A person's resolution (POST /v1/observations/{seq}/resolution) of this exception is the row's resolution,
+			// read as an observation row's is: the newest record about the seq wins, with its cause and who set it. It
+			// takes precedence over "none recorded" and over a later re-clear; a break-glass window still shows in
+			// row.Window.
+			if rr, ok := b.resolved[seq]; ok && (row.Class == ClassOutOfBand) {
+				s := obj(rr, "resolution")
+				row.Resolution = str(s, "state")
+				row.Cause = str(s, "cause")
+				row.ResolutionSeq = ptr(seqOf(rr))
+				row.ResolvedBy = orDefault(str(s, "by"), str(obj(rr, "provider"), "name"))
+				b.extra[seqOf(rr)] = true
+			}
 			rows = append(rows, row)
 		case gate.KindDegraded:
 			o := obj(r, "outage")
