@@ -82,16 +82,34 @@ func (s *Service) SetResolution(ctx context.Context, p authn.Principal, about in
 			return gerr("DG-UNKNOWN", "no such observation", "", 404)
 		}
 		o := rs[0]
-		if seq, _ := SeqInt(o["seq"]); seq != about || o["tool"] != evidence.KindObservation {
-			return gerr("DG-UNKNOWN", fmt.Sprintf("seq %d is not an observation: a person resolves an observation", about),
-				"List the scope's observations with GET /v1/observations.", 404)
+		seq0, _ := SeqInt(o["seq"])
+		if seq0 != about {
+			return gerr("DG-UNKNOWN", "no such observation", "", 404)
 		}
-		scope, _ := o["scope"].(string)
+		scope := ""
+		what := "observation"
+		switch o["tool"] {
+		case evidence.KindObservation:
+			scope, _ = o["scope"].(string)
+		case KindException:
+			what = "exception"
+			k, _ := o["exception"].(map[string]any)["kind"].(string)
+			if !ResolvableExceptionKind(k) {
+				return gerr("DG-UNKNOWN", fmt.Sprintf("seq %d is a %s exception: a person resolves an out-of-band, drift, untraced-apply or digest-mismatch exception", about, k), "", 404)
+			}
+			var ok bool
+			if scope, ok = ExceptionScope(o); !ok {
+				return gerr("DG-UNKNOWN", fmt.Sprintf("seq %d names no destination cluster or workspace to scope a resolution to", about), "", 404)
+			}
+		default:
+			return gerr("DG-UNKNOWN", fmt.Sprintf("seq %d is not an observation or a gate exception: a person resolves one of those", about),
+				"List the scope's observations with GET /v1/observations, the exceptions with GET /v1/exceptions.", 404)
+		}
 		ev := store.Event{
 			"ts": evidence.ISO(w.now), "tool": evidence.KindResolution, "boundary": "deployment",
 			"task_id": nil, "session": nil, "parent": nil, "principal": person, "agent": nil, "target": nil,
 			"decision": nil, "rule": nil, "args_sha256": nil, "tier": nil,
-			"result":     fmt.Sprintf("observation %d resolved %s by %s", about, req.State, person),
+			"result":     fmt.Sprintf("%s %d resolved %s by %s", what, about, req.State, person),
 			"scope":      scope,
 			"about":      map[string]any{"seq": json.Number(strconv.FormatInt(about, 10))},
 			"resolution": res,
@@ -162,4 +180,42 @@ func (h *Handler) setResolution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpjson.Write(w, http.StatusOK, out)
+}
+
+// ResolvableExceptionKind: a person resolves an exception of a change that landed (out-of-band, drift,
+// untraced-apply, digest-mismatch). attempted-refused (nothing landed) and monitoring-protection (tier 3, an operation
+// on the controls themselves) are not resolved this way.
+func ResolvableExceptionKind(k string) bool {
+	switch k {
+	case "out-of-band", "drift", "untraced-apply", "digest-mismatch":
+		return true
+	}
+	return false
+}
+
+// ExceptionScope is the scope a resolution about a deploy.exception is written in, since an exception has none of its
+// own: its destination's cluster, else its Terraform workspace as backend/key#name (as the packet names it). False when
+// the record names neither, or the name is not a valid scope.
+func ExceptionScope(r map[string]any) (string, bool) {
+	d, _ := r["destination"].(map[string]any)
+	sc, _ := d["cluster"].(string)
+	if sc == "" {
+		if w, ok := d["workspace"].(map[string]any); ok {
+			b, _ := w["backend"].(string)
+			k, _ := w["key"].(string)
+			n, _ := w["name"].(string)
+			if b != "" && k != "" && n != "" {
+				sc = b + "/" + k + "#" + n
+			}
+		}
+	}
+	if sc == "" || len(sc) > 256 {
+		return "", false
+	}
+	for _, c := range sc {
+		if c < 0x21 || c > 0x7e {
+			return "", false
+		}
+	}
+	return sc, true
 }

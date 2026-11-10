@@ -189,3 +189,29 @@ func TestPacketSumsTheCollectorsFilteredCountsFromTheChain(t *testing.T) {
 		t.Fatalf("%+v", res.Packet.Exceptions.Filtered)
 	}
 }
+
+// A person's resolution of a gate exception (the Argo CD agent's out-of-band report has no change id) is the row's
+// resolution, newest first, instead of "none recorded".
+func TestAPersonsResolutionOfAGateExceptionIsTheRowsResolution(t *testing.T) {
+	const scope = "hangar-prod"
+	st := miniChain(t, healthFor("2026-10-09T00:00:00Z", scope))
+	lb := &labber{t: t, st: st}
+	gx := seqI(lb.add(argoW, gateException("2026-11-02T10:00:50Z", scope, dep("gate-api", "gate-api"))))
+	if rows := exceptionRows(t, st); len(rows) != 1 || rows[0].Resolution != "none recorded" || rows[0].ResolutionSeq != nil {
+		t.Fatalf("before: %+v", rows)
+	}
+	lb.add(coreW, personResolution("2026-11-03T08:00:00Z", scope, gx, "user:dana", "human-initiated"))
+	edit := seqI(lb.add(coreW, func() store.Event {
+		r := personResolution("2026-11-03T09:00:00Z", scope, gx, "user:jfillman", "")
+		r["resolution"] = map[string]any{"state": "ratified", "by": "user:jfillman", "note": "a false out-of-band report"}
+		return r
+	}()))
+	rows := exceptionRows(t, st)
+	if len(rows) != 1 {
+		t.Fatalf("%d rows: %+v", len(rows), rows)
+	}
+	r := rows[0]
+	if r.Seq != gx || r.Resolution != "ratified" || r.Cause != "" || r.ResolvedBy != "user:jfillman" || r.ResolutionSeq == nil || *r.ResolutionSeq != edit {
+		t.Fatalf("the newest person's resolution is the row's: %+v", r)
+	}
+}

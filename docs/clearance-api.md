@@ -103,7 +103,9 @@ stretch before it. `TestCoverageIsBlindForAScopeWhoseHealthRecordIsStale` runs t
 
 A person sets a resolution on the **core**, not here (clearance-api writes nothing):
 `POST /v1/observations/{seq}/resolution` ([gate.md](gate.md#a-persons-resolution-of-an-observation-o-5)); the coverage
-statement reads the newest resolution record about an observation.
+statement reads the newest resolution record about an observation. The same route resolves a gate `deploy.exception`
+(out-of-band, drift, untraced-apply, digest-mismatch), scoped to its destination; `GET /v1/observations?kind=resolution`
+lists those too, under the exception's cluster or workspace scope.
 
 Indexes (the core's schema): `clearance_evidence_observed` on `((record->>'scope'), seq)` for the five kinds (and `clearance_evidence_verification` for `observation.verification`), and
 `clearance_evidence_event` on provider, kind and `source.event_id` behind the core's de-duplication.
