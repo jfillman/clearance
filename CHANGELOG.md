@@ -9,6 +9,15 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.39.3] - 2026-11-10
+
+### Added
+
+- **observe-aws renders its own rule set.** The chart builds the collector's rule set from `ruleset.applyRoles`,
+  `ruleset.ssoAdminRoles` and `ruleset.governedAccounts` (default: the observed account), with the pipeline's default
+  attribution, classification and monitoring operations. Before, an empty `rules_bundle` left the collector on the
+  documentation-style default, which governs no real account. `ruleset.applyRoles` is required unless `rules_bundle` is set.
+
 ## [0.39.2] - 2026-11-10
 
 ### Fixed
@@ -962,7 +971,8 @@ What the Autopilot gateway needs of the core before the hangar-dev cutover (R-3e
   scope, narrow-only limits, CEL policy, sessions, the hash-chained audit log and the gateway; the Hangar pack's
   `glidepath.*` and `airframe.*` tools over glidepath-api and a GET-only Kubernetes adapter.
 
-[Unreleased]: https://github.com/jfillman/clearance/compare/v0.39.2...HEAD
+[Unreleased]: https://github.com/jfillman/clearance/compare/v0.39.3...HEAD
+[0.39.3]: https://github.com/jfillman/clearance/compare/v0.39.2...v0.39.3
 [0.39.2]: https://github.com/jfillman/clearance/compare/v0.39.1...v0.39.2
 [0.39.1]: https://github.com/jfillman/clearance/compare/v0.39.0...v0.39.1
 [0.39.0]: https://github.com/jfillman/clearance/compare/v0.38.0...v0.39.0
