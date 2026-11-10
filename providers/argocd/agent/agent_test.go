@@ -97,8 +97,8 @@ func TestGrantSync(t *testing.T) {
 			ns = append(ns, l)
 		}
 	}
-	wantOrder := []string{"apply app-a/" + ch4 + " active=false", "valid app-a/" + ch4 + " true",
-		"apply app-a/" + ch2 + " active=false", "apply app-a/" + ch4 + " active=true"}
+	wantOrder := []string{"create app-a/" + ch4 + " active=false", "valid app-a/" + ch4 + " true",
+		"update app-a/" + ch2 + " active=false", "update app-a/" + ch4 + " active=true"}
 	if strings.Join(ns[:4], ";") != strings.Join(wantOrder, ";") {
 		t.Errorf("rotation order:\n%v\nwant\n%v", ns, wantOrder)
 	}
@@ -360,4 +360,73 @@ func TestCarriedIsPerNamespaceAndBounded(t *testing.T) {
 	if g := w.grant("elsewhere", ch3); len(g.Spec.Carried) != 0 {
 		t.Errorf("another namespace's trees are not carried: %+v", g.Spec.Carried)
 	}
+}
+
+// writes is the grant and state writes the agent made since the last reset.
+func (w *world) resetVerbs() { w.kube.verbs = map[string]int{} }
+
+func (w *world) wantVerbs(what string, want map[string]int) {
+	w.t.Helper()
+	for _, v := range []string{"create", "update", "delete", "valid", "put"} {
+		if w.kube.verbs[v] != want[v] {
+			w.t.Errorf("%s: %s calls = %d, want %d (all: %v)", what, v, w.kube.verbs[v], want[v], w.kube.verbs)
+		}
+	}
+}
+
+// A feed that has not changed makes no write at all: no create (the API server refuses one for a grant that exists
+// and the audit log records the refusal), no update, no status write, no state write.
+func TestUnchangedFeedWritesNothing(t *testing.T) {
+	w := newWorld(t)
+	w.kube.protect("app-a", nil)
+	w.feeds.claims = []token.Claims{claim(w.feeds, ch2, "app-a", t0, deploy("web", hex("c")))}
+	w.feeds.publish()
+	w.resetVerbs()
+	if err := w.sync(); err != nil {
+		t.Fatal(err)
+	}
+	w.wantVerbs("a new token", map[string]int{"create": 1, "update": 1, "valid": 1, "put": 1}) // create, valid, then activate
+	for i := 0; i < 2; i++ {
+		w.resetVerbs()
+		w.clock.add(30 * time.Second)
+		if err := w.sync(); err != nil {
+			t.Fatal(err)
+		}
+		w.wantVerbs(fmt.Sprintf("steady state sync %d", i+1), map[string]int{})
+	}
+}
+
+func TestChangedAndRemovedTokensWriteOnce(t *testing.T) {
+	w := newWorld(t)
+	w.kube.protect("app-a", nil)
+	w.feeds.claims = []token.Claims{claim(w.feeds, ch2, "app-a", t0, deploy("web", hex("c")))}
+	w.feeds.publish()
+	if err := w.sync(); err != nil {
+		t.Fatal(err)
+	}
+	// The same change, other claims (the object's hash): one update, no create.
+	w.feeds.claims = []token.Claims{claim(w.feeds, ch2, "app-a", t0, deploy("web", hex("d")))}
+	w.feeds.publish()
+	w.resetVerbs()
+	if err := w.sync(); err != nil {
+		t.Fatal(err)
+	}
+	w.wantVerbs("changed claims", map[string]int{"update": 1, "put": 1})
+	// A second change in the namespace: one create (the new one), the active one updated to carry it, the flip.
+	w.feeds.claims = append(w.feeds.claims, claim(w.feeds, ch4, "app-b", t0, deploy("api", hex("e"))))
+	w.feeds.publish()
+	w.kube.protect("app-b", nil)
+	w.resetVerbs()
+	if err := w.sync(); err != nil {
+		t.Fatal(err)
+	}
+	w.wantVerbs("a new token", map[string]int{"create": 1, "update": 1, "valid": 1, "put": 1})
+	// Removed from the feed: one delete.
+	w.feeds.claims = w.feeds.claims[:1]
+	w.feeds.publish()
+	w.resetVerbs()
+	if err := w.sync(); err != nil {
+		t.Fatal(err)
+	}
+	w.wantVerbs("a removed token", map[string]int{"delete": 1, "put": 1})
 }

@@ -54,12 +54,13 @@ type fakeKube struct {
 	workOps  int // anything that would touch a workload: must stay 0
 	failList bool
 	log      []string        // grant operations, in order
-	failName map[string]bool // ApplyGrant of these grant names fails
+	failName map[string]bool // writes of these grant names fail
+	verbs    map[string]int  // create, update, delete, valid, put: the writes the agent made
 }
 
 func newKube(t *testing.T) *fakeKube {
 	return &fakeKube{t: t, ns: map[string]map[string]string{}, grants: map[string]agent.Grant{},
-		objs: map[string][]agent.ObjectDetail{}, data: map[string]map[string]string{}}
+		verbs: map[string]int{}, objs: map[string][]agent.ObjectDetail{}, data: map[string]map[string]string{}}
 }
 
 func (k *fakeKube) protect(ns string, labels map[string]string) {
@@ -112,19 +113,41 @@ func (k *fakeKube) ListGrants(context.Context) ([]agent.Grant, error) {
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
-func (k *fakeKube) ApplyGrant(_ context.Context, g agent.Grant) error {
+func (k *fakeKube) CreateGrant(_ context.Context, g agent.Grant) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.grantOps++
+	k.verbs["create"]++
 	if k.failName[g.Name] {
 		return errors.New("apply refused")
 	}
-	k.log = append(k.log, fmt.Sprintf("apply %s/%s active=%v", g.Namespace, g.Name, g.Active()))
 	key := g.Namespace + "/" + g.Name
-	n := cp(g)
-	if old, ok := k.grants[key]; ok {
-		n.Valid = old.Valid // spec and labels are replaced; status is not touched
+	if _, ok := k.grants[key]; ok {
+		k.t.Errorf("create of grant %s that exists: the API server refuses it (and the audit log records it)", key)
+		return errors.New("already exists")
 	}
+	k.log = append(k.log, fmt.Sprintf("create %s/%s active=%v", g.Namespace, g.Name, g.Active()))
+	k.grants[key] = cp(g)
+	k.checkActive()
+	return nil
+}
+func (k *fakeKube) UpdateGrant(_ context.Context, g, _ agent.Grant) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.grantOps++
+	k.verbs["update"]++
+	if k.failName[g.Name] {
+		return errors.New("apply refused")
+	}
+	key := g.Namespace + "/" + g.Name
+	old, ok := k.grants[key]
+	if !ok {
+		k.t.Errorf("update of grant %s that does not exist", key)
+		return errors.New("not found")
+	}
+	k.log = append(k.log, fmt.Sprintf("update %s/%s active=%v", g.Namespace, g.Name, g.Active()))
+	n := cp(g)
+	n.Valid = old.Valid // spec and labels are replaced; status is not touched
 	k.grants[key] = n
 	k.checkActive()
 	return nil
@@ -133,8 +156,12 @@ func (k *fakeKube) SetGrantValid(_ context.Context, ns, name string, v bool, _ s
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.grantOps++
+	k.verbs["valid"]++
 	k.log = append(k.log, fmt.Sprintf("valid %s/%s %v", ns, name, v))
-	g := k.grants[ns+"/"+name]
+	g, ok := k.grants[ns+"/"+name]
+	if !ok {
+		return errors.New("not found") // the API server has no such grant to patch the status of
+	}
 	g.Valid = &v
 	k.grants[ns+"/"+name] = g
 	return nil
@@ -143,6 +170,7 @@ func (k *fakeKube) DeleteGrant(_ context.Context, ns, name string) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.grantOps++
+	k.verbs["delete"]++
 	delete(k.grants, ns+"/"+name)
 	return nil
 }
@@ -177,6 +205,7 @@ func (k *fakeKube) GetData(_ context.Context, ns, name string) (map[string]strin
 func (k *fakeKube) PutData(_ context.Context, ns, name string, d map[string]string) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	k.verbs["put"]++
 	k.data[ns+"/"+name] = d
 	return nil
 }
