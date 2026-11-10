@@ -177,7 +177,7 @@ func TestObserveK8sChartRulesLoadInThePipeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the rendered rule set does not load: %v\n%s", err, doc)
 	}
-	if rs.Ref.Name != "observe-hangar" || rs.Ref.Version != "2026.11.3" {
+	if rs.Ref.Name != "observe-hangar" || rs.Ref.Version != "2026.11.4" {
 		t.Errorf("%+v", rs.Ref)
 	}
 	if !strings.Contains(doc, "hangar-prod") || !strings.Contains(doc, "app-gate-api-prod") || !strings.Contains(doc, "argocd-apps") {

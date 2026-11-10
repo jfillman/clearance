@@ -74,6 +74,8 @@ noise:
     provider: kubernetes
     why: the ApplicationSet controller writing the status subresource of ApplicationSets in its own namespace.
     identity: {subject: "system:serviceaccount:{{ .Values.argocd.namespace }}:argocd-applicationset-controller"}
+    # Applicationset is what a Metadata-level audit event yields (the kind is derived from the resource, with no object to
+    # read it from); ApplicationSet is the real kind, for an event that carries the object.
     shape: {kinds: [Applicationset, ApplicationSet], verbs: [update], subresources: [status], namespaces: [{{ .Values.argocd.namespace }}]}
   - name: prometheus-operator-kubelet-service
     provider: kubernetes
