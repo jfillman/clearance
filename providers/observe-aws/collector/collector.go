@@ -41,14 +41,19 @@ type Stats struct {
 	// Verifications are the trail's verification records posted for events the core already had; VerificationsRefused
 	// those the core refused (a collector registered without the observation.verification kind: the observation keeps
 	// sourceVerified false, and the refusal is logged once).
-	Verifications        int            `json:"verifications"`
-	VerificationsRefused int            `json:"verifications_refused"`
-	ConfigOnly           int            `json:"config_only"`
-	NotWrites            int            `json:"not_writes"`
-	NotEvaluated         map[string]int `json:"not_evaluated"`
-	OutOfAccounts        int            `json:"out_of_accounts"`
-	Filtered             int            `json:"filtered"`
-	Errors               int            `json:"errors"`
+	Verifications        int `json:"verifications"`
+	VerificationsRefused int `json:"verifications_refused"`
+	ConfigOnly           int `json:"config_only"`
+	// Baseline are Config's first-discovery items (status ResourceDiscovered for a resource created long before the
+	// recorder began): the resource existed, nothing changed, so they are counted and not posted.
+	Baseline int `json:"baseline"`
+	// RequestDiffs are the observations whose diff is their own CloudTrail request, no Config item having joined.
+	RequestDiffs  int            `json:"request_diffs"`
+	NotWrites     int            `json:"not_writes"`
+	NotEvaluated  map[string]int `json:"not_evaluated"`
+	OutOfAccounts int            `json:"out_of_accounts"`
+	Filtered      int            `json:"filtered"`
+	Errors        int            `json:"errors"`
 }
 
 // Collector runs the feeds' items through the scope filter, the reconciler and the pipeline, and posts the result.
@@ -128,6 +133,12 @@ func (c *Collector) Ingest(it *Item) error {
 		}
 		if d := c.Filter.DecideConfig(cc.ResourceType); !d.Evaluated {
 			c.count(func(s *Stats) { s.NotEvaluated[d.Area]++ })
+			runAcks(it.Acks)
+			return nil
+		}
+		if cc.Baseline() {
+			// AWS Config's first discovery of a resource that already existed: not a change, so not an exception.
+			c.count(func(s *Stats) { s.Baseline++ })
 			runAcks(it.Acks)
 			return nil
 		}
@@ -399,6 +410,13 @@ func (c *Collector) observation(m *Merged, a *pipeline.Assessment) client.Provid
 	}
 	rid := a.Resource
 	res := map[string]any{"kind": v.Service, "id": strings.TrimPrefix(rid, v.Service+"/")}
+	if id := createdID(v); id != "" && id != res["id"] {
+		// the response names the resource the call made (sg-..., i-...): that is its id; the name the request used stays
+		if res["id"] != "" {
+			res["name"] = res["id"]
+		}
+		res["id"] = id
+	}
 	if v.Region != "" {
 		res["region"] = v.Region
 	}
@@ -418,6 +436,9 @@ func (c *Collector) observation(m *Merged, a *pipeline.Assessment) client.Provid
 	}
 	if sc := stateChange(m.Config); sc != nil {
 		ev.StateChange = sc
+	} else if sc := requestDiff(v); sc != nil {
+		ev.StateChange = sc
+		c.count(func(s *Stats) { s.RequestDiffs++ })
 	}
 	corr := map[string]any{}
 	if a.Grant != "" {
@@ -456,9 +477,6 @@ func clipText(s string, n int) string {
 const maxStateChange = 48 << 10
 
 func stateChange(cfgs []*ConfigChange) map[string]any {
-	if len(cfgs) == 0 {
-		return nil
-	}
 	before, after := map[string]any{}, map[string]any{}
 	var ptrs []string
 	for _, c := range cfgs {
@@ -466,6 +484,10 @@ func stateChange(cfgs []*ConfigChange) map[string]any {
 			before[k], after[k] = p.Previous, p.Updated
 		}
 		ptrs = append(ptrs, c.Pointers()...)
+	}
+	if len(ptrs) == 0 {
+		// no joined item, or items with no changed properties (Config lists none for a CREATE): no Config diff
+		return nil
 	}
 	b1, _ := json.Marshal(before)
 	b2, _ := json.Marshal(after)

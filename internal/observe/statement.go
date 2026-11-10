@@ -198,6 +198,8 @@ type hrec struct {
 	state    string
 	interval time.Duration
 	failed   []string
+	// core is a record the core wrote itself (the flip an operation on monitoring causes), not the collector.
+	core bool
 }
 
 func hrecs(rs []Record) map[string][]hrec {
@@ -212,7 +214,7 @@ func hrecs(rs []Record) map[string][]hrec {
 		if n, ok := intOf(h["interval_seconds"]); ok && n > 0 {
 			iv = time.Duration(n) * time.Second
 		}
-		x := hrec{seq: seqOf(r), ts: tsOf(r), state: s(h, "state"), interval: iv}
+		x := hrec{seq: seqOf(r), ts: tsOf(r), state: s(h, "state"), interval: iv, core: s(sub(r, "provider"), "name") == evidence.CoreProviderName}
 		if cs, ok := h["checks"].([]any); ok {
 			for _, c := range cs {
 				if m, ok := c.(map[string]any); ok && m["ok"] == false {
@@ -222,10 +224,35 @@ func hrecs(rs []Record) map[string][]hrec {
 		}
 		out[src] = append(out[src], x)
 	}
-	for _, l := range out {
+	for src, l := range out {
 		sort.Slice(l, func(i, j int) bool { return l[i].seq < l[j].seq })
+		out[src] = holdCoreFlip(l)
 	}
 	return out
+}
+
+// holdCoreFlip applies the rule that a flip the core wrote (an operation on monitoring: blind when it succeeded,
+// degraded when it did not) is ended only by a record from the collector itself with state healthy. A degraded or
+// blind collector record in between does not end it: while the flip holds, each record's state is the worse of its own
+// and the flip's. recs are in seq order.
+func holdCoreFlip(recs []hrec) []hrec {
+	held := ""
+	for i := range recs {
+		r := &recs[i]
+		switch {
+		case r.core:
+			if held == "" {
+				held = r.state
+			} else {
+				held = worse(held, r.state)
+			}
+		case held != "" && r.state == Healthy:
+			held = "" // the collector's own checks say healthy: the flip is over
+		case held != "":
+			r.state = worse(r.state, held)
+		}
+	}
+	return recs
 }
 
 // Timeline is one source's states over w: each health record holds from its time until the next record or until

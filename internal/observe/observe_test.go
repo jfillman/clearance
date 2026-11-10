@@ -150,3 +150,58 @@ func TestAnObservationIsCountedOnceHoweverManyRecordsVouchForIt(t *testing.T) {
 		t.Fatal("a verification record is not an observation")
 	}
 }
+
+// coreFlip is the health record the core writes when an operation on monitoring succeeded or was refused.
+func coreFlip(seq int64, at time.Time, state string) Record {
+	r := health(seq, at, state, 300, "monitoring-protection")
+	r["provider"] = map[string]any{"name": "clearance"}
+	r["about"] = map[string]any{"seq": json.Number("1")}
+	return r
+}
+
+func TestACoreFlipToBlindEndsOnlyWithTheCollectorsHealthyRecord(t *testing.T) {
+	now := t0.Add(time.Hour)
+	in := Input{Scope: "s", Window: window(0, 30*time.Minute), Health: []Record{
+		health(1, t0, Healthy, 300),
+		coreFlip(2, t0.Add(5*time.Minute), Blind),
+		health(3, t0.Add(6*time.Minute), Degraded, 300, "event-selectors"), // routine report, trail still stopped
+		health(4, t0.Add(10*time.Minute), Degraded, 300, "event-selectors"),
+		health(5, t0.Add(15*time.Minute), Healthy, 300),
+	}}
+	st := Build(in, now)
+	var blind, degraded int64
+	for _, g := range st.Blind.Segments {
+		if g.Reason != "reported" {
+			continue
+		}
+		switch g.State {
+		case Blind:
+			blind += g.Seconds
+		case Degraded:
+			degraded += g.Seconds
+		}
+	}
+	if blind != 600 || degraded != 0 {
+		t.Fatalf("blind from the flip until the collector's healthy record, never degraded: blind %d degraded %d: %+v", blind, degraded, st.Blind.Segments)
+	}
+	// once the collector reports healthy the flip is over, and a later degraded record is just degraded
+	in.Health = append(in.Health, health(6, t0.Add(20*time.Minute), Degraded, 300, "x"))
+	st = Build(in, now)
+	found := false
+	for _, g := range st.Blind.Segments {
+		if g.State == Degraded && g.From == iso(t0.Add(20*time.Minute)) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("after the healthy record a degraded one is degraded again: %+v", st.Blind.Segments)
+	}
+}
+
+func TestACoreFlipToDegradedIsNotWorsenedByABlindOrClearedByADegradedRecord(t *testing.T) {
+	recs := hrecs([]Record{coreFlip(1, t0, Degraded), health(2, t0.Add(time.Minute), Degraded, 300, "a"),
+		health(3, t0.Add(2*time.Minute), Blind, 300, "a")})["cloudtrail"]
+	if recs[1].state != Degraded || recs[2].state != Blind {
+		t.Fatalf("%+v", recs)
+	}
+}

@@ -57,6 +57,23 @@ type ConfigChange struct {
 	ChangeType   string
 	Changed      map[string]PropChange
 	Related      []string // the CloudTrail event ids Config says caused the item (configurationItem.relatedEvents)
+	// Status is configurationItemStatus: OK, ResourceDiscovered, ResourceNotRecorded, ResourceDeleted or
+	// ResourceDeletedNotRecorded. Created is configurationItem.resourceCreationTime (zero when Config does not say).
+	Status  string
+	Created time.Time
+}
+
+// BaselineAge is how much older than its capture a resource's creation time must be for a ResourceDiscovered item to
+// be the recorder's first discovery of something that already existed, not the record of a creation. AWS Config
+// uses status ResourceDiscovered for both (a resource it has not seen before), so the status alone proves nothing.
+const BaselineAge = time.Hour
+
+// Baseline says the item records a resource that existed before Config began recording it: status ResourceDiscovered,
+// no CloudTrail event related to it, and a resource creation time more than BaselineAge before the capture. That is the
+// recorder's first discovery, not a change. An item without a creation time cannot be told apart from a creation
+// and stays a change; so does a ResourceDiscovered item created just before its capture (a real, new resource).
+func (c *ConfigChange) Baseline() bool {
+	return c.Status == "ResourceDiscovered" && len(c.Related) == 0 && !c.Created.IsZero() && c.Captured.Sub(c.Created) > BaselineAge
 }
 
 // PropChange is one changed property of a configuration item.
@@ -93,6 +110,9 @@ type ctView struct {
 	ErrorCode, ErrorMessage            string
 	ClaimGrant, ClaimPlan              string
 	Refs                               map[string]bool // identifiers the event names, for the reconciler
+	// Request and Response are the record's requestParameters and responseElements, for the diff an event carries when
+	// no Config item joins it (requestDiff).
+	Request, Response map[string]any
 }
 
 var claimRx = regexp.MustCompile(`clearance/grant=([A-Za-z0-9_-]+)(?:;plan=(sha256:[0-9a-fA-F]+))?`)
@@ -130,6 +150,7 @@ func parseCT(raw []byte) (*ctView, error) {
 		v.ClaimGrant, v.ClaimPlan = m[1], m[2]
 	}
 	rp := obj(a["requestParameters"])
+	v.Request, v.Response = rp, obj(a["responseElements"])
 	v.Bucket = str(rp["bucketName"])
 	collectRefs(v.Refs, rp, 0)
 	collectRefs(v.Refs, obj(a["responseElements"]), 0)
@@ -239,6 +260,7 @@ func parseConfig(detail []byte, e envelope) (*ConfigChange, error) {
 			Region       string   `json:"awsRegion"`
 			Account      string   `json:"awsAccountId"`
 			Related      []string `json:"relatedEvents"`
+			Created      string   `json:"resourceCreationTime"`
 		} `json:"configurationItem"`
 	}
 	if err := json.Unmarshal(detail, &d); err != nil {
@@ -250,7 +272,14 @@ func parseConfig(detail []byte, e envelope) (*ConfigChange, error) {
 	}
 	c := &ConfigChange{Account: orElse(it.Account, e.Account), Region: orElse(it.Region, e.Region), ResourceType: it.ResourceType,
 		ResourceID: it.ResourceID, ResourceName: it.ResourceName, ARN: it.ARN, ChangeType: d.Diff.ChangeType, Related: it.Related,
-		Changed: map[string]PropChange{}}
+		Status: it.Status, Changed: map[string]PropChange{}}
+	if it.Created != "" {
+		if t, err := time.Parse(time.RFC3339, it.Created); err == nil {
+			c.Created = t
+		} else if t, err := time.Parse("2006-01-02T15:04:05.000Z", it.Created); err == nil {
+			c.Created = t
+		}
+	}
 	var err error
 	if c.Captured, err = time.Parse(time.RFC3339, it.Captured); err != nil {
 		if c.Captured, err = time.Parse("2006-01-02T15:04:05.000Z", it.Captured); err != nil {

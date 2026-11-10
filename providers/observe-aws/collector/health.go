@@ -185,6 +185,9 @@ func (h *Health) Checks(ctx context.Context) []check {
 		out = append(out, check{"collector-current", true, "last drained " + drained.UTC().Format(time.RFC3339), true})
 	}
 	if h.Col != nil {
+		st := h.Col.Stats()
+		out = append(out, check{"config-join", true, fmt.Sprintf("config items that arrived after their event was posted: %d (their events carry the CloudTrail request as the diff); events with the request as diff: %d; config first-discovery items counted as baseline, not changes: %d",
+			lateCount(h.Col), st.RequestDiffs, st.Baseline), true})
 		out = append(out, check{name: "scope-not-evaluated", ok: true, detail: clipText(h.Col.Filter.Statement(), 3500)})
 	}
 	return out
@@ -419,4 +422,11 @@ func trailsDetail(main TrailState, c HealthConfig, own []TrailState) string {
 		return ""
 	}
 	return "; data events: " + strings.Join(parts, "; ")
+}
+
+func lateCount(c *Collector) int {
+	if c.Rec == nil {
+		return 0
+	}
+	return c.Rec.Late()
 }

@@ -367,8 +367,13 @@ func checkObservation(ev map[string]any, v vocab.Vocabulary) (Result, error) {
 		if !ok {
 			return res, bad("state_change is {before, after}")
 		}
-		if err := only("state_change", sc, "before", "after"); err != nil {
+		if err := only("state_change", sc, "before", "after", "source"); err != nil {
 			return res, err
+		}
+		if x, present := sc["source"]; present { // where the diff came from: "cloudtrail-request" when no state service had one
+			if _, err := text("state_change.source", x, 64); err != nil {
+				return res, err
+			}
 		}
 		for _, k := range []string{"before", "after"} {
 			if err := size("state_change."+k, sc[k]); err != nil {

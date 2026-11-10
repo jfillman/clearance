@@ -24,6 +24,7 @@ type ct struct {
 	userAgent        string
 	errCode          string
 	params           map[string]any
+	response         map[string]any
 	category         string
 	readOnly         *bool
 }
@@ -59,6 +60,9 @@ func (c ct) json() json.RawMessage {
 	m := map[string]any{"eventVersion": "1.10", "eventID": c.id, "eventName": c.name, "eventSource": c.source,
 		"eventTime": c.at.UTC().Format(time.RFC3339), "awsRegion": "us-east-1", "recipientAccountId": acct,
 		"userIdentity": ui, "userAgent": c.userAgent, "requestParameters": c.params}
+	if c.response != nil {
+		m["responseElements"] = c.response
+	}
 	if c.errCode != "" {
 		m["errorCode"] = c.errCode
 		m["errorMessage"] = "not authorized"
@@ -85,6 +89,8 @@ type cfgItem struct {
 	at               time.Time
 	related          []string
 	changed          map[string]map[string]any
+	status, created  string // configurationItemStatus (default OK) and resourceCreationTime
+	changeType       string
 }
 
 func sgConfig(at time.Time, related ...string) cfgItem {
@@ -99,10 +105,17 @@ func (c cfgItem) envelope() []byte {
 	if len(c.related) > 0 {
 		item["relatedEvents"] = c.related
 	}
+	if c.status != "" {
+		item["configurationItemStatus"] = c.status
+	}
+	if c.created != "" {
+		item["resourceCreationTime"] = c.created
+	}
+	ctype := orElse(c.changeType, "UPDATE")
 	b, _ := json.Marshal(map[string]any{"version": "0", "id": "cfg-" + c.at.Format("150405"), "detail-type": "Config Configuration Item Change",
 		"source": "aws.config", "account": acct, "region": "us-east-1", "time": c.at.UTC().Format(time.RFC3339),
 		"detail": map[string]any{"messageType": "ConfigurationItemChangeNotification",
-			"configurationItemDiff": map[string]any{"changeType": "UPDATE", "changedProperties": c.changed}, "configurationItem": item}})
+			"configurationItemDiff": map[string]any{"changeType": ctype, "changedProperties": c.changed}, "configurationItem": item}})
 	return b
 }
 

@@ -43,7 +43,7 @@ type fileConfig struct {
 	Rules        []string           `json:"rules"`         // EventBridge rules that must be enabled
 	ScopeEnv     string             `json:"environment"`   // the environment the account's cleared applies are recorded under
 	SecondWave   bool               `json:"secondWave"`    // also evaluate VPC routing, Secrets Manager, Lambda, EKS access, RDS
-	Settle       string             `json:"settle"`        // how long an event waits for its Config item and the apply outcome (default 10m)
+	Settle       string             `json:"settle"`        // how long an event waits for its Config item and the apply outcome (default 15m)
 	Workspaces   []detect.Workspace `json:"workspaces"`    // the Terraform workspaces the detector stages watch (may be empty)
 	UntracedEach string             `json:"untracedEvery"` // default 30m
 	DriftEach    string             `json:"driftEvery"`    // default 24h
@@ -155,7 +155,7 @@ func run() error {
 			Prefix: fc.TrailPrefix, Regions: fc.Regions}
 	}
 	lk := &collector.EvidenceLookups{Src: ev, ScopeEnv: map[string]string{fc.Account: fc.ScopeEnv}}
-	rec := &collector.Reconciler{Settle: dur(fc.Settle, 10*time.Minute)}
+	rec := &collector.Reconciler{Settle: dur(fc.Settle, 15*time.Minute)}
 	col := &collector.Collector{Cfg: collector.Config{Accounts: []string{fc.Account}, Version: version}, Pipe: pipeline.New(rs, lk, vocab.Vocabulary{}),
 		Filter: &scope.Filter{DataBuckets: fc.DataBuckets, MaxWave: map[bool]int{false: 1, true: 2}[fc.SecondWave]}, Rec: rec, Core: cc, Lookups: lk, Log: log}
 	hl := &collector.Health{Cfg: collector.HealthConfig{Account: fc.Account, Trail: fc.TrailName, DataTrail: fc.DataTrail, DataBuckets: fc.DataBuckets, Rules: fc.Rules,
