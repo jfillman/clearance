@@ -210,6 +210,7 @@ func run(args []string) error {
 		healthEv  = fs.Duration("health-interval", time.Minute, "the health record's interval")
 		beatEv    = fs.Duration("heartbeat-interval", 30*time.Second, "how often the heartbeat is written")
 		gapGrace  = fs.Duration("gap-grace", 3*time.Minute, "how long a watch change waits for its audit event before it is an audit gap")
+		settle    = fs.Duration("grant-settle", 3*time.Minute, "how long a write that names a grant the collector does not know yet waits, and the grants are re-read, before it is decided (negative: decide at once)")
 		complete  = fs.Bool("completeness-claimed", true, "each observation claims its feed delivered everything (the core checks the claim against health)")
 		showVer   = fs.Bool("version", false, "print the version")
 	)
@@ -266,7 +267,7 @@ func run(args []string) error {
 
 	cfg := collector.Config{Cluster: *cluster, Source: *source, Webhook: *reader == "", CompletenessClaimed: *complete,
 		Namespace: *namespace, ServiceAccount: *saName, HeartbeatCM: *hbCM, CanarySecret: *canary, PolicyCM: *policyCM,
-		HealthInterval: *healthEv, HeartbeatInterval: *beatEv, GapGrace: *gapGrace, WatchNS: list(*watchNS), Log: log}
+		HealthInterval: *healthEv, HeartbeatInterval: *beatEv, GapGrace: *gapGrace, GrantSettle: *settle, WatchNS: list(*watchNS), Log: log}
 	cfg.Watches, err = parseWatches(*watches)
 	if err != nil {
 		return err

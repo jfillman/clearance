@@ -20,6 +20,8 @@ type RawEvent struct {
 	Scope    string          `json:"scope"`    // the cluster, or the account (default: the record's own recipientAccountId)
 	Raw      json.RawMessage `json:"raw"`
 	Before   json.RawMessage `json:"before,omitempty"`
+	// Final: decide now. A Pipeline that holds events whose grant is not known yet (HoldUnknownGrants) does not hold this one.
+	Final bool `json:"-"`
 }
 
 // Owner is an ownerReference.
@@ -139,7 +141,8 @@ var kubeKinds = map[string]string{
 }
 
 func kindOf(resource string, o map[string]any) string {
-	if k := str(o["kind"]); k != "" && k != "Status" {
+	// A Status is a delete's answer and DeleteOptions is its request body: neither names what was deleted, the resource does.
+	if k := str(o["kind"]); k != "" && k != "Status" && k != "DeleteOptions" {
 		return k
 	}
 	if k, ok := kubeKinds[resource]; ok {
@@ -289,9 +292,23 @@ var serverFields = []string{"uid", "resourceVersion", "generation", "creationTim
 
 var serverAnnotations = []string{"kubectl.kubernetes.io/last-applied-configuration", "deployment.kubernetes.io/revision"}
 
+// controllerOwned reports whether name is in list: an entry ending in "/" is a prefix ("rollout.argoproj.io/"), any other
+// is exact.
+func controllerOwned(list []string, name string) bool {
+	for _, x := range list {
+		if x == name || (strings.HasSuffix(x, "/") && strings.HasPrefix(name, x)) {
+			return true
+		}
+	}
+	return false
+}
+
 // canonicalObject is the object as the gate hashes a rendered one: no status, no server-managed metadata, none of the
-// gate's own annotations (the stamp, the tree, the release, Argo's tracking id), and no empty annotations map. It
-// copies what it changes; the input is not modified.
+// gate's own annotations (the stamp, the tree, the release, Argo's tracking id), none of the annotations and labels a
+// controller keeps on an object it manages (annotations.controller_owned and controller_labels: Argo Rollouts' revision
+// bookkeeping, a notification controller's sent-log), and no empty annotations or labels map. The gate never renders
+// those, so the rendered hash is unchanged by dropping them; what is left is the fields a grant covers, which a controller
+// does not write. It copies what it changes; the input is not modified.
 func (rs *RuleSet) canonicalObject(o map[string]any) map[string]any {
 	out := make(map[string]any, len(o))
 	for k, v := range o {
@@ -325,10 +342,28 @@ func (rs *RuleSet) canonicalObject(o map[string]any) map[string]any {
 		for _, k := range rs.ann.Strip {
 			delete(a, k)
 		}
+		for k := range a {
+			if controllerOwned(rs.ann.ControllerOwned, k) {
+				delete(a, k)
+			}
+		}
 		if len(a) == 0 {
 			delete(m, "annotations")
 		} else {
 			m["annotations"] = a
+		}
+	}
+	if lb := obj(md["labels"]); lb != nil && len(rs.ann.ControllerLabels) > 0 {
+		l := make(map[string]any, len(lb))
+		for k, v := range lb {
+			if !controllerOwned(rs.ann.ControllerLabels, k) {
+				l[k] = v
+			}
+		}
+		if len(l) == 0 {
+			delete(m, "labels")
+		} else {
+			m["labels"] = l
 		}
 	}
 	out["metadata"] = m

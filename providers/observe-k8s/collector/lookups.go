@@ -37,7 +37,7 @@ type Lookups struct {
 	mu      sync.RWMutex
 	missMu  sync.Mutex
 	byID    map[string][]string // grant (change) id -> the rendered hashes it lists, carried trees included
-	listed  map[string]string   // "<namespace>/<kind>/<name>" -> grant id (active grants only)
+	listed  map[string]string   // "<namespace>/<lower-case kind>/<name>" -> grant id (active grants only)
 	windows []agent.Window
 	at      time.Time
 }
@@ -79,7 +79,7 @@ func (l *Lookups) Refresh(ctx context.Context) error {
 			// key is <group>/<kind>/<name>; the namespace is the grant's own
 			parts := strings.SplitN(key, "/", 3)
 			if len(parts) == 3 {
-				listed[ns+"/"+parts[1]+"/"+parts[2]] = id
+				listed[ns+"/"+strings.ToLower(parts[1])+"/"+parts[2]] = id
 			}
 		}
 	}
@@ -155,7 +155,7 @@ func (l *Lookups) ObjectGrant(scope, namespace, kind, name string) (string, bool
 	if scope != l.Cluster {
 		return "", false
 	}
-	key := namespace + "/" + kind + "/" + name
+	key := namespace + "/" + strings.ToLower(kind) + "/" + name // a Metadata-level event spells a kind from the resource name ("Rolloutwatch")
 	l.mu.RLock()
 	id, ok := l.listed[key]
 	l.mu.RUnlock()

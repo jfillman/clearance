@@ -88,6 +88,9 @@ watch:
     - {group: networking.k8s.io, version: v1, resource: networkpolicies, kind: NetworkPolicy, namespaced: true}
     - {group: networking.k8s.io, version: v1, resource: ingresses, kind: Ingress, namespaced: true}
     - {group: argoproj.io, version: v1alpha1, resource: applications, kind: Application, namespaced: true}
+    # A Rollout's live object carries fields its render leaves out, so a controller's bookkeeping on it is judged by what it
+    # changed against the object as it was (grant-annotation+unchanged): that needs the before-state.
+    - {group: argoproj.io, version: v1alpha1, resource: rollouts, kind: Rollout, namespaced: true}
     - {group: rbac.authorization.k8s.io, version: v1, resource: clusterroles, kind: ClusterRole, namespaced: false}
     - {group: rbac.authorization.k8s.io, version: v1, resource: clusterrolebindings, kind: ClusterRoleBinding, namespaced: false}
     - {group: admissionregistration.k8s.io, version: v1, resource: validatingwebhookconfigurations, kind: ValidatingWebhookConfiguration, namespaced: false}
@@ -99,7 +102,7 @@ watch:
 # complete document in `override` replaces it. Its name and version are in every assessment.
 rules:
   name: observe-hangar
-  version: "2026.11.4"
+  version: "2026.11.5"
   override: ""
   # Argo CD's application controller, as the API server sees it.
   argoControllerSubject: system:serviceaccount:argocd:argocd-application-controller
@@ -110,17 +113,35 @@ rules:
     grant: clearance.hangar.io/grant
     rendered: clearance.hangar.io/rendered
     strip: [clearance.hangar.io/tree, clearance.hangar.io/release, argocd.argoproj.io/tracking-id]
+    # What a controller keeps on an object it manages is not a rendered field, so hashing ignores it: a controller's
+    # bookkeeping on a granted object (Argo Rollouts' revision, a notification controller's sent-log) does not make it differ
+    # from the grant's render. An entry ending in "/" is a prefix.
+    controllerOwned: [rollout.argoproj.io/, rollouts.argoproj.io/, deployment.kubernetes.io/, notified.notifications.argoproj.io]
+    controllerLabels: [rollouts-pod-template-hash, pod-template-hash]
   # Namespaces whose writes are governed, beside protectedNamespaces and the argocd namespace.
   extraGovernedNamespaces: [kube-system]
   # Cluster-scoped kinds whose writes are governed.
   governedKinds: [ValidatingWebhookConfiguration, MutatingWebhookConfiguration, ValidatingAdmissionPolicy,
                   ValidatingAdmissionPolicyBinding, ClusterRole, ClusterRoleBinding, Namespace, CustomResourceDefinition]
   hpaNamespaces: []
+  # Routine writers with exact noise rules (observe-rules.yaml). Subjects as the API server sees them.
+  grantAgentSubject: system:serviceaccount:clearance-system:clearance-argocd-agent
+  externalSecretsSubject: system:serviceaccount:external-secrets:external-secrets
+  crossplaneSubject: system:serviceaccount:crossplane-system:crossplane
+  # The composite resource kinds Crossplane composes in governed namespaces, and the kinds it composes from them
+  # (matched by the owner reference). Empty compositeKinds: no Crossplane rule.
+  crossplaneCompositeKinds: [RolloutWatch]
+  crossplaneComposedKinds: [ServiceAccount]
   # Node names whose kubelets may mint pod tokens without an exception. A node not listed stays visible as out-of-band.
   kubeletNodes: []
 
 healthInterval: 1m
 gapGrace: 3m
+# A write that names a grant the collector does not know yet (a grant is cleared a moment before Argo CD stamps and applies
+# it; the Argo CD agent writes the ClearanceGrant up to its --grant-interval, 30s, later) waits this long, the grants are
+# re-read, and only then is it decided. Keep it longer than the agent's grant interval plus healthInterval. "-1s": decide
+# at once.
+grantSettle: 3m
 
 # hangar-prod reaches the lab core over plain HTTP through a host alias to the other cluster's ingress.
 hostAliases: []

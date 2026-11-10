@@ -11,6 +11,25 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ### Added
 
+- **observe-k8s: a controller's writes to what a grant created are not exceptions.** A rollout under a correctly cleared grant used to
+  leave about 54 `out-of-band-detected` rows in two minutes and about 170 an hour at rest (hangar-prod, last 6 h: 1154 rows, 1016
+  before the release). Three changes, all keeping a person's, a `kubectl` client's and a refused write out-of-band:
+  - **Settle window for an unknown grant** (`--grant-settle`, chart `grantSettle`, default 3m). A write that names a grant the
+    collector's lookups (the `ClearanceGrant` objects the Argo CD agent keeps) do not know yet is held, the grants are re-read when
+    the window is over, and then it is decided. Held events are kept with the queue cursor.
+  - **Derived objects are attributed to their parent's grant.** New attribution signals `owner-grant` (a controller writing an object
+    whose ownerReferences chain reaches an object a valid grant lists: ReplicaSet of a Rollout, Pod of a ReplicaSet or Job),
+    `listed-grant` (a controller writing the status of a listed object) and `grant-annotation+unchanged` (a controller's bookkeeping on a
+    granted object that leaves it as it was before). The stamp hash now ignores controller-owned annotations and labels
+    (`annotations.controller_owned`, `controller_labels`: `rollout.argoproj.io/*`, `notified.notifications.argoproj.io`, ...), as
+    well as status. A delete's `DeleteOptions` body is no longer taken for the kind. The chart watches Rollouts for the before-state;
+    a deployment that overrides `watch.resources` should add `argoproj.io/v1alpha1 rollouts`.
+  - **Exact noise rules for routine writers**: Calico's CNI plugin (pod status), the Clearance Argo CD agent (its `ClearanceGrant`s,
+    both kind spellings), Crossplane (its composite `RolloutWatch`es and the resources it composes for them, values-driven), the
+    disruption controller (PDB status), External Secrets (ExternalSecret status) and the Job controller (the PreSync wait Job).
+    Rules version 2026.11.5; new values `rules.grantAgentSubject`, `externalSecretsSubject`, `crossplaneSubject`,
+    `crossplaneCompositeKinds`, `crossplaneComposedKinds`, `annotations.controllerOwned`, `annotations.controllerLabels`.
+
 - A person (an admin, or a delegate naming one) can record a resolution on a gate exception, the way they can on an
   observation: `POST /v1/observations/{seq}/resolution` now also takes the seq of a `deploy.exception` of kind
   out-of-band, drift, untraced-apply or digest-mismatch (attempted-refused and monitoring-protection stay 404). The

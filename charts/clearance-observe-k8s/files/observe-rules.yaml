@@ -17,6 +17,9 @@ annotations:
   grant: {{ .Values.rules.annotations.grant }}
   rendered: {{ .Values.rules.annotations.rendered }}
   strip: [{{ join ", " .Values.rules.annotations.strip }}]
+  # What a controller keeps on an object it manages is not a rendered field: hashing ignores it (an entry ending in "/" is a prefix).
+  controller_owned: [{{ range $i, $a := .Values.rules.annotations.controllerOwned }}{{ if $i }}, {{ end }}{{ $a | quote }}{{ end }}]
+  controller_labels: [{{ range $i, $a := .Values.rules.annotations.controllerLabels }}{{ if $i }}, {{ end }}{{ $a | quote }}{{ end }}]
 
 scope:
   governed:
@@ -27,6 +30,7 @@ scope:
       scopes: [{{ .Values.cluster | quote }}]
       kinds: [{{ join ", " .Values.rules.governedKinds }}]
 
+{{- $gov := concat .Values.protectedNamespaces (list .Values.argocd.namespace) .Values.rules.extraGovernedNamespaces | uniq }}
 noise:
   - name: argo-application-bookkeeping
     provider: kubernetes
@@ -94,6 +98,61 @@ noise:
       kinds: [CustomResourceDefinition]
       verbs: [update, patch]
       when: 'event.owners.exists(o, o.kind == "ProviderRevision" || o.kind == "CompositeResourceDefinition")'
+
+  # The writers below are routine controllers whose writes land in governed namespaces. A rule is one exact identity and the
+  # exact shape it writes; a refused attempt is never noise, whatever the rule says.
+  - name: calico-cni-pod-status
+    provider: kubernetes
+    why: Calico's CNI plugin patching the pod status subresource with the pod's IP annotations (cni.projectcalico.org/podIP, podIPs) as the pod starts. The audit policy records it at Metadata, so the annotation shape itself is not visible to a rule; the identity, the verb and the status subresource are.
+    identity: {subject: "system:serviceaccount:kube-system:calico-cni-plugin"}
+    shape: {kinds: [Pod], verbs: [patch], subresources: [status], namespaces: [{{ range $i, $n := $gov }}{{ if $i }}, {{ end }}{{ $n | quote }}{{ end }}]}
+  - name: clearance-argocd-agent-grants
+    provider: kubernetes
+    why: the Clearance Argo CD agent keeping the ClearanceGrant objects of the namespaces it serves (create, update, status, delete of an expired grant). Only a succeeded write; its refused creates (AlreadyExists) stay visible as attempted-refused.
+    identity: {subject: {{ .Values.rules.grantAgentSubject | quote }}}
+    # Clearancegrant is what a Metadata-level audit event yields (the kind is derived from the resource name); ClearanceGrant is the real kind.
+    shape: {kinds: [ClearanceGrant, Clearancegrant], verbs: [create, update, patch, delete], namespaces: [{{ range $i, $n := $gov }}{{ if $i }}, {{ end }}{{ $n | quote }}{{ end }}]}
+{{- if .Values.rules.crossplaneCompositeKinds }}
+  - name: crossplane-composite-resources
+    provider: kubernetes
+    why: Crossplane maintaining the composite resources it composes ({{ join ", " .Values.rules.crossplaneCompositeKinds }}), meaning its finalizer, composition references, resource references and status. It is the composite's own controller; the object is recognised by the crossplane.io/composite label it puts on it.
+    identity: {subject: {{ .Values.rules.crossplaneSubject | quote }}}
+    shape:
+      kinds: [{{ range $i, $k := .Values.rules.crossplaneCompositeKinds }}{{ if $i }}, {{ end }}{{ $k }}, {{ $k | lower | title }}{{ end }}]
+      verbs: [update, patch]
+      namespaces: [{{ range $i, $n := $gov }}{{ if $i }}, {{ end }}{{ $n | quote }}{{ end }}]
+      when: '"crossplane.io/composite" in event.labels'
+  - name: crossplane-composed-resources
+    provider: kubernetes
+    why: Crossplane reconciling the resources it composes for those composites ({{ join ", " .Values.rules.crossplaneComposedKinds }}); the owner reference names the composite.
+    identity: {subject: {{ .Values.rules.crossplaneSubject | quote }}}
+    shape:
+      kinds: [{{ join ", " .Values.rules.crossplaneComposedKinds }}]
+      verbs: [create, update, patch]
+      namespaces: [{{ range $i, $n := $gov }}{{ if $i }}, {{ end }}{{ $n | quote }}{{ end }}]
+      when: 'event.owners.exists(o, {{ range $i, $k := .Values.rules.crossplaneCompositeKinds }}{{ if $i }} || {{ end }}o.kind == "{{ $k }}"{{ end }})'
+{{- end }}
+  - name: disruption-controller-status
+    provider: kubernetes
+    why: the disruption controller writing the status subresource of PodDisruptionBudgets; it changes no workload.
+    identity: {subject: "system:serviceaccount:kube-system:disruption-controller"}
+    # Poddisruptionbudget is what a Metadata-level audit event yields; PodDisruptionBudget is the real kind.
+    shape: {kinds: [PodDisruptionBudget, Poddisruptionbudget], verbs: [update], subresources: [status], namespaces: [{{ range $i, $n := $gov }}{{ if $i }}, {{ end }}{{ $n | quote }}{{ end }}]}
+  - name: external-secrets-status
+    provider: kubernetes
+    why: the External Secrets controller writing the status subresource of ExternalSecrets (sync state and refresh time); the Secrets it writes are not covered.
+    identity: {subject: {{ .Values.rules.externalSecretsSubject | quote }}}
+    # Externalsecret is what a Metadata-level audit event yields; ExternalSecret is the real kind.
+    shape: {kinds: [ExternalSecret, Externalsecret], verbs: [update], subresources: [status], namespaces: [{{ range $i, $n := $gov }}{{ if $i }}, {{ end }}{{ $n | quote }}{{ end }}]}
+  - name: job-controller-wait-job
+    provider: kubernetes
+    why: the Job controller running the PreSync wait Job the Argo CD plugin injects while a change is held for people (clearance-awaiting-approval, and its pod); it is not a workload and carries no grant.
+    identity: {subject: "system:serviceaccount:kube-system:job-controller"}
+    shape:
+      kinds: [Job, Pod]
+      verbs: [create, update, patch, delete]
+      namespaces: [{{ range $i, $n := $gov }}{{ if $i }}, {{ end }}{{ $n | quote }}{{ end }}]
+      when: 'event.name == "clearance-awaiting-approval" || event.name.startsWith("clearance-awaiting-approval-")'
 
 monitoring:
   kubernetes: [ValidatingWebhookConfiguration, MutatingWebhookConfiguration]

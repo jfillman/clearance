@@ -61,7 +61,10 @@ type Assessment struct {
 type Disposition string
 
 const (
-	Assessed   Disposition = "assessed"
+	Assessed Disposition = "assessed"
+	// Held: the object names a grant the lookups do not know yet, and the caller asked for such events to settle
+	// (HoldUnknownGrants). Nothing is counted or correlated; give the event back as Final after the settle window.
+	Held       Disposition = "held"
 	Filtered   Disposition = "filtered"
 	OutOfScope Disposition = "out-of-scope"
 	NotWrite   Disposition = "not-a-write"
@@ -103,6 +106,9 @@ type Pipeline struct {
 	// OnAlert is called, under the pipeline's lock and before Process returns, for each operation on monitoring.
 	OnAlert func(Alert)
 
+	holdUnknown bool
+	owners      ownerIndex
+
 	mu     sync.Mutex
 	stats  Stats
 	health map[string]string
@@ -118,6 +124,16 @@ func New(rs *RuleSet, lk Lookups, v vocab.Vocabulary) *Pipeline {
 		stats: Stats{Filtered: map[string]int{}, OutOfScope: map[string]int{}}}
 }
 
+// HoldUnknownGrants makes Process answer Held, instead of deciding, for a write that names a grant the lookups do not
+// know. A grant is cleared a moment before its objects are stamped and applied, and the collector learns of it a sync
+// later: a collector that waits (a settle window) and asks again attributes the writes it would have flagged. A RawEvent
+// with Final set is decided at once either way. Monitoring operations and refusals are never held.
+func (p *Pipeline) HoldUnknownGrants(on bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.holdUnknown = on
+}
+
 // RuleSet is the rule set in force.
 func (p *Pipeline) RuleSet() RuleSetRef { return p.rs.Ref }
 
@@ -127,6 +143,9 @@ func (p *Pipeline) Process(raw RawEvent) (*Assessment, Disposition, string, erro
 	ev, err := p.rs.Normalize(raw)
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if err == nil {
+		p.learn(ev)
+	}
 	p.stats.Events++
 	if err == ErrSkip {
 		p.stats.NotWrites++
@@ -159,6 +178,10 @@ func (p *Pipeline) Process(raw RawEvent) (*Assessment, Disposition, string, erro
 	a, err := p.attribute(ev)
 	if err != nil {
 		return nil, "", "", err
+	}
+	if p.holdUnknown && !raw.Final && !a.Monitoring && a.Signal == SignalUnknownGrant {
+		p.stats.Events-- // counted when it is decided
+		return nil, Held, a.Grant, nil
 	}
 	p.stats.Assessed++
 	p.corr.Add(a)
@@ -416,6 +439,9 @@ func (p *Pipeline) attribute(e *Event) (*Assessment, error) {
 	}
 	a.Signal, a.Outcome, a.Severity, a.Confidence, a.Detail = sig.name, sig.outcome, sig.severity, sig.confidence, sig.detail
 	a.Grant = f.grant
+	if f.derived != "" && (a.Signal == SignalOwnerGrant || a.Signal == SignalListedGrant) {
+		a.Grant = f.derived
+	}
 	if a.Outcome == OutcomeOutOfBand || a.Outcome == OutcomeNotAttributed {
 		a.Diff = diff(e)
 	}

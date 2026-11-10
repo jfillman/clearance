@@ -91,6 +91,11 @@ type AnnotationNames struct {
 	Grant    string   `yaml:"grant"`
 	Rendered string   `yaml:"rendered"`
 	Strip    []string `yaml:"strip"` // other annotations hashing ignores (the gate's tree and release, Argo's tracking id)
+	// ControllerOwned are the annotations a controller keeps on an object it manages (an entry ending in "/" is a prefix),
+	// and ControllerLabels the labels: hashing ignores them, so a controller's bookkeeping on a granted object does not
+	// make the object differ from what the grant rendered. Never the fields a grant renders.
+	ControllerOwned  []string `yaml:"controller_owned"`
+	ControllerLabels []string `yaml:"controller_labels"`
 }
 
 type scopeDoc struct {
