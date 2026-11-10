@@ -43,7 +43,10 @@ func (k *fakeArgo) ProtectedNamespaces(context.Context) (map[string]map[string]s
 	return map[string]map[string]string{"conformance": {}}, nil
 }
 func (k *fakeArgo) ListGrants(context.Context) ([]agent.Grant, error) { return nil, nil }
-func (k *fakeArgo) ApplyGrant(context.Context, agent.Grant) error     { return errors.New("not used") }
+func (k *fakeArgo) CreateGrant(context.Context, agent.Grant) error    { return errors.New("not used") }
+func (k *fakeArgo) UpdateGrant(context.Context, agent.Grant, agent.Grant) error {
+	return errors.New("not used")
+}
 func (k *fakeArgo) DeleteGrant(context.Context, string, string) error { return errors.New("not used") }
 func (k *fakeArgo) SetGrantValid(context.Context, string, string, bool, string, time.Time) error {
 	return errors.New("not used")
