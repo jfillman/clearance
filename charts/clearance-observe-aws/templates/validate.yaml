@@ -5,3 +5,4 @@
 {{- if not .Values.aws.roleARN }}{{ fail "aws.roleARN is required (the read-only role in the observed account)" }}{{ end }}
 {{- if and .Values.trail.bucket (not .Values.aws.trailRoleARN) }}{{ fail "aws.trailRoleARN is required when trail.bucket is set (the logging account's read role)" }}{{ end }}
 {{- if and .Values.trail.bucket (not .Values.trail.prefix) }}{{ fail "trail.prefix is required when trail.bucket is set" }}{{ end }}
+{{- if and (not .Values.rules_bundle) (not .Values.ruleset.applyRoles) }}{{ fail "ruleset.applyRoles is required: the gated apply roles' session-issuer ARNs" }}{{ end }}

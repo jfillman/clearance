@@ -61,8 +61,20 @@ workspaces: []
 untracedEvery: 30m
 driftEvery: 24h
 
-# A rule set bundle (clearance.observe-rules/v1) naming this deployment's apply roles, SSO admin roles and governed
-# accounts. Empty: the build's documentation-style default, which governs nothing real.
+# The collector's rule set (clearance.observe-rules/v1), rendered from files/observe-rules.yaml. rules_bundle, when set,
+# replaces it whole.
+ruleset:
+  name: observe-aws
+  version: "2026.11.5"
+  # Exact CloudTrail session-issuer ARNs of the gated apply roles (a change made under one, inside a recorded apply window, is attributed).
+  applyRoles: []
+  # Session-issuer ARN globs of the SSO admin roles (console/CLI people).
+  ssoAdminRoles: []
+  # Account ids governed (fnmatch). Empty: [.Values.account].
+  governedAccounts: []
+
+# A complete rule set bundle (clearance.observe-rules/v1) that replaces the one rendered from ruleset.* whole. Empty: the
+# rendered one.
 rules_bundle: ""
 
 networkPolicy:

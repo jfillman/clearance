@@ -121,6 +121,21 @@ RBAC, no Secret. Two projected service-account tokens are its whole credential: 
 and give it the auditor role on clearance-api (outcomes). Terraform for the AWS side is in
 [hangar-infra](https://github.com/jfillman/hangar-infra) `observe/`.
 
+### The rule set
+
+The collector's rule set (`clearance.observe-rules/v1`) is rendered from `files/observe-rules.yaml` and mounted from the
+`<release>-rules` ConfigMap (`--rules`). It is the pipeline's default (`internal/observe/pipeline/default.yaml`) with the
+deployment's identities and scope; the attribution orders, classification and monitoring list are the default's, and a chart
+test fails if they drift. No AWS noise rules are defined yet. Values under `ruleset`:
+
+| Value | Meaning |
+|---|---|
+| `ruleset.name`, `ruleset.version` | The rule set's reference, recorded with each decision. |
+| `ruleset.applyRoles` | **Required** (unless `rules_bundle` is set). Exact CloudTrail session-issuer ARNs of the gated apply roles: a change made under one, inside a recorded apply window, is attributed. |
+| `ruleset.ssoAdminRoles` | Session-issuer ARN globs of the SSO admin roles (console and CLI people). |
+| `ruleset.governedAccounts` | Account ids governed (fnmatch). Empty: the observed `account`. |
+| `rules_bundle` | A complete rule set that replaces the rendered one whole. |
+
 ### Customer precondition: the logging account
 
 The trail and the Config aggregator must deliver into an account production administrators cannot write to (a separate
