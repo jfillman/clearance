@@ -202,7 +202,7 @@ func (t *TrailReader) one(ctx context.Context, region, key string, end time.Time
 		if err != nil {
 			return nil, fmt.Errorf("reading %s: %w", l.S3Object, err)
 		}
-		content, err := digest.Gunzip(body)
+		content, err := digest.Content(body)
 		if err != nil {
 			t.fail(l.S3Object, digest.ReasonLogHash, "the log file does not decompress: "+err.Error())
 			continue
@@ -237,7 +237,7 @@ func (t *TrailReader) fetchVerified(ctx context.Context, key string) (*digest.Ve
 	if err != nil {
 		return nil, false, fmt.Errorf("reading digest: %w", err)
 	}
-	content, err := digest.Gunzip(body)
+	content, err := digest.Content(body)
 	if err != nil {
 		t.fail(key, digest.ReasonMalformed, "the digest does not decompress: "+err.Error())
 		return nil, false, nil

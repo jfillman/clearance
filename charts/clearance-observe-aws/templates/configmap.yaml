@@ -13,6 +13,7 @@ data:
     {{- $_ := set $c "trailPrefix" .Values.trail.prefix }}
     {{- $_ := set $c "trailRegion" .Values.trail.region }}
     {{- $_ := set $c "trailName" .Values.trail.name }}
+    {{- $_ := set $c "dataTrail" .Values.trail.dataTrail }}
     {{- $_ := set $c "regions" .Values.trail.regions }}
     {{- end }}
     {{ toJson $c }}

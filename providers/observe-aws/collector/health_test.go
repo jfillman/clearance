@@ -162,3 +162,81 @@ func TestADigestValidationFailureDegradesAndStaysFor24Hours(t *testing.T) {
 		t.Fatal("tamper evidence does not heal within a day")
 	}
 }
+
+// The lab layout: management events from the organization trail (management account), the state bucket's data events
+// from a separate trail the observed account owns (observe-data), read with the account's own role.
+func labLayout(g *hrig) *TrailState {
+	g.st.DataBuckets = nil // the organization trail records no data events
+	data := &TrailState{Name: "observe-data", Logging: true, LogValidation: true, DataBuckets: []string{"tf-state"}}
+	g.h.Ctl.DataTrails = func(context.Context) ([]TrailState, error) { return []TrailState{*data}, g.err }
+	return data
+}
+
+func TestDataEventsFromTheAccountsOwnTrail(t *testing.T) {
+	g := newHealth(t)
+	data := labLayout(g)
+	st, failed := g.post(t)
+	if st != observe.Healthy || len(failed) != 0 {
+		t.Fatal(st, failed)
+	}
+	for _, c := range g.r.co.of("observation.health")[0].Record.Health["checks"].([]any) {
+		if m := c.(map[string]any); m["name"] == "event-selectors" && !strings.Contains(m["detail"].(string), "observe-data") {
+			t.Fatalf("the detail names each trail: %v", m["detail"])
+		}
+	}
+	// StopLogging on observe-data
+	data.Logging = false
+	st, failed = g.post(t)
+	if st != observe.Degraded || !strings.Contains(failed["event-selectors"], "data trail observe-data is not logging") {
+		t.Fatal(st, failed)
+	}
+	// logging again, validation off
+	data.Logging, data.LogValidation = true, false
+	if _, failed = g.post(t); !strings.Contains(failed["event-selectors"], "observe-data has log file validation off") {
+		t.Fatal(failed)
+	}
+}
+
+func TestNoTrailRecordsTheDataBucket(t *testing.T) {
+	g := newHealth(t)
+	data := labLayout(g)
+	data.DataBuckets = []string{"another-bucket"}
+	st, failed := g.post(t)
+	if st != observe.Degraded || !strings.Contains(failed["event-selectors"], "no data events for bucket tf-state on any logging trail (organization, observe-data)") {
+		t.Fatal(st, failed)
+	}
+}
+
+func TestNamedDataTrail(t *testing.T) {
+	g := newHealth(t)
+	data := labLayout(g)
+	g.h.Cfg.DataTrail = "observe-data"
+	if st, failed := g.post(t); st != observe.Healthy {
+		t.Fatal(st, failed)
+	}
+	// the named trail not logging fails even when the organization trail would cover the bucket
+	g.st.DataBuckets = []string{"tf-state"}
+	data.Logging = false
+	if _, failed := g.post(t); !strings.Contains(failed["event-selectors"], "data trail observe-data is not logging") {
+		t.Fatal(failed)
+	}
+	g.h.Cfg.DataTrail = "missing"
+	if _, failed := g.post(t); !strings.Contains(failed["event-selectors"], "data trail missing does not exist") {
+		t.Fatal(failed)
+	}
+}
+
+func TestAccountTrailsUnreadable(t *testing.T) {
+	g := newHealth(t)
+	g.st.DataBuckets = nil
+	g.h.Ctl.DataTrails = func(context.Context) ([]TrailState, error) { return nil, errors.New("AccessDenied: DescribeTrails") }
+	_, failed := g.post(t)
+	if !strings.Contains(failed["event-selectors"], "the account's trails could not be read: AccessDenied") {
+		t.Fatal(failed)
+	}
+	// the organization trail covering the bucket needs no account trail
+	g.st.DataBuckets = []string{"tf-state"}
+	if st, failed := g.post(t); st != observe.Healthy {
+		t.Fatal(st, failed)
+	}
+}

@@ -53,7 +53,10 @@ signature>`; the key is found by the digest's fingerprint (`cloudtrail:ListPubli
    replaced) is extracted with `sourceVerified: false` and fails `digests-validating`;
 3. each log file's sha256 against the hash the digest lists, **before** any record is parsed (a tampered file is not extracted).
 
-The first digest of a run is linked to the previous digest object, fetched for the purpose. The signing string follows AWS's
+The first digest of a run is linked to the previous digest object, fetched for the purpose. S3 stores these objects gzipped with `Content-Encoding: gzip`, and Go's HTTP transport decompresses such a response unless the
+request sets `Accept-Encoding`; `S3.Get` sets it, and `digest.Content` also accepts a body that is already decompressed. Every hash
+AWS records (a log file's `hashValue`, `previousDigestHashValue`, the hash in the digest's signed string) is over the
+**uncompressed** content, so it is computed over the same bytes either way. The signing string follows AWS's
 documentation and is tested against a key generated for the test; it has not yet been checked against a digest AWS signed. If
 the first live read reports `digest-signature-invalid` on every digest, suspect the signing string before the trail.
 
@@ -98,6 +101,15 @@ digests stopped arriving or the queue is not being drained; **degraded** for any
 successful `StopLogging` (and the other operations on monitoring) flips the account to blind through the core, a refused
 one to degraded ([evidence.md](evidence.md)); only the collector's next healthy record clears it, and the pipeline's own flip
 is cleared with it.
+
+**Where the data events come from.** The main trail (`trail.name`, the organization trail, read with the trail role in the
+management account) carries the management events and `trail-enabled`. A data bucket's events may be recorded by that trail or by
+a trail the observed account owns (hangar-infra's `observe-data`), read with the observed-account role: each bucket needs one
+logging trail with log file validation on that records it. `trail.dataTrail` names the account trail expected (empty: any).
+A trail that records a bucket and is not logging, or has validation off, fails `event-selectors` with the trail named (for
+example "data trail observe-data is not logging"), so a `StopLogging` on it shows on the next health record; with `dataTrail`
+set, that trail not logging fails even when another trail covers the bucket. The detail lists each trail and its buckets. The
+account role needs `cloudtrail:DescribeTrails`, `GetTrailStatus` and `GetEventSelectors`.
 
 ## Detector stages (absorbed from G-TF-5)
 

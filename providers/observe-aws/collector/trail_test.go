@@ -32,6 +32,50 @@ func (f fakeObjects) Get(_ context.Context, _, key string) ([]byte, map[string]s
 	return o.Body, map[string]string{"signature": o.Sig, "signature-algorithm": o.Algo}, nil
 }
 
+// decompressedObjects is S3 as the live collector saw it: the objects are stored gzipped with Content-Encoding: gzip,
+// and the HTTP client handed back the decompressed body (the 2026-11-10 digest-malformed failures).
+type decompressedObjects struct{ fakeObjects }
+
+func (f decompressedObjects) Get(ctx context.Context, b, key string) ([]byte, map[string]string, error) {
+	_, meta, err := f.fakeObjects.Get(ctx, b, key)
+	if err != nil {
+		return nil, nil, err
+	}
+	return f.tr.Objects[key].Content, meta, nil
+}
+
+// A body the transport already decompressed verifies exactly as a gzipped one: AWS hashes the uncompressed content.
+func TestTrailAcceptsDecompressedBodies(t *testing.T) {
+	r := newTrail(t)
+	r.hour(1, "e1", "e2")
+	r.hour(2, "e3")
+	r.rd.Objects = decompressedObjects{fakeObjects{r.tr}}
+	items, _, err := r.rd.Read(context.Background())
+	if err != nil || len(items) != 3 {
+		t.Fatal(len(items), err)
+	}
+	for _, it := range items {
+		if !it.Verified {
+			t.Fatalf("%+v", it)
+		}
+	}
+	if f := r.rd.Failures(t0); len(f) != 0 {
+		t.Fatalf("%v", f)
+	}
+}
+
+// A decompressed body that was tampered still fails its hash: accepting plain content does not skip verification.
+func TestDecompressedTamperedLogFileStillFails(t *testing.T) {
+	r := newTrail(t)
+	_, lk := r.hour(1, "e1")
+	r.tr.Tamper(lk, func(b []byte) []byte { return append(b[:len(b)-1:len(b)-1], ' ', '}') })
+	r.rd.Objects = decompressedObjects{fakeObjects{r.tr}}
+	items, _, _ := r.rd.Read(context.Background())
+	if len(items) != 0 || len(r.rd.Failures(t0)) != 1 || r.rd.Failures(t0)[0].Reason != "log-file-hash-mismatch" {
+		t.Fatalf("%d %v", len(items), r.rd.Failures(t0))
+	}
+}
+
 type notFound struct{ key string }
 
 func (n *notFound) Error() string { return "not found: " + n.key }

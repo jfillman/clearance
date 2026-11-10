@@ -144,6 +144,9 @@ func (s S3) Get(ctx context.Context, bucket, key string) ([]byte, map[string]str
 	if err != nil {
 		return nil, nil, err
 	}
+	// Asking for gzip ourselves stops Go's transport decompressing the CloudTrail objects (stored with
+	// Content-Encoding: gzip); the collector decompresses (digest.Content, which also accepts a decompressed body).
+	req.Header.Set("Accept-Encoding", "gzip")
 	b, h, err := s.API.AWS.Do(ctx, "s3", req, nil)
 	if err != nil {
 		return nil, nil, err
@@ -249,6 +252,17 @@ func (p *PublicKeys) PublicKey(fp string, at time.Time) (*rsa.PublicKey, error) 
 
 // Trails is the collector.Control.Trails reader: DescribeTrails, GetTrailStatus and GetEventSelectors per trail.
 func (a *API) Trails(ctx context.Context) ([]collector.TrailState, error) {
+	return a.trails(ctx, "")
+}
+
+// TrailsIn is Trails for the trails an account owns: an organization trail (and any other trail whose ARN names another
+// account) is visible from a member account but cannot be read from it (GetTrailStatus is the owner's), so it is left
+// to the reader in the account that owns it.
+func (a *API) TrailsIn(ctx context.Context, account string) ([]collector.TrailState, error) {
+	return a.trails(ctx, account)
+}
+
+func (a *API) trails(ctx context.Context, account string) ([]collector.TrailState, error) {
 	ep := a.endpoint(a.EP.CloudTrail, "cloudtrail")
 	var list struct {
 		TrailList []struct {
@@ -263,6 +277,9 @@ func (a *API) Trails(ctx context.Context) ([]collector.TrailState, error) {
 	}
 	var out []collector.TrailState
 	for _, t := range list.TrailList {
+		if account != "" && !strings.Contains(t.TrailARN, ":"+account+":") {
+			continue
+		}
 		var st struct {
 			IsLogging           bool
 			LatestDeliveryError string

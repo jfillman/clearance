@@ -40,6 +40,19 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ### Fixed
 
+- **observe-aws: `digests-validating` failed on every real digest (`digest-malformed`), and `event-selectors` on the lab's data trail.**
+  First live read, hangar-dev, 2026-11-10. (1) S3 serves CloudTrail objects with `Content-Encoding: gzip`; the collector's S3 client
+  did not set `Accept-Encoding`, so Go's transport asked for gzip itself and handed back the decompressed body, which `digest.Gunzip`
+  then rejected. `S3.Get` now sets `Accept-Encoding: gzip` (the stored bytes arrive as stored) and the trail reader uses the new
+  `digest.Content`, which decompresses a gzip body and takes any other body as already-decompressed content (bounded by `MaxFile`),
+  for digests and log files alike. Every hash AWS records is over the uncompressed content, so verification is unchanged and a
+  tampered body still fails. (2) The data buckets' events may now be recorded by any logging trail with log file validation in the
+  observed account (read with the observed-account role; new `Control.DataTrails`) or by the main trail, not only the main trail:
+  hangar-infra's `observe-data` trail records the state bucket and the organization trail cannot be read from the lab account.
+  Optional `trail.dataTrail` (config `dataTrail`) names the account trail expected; empty searches all. A bucket whose trail is not
+  logging, or has validation off, fails `event-selectors` and names the trail ("data trail observe-data is not logging"); the detail
+  lists each trail. The lab read role needs `cloudtrail:DescribeTrails`, `GetTrailStatus`, `GetEventSelectors`
+  (hangar-infra `observe/lab/role.tf`).
 - **An applied change stays valid for its stamps until its successor applies.** A new pushed head superseded the older
   change for the same app, environment and cluster even when that change was already applied, and revoked its token, so
   its `ClearanceGrant` left the cluster and the Argo CD agent raised a false `deploy.exception` ("hash listed by no

@@ -37,6 +37,7 @@ type fileConfig struct {
 	TrailPrefix  string             `json:"trailPrefix"`   // AWSLogs/<org id>/<account>/
 	TrailRegion  string             `json:"trailRegion"`   // the bucket's region
 	TrailName    string             `json:"trailName"`     // the trail expected (health)
+	DataTrail    string             `json:"dataTrail"`     // the account's own trail that records the data buckets' events; empty: any trail in the account (or the main trail) that does
 	Regions      []string           `json:"regions"`       // regions whose digests are read
 	DataBuckets  []string           `json:"dataBuckets"`   // state, artifact and secrets buckets whose data events are assessed
 	Rules        []string           `json:"rules"`         // EventBridge rules that must be enabled
@@ -138,6 +139,10 @@ func run() error {
 	tokenPath := os.Getenv("AWS_WEB_IDENTITY_TOKEN_FILE")
 	var trail *collector.TrailReader
 	ctl := collector.Control{Recorders: lab.Recorders, Rules: lab.Rules}
+	if len(fc.DataBuckets) > 0 {
+		// The account's own trails (the data events of the state bucket), read with the observed-account role.
+		ctl.DataTrails = func(ctx context.Context) ([]collector.TrailState, error) { return lab.TrailsIn(ctx, fc.Account) }
+	}
 	if fc.TrailBucket != "" {
 		role := os.Getenv("OBSERVE_TRAIL_ROLE_ARN")
 		if role == "" || tokenPath == "" {
@@ -153,7 +158,7 @@ func run() error {
 	rec := &collector.Reconciler{Settle: dur(fc.Settle, 10*time.Minute)}
 	col := &collector.Collector{Cfg: collector.Config{Accounts: []string{fc.Account}, Version: version}, Pipe: pipeline.New(rs, lk, vocab.Vocabulary{}),
 		Filter: &scope.Filter{DataBuckets: fc.DataBuckets, MaxWave: map[bool]int{false: 1, true: 2}[fc.SecondWave]}, Rec: rec, Core: cc, Lookups: lk, Log: log}
-	hl := &collector.Health{Cfg: collector.HealthConfig{Account: fc.Account, Trail: fc.TrailName, DataBuckets: fc.DataBuckets, Rules: fc.Rules,
+	hl := &collector.Health{Cfg: collector.HealthConfig{Account: fc.Account, Trail: fc.TrailName, DataTrail: fc.DataTrail, DataBuckets: fc.DataBuckets, Rules: fc.Rules,
 		MustCoverRegions: fc.Regions}, Ctl: ctl, Trail: trail, Col: col, Core: cc}
 	hl.Start()
 	drain := &collector.Drainer{Q: &feeds.SQS{API: lab, QueueURL: fc.QueueURL}, Col: col, Health: hl, Log: log}

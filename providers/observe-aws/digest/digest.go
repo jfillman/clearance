@@ -117,6 +117,22 @@ func Gunzip(b []byte) ([]byte, error) {
 	return out, nil
 }
 
+// Content is an object's uncompressed content whether or not the transport already decompressed it. CloudTrail objects
+// are stored gzipped with Content-Encoding: gzip, and an HTTP client that asked for gzip itself (Go's does, unless the
+// request sets Accept-Encoding) hands back the decompressed body. A body with the gzip magic is decompressed (bounded);
+// any other body is taken as already-decompressed content (bounded by MaxFile). Every hash AWS records (a log file's
+// hashValue, previousDigestHashValue, the digest's signed hash) is over the uncompressed content, so it is the same
+// bytes either way.
+func Content(b []byte) ([]byte, error) {
+	if len(b) >= 2 && b[0] == 0x1f && b[1] == 0x8b {
+		return Gunzip(b)
+	}
+	if len(b) > MaxFile {
+		return nil, errors.New("object is over the size cap")
+	}
+	return b, nil
+}
+
 // Verified is a digest that passed.
 type Verified struct {
 	Digest    Digest
