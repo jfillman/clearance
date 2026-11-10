@@ -13,7 +13,7 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 - **observe-k8s reports `still-live`.** The collector now posts its own first resolution, `still-live`, for each observation of
   a change that landed and was not put back, as `docs/evidence.md` says. Packet rows no longer read `none recorded` until a
-  person acts. Refused attempts and break-glass windows get none.
+  person acts. Refused events, including a refused event in a transaction with a landed one, and break-glass windows get none.
 
 ## [0.39.1] - 2026-11-10
 

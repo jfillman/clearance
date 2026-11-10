@@ -462,10 +462,7 @@ func (c *Collector) Flush(ctx context.Context) error {
 			}
 			continue
 		}
-		if !landedChange(x.Kind) {
-			continue
-		}
-		for _, ev := range x.Events {
+		for _, ev := range x.Landed {
 			seq, ok := c.seqOf(ev)
 			if !ok {
 				continue
@@ -485,12 +482,6 @@ func (c *Collector) seqOf(event string) (int64, bool) {
 	defer c.mu.Unlock()
 	seq, ok := c.seqs[event]
 	return seq, ok
-}
-
-// landedChange says an exception of this kind is a change that took effect and was not put back: a refused attempt
-// landed nothing, and a break-glass window has its own record.
-func landedChange(kind string) bool {
-	return kind == "out-of-band" || kind == "monitoring-protection" || kind == "drift"
 }
 
 // Run drains the queue until ctx ends: it waits for an append, processes batches, and backs off on an error. The
