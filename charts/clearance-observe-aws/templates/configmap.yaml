@@ -16,7 +16,6 @@ data:
     {{- $_ := set $c "regions" .Values.trail.regions }}
     {{- end }}
     {{ toJson $c }}
-{{- if .Values.rules_bundle }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -25,5 +24,8 @@ metadata:
   labels: {{- include "observe.labels" . | nindent 4 }}
 data:
   rules.yaml: |
-    {{- .Values.rules_bundle | nindent 4 }}
+{{- if .Values.rules_bundle }}
+{{ .Values.rules_bundle | indent 4 }}
+{{- else }}
+{{ tpl (.Files.Get "files/observe-rules.yaml") . | indent 4 }}
 {{- end }}
