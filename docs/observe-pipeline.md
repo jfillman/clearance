@@ -105,8 +105,9 @@ record, the only thing that clears the flip.
 admission controller every ~20 s, cert-manager's cainjector injecting `caBundle`), and treating every such write as an
 attack leaves the feed permanently blind. `monitoring.kubernetes_exempt` lists the carve-outs, each with a `name`, a `why`,
 one exact `subject`, exact `verbs`, `kinds` (only the two webhook configuration kinds) and `names` (globs on the object
-name). The defaults are `kyverno-admission-controller` (update, patch, `kyverno-*`) and `cert-manager-cainjector` (patch, any
-name). A **succeeded** write that matches an entry is routine noise: not monitoring-protection, no alert, no health flip, no
+name). The defaults are `kyverno-admission-controller` (update, patch, `kyverno-*`), `cert-manager-cainjector` (patch, any
+name), Kyverno's cleanup controller (its cleanup and TTL webhooks) and the Tekton operator, proxy, Pipelines, Triggers and
+Pipelines-as-Code webhooks, each limited to its own webhook names. A **succeeded** write that matches an entry is routine noise: not monitoring-protection, no alert, no health flip, no
 exception, counted in the filtered count as `monitoring-exempt:<name>`. Everything else stays monitoring-protection: another
 verb (`delete`), another name, a person, a refused attempt, and any write to the `kube-system/audit-policy` ConfigMap, by
 these identities too. The loader refuses an entry with no name or reason, an empty or pattern subject, no verbs, no names, or
