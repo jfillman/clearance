@@ -132,7 +132,7 @@ changes it proposed, the provenance levels, and the model versions (claimed by t
 
 | Class | Rows |
 | --- | --- |
-| `out-of-band` | `deploy.exception` of kind out-of-band, drift, untraced-apply or digest-mismatch, and observations seen and not cleared: actor, the diff (expected and observed digests, objects or addresses, the state or the operation), and the resolution (inside a break-glass window, re-cleared at a seq, an observation's or a person's `reverted`/`ratified`/... with its cause, or "none recorded"). A person's resolution of a gate exception (`POST /v1/observations/{seq}/resolution`, newest wins) is the row's resolution, with `cause`, `resolved_by` and `resolution_seq` as an observation row has; a break-glass window still shows in `window` |
+| `out-of-band` | `deploy.exception` of kind out-of-band, drift, untraced-apply or digest-mismatch, and observations seen and not cleared: actor, the diff (expected and observed digests, objects or addresses, the state or the operation), and the resolution (inside a break-glass window, re-cleared at a seq, an observation's or a person's `reverted`/`ratified`/... with its cause, or "none recorded"). A person's resolution of a gate exception (`POST /v1/observations/{seq}/resolution`, newest wins) is the row's resolution, with `cause`, `resolved_by`, `resolution_seq` and `resolution_note` as an observation row has; a break-glass window still shows in `window` |
 | `break-glass` | One row per window: who opened it, until when, and how it closed (`breakglass.close`'s report) |
 | `attempted-refused` | An operation something tried and a control refused: nothing landed |
 | `monitoring-protection` | An operation on the controls that watch the environment, whether or not it succeeded |
@@ -159,7 +159,7 @@ is inferred from the chain. `acceptances` in the JSON is `{status, statement, re
 until receipts exist, and `packet.Params.Receipts` is where P-1 will hand them in), and `csv/acceptances.csv` has the
 receipt columns, empty for now. A `ratified` or `declared-break-glass` resolution and each break-glass window are
 **Exceptions** rows (the resolution column, and the `break-glass` class). An observation row shows its **newest**
-resolution with the person (or provider) who wrote it (`resolved_by`, `resolution_seq`, and the cause): a person's edit
+resolution with the person (or provider) who wrote it (`resolved_by`, `resolution_seq`, the cause, and the person's note as `resolution_note`: in full in `packet.json`, cut to 200 characters in the CSV and the PDF): a person's edit
 in Tower is a newer record about the same seq and replaces the collector's in the packet, the earlier records staying
 in the evidence. A row also says whether its source was verified.
 

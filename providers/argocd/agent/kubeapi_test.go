@@ -67,7 +67,9 @@ func TestKubeAPI(t *testing.T) {
 	}
 	g := agent.Grant{Namespace: "app-a", Name: ch2, Labels: map[string]string{agent.LabelManagedBy: agent.ManagedBy}}
 	g.Spec.Objects = map[string]agent.GrantObject{"apps/Deployment/web": {Rendered: "z"}}
-	if err := k.ApplyGrant(bg, g); err != nil { // POST conflicts, so it patches; the active label is cleared with null
+	cur := agent.Grant{Namespace: "app-a", Name: ch2}
+	cur.Spec.Objects = map[string]agent.GrantObject{"/ConfigMap/gone": {}, "apps/Deployment/web": {Rendered: "y"}}
+	if err := k.UpdateGrant(bg, g, cur); err != nil { // a patch, no create; the active label is cleared with null
 		t.Fatal(err)
 	}
 	if !strings.Contains(bodies[len(bodies)-1], `"/ConfigMap/gone":null`) || strings.Contains(bodies[len(bodies)-1], `"apps/Deployment/web":null`) {
@@ -104,5 +106,74 @@ func TestKubeAPI(t *testing.T) {
 	}
 	if d, err := k.GetData(bg, "clearance-system", "state"); err != nil || d != nil {
 		t.Errorf("no state yet: %v %v", d, err)
+	}
+}
+
+// An update and a state write never send a create the API server would refuse; a create that loses a race (409)
+// reads the grant and writes only if it differs.
+func TestKubeAPIWritesAreNotRefused(t *testing.T) {
+	var mu sync.Mutex
+	var calls []string
+	stored := `{"metadata":{"labels":{"app.kubernetes.io/managed-by":"clearance-argocd-agent"}},"spec":{"expiresAt":"2026-01-01T00:00:00Z","objects":{"apps/Deployment/web":{"rendered":"x","changed":false}}}}`
+	cmExists := true
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/clearancegrants"):
+			w.WriteHeader(409)
+			_, _ = w.Write([]byte(`{"reason":"AlreadyExists"}`))
+		case r.Method == "GET" && strings.Contains(r.URL.Path, "/clearancegrants/"):
+			_, _ = w.Write([]byte(stored))
+		case strings.Contains(r.URL.Path, "/configmaps/state") && !cmExists:
+			w.WriteHeader(404)
+		case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/configmaps"):
+			cmExists = true
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			_, _ = w.Write([]byte(`{}`))
+		}
+	}))
+	defer srv.Close()
+	tok := filepath.Join(t.TempDir(), "token")
+	_ = os.WriteFile(tok, []byte("t"), 0o600)
+	k := &agent.API{Base: srv.URL, TokenFile: tok, Client: srv.Client(), Grants: agent.DefaultGrantAPI, ArgoNS: "argocd-apps"}
+	reset := func() { calls = nil }
+
+	g := agent.Grant{Namespace: "app-a", Name: ch2, Labels: map[string]string{agent.LabelManagedBy: agent.ManagedBy}}
+	g.Spec.ExpiresAt = "2026-01-01T00:00:00Z"
+	g.Spec.Objects = map[string]agent.GrantObject{"apps/Deployment/web": {Rendered: "x"}}
+
+	// The race: the create gets 409, the grant is the same: nothing is written.
+	if err := k.CreateGrant(bg, g); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(calls, ";") != "POST /apis/clearance.hangar.io/v1/namespaces/app-a/clearancegrants;GET /apis/clearance.hangar.io/v1/namespaces/app-a/clearancegrants/"+ch2 {
+		t.Errorf("a lost race on an equal grant: %v", calls)
+	}
+	// The race, the stored grant differs: one patch.
+	reset()
+	g.Spec.Objects["apps/Deployment/web"] = agent.GrantObject{Rendered: "y"}
+	if err := k.CreateGrant(bg, g); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 3 || !strings.HasPrefix(calls[2], "PATCH ") {
+		t.Errorf("a lost race on a different grant: %v", calls)
+	}
+	// An update is a patch only.
+	reset()
+	if err := k.UpdateGrant(bg, g, g); err != nil || len(calls) != 1 || !strings.HasPrefix(calls[0], "PATCH ") {
+		t.Errorf("update: %v %v", err, calls)
+	}
+	// State: a patch when the ConfigMap is there; a create only after a 404.
+	reset()
+	if err := k.PutData(bg, "clearance-system", "state", map[string]string{"k": "v"}); err != nil || len(calls) != 1 || !strings.HasPrefix(calls[0], "PATCH ") {
+		t.Errorf("state patch: %v %v", err, calls)
+	}
+	reset()
+	cmExists = false
+	if err := k.PutData(bg, "clearance-system", "state", map[string]string{"k": "v"}); err != nil || len(calls) != 2 || !strings.HasPrefix(calls[1], "POST ") {
+		t.Errorf("state create after 404: %v %v", err, calls)
 	}
 }

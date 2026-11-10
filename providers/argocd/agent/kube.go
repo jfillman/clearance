@@ -14,8 +14,12 @@ type Kube interface {
 
 	// ListGrants are the grants the agent manages, in every namespace.
 	ListGrants(ctx context.Context) ([]Grant, error)
-	// ApplyGrant creates the grant or replaces its spec and labels. It never touches status.
-	ApplyGrant(ctx context.Context, g Grant) error
+	// CreateGrant creates a grant the caller has seen is absent. If something created it in between (a 409) it reads
+	// the grant and writes only when spec or labels differ. It never touches status.
+	CreateGrant(ctx context.Context, g Grant) error
+	// UpdateGrant replaces the spec and labels of a grant that exists, in the state cur (as listed): a patch, never a
+	// create, so a refused attempt is not made. The caller has compared first and calls it only when g differs.
+	UpdateGrant(ctx context.Context, g, cur Grant) error
 	// SetGrantValid writes the grant's status.valid (the status subresource: only the agent has it).
 	SetGrantValid(ctx context.Context, namespace, name string, valid bool, reason string, at time.Time) error
 	DeleteGrant(ctx context.Context, namespace, name string) error
