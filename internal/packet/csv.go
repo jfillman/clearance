@@ -109,17 +109,17 @@ func CSVs(pk *Packet) (map[string][]byte, error) {
 	rows = nil
 	for _, e := range pk.Exceptions.Rows {
 		rows = append(rows, []string{e.Class, fmt.Sprint(e.Seq), e.TS, e.Kind, e.Source, e.Scope, e.Subject, e.Actor, e.Diff, e.Resolution, e.Cause, e.Window,
-			strings.Join(e.OperationalClass, " "), e.Detail, ptrStr(e.ResolutionSeq), e.ResolvedBy, fmt.Sprint(e.SourceVerified)})
+			strings.Join(e.OperationalClass, " "), e.Detail, ptrStr(e.ResolutionSeq), e.ResolvedBy, fmt.Sprint(e.SourceVerified), short(e.ResolutionNote, 200)})
 	}
 	do(put("exceptions.csv", []string{"class", "seq", "ts", "kind", "source", "scope", "subject", "actor", "diff", "resolution", "cause", "break_glass_window", "operational_class", "detail",
-		"resolution_seq", "resolved_by", "source_verified"}, rows))
+		"resolution_seq", "resolved_by", "source_verified", "resolution_note"}, rows))
 	if oc := pk.Observed; oc != nil {
 		rows = nil
 		for _, o := range oc.Rows {
 			rows = append(rows, []string{fmt.Sprint(o.Seq), o.TS, o.Scope, o.Source, o.Resource, o.Actor, o.API, o.Diff, o.Coverage, o.Resolution, o.Cause, o.ResolvedBy,
-				fmt.Sprint(o.SourceVerified), o.VerifiedBy})
+				fmt.Sprint(o.SourceVerified), o.VerifiedBy, short(o.ResolutionNote, 200)})
 		}
-		do(put("observed-changes.csv", []string{"seq", "ts", "scope", "source", "resource", "actor", "api", "diff", "coverage", "resolution", "cause", "resolved_by", "source_verified", "verified_by"}, rows))
+		do(put("observed-changes.csv", []string{"seq", "ts", "scope", "source", "resource", "actor", "api", "diff", "coverage", "resolution", "cause", "resolved_by", "source_verified", "verified_by", "resolution_note"}, rows))
 	}
 	rows = nil
 	for _, e := range pk.Policy {

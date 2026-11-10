@@ -214,4 +214,7 @@ func TestAPersonsResolutionOfAGateExceptionIsTheRowsResolution(t *testing.T) {
 	if r.Seq != gx || r.Resolution != "ratified" || r.Cause != "" || r.ResolvedBy != "user:jfillman" || r.ResolutionSeq == nil || *r.ResolutionSeq != edit {
 		t.Fatalf("the newest person's resolution is the row's: %+v", r)
 	}
+	if r.ResolutionNote != "a false out-of-band report" {
+		t.Fatalf("the row carries the resolution's note: %q", r.ResolutionNote)
+	}
 }

@@ -78,6 +78,7 @@ func (b *builder) exceptionsSection(pk *Packet) {
 				row.Cause = str(s, "cause")
 				row.ResolutionSeq = ptr(seqOf(rr))
 				row.ResolvedBy = orDefault(str(s, "by"), str(obj(rr, "provider"), "name"))
+				row.ResolutionNote = str(s, "note")
 				b.extra[seqOf(rr)] = true
 			}
 			rows = append(rows, row)
@@ -248,6 +249,7 @@ func (b *builder) observationRows() []Exception {
 			row.Cause = str(s, "cause")
 			row.ResolutionSeq = ptr(seqOf(rr))
 			row.ResolvedBy = orDefault(str(s, "by"), str(obj(rr, "provider"), "name"))
+			row.ResolutionNote = str(s, "note")
 		}
 		if selfVerified(r) {
 			row.SourceVerified, row.VerifiedBy = true, "self"
@@ -368,6 +370,7 @@ func (b *builder) observedSection(pk *Packet) {
 			s := obj(rr, "resolution")
 			row.Resolution, row.Cause = str(s, "state"), str(s, "cause")
 			row.ResolvedBy = orDefault(str(s, "by"), str(obj(rr, "provider"), "name"))
+			row.ResolutionNote = str(s, "note")
 		}
 		if selfVerified(r) {
 			row.SourceVerified, row.VerifiedBy = true, "self"

@@ -11,6 +11,10 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ### Added
 
+- **The packet shows a resolution's note.** Exception and observed-change rows carry the newest resolution's `note` as
+  `resolution_note` (in full in `packet.json`; cut to 200 characters in `exceptions.csv`, `observed-changes.csv` and the
+  PDF), so a ratified exception reads with its reason, not only who ratified it.
+
 - **observe-k8s: a controller's writes to what a grant created are not exceptions.** A rollout under a correctly cleared grant used to
   leave about 54 `out-of-band-detected` rows in two minutes and about 170 an hour at rest (hangar-prod, last 6 h: 1154 rows, 1016
   before the release). Three changes, all keeping a person's, a `kubectl` client's and a refused write out-of-band:
