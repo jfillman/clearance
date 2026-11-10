@@ -4,8 +4,13 @@ For the owner of a cluster that the [Kubernetes audit collector](observe-k8s.md)
 lab). **On Hangar neither cluster has any audit flag set today.** The API server flags, the policy file and the webhook
 kubeconfig are files on the control-plane node; apron renders the collector, not these. Do hangar-dev first.
 
-Nothing here has been run against a live cluster. The kubeadm argument syntax is the v1beta4 form (Kubernetes 1.31 and
-later); check your kubeadm's version.
+**On an Apron cluster use `hack/observe-audit.sh` in apron**: it does sections 1 to 4 and checks each one, and it puts
+the manifest back if the API server does not return. Hangar's two clusters have a wrapper each in hangar
+`tools/observe-audit/`. The rest of this page is what that script does, for a cluster it does not cover.
+
+The script's flow was tested on a throwaway kiac cluster on Kubernetes 1.36: real collector, delivery, refusals, no
+Secret value in the queue, rollback. The flag names were checked against the `kube-apiserver` 1.36.5 and 1.37.0
+binaries. The kubeadm section below is the v1beta4 form (Kubernetes 1.31 and later) and has not been run.
 
 ## 0. What you need
 
@@ -20,24 +25,26 @@ later); check your kubeadm's version.
 ```sh
 # a CA that only signs the API server's audit client certificate
 openssl ecparam -name prime256v1 -genkey -noout -out audit-client-ca.key
-openssl req -x509 -new -key audit-client-ca.key -days 825 -subj "/CN=observe-audit-client-ca" -out audit-client-ca.crt
+openssl req -x509 -new -sha256 -key audit-client-ca.key -days 825 -subj "/CN=observe-audit-client-ca" -out audit-client-ca.crt
 
 # the API server's client certificate: the name the collector allows (--allowed-client, default kube-apiserver)
 openssl ecparam -name prime256v1 -genkey -noout -out apiserver-audit-client.key
-openssl req -new -key apiserver-audit-client.key -subj "/CN=kube-apiserver" -out apiserver-audit-client.csr
+openssl req -new -sha256 -key apiserver-audit-client.key -subj "/CN=kube-apiserver" -out apiserver-audit-client.csr
 printf 'extendedKeyUsage=clientAuth\n' > client.ext
-openssl x509 -req -in apiserver-audit-client.csr -CA audit-client-ca.crt -CAkey audit-client-ca.key -CAcreateserial \
+openssl x509 -req -sha256 -in apiserver-audit-client.csr -CA audit-client-ca.crt -CAkey audit-client-ca.key -CAcreateserial \
   -days 365 -extfile client.ext -out apiserver-audit-client.crt
 
 # the collector's server certificate, with the Service's IP as an IP SAN (and its DNS name)
 openssl ecparam -name prime256v1 -genkey -noout -out collector.key
-openssl req -new -key collector.key -subj "/CN=clearance-observe-k8s" -out collector.csr
+openssl req -new -sha256 -key collector.key -subj "/CN=clearance-observe-k8s" -out collector.csr
 printf 'extendedKeyUsage=serverAuth\nsubjectAltName=IP:10.96.200.50,DNS:clearance-observe-k8s.clearance-system.svc\n' > server.ext
-openssl x509 -req -in collector.csr -CA audit-client-ca.crt -CAkey audit-client-ca.key -CAcreateserial \
+openssl x509 -req -sha256 -in collector.csr -CA audit-client-ca.crt -CAkey audit-client-ca.key -CAcreateserial \
   -days 365 -extfile server.ext -out collector.crt
 ```
 
-(One CA signing both is fine for a lab; a separate server CA is better.) Create the collector's Secret yourself:
+`-sha256` is required: LibreSSL (macOS's `openssl`) otherwise signs with SHA-1, and the node's OpenSSL refuses that
+certificate. One CA signing both is fine for a lab; a separate server CA is better (the script makes two). Copy the CA
+that signed `collector.crt` to `collector-ca.crt`; section 3 uses that name. Create the collector's Secret yourself:
 
 ```sh
 kubectl -n clearance-system create secret generic clearance-observe-k8s-tls \
@@ -54,8 +61,8 @@ observe-k8s policy render --namespaces app-gate-api-prod,argocd > audit-policy.y
 observe-k8s policy check audit-policy.yaml        # must say: ok ... never records a Secret body
 ```
 
-(The binary is in the image: `docker run --rm ghcr.io/jfillman/clearance-observe-k8s:vX.Y.Z policy render ...`.) Use the
-same `--namespaces` as the chart's `protectedNamespaces`. **Never apply a policy `policy check` fails.**
+(The binary is in the image, or `go run ./providers/observe-k8s/cmd/observe-k8s policy render ...` from a checkout of the
+release tag.) List the chart's `protectedNamespaces` and every namespace that holds Argo CD Applications. **Never apply a policy `policy check` fails.**
 
 Keep a mirror the collector can read and hold to the Secret rule (set the chart's `auditPolicyMirror` to it):
 
@@ -126,7 +133,7 @@ and mount the directory (and the log directory) into the pod:
 ```
 
 The kubelet restarts the API server when the manifest changes; the cluster's API is unavailable for a short while.
-Back up the manifest first (`cp kube-apiserver.yaml /root/kube-apiserver.yaml.pre-audit`, outside the manifests
+An unknown flag leaves it down until the manifest is restored. Back up the manifest first (`cp kube-apiserver.yaml /root/kube-apiserver.yaml.pre-audit`, outside the manifests
 directory). The buffer size (`--audit-webhook-batch-buffer-size`, default 10000) is the cushion for a collector that is
 down: events beyond it are dropped *at the API server*, and the feed goes blind instead.
 
@@ -157,10 +164,11 @@ nodes:
             - {name: audit, hostPath: /etc/kubernetes/audit, mountPath: /etc/kubernetes/audit, readOnly: true, pathType: DirectoryOrCreate}
 ```
 
-For an existing kind cluster (this is the case on hangar-dev and hangar-prod, which have no audit flags), do step 4 on
-the node itself: copy the files into the node container (`<container cli> cp` or exec; the nodes of these clusters
-run under `container`, not podman) and edit `/etc/kubernetes/manifests/kube-apiserver.yaml` there. The node's kubelet
-restarts the API server. A recreated cluster loses the edit: put it in the cluster config.
+For an existing cluster, do step 4 inside the control-plane node. On Hangar, hangar-dev's node is a kiac VM
+(`container exec -i kiac-hangar-dev-control-plane`) and hangar-prod's is a kind container under podman on another machine
+(`ssh laptop /opt/podman/bin/podman exec -i hangar-prod-control-plane`). The node's kubelet restarts the API server. A
+recreated cluster loses the edit: run the script again, or put it in the cluster config on kind (kiac cannot pass
+API-server flags at create time).
 
 ## 5. Verify, in this order
 
