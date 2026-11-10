@@ -9,6 +9,8 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.39.0] - 2026-11-10
+
 ### Added
 
 - **O-5: coverage in the packet, a person's resolution, and the trail's verification** (clearance side; the Tower tab, banner
@@ -24,8 +26,6 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   as a verification record about the observation, counted once, never a second observation or exception. **Rollout:** add
   `observation.verification` to the observe-aws provider's registered `kinds`; until then the collector counts and logs
   the core's refusal and the observations stay `sourceVerified: false`. The evidence record schema is `x-clearance-revision` 6.
-
-## [0.38.1] - Unreleased
 
 ### Fixed
 
@@ -944,7 +944,8 @@ What the Autopilot gateway needs of the core before the hangar-dev cutover (R-3e
   scope, narrow-only limits, CEL policy, sessions, the hash-chained audit log and the gateway; the Hangar pack's
   `glidepath.*` and `airframe.*` tools over glidepath-api and a GET-only Kubernetes adapter.
 
-[Unreleased]: https://github.com/jfillman/clearance/compare/v0.38.0...HEAD
+[Unreleased]: https://github.com/jfillman/clearance/compare/v0.39.0...HEAD
+[0.39.0]: https://github.com/jfillman/clearance/compare/v0.38.0...v0.39.0
 [0.38.0]: https://github.com/jfillman/clearance/compare/v0.37.0...v0.38.0
 [0.37.0]: https://github.com/jfillman/clearance/compare/v0.36.1...v0.37.0
 [0.36.1]: https://github.com/jfillman/clearance/compare/v0.36.0...v0.36.1
