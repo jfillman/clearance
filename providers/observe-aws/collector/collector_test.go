@@ -477,3 +477,14 @@ func TestConfigFirstDiscoveryIsBaselineAndACreationWithoutAnEventIsNot(t *testin
 		t.Fatalf("a created resource, and one whose age is unknown, stay exceptions: %d %+v", got, r.c.Stats())
 	}
 }
+
+func TestCreatedIDIsOnlyTakenFromACreateCallAndPrefersTheCreatedResource(t *testing.T) {
+	snap := &ctView{Name: "CreateSnapshot", Response: map[string]any{"volumeId": "vol-0src", "snapshotId": "snap-0new"}}
+	if got := createdID(snap); got != "snap-0new" {
+		t.Fatal(got)
+	}
+	attach := &ctView{Name: "AttachVolume", Response: map[string]any{"volumeId": "vol-0a", "instanceId": "i-0b"}}
+	if got := createdID(attach); got != "" {
+		t.Fatalf("an attach creates nothing: %s", got)
+	}
+}

@@ -93,12 +93,25 @@ func requestDiff(v *ctView) map[string]any {
 }
 
 // idKeys are the response elements that name the resource a call created, in the order they are preferred.
-var idKeys = []string{"groupId", "instanceId", "vpcId", "subnetId", "volumeId", "networkInterfaceId", "snapshotId",
+var idKeys = []string{"groupId", "instanceId", "vpcId", "subnetId", "snapshotId", "volumeId", "networkInterfaceId",
 	"imageId", "allocationId", "routeTableId", "internetGatewayId", "natGatewayId", "transitGatewayId", "keyId"}
+
+// createCall says the API makes a resource: only then does its response name one as created.
+func createCall(name string) bool {
+	for _, p := range []string{"Create", "Run", "Allocate", "Import", "Register", "Copy"} {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
+}
 
 // createdID is the id the response gives the created resource (an ec2 CreateSecurityGroup answers groupId sg-...), or
 // "" when it names none.
 func createdID(v *ctView) string {
+	if !createCall(v.Name) { // AttachVolume answers instanceId and volumeId: both existing resources
+		return ""
+	}
 	for _, k := range idKeys {
 		if s := str(v.Response[k]); s != "" && len(s) <= 256 && !strings.ContainsAny(s, " \t\n") {
 			return s
