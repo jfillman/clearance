@@ -30,6 +30,24 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
     Rules version 2026.11.5; new values `rules.grantAgentSubject`, `externalSecretsSubject`, `crossplaneSubject`,
     `crossplaneCompositeKinds`, `crossplaneComposedKinds`, `annotations.controllerOwned`, `annotations.controllerLabels`.
 
+- A person (an admin, or a delegate naming one) can record a resolution on a gate exception, the way they can on an
+  observation: `POST /v1/observations/{seq}/resolution` now also takes the seq of a `deploy.exception` of kind
+  out-of-band, drift, untraced-apply or digest-mismatch (attempted-refused and monitoring-protection stay 404). The
+  resolution is scoped to the exception's destination (cluster, else workspace `backend/key#name`), is append-only
+  and names the person. The packet's Exceptions row shows the newest resolution instead of "none recorded", and a
+  provider's `resolution` about such an exception is accepted in that scope. `contract/clearance-core.json` changes
+  (route text only).
+
+### Fixed
+
+- **An applied change stays valid for its stamps until its successor applies.** A new pushed head superseded the older
+  change for the same app, environment and cluster even when that change was already applied, and revoked its token, so
+  its `ClearanceGrant` left the cluster and the Argo CD agent raised a false `deploy.exception` ("hash listed by no
+  grant") for the live objects until the new head applied. Now a superseded change that has an applied `deploy.outcome`
+  keeps its token in the signed grant feed, as no clearance (the old head still cannot render as cleared), and is revoked
+  when a later change for the same app, environment and cluster applies. A change that was never applied is revoked on
+  supersede as before. The feed's shape and signature are unchanged.
+
 ## [0.39.3] - 2026-11-10
 
 ### Added

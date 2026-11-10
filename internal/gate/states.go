@@ -3,6 +3,8 @@ package gate
 import (
 	"fmt"
 	"slices"
+
+	"github.com/jfillman/clearance/internal/token"
 )
 
 // The clearance state machine (C-6). A change is registered into one of the first three states; holding is the
@@ -77,7 +79,45 @@ func (w *writer) move(c *Change, to, why string, extra map[string]any) {
 		c.EvidenceWait = nil // a change that left holding is no longer waiting for the evidence ledger (C-3)
 	}
 	if from == StateCleared {
+		if to == StateSuperseded && applied(c) {
+			// An applied change stays live on its cluster until a successor applies (retireSuperseded): its token
+			// stays in the grant feed so its stamps stay valid, and is no clearance any more (Clearance serves none,
+			// CheckNonce refuses it).
+			w.touch(c.ID, c.Cluster)
+			return
+		}
 		w.revoke(c, why, extra)
+	}
+}
+
+// applied reports whether c has a recorded deploy.outcome that applied it.
+func applied(c *Change) bool { return c.Outcome != nil && c.Outcome.Applied }
+
+// retireSuperseded revokes the tokens of the superseded changes of by's app, environment and cluster that were kept
+// live because they were applied (move): by has now applied, so the objects they stamped are replaced, and their
+// stamps stop being valid. Recorded as deploy.revoke.
+func (w *writer) retireSuperseded(by *Change) {
+	if w.err != nil || w.svc == nil || w.svc.Tokens == nil {
+		return
+	}
+	live, err := w.tx.LiveTokens(w.ctx, by.Cluster, w.now, token.MaxFeedEntries+1)
+	if err != nil {
+		w.err = err
+		return
+	}
+	for _, tk := range live {
+		if tk.ChangeID == by.ID {
+			continue
+		}
+		old, err := load(w.ctx, w.tx, tk.ChangeID)
+		if err != nil {
+			w.err = err
+			return
+		}
+		if old == nil || old.State != StateSuperseded || old.App != by.App || old.Env != by.Env || old.Cluster != by.Cluster {
+			continue
+		}
+		w.revoke(old, "successor "+by.ID+" applied", map[string]any{"by": by.Head})
 	}
 }
 

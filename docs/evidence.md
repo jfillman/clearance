@@ -198,6 +198,10 @@ a `resolution` record about the same seq, in the same shape, naming the person (
 `resolution.by`). An edit is another record; **the newest record about a seq is the resolution when it is read**
 (the coverage statement, the packet and the verifier all read it that way), and every earlier one stays in the chain,
 so who set which cause and when is never lost. `GET /v1/observations?kind=resolution` is the history.
+The same route resolves a gate `deploy.exception` (kinds out-of-band, drift, untraced-apply, digest-mismatch): the
+record's `about.seq` names the exception and its `scope` is the exception's destination (cluster, else workspace
+`backend/key#name`), since an exception has no scope of its own; the core's reference check accepts that and no other
+scope ([gate.md](gate.md#a-gate-exception-is-resolved-the-same-way)).
 
 **Source integrity is not completeness.** `integrity.sourceVerified` says the delivered log files were verified
 unaltered (a trail's digest chain). When the feed that delivered an event first could not verify it and another feed later
