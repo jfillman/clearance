@@ -57,7 +57,7 @@ The first digest of a run is linked to the previous digest object, fetched for t
 request sets `Accept-Encoding`; `S3.Get` sets it, and `digest.Content` also accepts a body that is already decompressed. Every hash
 AWS records (a log file's `hashValue`, `previousDigestHashValue`, the hash in the digest's signed string) is over the
 **uncompressed** content, so it is computed over the same bytes either way. The signing string was checked on
-2026-11-10 against a digest AWS signed (the organization trail's digest for 700017004810, verified with the key
+2026-11-10 against a digest AWS signed (a real organization trail's digest, verified with the key
 `ListPublicKeys` returned for its fingerprint): the end time is signed as the digest writes it (RFC 3339), not in the compact
 `yyyymmddThhmmssZ` form the first build used, which made every live digest `digest-signature-invalid`.
 

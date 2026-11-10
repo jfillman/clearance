@@ -1,7 +1,7 @@
 // Package digest validates a CloudTrail trail's log-file integrity (O-4), the way AWS documents it: each hourly
 // digest file carries an RSA signature (SHA256withRSA, in the S3 object's x-amz-meta-signature) over
 //
-//	<digestEndTime as yyyymmddThhmmssZ> \n <bucket>/<key> \n <hex sha256 of the digest file> \n <previous digest's signature>
+//	<digestEndTime exactly as the digest writes it, e.g. 2026-11-10T21:33:00Z> \n <bucket>/<key> \n <hex sha256 of the digest file> \n <previous digest's signature>
 //
 // and lists the log files it covers with the sha256 of each one's uncompressed content, and the previous digest by
 // its key, hash and signature. A log file is read for its events only after its digest verifies and its own hash
@@ -160,8 +160,8 @@ func hexSum(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(
 // SignedString is the data a digest's signature covers.
 //
 // endTime is the digest's digestEndTime exactly as the digest file writes it (e.g. 2026-11-10T21:33:00Z): AWS signs
-// that string, not a reformatted time. Checked 2026-11-10 against a digest AWS signed (the organization trail of
-// 700017004810, key fingerprint 93d8149d...): the compact yyyymmddThhmmssZ form does not verify; this one does.
+// that string, not a reformatted time. Checked 2026-11-10 against a digest AWS signed for a real organization trail:
+// the compact yyyymmddThhmmssZ form does not verify; this one does.
 func SignedString(endTime, bucket, object, contentHash, prevSignature string) string {
 	if prevSignature == "" {
 		prevSignature = "null"

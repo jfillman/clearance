@@ -156,8 +156,8 @@ func TestObserveAWSChartRulesAreTheDefaultsPlusTheValues(t *testing.T) {
 			t.Errorf("identities.%s = %v, want the default %v", k, ids[k], v)
 		}
 	}
-	if !reflect.DeepEqual(ids["apply_roles"], []any{"arn:aws:iam::700017004810:role/hangar-lab-apply"}) ||
-		!reflect.DeepEqual(ids["sso_admin_roles"], []any{"arn:aws:iam::700017004810:role/aws-reserved/sso.amazonaws.com/*AWSReservedSSO_Admin_*"}) {
+	if !reflect.DeepEqual(ids["apply_roles"], []any{"arn:aws:iam::111122223333:role/hangar-lab-apply"}) ||
+		!reflect.DeepEqual(ids["sso_admin_roles"], []any{"arn:aws:iam::111122223333:role/aws-reserved/sso.amazonaws.com/*AWSReservedSSO_Admin_*"}) {
 		t.Errorf("identities: %v", ids)
 	}
 	if got["name"] != "observe-aws" || got["version"] != "2026.11.5" {
@@ -166,7 +166,7 @@ func TestObserveAWSChartRulesAreTheDefaultsPlusTheValues(t *testing.T) {
 	if n, _ := got["noise"].([]any); len(n) != 0 {
 		t.Errorf("noise: %v, want none for AWS yet", n)
 	}
-	want := map[string]any{"governed": []any{map[string]any{"provider": "aws", "scopes": []any{"700017004810"}}}}
+	want := map[string]any{"governed": []any{map[string]any{"provider": "aws", "scopes": []any{"111122223333"}}}}
 	if !reflect.DeepEqual(got["scope"], want) {
 		t.Errorf("scope %v, want the observed account only", got["scope"])
 	}
