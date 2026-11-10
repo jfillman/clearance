@@ -83,6 +83,42 @@ monitoring:
       verbs: [patch]
       kinds: [ValidatingWebhookConfiguration, MutatingWebhookConfiguration]
       names: ["*"]
+    - name: kyverno-cleanup-own-webhooks
+      why: Kyverno's cleanup controller rewrites its own cleanup and TTL webhook configurations when it starts or the API server restarts.
+      subject: "system:serviceaccount:kyverno:kyverno-cleanup-controller"
+      verbs: [update, patch]
+      kinds: [ValidatingWebhookConfiguration, MutatingWebhookConfiguration]
+      names: ["kyverno-cleanup-*", "kyverno-ttl-*"]
+    - name: tekton-operator-own-webhooks
+      why: The Tekton operator reconciles its own webhook configurations when it starts or the API server restarts.
+      subject: "system:serviceaccount:tekton-operator:tekton-operator"
+      verbs: [update, patch]
+      kinds: [ValidatingWebhookConfiguration, MutatingWebhookConfiguration]
+      names: ["*.operator.tekton.dev"]
+    - name: tekton-operators-proxy-own-webhook
+      why: Tekton's operator proxy webhook reconciles its own mutating webhook configuration.
+      subject: "system:serviceaccount:tekton-pipelines:tekton-operators-proxy-webhook"
+      verbs: [update, patch]
+      kinds: [ValidatingWebhookConfiguration, MutatingWebhookConfiguration]
+      names: ["proxy.operator.tekton.dev"]
+    - name: tekton-pipelines-own-webhooks
+      why: The Tekton Pipelines webhook reconciles its own webhook configurations.
+      subject: "system:serviceaccount:tekton-pipelines:tekton-pipelines-webhook"
+      verbs: [update, patch]
+      kinds: [ValidatingWebhookConfiguration, MutatingWebhookConfiguration]
+      names: ["*.pipeline.tekton.dev"]
+    - name: tekton-triggers-own-webhooks
+      why: The Tekton Triggers webhook reconciles its own webhook configurations.
+      subject: "system:serviceaccount:tekton-pipelines:tekton-triggers-webhook"
+      verbs: [update, patch]
+      kinds: [ValidatingWebhookConfiguration, MutatingWebhookConfiguration]
+      names: ["*.triggers.tekton.dev"]
+    - name: pipelines-as-code-own-webhook
+      why: The Pipelines-as-Code webhook reconciles its own validating webhook configuration.
+      subject: "system:serviceaccount:tekton-pipelines:pipelines-as-code-webhook"
+      verbs: [update, patch]
+      kinds: [ValidatingWebhookConfiguration, MutatingWebhookConfiguration]
+      names: ["validation.pipelinesascode.tekton.dev"]
 
 # Attribution: ordered signals, strongest first, the first that holds decides. The last of each list is the catch-all.
 attribute:

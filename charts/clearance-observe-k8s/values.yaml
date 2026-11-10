@@ -99,7 +99,7 @@ watch:
 # complete document in `override` replaces it. Its name and version are in every assessment.
 rules:
   name: observe-hangar
-  version: "2026.11.3"
+  version: "2026.11.4"
   override: ""
   # Argo CD's application controller, as the API server sees it.
   argoControllerSubject: system:serviceaccount:argocd:argocd-application-controller
@@ -116,6 +116,8 @@ rules:
   governedKinds: [ValidatingWebhookConfiguration, MutatingWebhookConfiguration, ValidatingAdmissionPolicy,
                   ValidatingAdmissionPolicyBinding, ClusterRole, ClusterRoleBinding, Namespace, CustomResourceDefinition]
   hpaNamespaces: []
+  # Node names whose kubelets may mint pod tokens without an exception. A node not listed stays visible as out-of-band.
+  kubeletNodes: []
 
 healthInterval: 1m
 gapGrace: 3m
@@ -136,7 +138,7 @@ networkPolicy:
 
 resources:
   requests: {cpu: 50m, memory: 64Mi}
-  limits: {memory: 256Mi}
+  limits: {memory: 384Mi}
 podAnnotations: {}
 nodeSelector: {}
 tolerations: []

@@ -48,6 +48,50 @@ noise:
     identity: {subject: "system:serviceaccount:kube-system:horizontal-pod-autoscaler"}
     shape: {kinds: [Deployment, StatefulSet, ReplicaSet], verbs: [update, patch], subresources: [scale], namespaces: [{{ join ", " .Values.rules.hpaNamespaces }}]}
 {{- end }}
+{{- range .Values.rules.kubeletNodes }}
+  - name: kubelet-serviceaccount-tokens-{{ . }}
+    provider: kubernetes
+    why: this node's kubelet minting the short-lived projected token of a pod it runs.
+    identity: {subject: "system:node:{{ . }}"}
+    shape: {kinds: [ServiceAccount], verbs: [create], subresources: [token]}
+{{- end }}
+  - name: controller-manager-own-tokens
+    provider: kubernetes
+    why: kube-controller-manager minting the tokens of its own controllers in kube-system.
+    identity: {subject: "system:kube-controller-manager"}
+    shape: {kinds: [ServiceAccount], verbs: [create], subresources: [token], namespaces: [kube-system]}
+  - name: deployment-controller-status
+    provider: kubernetes
+    why: the Deployment controller writing the status subresource; it changes no workload.
+    identity: {subject: "system:serviceaccount:kube-system:deployment-controller"}
+    shape: {kinds: [Deployment], verbs: [update], subresources: [status], namespaces: [kube-system]}
+  - name: replicaset-controller-status
+    provider: kubernetes
+    why: the ReplicaSet controller writing the status subresource; it changes no workload.
+    identity: {subject: "system:serviceaccount:kube-system:replicaset-controller"}
+    shape: {kinds: [ReplicaSet], verbs: [update], subresources: [status], namespaces: [kube-system]}
+  - name: applicationset-status
+    provider: kubernetes
+    why: the ApplicationSet controller writing the status subresource of ApplicationSets in its own namespace.
+    identity: {subject: "system:serviceaccount:{{ .Values.argocd.namespace }}:argocd-applicationset-controller"}
+    shape: {kinds: [Applicationset, ApplicationSet], verbs: [update], subresources: [status], namespaces: [{{ .Values.argocd.namespace }}]}
+  - name: prometheus-operator-kubelet-service
+    provider: kubernetes
+    why: the Prometheus operator keeping the one kubelet Service it owns in kube-system up to date.
+    identity: {subject: "system:serviceaccount:observability:kube-prometheus-stack-operator"}
+    shape:
+      kinds: [Service]
+      verbs: [update]
+      namespaces: [kube-system]
+      when: 'event.name == "kube-prometheus-stack-kubelet"'
+  - name: crossplane-owned-crds
+    provider: kubernetes
+    why: Crossplane establishing the CRDs its provider revisions and composite resource definitions own.
+    identity: {subject: "system:serviceaccount:crossplane-system:crossplane"}
+    shape:
+      kinds: [CustomResourceDefinition]
+      verbs: [update, patch]
+      when: 'event.owners.exists(o, o.kind == "ProviderRevision" || o.kind == "CompositeResourceDefinition")'
 
 monitoring:
   kubernetes: [ValidatingWebhookConfiguration, MutatingWebhookConfiguration]
@@ -70,5 +114,41 @@ monitoring:
       verbs: [patch]
       kinds: [ValidatingWebhookConfiguration, MutatingWebhookConfiguration]
       names: ["*"]
+    - name: kyverno-cleanup-own-webhooks
+      why: Kyverno's cleanup controller rewrites its own cleanup and TTL webhook configurations when it starts or the API server restarts.
+      subject: "system:serviceaccount:kyverno:kyverno-cleanup-controller"
+      verbs: [update, patch]
+      kinds: [ValidatingWebhookConfiguration, MutatingWebhookConfiguration]
+      names: ["kyverno-cleanup-*", "kyverno-ttl-*"]
+    - name: tekton-operator-own-webhooks
+      why: The Tekton operator reconciles its own webhook configurations when it starts or the API server restarts.
+      subject: "system:serviceaccount:tekton-operator:tekton-operator"
+      verbs: [update, patch]
+      kinds: [ValidatingWebhookConfiguration, MutatingWebhookConfiguration]
+      names: ["*.operator.tekton.dev"]
+    - name: tekton-operators-proxy-own-webhook
+      why: Tekton's operator proxy webhook reconciles its own mutating webhook configuration.
+      subject: "system:serviceaccount:tekton-pipelines:tekton-operators-proxy-webhook"
+      verbs: [update, patch]
+      kinds: [ValidatingWebhookConfiguration, MutatingWebhookConfiguration]
+      names: ["proxy.operator.tekton.dev"]
+    - name: tekton-pipelines-own-webhooks
+      why: The Tekton Pipelines webhook reconciles its own webhook configurations.
+      subject: "system:serviceaccount:tekton-pipelines:tekton-pipelines-webhook"
+      verbs: [update, patch]
+      kinds: [ValidatingWebhookConfiguration, MutatingWebhookConfiguration]
+      names: ["*.pipeline.tekton.dev"]
+    - name: tekton-triggers-own-webhooks
+      why: The Tekton Triggers webhook reconciles its own webhook configurations.
+      subject: "system:serviceaccount:tekton-pipelines:tekton-triggers-webhook"
+      verbs: [update, patch]
+      kinds: [ValidatingWebhookConfiguration, MutatingWebhookConfiguration]
+      names: ["*.triggers.tekton.dev"]
+    - name: pipelines-as-code-own-webhook
+      why: The Pipelines-as-Code webhook reconciles its own validating webhook configuration.
+      subject: "system:serviceaccount:tekton-pipelines:pipelines-as-code-webhook"
+      verbs: [update, patch]
+      kinds: [ValidatingWebhookConfiguration, MutatingWebhookConfiguration]
+      names: ["validation.pipelinesascode.tekton.dev"]
 
 {{ .Files.Get "files/attribute.yaml" }}

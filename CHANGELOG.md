@@ -9,6 +9,14 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Fixed
+
+- **observe-k8s false exceptions from controllers.** An API server restart made Tekton's webhooks and Kyverno's cleanup controller
+  rewrite their own webhook configurations, which flipped health to blind: each is now a named exemption limited to its own
+  names. The chart adds exact-identity noise rules for kubelet and controller-manager token minting, status writes by the
+  Deployment, ReplicaSet and ApplicationSet controllers, the Prometheus operator's kubelet Service, and CRDs Crossplane's
+  revisions own. New value `rules.kubeletNodes`; rules version 2026.11.4; the collector's memory limit is 384Mi.
+
 ## [0.39.0] - 2026-11-10
 
 ### Added

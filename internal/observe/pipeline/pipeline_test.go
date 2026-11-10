@@ -635,6 +635,17 @@ func TestMonitoringExemptions(t *testing.T) {
 		{"kyverno writing the audit policy", kyverno, "update", "configmaps", "ConfigMap", "audit-policy", "kube-system", 200, false},
 		{"kyverno patching the audit policy", kyverno, "patch", "configmaps", "ConfigMap", "audit-policy", "kube-system", 200, false},
 		{"cainjector patching the audit policy", cainjector, "patch", "configmaps", "ConfigMap", "audit-policy", "kube-system", 200, false},
+		{"tekton operator update of its own config", "system:serviceaccount:tekton-operator:tekton-operator", "update", "mutatingwebhookconfigurations", "MutatingWebhookConfiguration", "webhook.operator.tekton.dev", "", 200, true},
+		{"tekton proxy update of its own config", "system:serviceaccount:tekton-pipelines:tekton-operators-proxy-webhook", "update", "mutatingwebhookconfigurations", "MutatingWebhookConfiguration", "proxy.operator.tekton.dev", "", 200, true},
+		{"tekton pipelines update of its own config", "system:serviceaccount:tekton-pipelines:tekton-pipelines-webhook", "update", "validatingwebhookconfigurations", "ValidatingWebhookConfiguration", "validation.webhook.pipeline.tekton.dev", "", 200, true},
+		{"tekton triggers update of its own config", "system:serviceaccount:tekton-pipelines:tekton-triggers-webhook", "update", "mutatingwebhookconfigurations", "MutatingWebhookConfiguration", "webhook.triggers.tekton.dev", "", 200, true},
+		{"pipelines-as-code update of its own config", "system:serviceaccount:tekton-pipelines:pipelines-as-code-webhook", "update", "validatingwebhookconfigurations", "ValidatingWebhookConfiguration", "validation.pipelinesascode.tekton.dev", "", 200, true},
+		{"kyverno cleanup update of its ttl config", "system:serviceaccount:kyverno:kyverno-cleanup-controller", "update", "validatingwebhookconfigurations", "ValidatingWebhookConfiguration", "kyverno-ttl-validating-webhook-cfg", "", 200, true},
+		{"tekton pipelines updating the operator's config", "system:serviceaccount:tekton-pipelines:tekton-pipelines-webhook", "update", "mutatingwebhookconfigurations", "MutatingWebhookConfiguration", "webhook.operator.tekton.dev", "", 200, false},
+		{"tekton operator updating another product's config", "system:serviceaccount:tekton-operator:tekton-operator", "update", "validatingwebhookconfigurations", "ValidatingWebhookConfiguration", "cert-manager-webhook", "", 200, false},
+		{"tekton operator deleting its own config", "system:serviceaccount:tekton-operator:tekton-operator", "delete", "mutatingwebhookconfigurations", "MutatingWebhookConfiguration", "webhook.operator.tekton.dev", "", 200, false},
+		{"refused tekton operator update", "system:serviceaccount:tekton-operator:tekton-operator", "update", "mutatingwebhookconfigurations", "MutatingWebhookConfiguration", "webhook.operator.tekton.dev", "", 403, false},
+		{"kyverno cleanup updating the policy webhook", "system:serviceaccount:kyverno:kyverno-cleanup-controller", "update", "validatingwebhookconfigurations", "ValidatingWebhookConfiguration", "kyverno-policy-validating-webhook-cfg", "", 200, false},
 	}
 	for i, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
