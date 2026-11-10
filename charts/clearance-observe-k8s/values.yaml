@@ -72,7 +72,9 @@ heartbeat:
 auditPolicyMirror: ""
 
 # The kinds watched, to keep the object before each change (an audit event carries only the new state) and to notice a
-# change no audit event reported. No Secret, ever: the collector has no get, list or watch on Secrets.
+# change no audit event reported. No Secret, ever: the collector has no get, list or watch on Secrets. No
+# CustomResourceDefinition either: the cache keeps whole objects and a cluster's CRDs are tens of MB (OOMKilled at 256Mi
+# on ~470 CRDs). A CRD write is still observed through its audit event (governedKinds), with no before-object.
 watch:
   enabled: true
   resources:
@@ -92,7 +94,6 @@ watch:
     - {group: admissionregistration.k8s.io, version: v1, resource: mutatingwebhookconfigurations, kind: MutatingWebhookConfiguration, namespaced: false}
     - {group: admissionregistration.k8s.io, version: v1, resource: validatingadmissionpolicies, kind: ValidatingAdmissionPolicy, namespaced: false}
     - {group: admissionregistration.k8s.io, version: v1, resource: validatingadmissionpolicybindings, kind: ValidatingAdmissionPolicyBinding, namespaced: false}
-    - {group: apiextensions.k8s.io, version: v1, resource: customresourcedefinitions, kind: CustomResourceDefinition, namespaced: false}
 
 # The observation rule set (clearance.observe-rules/v1, docs/observe-pipeline.md), generated from these values. A
 # complete document in `override` replaces it. Its name and version are in every assessment.

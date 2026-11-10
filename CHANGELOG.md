@@ -25,6 +25,24 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   `observation.verification` to the observe-aws provider's registered `kinds`; until then the collector counts and logs
   the core's refusal and the observations stay `sourceVerified: false`. The evidence record schema is `x-clearance-revision` 6.
 
+## [0.38.1] - Unreleased
+
+### Fixed
+
+- **observe-k8s: the collector no longer caches CustomResourceDefinitions.** The chart's default `watch.resources` listed
+  `customresourcedefinitions`, and the watch cache keeps whole objects: about 470 CRDs on hangar-dev was 68 MB of JSON and the
+  collector was OOMKilled at its 256Mi limit. CRDs are out of the default watch list; `CustomResourceDefinition` stays in
+  `rules.governedKinds`, so a CRD write is still observed through its audit event, with no before-object and no watch-based
+  gap detection ([docs/observe-k8s.md](docs/observe-k8s.md)).
+- **observe: controllers that maintain their own webhooks no longer keep the feed blind.** Every write to a validating or
+  mutating webhook configuration was monitoring-protection (tier 3, health blind), and Kyverno's admission controller and
+  cert-manager's cainjector write theirs continually. New rule key `monitoring.kubernetes_exempt`: named entries (exact subject,
+  verbs, webhook kinds only, name globs, validated at load). A succeeded write matching one is routine noise, counted as
+  `monitoring-exempt:<name>`: no alert, no flip, no exception. Defaults: `kyverno-admission-controller` update/patch on
+  `kyverno-*`, `cert-manager-cainjector` patch on any name. Anything else stays monitoring-protection, including a refused
+  attempt, other verbs or names, and the audit-policy ConfigMap. Trade-off: a compromised named controller can change its own
+  webhook without an alert ([docs/observe-pipeline.md](docs/observe-pipeline.md)).
+
 ## [0.38.0] - 2026-11-09
 
 ### Added

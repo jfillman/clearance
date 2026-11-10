@@ -101,6 +101,18 @@ and it flips the scope's health: **blind** when it succeeded, **degraded** when 
 `monitoring-protection`, as [evidence.md](evidence.md) says. `Pipeline.Healthy(scope)` is the provider's next healthy
 record, the only thing that clears the flip.
 
+**Named exceptions.** Controllers that maintain their own webhook configurations write them constantly (Kyverno's
+admission controller every ~20 s, cert-manager's cainjector injecting `caBundle`), and treating every such write as an
+attack leaves the feed permanently blind. `monitoring.kubernetes_exempt` lists the carve-outs, each with a `name`, a `why`,
+one exact `subject`, exact `verbs`, `kinds` (only the two webhook configuration kinds) and `names` (globs on the object
+name). The defaults are `kyverno-admission-controller` (update, patch, `kyverno-*`) and `cert-manager-cainjector` (patch, any
+name). A **succeeded** write that matches an entry is routine noise: not monitoring-protection, no alert, no health flip, no
+exception, counted in the filtered count as `monitoring-exempt:<name>`. Everything else stays monitoring-protection: another
+verb (`delete`), another name, a person, a refused attempt, and any write to the `kube-system/audit-policy` ConfigMap, by
+these identities too. The loader refuses an entry with no name or reason, an empty or pattern subject, no verbs, no names, or
+kinds other than the webhook kinds. **Trade-off:** a compromised named controller can change its own webhooks (within
+the verbs and names listed) without an alert; the exemption is as narrow as the rule makes it, and no narrower.
+
 ## The cost limit and failing closed
 
 Every `when` is compiled once, must be a boolean, and its worst-case cost (cel-go's estimate, every variable-length

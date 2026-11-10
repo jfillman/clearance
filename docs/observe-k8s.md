@@ -131,7 +131,11 @@ heartbeat must have come back *after* the operation, or the feed stays blind.
 ## Gaps and the watch cache
 
 The collector lists and watches the configured kinds (never Secrets): namespaced kinds in the protected namespaces and the
-Argo CD namespace, cluster-scoped ones (RBAC, admission configuration, CRDs) once. The cache keeps the last four versions
+Argo CD namespace, cluster-scoped ones (RBAC, admission configuration) once. **CustomResourceDefinitions are not
+watched by default**: the cache keeps whole objects, and a cluster with hundreds of CRDs is tens of MB of JSON (the hangar-dev
+rehearsal, about 470 CRDs, was OOMKilled at the 256Mi limit). `CustomResourceDefinition` stays in `rules.governedKinds`, so a CRD
+write is still observed through its audit event; it just has no before-object (no diff) and no watch-based audit-gap
+detection. A deployment that wants them back adds the resource to `watch.resources` and raises the memory limit. The cache keeps the last four versions
 of each object: with the `resourceVersion` of the audit event's response object the object before is exact; without one
 (a Metadata event) it is the second newest if the newest was seen at about the event's time. A watch change to *desired
 state* (canonical hash differs; a status write does not count) waits for an audit event for the same object (by

@@ -65,6 +65,24 @@ monitoring:
     - google.logging.v2.ConfigServiceV2.DeleteExclusion
   kubernetes: [ValidatingWebhookConfiguration, MutatingWebhookConfiguration]
   kubernetes_configmaps: [kube-system/audit-policy]
+  # The only carve-out: a controller that maintains its own webhook configurations. A succeeded write by exactly this
+  # subject, with these verbs, to these kinds and names, is routine noise (counted as filtered under
+  # monitoring-exempt:<name>): not monitoring-protection, no alert, no health flip, no exception. Anything else by the same
+  # subject (another verb, another name, a refused attempt, the audit-policy ConfigMap) stays monitoring-protection.
+  # A compromised named controller could change its own webhook without an alert: that is the price of the exemption.
+  kubernetes_exempt:
+    - name: kyverno-own-webhooks
+      why: Kyverno's admission controller rewrites its own kyverno-* webhook configurations every ~20s.
+      subject: "system:serviceaccount:kyverno:kyverno-admission-controller"
+      verbs: [update, patch]
+      kinds: [ValidatingWebhookConfiguration, MutatingWebhookConfiguration]
+      names: ["kyverno-*"]
+    - name: cert-manager-cainjector-cabundle
+      why: cert-manager's cainjector patches caBundle into the webhook configurations that ask for it.
+      subject: "system:serviceaccount:cert-manager:cert-manager-cainjector"
+      verbs: [patch]
+      kinds: [ValidatingWebhookConfiguration, MutatingWebhookConfiguration]
+      names: ["*"]
 
 # Attribution: ordered signals, strongest first, the first that holds decides. The last of each list is the catch-all.
 attribute:
