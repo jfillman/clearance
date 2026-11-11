@@ -974,7 +974,12 @@
       "type": "object",
       "properties": {
         "before": {},
-        "after": {}
+        "after": {},
+        "source": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Where the diff came from when no state service had one: cloudtrail-request is the event's own request (secrets stripped), not a verified result."
+        }
       },
       "x-clearance-group": "outcome",
       "description": "Revision 4 (O-1): on an observation, the resource's state before and after, where a state service has it. Never present on a Secret."

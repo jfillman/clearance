@@ -291,3 +291,35 @@ func checkCoverageCountsWhatTheTrailVerifiedLater(t *testing.T, f *fakeObserved)
 		t.Fatal(st["text"])
 	}
 }
+
+// The live W5 gate: StopLogging succeeded and the core flipped the scope blind; the collector's next routine record said
+// degraded. Coverage stays blind until the collector reports healthy.
+func TestCoverageStaysBlindAfterAMonitoringFlipUntilTheCollectorIsHealthy(t *testing.T) {
+	onBoth(t, checkCoverageStaysBlindAfterAMonitoringFlipUntilTheCollectorIsHealthy)
+}
+
+func checkCoverageStaysBlindAfterAMonitoringFlipUntilTheCollectorIsHealthy(t *testing.T, f *fakeObserved) {
+	start := time.Now().UTC().Truncate(time.Second)
+	f.post("observation.health", obsHealth("healthy"))
+	stop := obsEvent("e-stop", "StopLogging", true)
+	stop["action"].(map[string]any)["protects_monitoring"] = true
+	f.post("observation", stop)
+	f.post("observation.health", obsHealth("degraded", "digests-validating")) // routine: the trail is still stopped
+	h := f.harness(t, start.Add(time.Minute))
+	url := "/v1/coverage?scope=" + obsScope + "&from=" + evidence.ISO(f.firstTS())
+	st := h.ok(url, "audit")
+	if st["state"] != "blind" {
+		t.Fatalf("a degraded record does not end a monitoring flip: %v", st["state"])
+	}
+	for _, sg := range st["could_not_see"].(map[string]any)["segments"].([]any) {
+		if sg.(map[string]any)["state"] == "degraded" {
+			t.Fatalf("no stretch of the window is merely degraded: %v", sg)
+		}
+	}
+	f.post("observation.health", obsHealth("healthy"))
+	h = f.harness(t, start.Add(2*time.Minute))
+	st = h.ok(url, "audit")
+	if src := st["health"].(map[string]any)["sources"].([]any)[0].(map[string]any); src["state"] == nil || src["now"] != "healthy" {
+		t.Fatalf("the collector's healthy record ends the flip: %v", src)
+	}
+}

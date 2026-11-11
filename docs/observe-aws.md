@@ -66,11 +66,33 @@ AWS records (a log file's `hashValue`, `previousDigestHashValue`, the hash in th
 A Config item is the effect of a CloudTrail event when the item lists the event (`relatedEvents`, AWS Config's own pointer), or,
 when it lists none, when the same account's item resource is a resource the event names and the item was captured within
 15 minutes after it. An item that lists related events never joins one it does not list. The join is made when an entry is due
-over everything pending, so arrival order does not matter. An event waits `settle` (default 10 minutes) for its item and for
+over everything pending, so arrival order does not matter. An event waits `settle` (default 15 minutes; AWS Config took longer than ten for a security group in the live gate) for its item and for
 the apply outcome that clears it; an item waits `settle` for its event. The merged change is one observation whose
 `state_change` is the Config diff, one assessment (the detail names the changed properties and the quoted actor) and one
 resolution. An item no event explains is reported alone, observed-not-attributed, signal `config.item-without-event`: an effect
-the trail did not report. An item that arrives after its event was posted cannot be attached and is counted (`Late`).
+the trail did not report. An item that arrives after its event was posted cannot be attached and is counted (`Late`, shown in the health record's
+`config-join` check); it is not posted as a record of its own, because that would be a second exception for one change, and
+a new observation kind for it would have to be registered on every collector.
+
+**The diff when no Config item joins.** An event's own request is the diff: `state_change` is `{before: {}, after: <the
+event's requestParameters>, source: "cloudtrail-request"}`, so a console change shows what was asked for even when Config is
+slow, or (for a CREATE, whose configuration item lists no changed properties) says nothing. The request is not a verified
+result, which `source` says. Secret-bearing parameters keep their key and lose their value (`[redacted]`): names that contain
+`password`, `secret`, `privatekey`, `passphrase`, `credential` or `token`, and `userData`, `keyMaterial`, `plaintext`,
+`ciphertextBlob`, `secretString`, `secretBinary`, `environment` and `variables` (a Lambda's), at any depth; Secrets Manager is
+second-wave and not evaluated, and its parameters are on the list so that nothing has to be remembered the day it is. A
+request over 48 KiB keeps only its parameter names. A Config diff, when one joins, replaces the request. When the response
+names the resource the call created (`groupId`, `instanceId`, `vpcId`, ...), that is `resource.id` and the name the request
+used stays in `resource.name` (`sg-...` and `test-sg`). The core accepts the `source` key in `state_change` from this
+release: update the core before the collector.
+
+**Config's first discovery is a baseline, not a change.** When the recorder starts, Config emits an item for every resource
+that already exists. AWS Config uses `configurationItemStatus: ResourceDiscovered` for both such a first discovery and a
+newly created resource, so the status alone cannot tell them apart. An item is baseline when its status is
+`ResourceDiscovered`, it lists no related CloudTrail event, and its `resourceCreationTime` is more than one hour before its
+capture time; it is counted (`baseline`, in the `config-join` check) and not posted. A created resource Config reports with no
+CloudTrail event (a recent creation time) stays the `config.item-without-event` exception it is, and so does an item that
+carries no creation time, since nothing then tells a discovery from a creation.
 
 ### Attribution inputs
 
@@ -100,8 +122,9 @@ events, writes included, data events for the configured buckets, log file valida
 `rules-enabled`, `collector-current`, and `scope-not-evaluated`. State: **blind** when the trail is not enabled or unreadable,
 digests stopped arriving or the queue is not being drained; **degraded** for any other failing check; healthy otherwise. A
 successful `StopLogging` (and the other operations on monitoring) flips the account to blind through the core, a refused
-one to degraded ([evidence.md](evidence.md)); only the collector's next healthy record clears it, and the pipeline's own flip
-is cleared with it.
+one to degraded ([evidence.md](evidence.md)); only the collector's next **healthy** record clears it (a degraded record in between does not: the window stays
+blind), and the pipeline's own flip is cleared with it. The live W5 gate saw a routine degraded report 54 seconds after a
+`StopLogging` end the blind window; the rule above is the fix.
 
 **Where the data events come from.** The main trail (`trail.name`, the organization trail, read with the trail role in the
 management account) carries the management events and `trail-enabled`. A data bucket's events may be recorded by that trail or by

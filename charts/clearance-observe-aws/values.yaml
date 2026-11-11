@@ -55,7 +55,7 @@ rules: [observe-aws-cloudtrail, observe-aws-config]
 # Evaluate the second wave too (VPC routing, Secrets Manager, Lambda configuration, EKS access, RDS).
 secondWave: false
 # How long an event waits for its Config item and for the apply outcome that clears it. Longer than the longest apply.
-settle: 10m
+settle: 15m
 
 # The Terraform workspaces the detector stages watch (state-bucket versions, scheduled plan). Empty: no stage runs.
 # Each: {name, key, bucket, dir, env}. The untraced-apply witness runs in the collector. The scheduled plan (drift) needs

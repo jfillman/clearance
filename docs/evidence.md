@@ -226,7 +226,10 @@ it was refused, with an audit gap, written by the core with a check named `monit
 are such is **configuration**, not code: `CLEARANCE_MONITORING_PROTECTION_OPS` (chart `vocabulary.monitoringProtectionOps`),
 globs on `action.api` or `<source>:<api>`, default none; a provider may also mark one itself
 (`action.protects_monitoring`). Only the provider's next `healthy` health record, produced by its own checks, clears the
-flip. The matching `deploy.exception` kinds are `monitoring-protection` and `attempted-refused`
+flip: a `degraded` or `blind` record the collector reports in between (its routine report, the trail still being stopped)
+does not end it, and while the flip holds each such record counts as the worse of its own state and the flip's. The
+statement, `/v1/coverage` and the packet's degraded windows all read health this way (a core-written health record that
+has not been followed by a healthy collector record holds). The matching `deploy.exception` kinds are `monitoring-protection` and `attempted-refused`
 ([gate.md](gate.md#the-packets-exceptions)).
 
 **Secrets are observed at Metadata only.** An observation of a Secret (`resource.kind` Secret, Secrets or SecretList)

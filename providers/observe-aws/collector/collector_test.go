@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -376,5 +377,114 @@ func TestAssessmentFailureIsCompletedByTheRetry(t *testing.T) {
 	}
 	if got := *r.co.of("assessment")[0].Record.Coverage; got != "out-of-band-detected" {
 		t.Fatal(got)
+	}
+}
+
+// The live gate: Config's item for a console CreateSecurityGroup did not arrive inside the settle window. The event
+// posts with its own request as the diff, the created id as the resource id and the name kept.
+func TestConsoleCreateWithoutAConfigItemCarriesItsRequestAsTheDiff(t *testing.T) {
+	r := newRig(t)
+	c := consoleSG("ev-create", t0)
+	c.name = "CreateSecurityGroup"
+	c.params = map[string]any{"groupName": "test-sg", "groupDescription": "test", "vpcId": "vpc-0abc",
+		"password": "hunter2", "tagSpecificationSet": map[string]any{"items": []any{map[string]any{"secretKey": "x", "k": "v"}}}}
+	c.response = map[string]any{"requestId": "r-1", "groupId": "sg-0new1234"}
+	r.ingest(c.envelope(), t0)
+	r.settle()
+	o := r.co.of("observation")[0].Record
+	if o.Resource["id"] != "sg-0new1234" || o.Resource["name"] != "test-sg" {
+		t.Fatalf("the created id is the resource id: %v", o.Resource)
+	}
+	sc := o.StateChange
+	after, _ := sc["after"].(map[string]any)
+	if sc["source"] != "cloudtrail-request" || after["groupName"] != "test-sg" || len(sc["before"].(map[string]any)) != 0 {
+		t.Fatalf("%v", sc)
+	}
+	b, _ := json.Marshal(sc)
+	if strings.Contains(string(b), "hunter2") || after["password"] != "[redacted]" ||
+		after["tagSpecificationSet"].(map[string]any)["items"].([]any)[0].(map[string]any)["secretKey"] != "[redacted]" {
+		t.Fatalf("secret-bearing parameters are stripped: %s", b)
+	}
+	if r.c.Stats().RequestDiffs != 1 {
+		t.Fatal("counted")
+	}
+}
+
+func TestAConfigDiffWinsOverTheRequestAndAnOversizedRequestIsBounded(t *testing.T) {
+	r := newRig(t)
+	r.ingest(consoleSG("ev-console", t0).envelope(), t0)
+	r.ingest(sgConfig(t0.Add(30*time.Second), "ev-console").envelope(), t0)
+	r.settle()
+	if sc := r.co.of("observation")[0].Record.StateChange; sc["source"] != nil {
+		t.Fatalf("a joined Config diff is the diff: %v", sc)
+	}
+	big := &ctView{Request: map[string]any{"a": strings.Repeat("x", maxStateChange+1), "b": 1}}
+	sc := requestDiff(big)
+	after := sc["after"].(map[string]any)
+	if after["truncated"] == nil || len(after["parameters"].([]string)) != 2 {
+		t.Fatalf("%v", after)
+	}
+	if requestDiff(&ctView{}) != nil {
+		t.Fatal("no request, no diff")
+	}
+}
+
+// A Config item that arrives after its event was posted is counted, and shows in the health detail.
+func TestALateConfigItemIsCountedInTheHealthDetail(t *testing.T) {
+	r := newRig(t)
+	r.ingest(consoleSG("ev-console", t0).envelope(), t0)
+	r.settle()
+	r.ingest(sgConfig(t0.Add(30*time.Second), "ev-console").envelope(), t0)
+	if err := r.c.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if r.c.Rec.Late() != 1 {
+		t.Fatal("late")
+	}
+	h := &Health{Col: r.c, Cfg: HealthConfig{Account: acct}}
+	found := false
+	for _, ck := range h.Checks(context.Background()) {
+		if ck.name == "config-join" && ck.ok && strings.Contains(ck.detail, "after their event was posted: 1") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("the health detail counts the late item")
+	}
+}
+
+// AWS Config's first discovery of resources that already existed is a baseline, not an unexplained change; a resource
+// really created without a CloudTrail event stays an exception.
+func TestConfigFirstDiscoveryIsBaselineAndACreationWithoutAnEventIsNot(t *testing.T) {
+	r := newRig(t)
+	disc := sgConfig(t0)
+	disc.status, disc.changeType = "ResourceDiscovered", "CREATE"
+	disc.created = t0.Add(-72 * time.Hour).Format(time.RFC3339)
+	r.ingest(disc.envelope(), t0)
+	r.settle()
+	if len(r.co.kinds()) != 0 || r.c.Stats().Baseline != 1 || r.acks != 1 {
+		t.Fatalf("the discovery is counted and acked, not posted: %v %+v", r.co.kinds(), r.c.Stats())
+	}
+	made := sgConfig(t0.Add(time.Minute))
+	made.resourceID, made.status, made.changeType = "sg-0made5678", "ResourceDiscovered", "CREATE"
+	made.created = t0.Add(time.Minute - 20*time.Second).Format(time.RFC3339)
+	noTime := sgConfig(t0.Add(2 * time.Minute))
+	noTime.resourceID, noTime.status = "sg-0notime", "ResourceDiscovered"
+	r.ingest(made.envelope(), t0)
+	r.ingest(noTime.envelope(), t0)
+	r.settle()
+	if got := len(r.co.of("observation")); got != 2 || r.c.Stats().ConfigOnly != 2 || r.c.Stats().Baseline != 1 {
+		t.Fatalf("a created resource, and one whose age is unknown, stay exceptions: %d %+v", got, r.c.Stats())
+	}
+}
+
+func TestCreatedIDIsOnlyTakenFromACreateCallAndPrefersTheCreatedResource(t *testing.T) {
+	snap := &ctView{Name: "CreateSnapshot", Response: map[string]any{"volumeId": "vol-0src", "snapshotId": "snap-0new"}}
+	if got := createdID(snap); got != "snap-0new" {
+		t.Fatal(got)
+	}
+	attach := &ctView{Name: "AttachVolume", Response: map[string]any{"volumeId": "vol-0a", "instanceId": "i-0b"}}
+	if got := createdID(attach); got != "" {
+		t.Fatalf("an attach creates nothing: %s", got)
 	}
 }

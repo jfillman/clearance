@@ -31,9 +31,11 @@ type Merged struct {
 // An item that lists related events never joins an event it does not list. The join is made when an entry is due, over
 // everything pending, so the order the two arrive in does not matter: an event waits up to Settle for its item, and an
 // item waits up to Settle for its event. An item whose event never comes is emitted alone (an effect the trail
-// did not report: itself a finding). An item that arrives after its event was emitted is counted Late.
+// did not report: itself a finding). An item that arrives after its event was emitted is counted Late (the live gate
+// saw Config take longer than ten minutes for a security group, hence the fifteen-minute default); the event then
+// carries the diff of its own CloudTrail request (requestDiff), which does not depend on Config at all.
 type Reconciler struct {
-	Settle time.Duration // how long an entry waits for its counterpart (and for the outcomes attribution looks up); default 10m
+	Settle time.Duration // how long an entry waits for its counterpart (and for the outcomes attribution looks up); default 15m
 	Window time.Duration // the fallback key's time window; default 15m
 	Now    func() time.Time
 
@@ -71,7 +73,7 @@ func (r *Reconciler) now() time.Time {
 
 func (r *Reconciler) settle() time.Duration {
 	if r.Settle == 0 {
-		return 10 * time.Minute
+		return 15 * time.Minute
 	}
 	return r.Settle
 }

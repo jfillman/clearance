@@ -11,6 +11,19 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ### Fixed
 
+- **A monitoring flip to blind is cleared only by a healthy record.** A successful `StopLogging` flips the account blind through
+  the core, and the collector's routine `degraded` report a minute later (the trail was still stopped) ended the blind window.
+  The statement, `/v1/coverage` and the packet now hold a core-written flip until a record from the collector with state
+  `healthy`; a degraded or blind record in between counts as the worse of its own state and the flip's.
+- **observe-aws: a console change carries a diff when AWS Config is slow.** With no Config diff joined, the event's own request
+  is the `state_change` (`{before: {}, after: <request, secrets stripped, bounded>, source: "cloudtrail-request"}`) and the
+  created id (`sg-...`) is the resource id with the name kept. The core accepts `state_change.source`. The default `settle` is
+  15 minutes (chart `settle`), and late Config items and request diffs are counted in a new `config-join` health check. A Config
+  item that arrives after its event was posted is still not attached (a new record kind would be needed); this is the
+  documented limit.
+- **observe-aws: AWS Config's first discovery is a baseline, not an unexplained change.** A `ResourceDiscovered` item with no
+  related event whose `resourceCreationTime` is more than an hour before its capture is counted as baseline and not posted;
+  a resource really created without a CloudTrail event stays a `config.item-without-event` exception.
 - **observe-aws: every real digest failed `digest-signature-invalid`.** The signed string put `digestEndTime` in the compact
   `yyyymmddThhmmssZ` form; AWS signs the end time exactly as the digest writes it (`2026-11-10T21:33:00Z`). Checked against
   a digest AWS signed for the Hangar lab account: the old form does not verify, the new one does.
