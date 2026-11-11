@@ -422,6 +422,9 @@ func revertible(a *Assessment) bool {
 // the most recent changes that undoesRun accepts. Nil when b undoes nothing.
 func undoneBy(cand []*Assessment, b *Assessment) []*Assessment {
 	for _, a := range cand {
+		if a.hasDelta || b.hasDelta {
+			continue // a collector's property diff is a positional subset of the object: values decide, never the hashes
+		}
 		if undoes(a, b) {
 			return []*Assessment{a}
 		}

@@ -276,3 +276,40 @@ func TestValueDeltaIgnoresNamesAndNulls(t *testing.T) {
 		t.Fatalf("%v %v", add, rem)
 	}
 }
+
+// A positional sub-diff is not the whole object: removing an unrelated, pre-existing rule that happens to sit at the same
+// pointer does not put back a rule that was added.
+func TestRevertMemoryDifferentRuleAtTheSamePointerIsNotAnUndo(t *testing.T) {
+	r := newMemRig(t)
+	sg := "sg-0123456789abcdef0"
+	r.put("addX", "AuthorizeSecurityGroupIngress", 0, sg, addDelta("0", 9443))
+	r.pass()
+	r.put("revY", "RevokeSecurityGroupIngress", 10*time.Minute, sg,
+		&Delta{Before: map[string]any{ipp + "0": rule(22)}, After: map[string]any{ipp + "0": nil}})
+	exs := r.pass()
+	if len(reverted(exs)) != 0 {
+		t.Fatalf("X is still live: %+v", exs)
+	}
+	found := false
+	for _, l := range r.p.corr.mem {
+		for _, a := range l {
+			found = found || a.EventID == "addX"
+		}
+	}
+	if !found {
+		t.Fatal("X stays remembered")
+	}
+}
+
+// With a Delta, hashes never decide, even when they would match.
+func TestHashRulesAreNotUsedForAPairWithADelta(t *testing.T) {
+	a := &Assessment{BeforeHash: "h1", AfterHash: "h2", hasDelta: true, added: []string{"1"}}
+	b := &Assessment{BeforeHash: "h2", AfterHash: "h1", hasDelta: true, removed: []string{"2"}}
+	if got := undoneBy([]*Assessment{a}, b); got != nil {
+		t.Fatal("matched on hashes")
+	}
+	a.hasDelta, b.hasDelta = false, false
+	if got := undoneBy([]*Assessment{a}, b); len(got) != 1 {
+		t.Fatal("hash rule still applies without a Delta")
+	}
+}

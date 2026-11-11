@@ -536,3 +536,29 @@ func TestRevertOfSeveralChangesInLaterPassesIsResolvedForEachObservation(t *test
 		t.Fatalf("a reverted resolution about each of the three observations: %v", reverted)
 	}
 }
+
+// Removing a different, pre-existing rule that sits at the same Config pointer is not the undo of an added rule.
+func TestRevokeOfAnotherRuleIsNotARevertOfTheAdd(t *testing.T) {
+	r := newRig(t)
+	rule := func(port int) map[string]any {
+		return map[string]any{"fromPort": port, "toPort": port, "ipRanges": []string{"10.0.0.0/8"}}
+	}
+	cfg := func(at time.Time, event string, before, after any) cfgItem {
+		return cfgItem{resourceID: "sg-0abc1234", name: "web", at: at, related: []string{event}, changed: map[string]map[string]any{
+			"Configuration.IpPermissions.0": {"previousValue": before, "updatedValue": after, "changeType": "UPDATE"}}}
+	}
+	atA, atR := t0.Add(5*time.Minute), t0.Add(20*time.Minute)
+	r.ingest(consoleSG("ev-add", atA).envelope(), atA)
+	r.ingest(cfg(atA.Add(30*time.Second), "ev-add", nil, rule(9443)).envelope(), atA)
+	r.settle()
+	rv := consoleSG("ev-revoke", atR)
+	rv.name = "RevokeSecurityGroupIngress"
+	r.ingest(rv.envelope(), atR)
+	r.ingest(cfg(atR.Add(30*time.Second), "ev-revoke", rule(22), nil).envelope(), atR)
+	r.settle()
+	for _, rr := range r.co.of("resolution") {
+		if rr.Record.Resolution["state"] == "reverted" {
+			t.Fatalf("nothing was put back: %+v", rr.Record.Resolution)
+		}
+	}
+}

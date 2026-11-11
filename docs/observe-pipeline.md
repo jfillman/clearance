@@ -103,9 +103,11 @@ actor with the same tool (a `kubectl apply -f dir/`). It folds an **apply-and-re
 by one later change or by several, resolves as `reverted`, even when the undo arrives in a later pass. The window is
 `correlate.revert_window` (default 1h, measured on event times; the collector's settle time is a separate 15m). An undo is:
 
-- **one change put back as it was** (Kubernetes, whole-object hashes): the later change's after-hash is the first's
+- **one change put back as it was** (Kubernetes, whole-object hashes; used only for a pair where neither change carries a
+  `Delta`, because a collector's diff covers only the changed properties and equal hashes of two such subsets do not mean the
+  object is back as it was): the later change's after-hash is the first's
   before-hash, or it deletes what the first created; or
-- **values removed that a run of changes added** (and values added back that the run removed), whatever the property names:
+- **values removed that a run of changes added** (the only rule for a change that carries a `Delta`) (and values added back that the run removed), whatever the property names:
   the collector supplies the change as before and after property values (`RawEvent.Delta`, the AWS Config diff), and the
   most recent *k* unreverted changes on the resource, followed by one change, match when the values added by the run equal the
   values removed by the change and the values removed by the run equal the values added by the change, as multisets. The
