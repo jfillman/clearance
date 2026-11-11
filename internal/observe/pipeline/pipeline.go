@@ -55,6 +55,9 @@ type Assessment struct {
 	RuleSet    RuleSetRef `json:"rule_set"`
 
 	ev *Event
+	// added and removed are the change's value diff (see valueDelta); hasDelta says the collector supplied one.
+	added, removed []string
+	hasDelta       bool
 }
 
 // Disposition says what became of one event.
@@ -441,6 +444,10 @@ func (p *Pipeline) attribute(e *Event) (*Assessment, error) {
 	a.Grant = f.grant
 	if f.derived != "" && (a.Signal == SignalOwnerGrant || a.Signal == SignalListedGrant) {
 		a.Grant = f.derived
+	}
+	if e.Delta != nil {
+		a.hasDelta = true
+		a.added, a.removed = valueDelta(e.Delta.Before, e.Delta.After)
 	}
 	if a.Outcome == OutcomeOutOfBand || a.Outcome == OutcomeNotAttributed {
 		a.Diff = diff(e)

@@ -23,7 +23,7 @@ jobs:
           version: ${{ env.HELM_VERSION }}
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26.10"
+          go-version: "1.26.11"
       - run: helm lint charts/clearance --strict -f charts/clearance/ci/minimal-values.yaml
       - run: helm lint charts/clearance --strict -f charts/clearance/ci/full-values.yaml
       - run: helm lint charts/clearance-argocd-agent --strict -f charts/clearance-argocd-agent/ci/minimal-values.yaml

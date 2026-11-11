@@ -20,8 +20,18 @@ type RawEvent struct {
 	Scope    string          `json:"scope"`    // the cluster, or the account (default: the record's own recipientAccountId)
 	Raw      json.RawMessage `json:"raw"`
 	Before   json.RawMessage `json:"before,omitempty"`
+	// Delta is what changed, as the collector knows it when the audit record has no object (an AWS collector that joined
+	// an AWS Config item): property by property, the value before and after, null for none. The pipeline reads it only to
+	// tell whether a later change undid this one.
+	Delta *Delta `json:"delta,omitempty"`
 	// Final: decide now. A Pipeline that holds events whose grant is not known yet (HoldUnknownGrants) does not hold this one.
 	Final bool `json:"-"`
+}
+
+// Delta is a change as a pair of property maps (see RawEvent.Delta).
+type Delta struct {
+	Before map[string]any `json:"before"`
+	After  map[string]any `json:"after"`
 }
 
 // Owner is an ownerReference.
@@ -63,6 +73,8 @@ type Event struct {
 	// removed); the hashes are what a grant lists. Empty when the event has no object, always for a Secret.
 	Before, After         map[string]any
 	BeforeHash, AfterHash string
+	// Delta is the collector's property diff (RawEvent.Delta), when it supplied one.
+	Delta *Delta
 
 	// ExecKey is the execution context the source quotes (a grant, a session): correlation joins on it.
 	ExecKey string
@@ -409,6 +421,7 @@ func (rs *RuleSet) normalizeAWS(a map[string]any, r RawEvent) (*Event, error) {
 		e.Scope = str(a["recipientAccountId"])
 	}
 	e.Succeeded = e.ErrorCode == ""
+	e.Delta = r.Delta
 	e.Kind = strings.TrimSuffix(str(a["eventSource"]), ".amazonaws.com")
 	if e.Type == "AssumedRole" || e.Type == "FederatedUser" {
 		if i := strings.LastIndex(e.Subject, "/"); i >= 0 {

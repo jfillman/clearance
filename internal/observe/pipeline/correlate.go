@@ -3,6 +3,7 @@ package pipeline
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"slices"
 	"strings"
 	"time"
@@ -59,9 +60,22 @@ type Correlator struct {
 	open []*Transaction
 	done []*Transaction
 	seq  int
+
+	// mem is the revert memory: per scope|resource, the landed, revertible changes that no later change undid yet, by
+	// event time. It outlives Flush so that an undo arriving in a later pass still finds what it undoes.
+	mem    map[string][]*Assessment
+	latest time.Time // the newest event time seen; the memory's clock
 }
 
-func newCorrelator(rs *RuleSet) *Correlator { return &Correlator{rs: rs} }
+// The revert memory is bounded: per resource, and in all. The oldest by event time go first.
+const (
+	maxMemoryPerResource = 64
+	maxMemoryTotal       = 10000
+)
+
+func newCorrelator(rs *RuleSet) *Correlator {
+	return &Correlator{rs: rs, mem: map[string][]*Assessment{}}
+}
 
 func sevRank(s string) int { return slices.Index(Severities, s) }
 
@@ -82,6 +96,9 @@ func ownerKey(ns, kind, name string) string { return ns + "/" + kind + "/" + nam
 func (c *Correlator) Add(a *Assessment) {
 	e := a.ev
 	c.expire(a.Time)
+	if a.Time.After(c.latest) {
+		c.latest = a.Time
+	}
 	for _, t := range c.open {
 		if t.Scope != a.Scope || a.Time.Sub(t.To) > c.rs.window || a.Time.Before(t.From.Add(-c.rs.window)) {
 			continue
@@ -160,7 +177,8 @@ func (c *Correlator) expire(now time.Time) {
 	c.open = keep
 }
 
-// Flush closes every open transaction and returns all of them with the exceptions they hold, then resets.
+// Flush closes every open transaction and returns all of them with the exceptions they hold, then resets. What it
+// resets is the open transactions; the revert memory stays (see foldReverts).
 func (c *Correlator) Flush() ([]Transaction, []Exception) {
 	all := append(c.done, c.open...)
 	c.done, c.open = nil, nil
@@ -176,7 +194,7 @@ func (c *Correlator) Flush() ([]Transaction, []Exception) {
 	for _, t := range all {
 		t.seal()
 	}
-	folded := foldReverts(all, c.rs.revert)
+	folded := c.foldReverts(all)
 	var exs []Exception
 	txs := make([]Transaction, 0, len(all))
 	for _, t := range all {
@@ -288,14 +306,27 @@ type folds struct {
 	exceptions []Exception
 }
 
-// foldReverts finds, per resource, an uncleared change followed within the window by a change that puts the object
-// back as it was before (its after-hash is the first change's before-hash, or it deletes what the first created), and
-// folds the pair into one exception. A refused attempt landed nothing and a monitoring operation is never folded away
-// (it is an exception whether or not it was undone).
-func foldReverts(txs []*Transaction, window time.Duration) folds {
+// foldReverts finds, per resource, uncleared changes that a later change put back, and folds each undone run and its
+// undo into one exception, resolution `reverted`. A change is undone when a later change, within the revert window of
+// its event time, either
+//
+//   - puts the object back as it was (its after-hash is the first's before-hash, or it deletes what the first created):
+//     one change, one undo; or
+//   - removes exactly the values the run of most recent changes added and adds back exactly the values they removed
+//     (see undoesRun): several changes undone by one, or one by several.
+//
+// The changes it considers are those of this pass and the revert memory: changes of earlier passes that landed and were
+// not undone yet. An apply and its undo are often settled and emitted in different passes (each event waits out its own
+// settle time), so closing the transactions of a pass is not the end of a change's chance to be reverted. Changes that
+// stay undone-less are remembered again for the rest of their window, by event time. A refused attempt landed nothing
+// and a monitoring operation is never folded away (it is an exception whether or not it was undone).
+func (c *Correlator) foldReverts(txs []*Transaction) folds {
 	f := folds{in: map[*Assessment]bool{}}
 	byRes := map[string][]*Assessment{}
 	owner := map[*Assessment]*Transaction{}
+	for k, l := range c.mem {
+		byRes[k] = append(byRes[k], l...)
+	}
 	for _, t := range txs {
 		for _, a := range t.as {
 			k := a.Scope + "|" + a.Resource
@@ -303,30 +334,108 @@ func foldReverts(txs []*Transaction, window time.Duration) folds {
 			owner[a] = t
 		}
 	}
-	for _, list := range byRes {
-		for i, a := range list {
-			if f.in[a] || !revertible(a) {
+	keys := make([]string, 0, len(byRes))
+	for k := range byRes {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys) // the exceptions come out in the same order every time
+	for _, k := range keys {
+		list := byRes[k]
+		slices.SortStableFunc(list, func(a, b *Assessment) int { return a.Time.Compare(b.Time) })
+		for i, b := range list {
+			if f.in[b] || !b.Succeeded || b.Outcome == OutcomeMonitoring {
 				continue
 			}
-			for _, b := range list[i+1:] {
-				if f.in[b] || b.Time.Sub(a.Time) > window || !b.Succeeded || b.Outcome == OutcomeMonitoring {
-					continue
+			var cand []*Assessment // earlier, unfolded, revertible, within the window of b: oldest first
+			for _, a := range list[:i] {
+				if !f.in[a] && revertible(a) && b.Time.Sub(a.Time) <= c.rs.revert {
+					cand = append(cand, a)
 				}
-				if undoes(a, b) {
-					f.in[a], f.in[b] = true, true
-					t := owner[a]
-					ex := buildException(t, []*Assessment{a, b}, true)
-					f.exceptions = append(f.exceptions, *ex)
+			}
+			run := undoneBy(cand, b)
+			if len(run) == 0 {
+				continue
+			}
+			as := append(slices.Clone(run), b)
+			for _, a := range as {
+				f.in[a] = true
+			}
+			var t *Transaction // the transaction of the earliest change that has one still
+			for _, a := range as {
+				if t = owner[a]; t != nil {
 					break
 				}
 			}
+			if t == nil { // every change of it is from an earlier pass: its transaction was closed and is gone
+				h := sha256.Sum256([]byte(b.Scope + "|" + b.EventID))
+				t = &Transaction{Scope: b.Scope, ID: "txn_" + hex.EncodeToString(h[:])[:12]}
+			}
+			f.exceptions = append(f.exceptions, *buildException(t, as, true))
 		}
 	}
+	c.remember(byRes, f)
 	return f
+}
+
+// remember keeps what landed and was not undone, drops what is past its window (by event time, against the newest event
+// seen) and enforces the bounds.
+func (c *Correlator) remember(byRes map[string][]*Assessment, f folds) {
+	mem := map[string][]*Assessment{}
+	total := 0
+	for k, l := range byRes {
+		var keep []*Assessment
+		for _, a := range l {
+			if !f.in[a] && revertible(a) && c.latest.Sub(a.Time) <= c.rs.revert {
+				keep = append(keep, a)
+			}
+		}
+		if len(keep) > maxMemoryPerResource {
+			keep = keep[len(keep)-maxMemoryPerResource:]
+		}
+		if len(keep) > 0 {
+			mem[k] = keep
+			total += len(keep)
+		}
+	}
+	for total > maxMemoryTotal { // drop the oldest by event time, across resources
+		var ok string
+		var ot time.Time
+		for k, l := range mem {
+			if ok == "" || l[0].Time.Before(ot) || (l[0].Time.Equal(ot) && k < ok) {
+				ok, ot = k, l[0].Time
+			}
+		}
+		mem[ok] = mem[ok][1:]
+		if len(mem[ok]) == 0 {
+			delete(mem, ok)
+		}
+		total--
+	}
+	c.mem = mem
 }
 
 func revertible(a *Assessment) bool {
 	return a.Succeeded && (a.Outcome == OutcomeOutOfBand || a.Outcome == OutcomeNotAttributed || a.Outcome == OutcomeBreakGlass) && !a.Monitoring
+}
+
+// undoneBy is the changes of cand (oldest first) that b undoes: the one the hash rules name, else the smallest run of
+// the most recent changes that undoesRun accepts. Nil when b undoes nothing.
+func undoneBy(cand []*Assessment, b *Assessment) []*Assessment {
+	for _, a := range cand {
+		if a.hasDelta || b.hasDelta {
+			continue // a collector's property diff is a positional subset of the object: values decide, never the hashes
+		}
+		if undoes(a, b) {
+			return []*Assessment{a}
+		}
+	}
+	for k := 1; k <= len(cand); k++ {
+		run := cand[len(cand)-k:]
+		if undoesRun(run, b) {
+			return run
+		}
+	}
+	return nil
 }
 
 func undoes(a, b *Assessment) bool {
@@ -337,4 +446,62 @@ func undoes(a, b *Assessment) bool {
 		return true // created, then deleted
 	}
 	return false
+}
+
+// undoesRun: the values b removes are exactly the values the run added, and the values b adds are exactly the values the
+// run removed, as multisets, whatever the property names. (Positions in a list are not stable from one change to the
+// next: two rules added one after another are both element 0, and one revoke of both names elements 0 and 1.) A change
+// with no value diff, or a run whose changes all have none, never matches.
+func undoesRun(run []*Assessment, b *Assessment) bool {
+	if !b.hasDelta || len(b.added)+len(b.removed) == 0 {
+		return false
+	}
+	var added, removed []string
+	for _, a := range run {
+		if !a.hasDelta || len(a.added)+len(a.removed) == 0 {
+			return false
+		}
+		added, removed = append(added, a.added...), append(removed, a.removed...)
+	}
+	slices.Sort(added)
+	slices.Sort(removed)
+	return slices.Equal(added, b.removed) && slices.Equal(removed, b.added)
+}
+
+// valueDelta is the multiset of canonical-JSON values in after that are not in before, and the reverse; each sorted.
+// Null is no value. Property names are ignored.
+func valueDelta(before, after map[string]any) (added, removed []string) {
+	count := map[string]int{}
+	for _, v := range after {
+		if s, ok := canonicalValue(v); ok {
+			count[s]++
+		}
+	}
+	for _, v := range before {
+		if s, ok := canonicalValue(v); ok {
+			count[s]--
+		}
+	}
+	for s, n := range count {
+		for ; n > 0; n-- {
+			added = append(added, s)
+		}
+		for ; n < 0; n++ {
+			removed = append(removed, s)
+		}
+	}
+	slices.Sort(added)
+	slices.Sort(removed)
+	return added, removed
+}
+
+func canonicalValue(v any) (string, bool) {
+	if v == nil {
+		return "", false
+	}
+	b, err := json.Marshal(v) // map keys are sorted
+	if err != nil {
+		return "", false
+	}
+	return string(b), true
 }

@@ -9,6 +9,23 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Fixed
+
+- **A change undone later, by one change or several, resolves as `reverted`, in any pass.** A console user added two rules to a
+  security group and removed both with one `RevokeSecurityGroupIngress`; Clearance recorded three `out-of-band` exceptions, all
+  `still-live`, though the group was back as it was. Three causes: (1) the pipeline folded reverts only among the transactions
+  closed in one pass, and an apply and its undo are emitted in different passes; (2) the revert window was 15 minutes; (3) matching
+  was one-to-one on hashes, and the diff pointers are positional (both adds were `IpPermissions.0`, the revoke named `.0` and `.1`).
+- The pipeline now keeps a **revert memory** across `Flush`es (per resource, by event time, bounded to 64 changes per resource and
+  10000 in all, expired by the window), and matches an undo by **values** as well as by hash: the most recent *k* unreverted
+  changes, followed by one change that removes exactly what they added and adds back exactly what they removed (multisets, names
+  ignored; smallest *k*). The folded exception lists every event, so the collector posts `reverted` for each (the AWS collector
+  now passes its Config diff to the pipeline as `RawEvent.Delta`; the Kubernetes collector posts `reverted` for every folded change
+  but the undo). An empty diff never matches; a monitoring operation and a refused attempt are never folded away.
+- **`correlate.revert_window` defaults to 1h** (was 15m), in the rule set and both charts' `attribute.yaml`. The collector's
+  `settle` stays 15m. The rule set digest changes with it, so the golden replay reports carry the new digest.
+- The packet reads the newest resolution by seq (as before); a test now pins that a later `reverted` replaces `still-live`.
+
 ## [0.40.1] - 2026-11-11
 
 ### Fixed

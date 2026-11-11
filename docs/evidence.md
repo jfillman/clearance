@@ -192,7 +192,8 @@ in). The sixth is the core's.
 | `observation.audit-gap` | the core | A feed dropped | `scope`, `source` {name}, `gap` {state, reason, health_seq, since?} (verified), coverage `coverage-unavailable` |
 
 **Resolutions are append-only; a person may set one (O-5).** The first resolution of an observation is its collector's
-(`still-live`, or `reverted` when the collector saw the revert). A person sets what a person knows (why it happened,
+(`still-live`, or `reverted` when the collector saw the revert). A collector that sees the revert after it posted `still-live` posts
+a later `reverted` for the same seq: the newest wins. A person sets what a person knows (why it happened,
 or that it was ratified) with `POST /v1/observations/{seq}/resolution` on the core ([gate.md](gate.md#a-persons-resolution-of-an-observation-o-5)):
 a `resolution` record about the same seq, in the same shape, naming the person (`principal`, `initiator` {sub, iss}, and
 `resolution.by`). An edit is another record; **the newest record about a seq is the resolution when it is read**

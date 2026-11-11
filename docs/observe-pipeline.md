@@ -99,10 +99,29 @@ loader refuses a rule set that lowers it.
 **Correlate** collapses bursts into a `Transaction`. An event joins an open transaction of its scope, within
 `correlate.window` (30s) of its last event, when it shares the execution context (the grant a record quotes, the AWS
 session), when it is related by ownership (a Deployment and the ReplicaSet it cascades into), or when it is the same
-actor with the same tool (a `kubectl apply -f dir/`). It folds an **apply-and-revert** into one exception: an uncleared
-change followed, within `correlate.revert_window` (15m), by a change that puts the object back as it was (its
-after-hash is the first's before-hash, or it deletes what the first created) is one exception, resolution `reverted`,
-naming both events. A refused attempt and a monitoring operation are never folded away. Exception kinds are the gate's
+actor with the same tool (a `kubectl apply -f dir/`). It folds an **apply-and-revert** into one exception. The business rule: a change undone within the revert window,
+by one later change or by several, resolves as `reverted`, even when the undo arrives in a later pass. The window is
+`correlate.revert_window` (default 1h, measured on event times; the collector's settle time is a separate 15m). An undo is:
+
+- **one change put back as it was** (Kubernetes, whole-object hashes; used only for a pair where neither change carries a
+  `Delta`, because a collector's diff covers only the changed properties and equal hashes of two such subsets do not mean the
+  object is back as it was): the later change's after-hash is the first's
+  before-hash, or it deletes what the first created; or
+- **values removed that a run of changes added** (the only rule for a change that carries a `Delta`) (and values added back that the run removed), whatever the property names:
+  the collector supplies the change as before and after property values (`RawEvent.Delta`, the AWS Config diff), and the
+  most recent *k* unreverted changes on the resource, followed by one change, match when the values added by the run equal the
+  values removed by the change and the values removed by the run equal the values added by the change, as multisets. The
+  smallest *k* that matches wins. The names are ignored because a list position is not stable from one change to the next: two
+  rules added in turn are both element 0 and one revoke of both names elements 0 and 1. A change with no value diff never
+  matches.
+
+Each pass (`Flush`) closes the open transactions, but the correlator keeps a **revert memory**: every landed, revertible change
+that no change has undone yet, per resource and by event time, for the revert window from its event time. An apply and its undo
+are emitted when each one's own settle time ends, so they are usually in different passes; a later pass finds the earlier
+change in the memory and the folded exception lists the events of all of them, so the collector posts `reverted` for each
+(the packet reads the newest resolution by seq, so it replaces `still-live`). The memory holds at most 64 changes per resource
+and 10000 in all, oldest first out, and nothing past its window. A refused attempt and a monitoring operation are never folded away.
+Exception kinds are the gate's
 (`out-of-band`, `attempted-refused`, `monitoring-protection`, `drift` for observed-not-attributed) and `break-glass`,
 the packet's class of that name.
 

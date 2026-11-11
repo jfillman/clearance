@@ -247,4 +247,6 @@ documented in the chart's `values.yaml`):
 - Secrets are not watched, so a Secret write with no audit event has no backstop.
 - Break-glass and grants are read as of the last refresh; an event delayed past a window's close, or past a grant's
   expiry, is attributed as of now.
-- One flush interval (20 min) bounds how far apart an apply and its revert may be and still fold into one exception.
+- The revert window (`correlate.revert_window`, 1h by event time) bounds how far apart an apply and its revert may be and still
+  fold into one exception. The pipeline remembers an unreverted change across flushes for that window, so the revert may be in a
+  later flush (a restart in between loses the memory, and a revert is then its own exception).

@@ -562,12 +562,15 @@ func (c *Collector) Flush(ctx context.Context) error {
 			continue
 		}
 		if x.Reverted {
-			seq, ok := c.seqOf(x.Events[0])
-			if !ok {
-				continue // not posted in this run (a restart in between): no resolution is recorded, the cautious answer
-			}
-			if _, err := c.d.Core.Record(ctx, resolutionReverted(x.Scope, seq, fmt.Sprintf("applied and put back within the revert window (events %s)", strings.Join(x.Events, ", ")))); err != nil {
-				errs = append(errs, err)
+			// Every change it folds but the last (the undo) is a change that was put back; those of earlier passes too.
+			for _, ev := range x.Events[:len(x.Events)-1] {
+				seq, ok := c.seqOf(ev)
+				if !ok {
+					continue // not posted in this run (a restart in between): no resolution is recorded, the cautious answer
+				}
+				if _, err := c.d.Core.Record(ctx, resolutionReverted(x.Scope, seq, fmt.Sprintf("applied and put back within the revert window (events %s)", strings.Join(x.Events, ", ")))); err != nil {
+					errs = append(errs, err)
+				}
 			}
 			continue
 		}
