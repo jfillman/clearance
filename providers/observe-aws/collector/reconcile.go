@@ -28,7 +28,15 @@ type Merged struct {
 //     (resources[], request parameters or response elements), and the item was captured no earlier than a minute
 //     before the event and no later than Window after it.
 //
-// An item that lists related events never joins an event it does not list. The join is made when an entry is due, over
+// An item that lists related events never joins an event it does not list, and joins every event it lists. A fallback
+// item (one that lists none) is the effect of exactly one event: the nearest, the one with the latest event time that is
+// no later than a minute after the item's capture (ties: the smaller event id). Without that, a security group rule
+// added and then removed within the window had the removal's item attached to the add as well, and the add's diff
+// was overwritten by the removal's, so the pair could not fold as a revert. Because a nearer event could still be on its
+// way, a fallback item is not joined until Grace has passed since it arrived (capped at Settle, so an entry never waits
+// longer than Settle for it); an event that a not-yet-eligible item could still join is held for it, which can
+// extend that event's wait by at most Grace. The nearest rule also decides Late: an item whose nearest event was emitted
+// already is counted Late, but one with a pending event nearer joins that event instead. The join is made when an entry is due, over
 // everything pending, so the order the two arrive in does not matter: an event waits up to Settle for its item, and an
 // item waits up to Settle for its event. An item whose event never comes is emitted alone (an effect the trail
 // did not report: itself a finding). An item that arrives after its event was emitted is counted Late (the live gate
@@ -37,6 +45,7 @@ type Merged struct {
 type Reconciler struct {
 	Settle time.Duration // how long an entry waits for its counterpart (and for the outcomes attribution looks up); default 15m
 	Window time.Duration // the fallback key's time window; default 15m
+	Grace  time.Duration // how long a fallback item waits, from its arrival, before choosing its nearest event, so a nearer event can arrive first; default 2m, capped at Settle
 	Now    func() time.Time
 
 	mu      sync.Mutex
@@ -76,6 +85,17 @@ func (r *Reconciler) settle() time.Duration {
 		return 15 * time.Minute
 	}
 	return r.Settle
+}
+
+func (r *Reconciler) grace() time.Duration {
+	g := r.Grace
+	if g == 0 {
+		g = 2 * time.Minute
+	}
+	if s := r.settle(); g > s {
+		g = s
+	}
+	return g
 }
 
 func (r *Reconciler) window() time.Duration {
@@ -164,7 +184,8 @@ func (r *Reconciler) Ready() []*Merged {
 	defer r.mu.Unlock()
 	r.init()
 	now := r.now()
-	// 1. join every pending item to every pending event it belongs to
+	// 1. join every pending item. An item that lists its events joins each of them; one that lists none joins the single
+	// nearest event, once it has waited Grace for a nearer one to arrive.
 	ids := make([]string, 0, len(r.cfgs))
 	for id := range r.cfgs {
 		ids = append(ids, id)
@@ -172,6 +193,39 @@ func (r *Reconciler) Ready() []*Merged {
 	sort.Strings(ids)
 	for _, id := range ids {
 		pc := r.cfgs[id]
+		if len(pc.c.Related) == 0 {
+			if now.Sub(pc.first) < r.grace() {
+				continue
+			}
+			var best *ctView
+			var bestPend *pendCT
+			consider := func(v *ctView, pe *pendCT) {
+				if !r.joins(pc.c, v) {
+					return
+				}
+				if best == nil || v.Time.After(best.Time) || (v.Time.Equal(best.Time) && v.ID < best.ID) {
+					best, bestPend = v, pe
+				}
+			}
+			for _, pe := range r.cts {
+				consider(pe.m.View, pe)
+			}
+			for _, e := range r.emitted {
+				consider(e.view, nil)
+			}
+			switch {
+			case best == nil:
+			case bestPend != nil:
+				bestPend.cfgs = append(bestPend.cfgs, pc)
+				delete(r.cfgs, id)
+			default:
+				r.late++
+				runAcks(itemAcks(pc.items))
+				r.seen[pc.c.ID] = now
+				delete(r.cfgs, id)
+			}
+			continue
+		}
 		joined := false
 		for _, pe := range r.cts {
 			if r.joins(pc.c, pe.m.View) {
@@ -183,14 +237,13 @@ func (r *Reconciler) Ready() []*Merged {
 			delete(r.cfgs, id)
 			continue
 		}
-		// an item whose event was emitted already: it cannot be attached any more
-		for eid, e := range r.emitted {
+		// an item whose events were emitted already: it cannot be attached any more
+		for _, e := range r.emitted {
 			if r.joins(pc.c, e.view) {
 				r.late++
 				runAcks(itemAcks(pc.items))
 				r.seen[pc.c.ID] = now
 				delete(r.cfgs, id)
-				_ = eid
 				break
 			}
 		}
@@ -198,7 +251,7 @@ func (r *Reconciler) Ready() []*Merged {
 	var out []*Merged
 	// 2. events that are due
 	for id, pe := range r.cts {
-		if now.Sub(pe.first) < r.settle() {
+		if now.Sub(pe.first) < r.settle() || r.awaitsGrace(pe.m.View, now) {
 			continue
 		}
 		m := pe.m
@@ -220,6 +273,17 @@ func (r *Reconciler) Ready() []*Merged {
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].at().Before(out[j].at()) })
 	return out
+}
+
+// awaitsGrace says a fallback item that has not waited Grace yet could still join the event, so the event is held
+// for it (at most Grace past its Settle).
+func (r *Reconciler) awaitsGrace(v *ctView, now time.Time) bool {
+	for _, pc := range r.cfgs {
+		if len(pc.c.Related) == 0 && now.Sub(pc.first) < r.grace() && r.joins(pc.c, v) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Merged) at() time.Time {

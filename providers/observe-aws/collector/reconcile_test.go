@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"reflect"
 	"testing"
 	"time"
 )
@@ -229,5 +230,179 @@ func TestAVerifiedCopyUpgradesAPendingEventOrIsReportedAfterItWasPosted(t *testi
 	late.Verified = true
 	if !r.AddCT(late, v) {
 		t.Fatal("a copy after the event was posted is reported, so the collector can post its verification")
+	}
+}
+
+func sgDelete(at time.Time, related ...string) cfgItem {
+	return cfgItem{resourceID: "sg-0abc1234", name: "web", at: at, related: related, changeType: "UPDATE", changed: map[string]map[string]any{
+		"Configuration.IpPermissions.0": {"previousValue": map[string]any{"fromPort": 22, "toPort": 22, "ipRanges": []string{"0.0.0.0/0"}}, "updatedValue": nil, "changeType": "DELETE"}}}
+}
+
+func revokeSG(id string, at time.Time) ct {
+	c := consoleSG(id, at)
+	c.name = "RevokeSecurityGroupIngress"
+	return c
+}
+
+// The live case: a rule added and removed ten minutes later, Config reporting neither with relatedEvents. Both events
+// are still pending when the DELETE item arrives, and it fits the add's window too; it must join only the nearer revoke.
+func TestFallbackItemJoinsOnlyTheNearestEvent(t *testing.T) {
+	clk := &clock{t0}
+	r := &Reconciler{Settle: 15 * time.Minute, Window: 15 * time.Minute, Now: clk.now}
+	addIt, addV := ctItem(consoleSG("ev-add", t0), clk.t)
+	r.AddCT(addIt, addV)
+	clk.add(time.Minute)
+	r.AddConfig(mustItem(sgConfig(t0.Add(time.Minute)).envelope(), clk.t))
+	clk.add(9 * time.Minute)
+	rvIt, rvV := ctItem(revokeSG("ev-revoke", clk.t), clk.t)
+	r.AddCT(rvIt, rvV)
+	clk.add(time.Minute)
+	r.AddConfig(mustItem(sgDelete(t0.Add(11*time.Minute)).envelope(), clk.t))
+	var got []*Merged
+	for i := 0; i < 25 && len(got) < 2; i++ {
+		clk.add(time.Minute)
+		got = append(got, r.Ready()...)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want the add and the revoke, got %d", len(got))
+	}
+	byID := map[string]*Merged{}
+	for _, m := range got {
+		byID[m.ID()] = m
+	}
+	add, rv := byID["ev-add"], byID["ev-revoke"]
+	if add == nil || rv == nil {
+		t.Fatalf("%v", byID)
+	}
+	if len(add.Config) != 1 || add.Config[0].ChangeType != "UPDATE" || add.Config[0].Changed["Configuration.IpPermissions.0"].ChangeType != "CREATE" {
+		t.Fatalf("the add carries only the CREATE item: %+v", add.Config)
+	}
+	if len(rv.Config) != 1 || rv.Config[0].Changed["Configuration.IpPermissions.0"].ChangeType != "DELETE" {
+		t.Fatalf("the revoke carries only the DELETE item: %+v", rv.Config)
+	}
+	da, dr := configDelta(add.Config), configDelta(rv.Config)
+	k := "Configuration.IpPermissions.0"
+	if da == nil || dr == nil || da.Before[k] != nil || dr.After[k] != nil || !reflect.DeepEqual(da.After[k], dr.Before[k]) {
+		t.Fatalf("the two deltas must be inverse: %+v %+v", da, dr)
+	}
+	if e, c := r.Pending(); e != 0 || c != 0 {
+		t.Fatalf("%d %d", e, c)
+	}
+}
+
+// A nearer event that arrives after the item, within Grace, still wins; and an item waits for Grace before it joins.
+func TestFallbackItemWaitsGraceForANearerEvent(t *testing.T) {
+	clk := &clock{t0}
+	r := newRec(clk)
+	addIt, addV := ctItem(consoleSG("ev-add", t0), clk.t)
+	r.AddCT(addIt, addV)
+	clk.add(8 * time.Minute)
+	r.AddConfig(mustItem(sgDelete(t0.Add(8*time.Minute)).envelope(), clk.t))
+	if got := r.Ready(); len(got) != 0 {
+		t.Fatalf("nothing due: %d", len(got))
+	}
+	clk.add(30 * time.Second)
+	rvIt, rvV := ctItem(revokeSG("ev-revoke", t0.Add(7*time.Minute)), clk.t)
+	r.AddCT(rvIt, rvV)
+	clk.add(10 * time.Minute)
+	var got []*Merged
+	for i := 0; i < 20 && len(got) < 2; i++ {
+		clk.add(time.Minute)
+		got = append(got, r.Ready()...)
+	}
+	for _, m := range got {
+		switch m.ID() {
+		case "ev-add":
+			if len(m.Config) != 0 {
+				t.Fatal("the add must not take the item")
+			}
+		case "ev-revoke":
+			if len(m.Config) != 1 {
+				t.Fatal("the revoke takes the item")
+			}
+		}
+	}
+	if len(got) != 2 {
+		t.Fatal(len(got))
+	}
+}
+
+// An item whose nearest event is pending is not counted Late against an earlier event that was emitted already;
+// one whose nearest event was emitted is.
+func TestNearestRuleDecidesLate(t *testing.T) {
+	clk := &clock{t0}
+	r := newRec(clk)
+	addIt, addV := ctItem(consoleSG("ev-add", t0), clk.t)
+	r.AddCT(addIt, addV)
+	clk.add(6 * time.Minute)
+	for _, m := range r.Ready() {
+		r.Done(m)
+	}
+	rvIt, rvV := ctItem(revokeSG("ev-revoke", clk.t), clk.t)
+	r.AddCT(rvIt, rvV)
+	r.AddConfig(mustItem(sgDelete(t0.Add(7*time.Minute)).envelope(), clk.t))
+	clk.add(3 * time.Minute)
+	if got := r.Ready(); len(got) != 0 || r.Late() != 0 {
+		t.Fatalf("joined to the pending revoke, not late: %d %d", len(got), r.Late())
+	}
+	clk.add(5 * time.Minute)
+	got := r.Ready()
+	if len(got) != 1 || got[0].ID() != "ev-revoke" || len(got[0].Config) != 1 || r.Late() != 0 {
+		t.Fatalf("%+v late %d", got, r.Late())
+	}
+	r.Done(got[0])
+	// an item nearest to an emitted event is late
+	r.AddConfig(mustItem(sgDelete(t0.Add(20*time.Minute)).envelope(), clk.t))
+	clk.add(3 * time.Minute)
+	if len(r.Ready()) != 0 || r.Late() != 1 {
+		t.Fatalf("late %d", r.Late())
+	}
+}
+
+// Items that list relatedEvents join every event they list, however near another event is.
+func TestListedRelatedEventsJoinEachListedEvent(t *testing.T) {
+	clk := &clock{t0}
+	r := newRec(clk)
+	a, av := ctItem(consoleSG("ev-a", t0), clk.t)
+	b, bv := ctItem(revokeSG("ev-b", t0.Add(3*time.Minute)), clk.t)
+	c, cv := ctItem(revokeSG("ev-c", t0.Add(4*time.Minute)), clk.t)
+	r.AddCT(a, av)
+	r.AddCT(b, bv)
+	r.AddCT(c, cv)
+	r.AddConfig(mustItem(sgConfig(t0.Add(5*time.Minute), "ev-a", "ev-b").envelope(), clk.t))
+	clk.add(10 * time.Minute)
+	n := map[string]int{}
+	for _, m := range r.Ready() {
+		n[m.ID()] = len(m.Config)
+	}
+	if n["ev-a"] != 1 || n["ev-b"] != 1 || n["ev-c"] != 0 || len(n) != 3 {
+		t.Fatalf("%v", n)
+	}
+}
+
+// One event carrying several items on one pointer gets the net diff, whatever order the items arrived or are held in.
+func TestNetDiffOrdersItemsByCapturedAndKeepsEarliestPreviousLatestUpdated(t *testing.T) {
+	k := "Configuration.IpPermissions.0"
+	mk := func(id string, at time.Time, prev, upd any) *ConfigChange {
+		return &ConfigChange{ID: id, Captured: at, Changed: map[string]PropChange{k: {Previous: prev, Updated: upd}}}
+	}
+	first, second := mk("a", t0, nil, "r1"), mk("b", t0.Add(time.Minute), "r1", "r2")
+	for _, cfgs := range [][]*ConfigChange{{first, second}, {second, first}} {
+		d := configDelta(cfgs)
+		if d == nil || d.Before[k] != nil || d.After[k] != "r2" {
+			t.Fatalf("%+v", d)
+		}
+		sc := stateChange(cfgs)
+		if sc["before"].(map[string]any)[k] != nil || sc["after"].(map[string]any)[k] != "r2" {
+			t.Fatalf("%+v", sc)
+		}
+	}
+	// changed and changed back: the pointer is kept, before == after, in both views
+	back := mk("c", t0.Add(2*time.Minute), "r2", nil)
+	d := configDelta([]*ConfigChange{back, first, second})
+	sc := stateChange([]*ConfigChange{back, first, second})
+	b, a := sc["before"].(map[string]any), sc["after"].(map[string]any)
+	if d == nil || len(d.Before) != 1 || len(b) != 1 || len(a) != 1 || b[k] != nil || a[k] != nil {
+		t.Fatalf("%+v %+v", d, sc)
 	}
 }

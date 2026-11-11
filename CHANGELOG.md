@@ -9,6 +9,16 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Fixed
+
+- **observe-aws: an add and a later removal of the same security group rule now fold as `reverted`.** A Config item that lists no
+  `relatedEvents` was attached to every pending event its resource and 15-minute window matched, so the removal's item also joined the
+  add (still pending), overwrote its diff, and both observations carried the same diff; nothing could cancel. Now such an item joins
+  exactly one event, the nearest (latest event time no later than a minute after the item's capture; ties by event id), after waiting
+  a short grace (`Reconciler.Grace`, default 2m, capped at `settle`) for a nearer event to arrive; the same rule decides `Late`.
+  Items that list `relatedEvents` behave as before. When one event carries several items on the same property, `state_change` and the
+  revert diff are the net (earliest previous, latest updated, by capture time) rather than whichever item was merged last.
+
 ## [0.40.2] - 2026-11-11
 
 ### Fixed
