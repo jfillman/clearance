@@ -488,3 +488,51 @@ func TestCreatedIDIsOnlyTakenFromACreateCallAndPrefersTheCreatedResource(t *test
 		t.Fatalf("an attach creates nothing: %s", got)
 	}
 }
+
+// A console user adds two rules to a security group, emitted in different passes and out of event order, then removes both
+// with one call in a third pass: every observation of the three gets a `reverted` resolution (the revert memory, and a
+// value match that ignores the positional property names).
+func TestRevertOfSeveralChangesInLaterPassesIsResolvedForEachObservation(t *testing.T) {
+	r := newRig(t)
+	rule := func(port int) map[string]any {
+		return map[string]any{"fromPort": port, "toPort": port, "ipRanges": []string{"10.0.0.0/8"}}
+	}
+	cfg := func(at time.Time, event string, before, after map[string]any) cfgItem {
+		ch := map[string]map[string]any{}
+		for k := range before {
+			ch[k] = map[string]any{"previousValue": before[k], "updatedValue": after[k], "changeType": "UPDATE"}
+		}
+		return cfgItem{resourceID: "sg-0abc1234", name: "web", at: at, related: []string{event}, changed: ch}
+	}
+	atA, atB, atR := t0.Add(43*time.Minute), t0.Add(24*time.Minute), t0.Add(71*time.Minute)
+
+	r.ingest(consoleSG("ev-add-9443", atA).envelope(), atA)
+	r.ingest(cfg(atA.Add(30*time.Second), "ev-add-9443", map[string]any{"Configuration.IpPermissions.0": nil},
+		map[string]any{"Configuration.IpPermissions.0": rule(9443)}).envelope(), atA)
+	r.settle()
+	r.ingest(consoleSG("ev-add-8443", atB).envelope(), atB)
+	r.ingest(cfg(atB.Add(30*time.Second), "ev-add-8443", map[string]any{"Configuration.IpPermissions.0": nil},
+		map[string]any{"Configuration.IpPermissions.0": rule(8443)}).envelope(), atB)
+	r.settle()
+	rv := consoleSG("ev-revoke", atR)
+	rv.name = "RevokeSecurityGroupIngress"
+	r.ingest(rv.envelope(), atR)
+	r.ingest(cfg(atR.Add(30*time.Second), "ev-revoke",
+		map[string]any{"Configuration.IpPermissions.0": rule(8443), "Configuration.IpPermissions.1": rule(9443)},
+		map[string]any{"Configuration.IpPermissions.0": nil, "Configuration.IpPermissions.1": nil}).envelope(), atR)
+	r.settle()
+
+	obs := r.co.of("observation")
+	if len(obs) != 3 {
+		t.Fatalf("three observations: %d", len(obs))
+	}
+	reverted := map[any]bool{}
+	for _, rr := range r.co.of("resolution") {
+		if rr.Record.Resolution["state"] == "reverted" {
+			reverted[rr.Record.About["seq"]] = true
+		}
+	}
+	if len(reverted) != 3 {
+		t.Fatalf("a reverted resolution about each of the three observations: %v", reverted)
+	}
+}

@@ -282,6 +282,36 @@ func TestRevertGetsAResolution(t *testing.T) {
 	}
 }
 
+// The change and its undo are flushed in different passes: the revert memory still finds the first, and its observation
+// gets the reverted resolution (the later one, which the packet reads as the newest).
+func TestRevertAcrossFlushesGetsAResolution(t *testing.T) {
+	r := newRig(t)
+	mk := func(rv, v string, off time.Duration) map[string]any {
+		return auditEv(human, "kubectl/v1.36.0", "update", "configmaps", "shop", "web-config", 200, map[string]any{
+			"stageTimestamp": t0.Add(off).Format(time.RFC3339Nano), "responseObject": configMap("shop", "web-config", rv, map[string]any{"k": v})})
+	}
+	r.c.cache.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "1", map[string]any{"k": "orig"}), t0.Add(-time.Hour), true)
+	r.c.cache.Put("ConfigMap", "MODIFIED", configMap("shop", "web-config", "2", map[string]any{"k": "bad"}), t0, false)
+	r.push(mk("2", "bad", 0))
+	r.drain()
+	if err := r.c.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if res := r.core.kind("resolution"); len(res) != 1 || sub(res[0], "resolution")["state"] != "still-live" {
+		t.Fatalf("after the first pass: %v", res)
+	}
+	r.c.cache.Put("ConfigMap", "MODIFIED", configMap("shop", "web-config", "3", map[string]any{"k": "orig"}), t0.Add(40*time.Minute), false)
+	r.push(mk("3", "orig", 40*time.Minute))
+	r.drain()
+	if err := r.c.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	res := r.core.kind("resolution")
+	if len(res) != 2 || sub(res[1], "resolution")["state"] != "reverted" || sub(res[1], "about")["seq"] != json.Number("0") {
+		t.Fatalf("the first observation gets a later reverted resolution: %v", res)
+	}
+}
+
 // A change that stays, and a refused attempt: only the change gets the collector's still-live resolution.
 func TestStillLiveResolution(t *testing.T) {
 	r := newRig(t)

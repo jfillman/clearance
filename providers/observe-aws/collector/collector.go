@@ -246,7 +246,7 @@ func (c *Collector) emit(ctx context.Context, m *Merged) error {
 	}
 	it, v := m.Item, m.View
 	scopeID := orElse(v.Account, "unknown")
-	a, disp, _, err := c.Pipe.Process(pipeline.RawEvent{Provider: pipeline.AWS, Scope: scopeID, Raw: it.Raw})
+	a, disp, _, err := c.Pipe.Process(pipeline.RawEvent{Provider: pipeline.AWS, Scope: scopeID, Raw: it.Raw, Delta: configDelta(m.Config)})
 	if err != nil {
 		return fmt.Errorf("pipeline: %w", err)
 	}
@@ -497,6 +497,29 @@ func stateChange(cfgs []*ConfigChange) map[string]any {
 		return map[string]any{"before": note, "after": note}
 	}
 	return map[string]any{"before": before, "after": after}
+}
+
+// configDelta is the Config diff of a change as the pipeline's value diff reads it (what an undo is matched on); nil when
+// no Config item joined, or the diff was too large to carry.
+func configDelta(cfgs []*ConfigChange) *pipeline.Delta {
+	before, after := map[string]any{}, map[string]any{}
+	n := 0
+	for _, c := range cfgs {
+		for k, p := range c.Changed {
+			before[k], after[k] = p.Previous, p.Updated
+			n++
+		}
+	}
+	if n == 0 {
+		return nil
+	}
+	if b, _ := json.Marshal(before); len(b) > maxStateChange {
+		return nil
+	}
+	if b, _ := json.Marshal(after); len(b) > maxStateChange {
+		return nil
+	}
+	return &pipeline.Delta{Before: before, After: after}
 }
 
 func (c *Collector) assessment(m *Merged, a *pipeline.Assessment, about int64) client.ProviderEvent {

@@ -170,4 +170,4 @@ classify:
 
 correlate:
   window: 30s
-  revert_window: 15m
+  revert_window: 1h

@@ -291,7 +291,7 @@ func Load(b []byte) (*RuleSet, error) {
 	if rs.window, err = duration(d.Correlate.Window, 30*time.Second); err != nil {
 		return nil, fmt.Errorf("observe rules: correlate.window: %w", err)
 	}
-	if rs.revert, err = duration(d.Correlate.RevertWindow, 15*time.Minute); err != nil {
+	if rs.revert, err = duration(d.Correlate.RevertWindow, time.Hour); err != nil {
 		return nil, fmt.Errorf("observe rules: correlate.revert_window: %w", err)
 	}
 	if err := rs.loadScope(d); err != nil {
