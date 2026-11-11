@@ -476,13 +476,35 @@ func clipText(s string, n int) string {
 // maxStateChange keeps a diff under the core's per-object limit; past it only the pointers are kept.
 const maxStateChange = 48 << 10
 
+// netChanges folds the items of one change into one before/after pair. Items are taken in Captured order (item id
+// breaks a tie) and, per pointer, the earliest Previous and the latest Updated are kept: the net effect of the
+// sequence, not whichever item a map happened to visit last. A pointer whose net before equals its after (changed and
+// changed back within one change) is kept, so the pointer still shows that it was touched; stateChange and
+// configDelta both read this, so they always agree. n is the number of distinct pointers.
+func netChanges(cfgs []*ConfigChange) (before, after map[string]any, n int) {
+	sorted := append([]*ConfigChange(nil), cfgs...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if !sorted[i].Captured.Equal(sorted[j].Captured) {
+			return sorted[i].Captured.Before(sorted[j].Captured)
+		}
+		return sorted[i].ID < sorted[j].ID
+	})
+	before, after = map[string]any{}, map[string]any{}
+	for _, c := range sorted {
+		for k, p := range c.Changed {
+			if _, seen := before[k]; !seen {
+				before[k] = p.Previous
+			}
+			after[k] = p.Updated
+		}
+	}
+	return before, after, len(before)
+}
+
 func stateChange(cfgs []*ConfigChange) map[string]any {
-	before, after := map[string]any{}, map[string]any{}
+	before, after, _ := netChanges(cfgs)
 	var ptrs []string
 	for _, c := range cfgs {
-		for k, p := range c.Changed {
-			before[k], after[k] = p.Previous, p.Updated
-		}
 		ptrs = append(ptrs, c.Pointers()...)
 	}
 	if len(ptrs) == 0 {
@@ -502,14 +524,7 @@ func stateChange(cfgs []*ConfigChange) map[string]any {
 // configDelta is the Config diff of a change as the pipeline's value diff reads it (what an undo is matched on); nil when
 // no Config item joined, or the diff was too large to carry.
 func configDelta(cfgs []*ConfigChange) *pipeline.Delta {
-	before, after := map[string]any{}, map[string]any{}
-	n := 0
-	for _, c := range cfgs {
-		for k, p := range c.Changed {
-			before[k], after[k] = p.Previous, p.Updated
-			n++
-		}
-	}
+	before, after, n := netChanges(cfgs)
 	if n == 0 {
 		return nil
 	}

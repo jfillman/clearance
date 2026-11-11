@@ -65,8 +65,16 @@ AWS records (a log file's `hashValue`, `previousDigestHashValue`, the hash in th
 
 A Config item is the effect of a CloudTrail event when the item lists the event (`relatedEvents`, AWS Config's own pointer), or,
 when it lists none, when the same account's item resource is a resource the event names and the item was captured within
-15 minutes after it. An item that lists related events never joins one it does not list. The join is made when an entry is due
-over everything pending, so arrival order does not matter. An event waits `settle` (default 15 minutes; AWS Config took longer than ten for a security group in the live gate) for its item and for
+15 minutes after it. An item that lists related events joins every event it lists and never one it does not. An item that lists
+none is the effect of **one** event, the nearest: the pending (or already emitted) event with the latest event time no later than
+a minute after the item's capture (ties: the smaller event id). Without that rule a rule added and removed ten minutes later had
+the removal's item attached to the add as well, overwrote the add's diff, and the pair could not fold as a revert. A nearer event
+could still be on its way, so such an item is not joined until it has waited `grace` since it arrived (a `Reconciler` field, default 2
+minutes, capped at `settle`); an event a not-yet-eligible item could join is held for it, so an event's wait can run up to `grace` past
+`settle`. An item whose nearest event was already posted is the late case below; one with a pending event nearer joins that event.
+When one event carries several items that touch the same property, the diff is the net: items ordered by capture time, the earliest
+previous value and the latest updated value per property (a property changed and changed back stays listed, with equal before and
+after). The join is made when an entry is due over everything pending, so arrival order does not matter. An event waits `settle` (default 15 minutes; AWS Config took longer than ten for a security group in the live gate) for its item and for
 the apply outcome that clears it; an item waits `settle` for its event. The merged change is one observation whose
 `state_change` is the Config diff, one assessment (the detail names the changed properties and the quoted actor) and one
 resolution. An item no event explains is reported alone, observed-not-attributed, signal `config.item-without-event`: an effect

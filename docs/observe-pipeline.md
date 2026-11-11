@@ -100,7 +100,7 @@ loader refuses a rule set that lowers it.
 `correlate.window` (30s) of its last event, when it shares the execution context (the grant a record quotes, the AWS
 session), when it is related by ownership (a Deployment and the ReplicaSet it cascades into), or when it is the same
 actor with the same tool (a `kubectl apply -f dir/`). It folds an **apply-and-revert** into one exception. The business rule: a change undone within the revert window,
-by one later change or by several, resolves as `reverted`, even when the undo arrives in a later pass. The window is
+by one later change or by several, resolves as `reverted`, even when the undo arrives in a later pass. (For AWS the diff each change carries is its own: the collector joins a Config item that lists no related event to the single nearest CloudTrail event, so an add and its later removal carry inverse diffs; see `docs/observe-aws.md`.) The window is
 `correlate.revert_window` (default 1h, measured on event times; the collector's settle time is a separate 15m). An undo is:
 
 - **one change put back as it was** (Kubernetes, whole-object hashes; used only for a pair where neither change carries a

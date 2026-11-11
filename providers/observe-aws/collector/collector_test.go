@@ -562,3 +562,40 @@ func TestRevokeOfAnotherRuleIsNotARevertOfTheAdd(t *testing.T) {
 		}
 	}
 }
+
+// The live case end to end: a rule added, then removed ten minutes later, Config recording both without relatedEvents.
+// Each Config item joins its own event, so the two diffs are inverse and the pair folds as a revert.
+func TestAddThenRevokeWithoutRelatedEventsFoldsAsRevert(t *testing.T) {
+	r := newRig(t)
+	r.c.Rec = &Reconciler{Settle: 15 * time.Minute, Now: r.clk.now}
+	r.clk.t = t0
+	step := func(d time.Duration) {
+		r.clk.add(d)
+		if err := r.c.Step(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.ingest(consoleSG("ev-add", t0).envelope(), t0)
+	step(time.Minute)
+	r.ingest(sgConfig(t0.Add(time.Minute)).envelope(), r.clk.t)
+	step(9 * time.Minute)
+	rv := revokeSG("ev-revoke", r.clk.t)
+	r.ingest(rv.envelope(), r.clk.t)
+	step(time.Minute)
+	r.ingest(sgDelete(t0.Add(11*time.Minute)).envelope(), r.clk.t)
+	for i := 0; i < 40; i++ {
+		step(time.Minute)
+	}
+	if n := len(r.co.of("observation")); n != 2 {
+		t.Fatalf("two observations: %d", n)
+	}
+	reverted := map[any]bool{}
+	for _, rr := range r.co.of("resolution") {
+		if rr.Record.Resolution["state"] == "reverted" {
+			reverted[rr.Record.About["seq"]] = true
+		}
+	}
+	if len(reverted) != 2 {
+		t.Fatalf("both are resolved as reverted: %v", reverted)
+	}
+}
