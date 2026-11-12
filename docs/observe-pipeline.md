@@ -37,6 +37,20 @@ assessed.
 per scope (`out_of_scope`), so the coverage statement's population is honest. A rule set that governs nothing does not
 load.
 
+**Not changes** (since the rule set 2026.11.2). Two writes change no object's desired state and are counted under
+`out_of_scope`, not assessed: a controller's `update` or `patch` of the **`status` subresource**, and a service account's **`create`
+on `serviceaccounts/token`** (a TokenRequest mints a credential and changes no object). They are decided in the pipeline, after the
+named noise rules (a rule still claims what it names and its count carries its `why`) and before attribution, and only for a
+succeeded write. Never dropped: a refused attempt; an actor who is a person, a `kubectl` client, an impersonation or a federated
+agent (the status subresource of the built-in kinds can change labels and annotations, so only a controller is believed); an operation
+on monitoring; a node's token (`system:node:*` stays an exact noise rule per named kubelet); and a `status` write to an object a valid
+grant lists or whose owner chain reaches one, which keeps its attribution (`listed-grant`, `owner-grant`: the coverage statement
+counts it as verified, which a drop would not). `scale`, `ephemeralcontainers` and every other subresource are unchanged.
+This is why the signal `listed-grant` keeps its `event.subresource == "status"` guard: it only ever sees the status writes of
+objects a grant relates to. It is not a Normalize decision, because Normalize decides *whether an event is a write* (it counts reads
+under `not_writes`) and a status write is a write that is outside what a coverage statement is about; the stage that already owns
+that count is Scope.
+
 **Noise** drops legitimate controller writes. A rule pairs **one exact identity** with **the exact shape it may
 touch**: `identity.subject` (exact, never a pattern) with `shape.kinds` and `shape.verbs` (exact), optionally
 namespaces, subresources and a CEL `when`. Each rule says `why`. The loader refuses everything wider
@@ -92,9 +106,32 @@ user agent, weak), the apply window last (weak). The user agent is self-reported
 apply role (`sessionIssuer.arn`). Then the SSO admin role (out-of-band, high; the actor is the quoted `sourceIdentity`)
 and the catch-all.
 
+<a id="platform-gitops"></a>**`platform-gitops`** (G-ARGO-10a, in the attribution order right after `break-glass.live`). A write by an
+Argo CD instance's application controller to an object whose Argo CD tracking annotation names an Application is attributed to
+that Application and its sync revision, not out-of-band. A write by that controller to an object with no tracking annotation stays
+out-of-band. The rule set names the platform instance's identity exactly (`identities.platform_gitops`: exact service-account
+subjects; the loader refuses a pattern, a group, and a subject that is also in `identities.argo_controller`, because the gated
+instance's writes are cleared by grants, not by GitOps). The pipeline reads the annotation from the object the event carries
+(`annotations.tracking_id`, default `argocd.argoproj.io/tracking-id`; value `[<app namespace>_]<app>:<group>/<kind>:<namespace>/<name>`,
+which must be about this very object) and asks the lookups, `ArgoApplications.Application`, for the Application (in the controller's
+own namespace unless the id carries one) and its revision. An event with no object (a Secret at Metadata, a delete of an unwatched
+kind) carries no annotation: `ArgoApplications.ManagedBy` answers from the Applications' own `status.resources`, only when exactly
+one Application of the controller's namespace lists the object. No Application, no revision, no lookup support: no attribution. It
+sits below every grant signal (an object that names a grant whose hash differs is out-of-band whatever tracking annotation it
+carries) and below a refusal; in a live break-glass window the window decides, as for every controller. The assessment carries the
+Application (`<namespace>/<name>`) and the revision and its detail names both. Its outcome is `cleared`, so the coverage is
+`authorized-and-verified`, tier 0, with confidence `gitops`: see **Classify**.
+
 **Classify** maps the outcome to a coverage state and a tier (`classify`): cleared is `authorized-and-verified`, tier 0;
 observed-not-attributed 1; attempted-refused 1; out-of-band and break-glass 2. Monitoring protection is tier 3 and the
-loader refuses a rule set that lowers it.
+loader refuses a rule set that lowers it. `platform-gitops` is a `cleared` outcome. The coverage states are fixed by the evidence
+schema ([evidence.md](evidence.md)) and none says "attributed to a change process other than a clearance"; the others are wrong:
+`observed-not-attributed` says the write could not be tied to anything (it is tied to an Application and a revision), and
+`out-of-band-detected` is an exception. So it is `authorized-and-verified` with the honest limit carried in the record: the
+authorization is the cluster repository's own review and merge at the named revision, not a Clearance grant, and what the
+pipeline verified is the attribution (the API server's authenticated identity, the object's tracking annotation, an Application the
+collector watches), not the review. The attribution's `signal` (`platform-gitops`) and confidence (`gitops`) let a reader tell it from
+a grant's clearance. A deployment that wants a different state for it has to add one to the evidence schema first.
 
 **Correlate** collapses bursts into a `Transaction`. An event joins an open transaction of its scope, within
 `correlate.window` (30s) of its last event, when it shares the execution context (the grant a record quotes, the AWS
@@ -197,7 +234,9 @@ reports the pipeline's per-rule counters in the `noise-filtered` check of that h
 which the packet sums over its window into `packet.Params.Filtered` (the *"filtered: N events under rule X"* line). The
 AWS collector ([observe-aws.md](observe-aws.md), O-4) does the same for CloudTrail.
 
-`Lookups` has one optional extension, `ObjectGrants`: an event with no object (a Secret at Metadata, a delete) carries no
+`Lookups` has two optional extensions. `ArgoApplications` backs `platform-gitops` (the collector indexes the Argo CD
+Applications it watches: their revision and their `status.resources`); without it nothing is attributed to GitOps.
+The other, `ObjectGrants`: an event with no object (a Secret at Metadata, a delete) carries no
 grant annotation, so for Argo CD's controller only the pipeline asks which active grant lists that namespace, kind and name,
 and the answer feeds the same facts the annotation would, so the event reaches `grant-annotation.no-hash`
 (observed-not-attributed) and not `argo-controller.no-grant`. Anyone else is attributed as before.

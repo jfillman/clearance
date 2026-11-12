@@ -387,6 +387,13 @@ func (c *Collector) RunWatches(ctx context.Context) {
 	wg.Wait()
 }
 
+// noteApplication feeds the lookups' Argo CD Application index (platform-gitops attribution) from the Application watch.
+func (c *Collector) noteApplication(kind, typ string, o map[string]any) {
+	if kind == "Application" && c.d.Lookups != nil {
+		c.d.Lookups.PutApplication(typ, o)
+	}
+}
+
 func (c *Collector) watchLoop(ctx context.Context, w WatchSpec, ns string) {
 	key := w.Resource + "/" + ns
 	path := w.path(ns)
@@ -401,6 +408,7 @@ func (c *Collector) watchLoop(ctx context.Context, w WatchSpec, ns string) {
 		}
 		for _, o := range items {
 			c.cache.Put(w.Kind, "ADDED", o, c.cfg.Now(), true)
+			c.noteApplication(w.Kind, "ADDED", o)
 		}
 		c.mu.Lock()
 		c.watchOK[key] = c.cfg.Now()
@@ -417,6 +425,7 @@ func (c *Collector) watchLoop(ctx context.Context, w WatchSpec, ns string) {
 				if typ == "BOOKMARK" {
 					return
 				}
+				c.noteApplication(w.Kind, typ, o)
 				if ch, ok := c.cache.Put(w.Kind, typ, o, c.cfg.Now(), false); ok {
 					c.gaps.Watched(ch)
 				}

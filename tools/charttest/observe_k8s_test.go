@@ -180,7 +180,7 @@ func TestObserveK8sChartRulesLoadInThePipeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the rendered rule set does not load: %v\n%s", err, doc)
 	}
-	if rs.Ref.Name != "observe-hangar" || rs.Ref.Version != "2026.11.5" {
+	if rs.Ref.Name != "observe-hangar" || rs.Ref.Version != "2026.11.6" {
 		t.Errorf("%+v", rs.Ref)
 	}
 	if !strings.Contains(doc, "hangar-prod") || !strings.Contains(doc, "app-gate-api-prod") || !strings.Contains(doc, "argocd-apps") {
@@ -264,14 +264,15 @@ func TestObserveK8sChartNoiseRulesAreExact(t *testing.T) {
 		code                                         int
 		obj                                          map[string]any
 		want                                         string // the noise rule, or "" for an assessment
+		oos                                          bool   // not a change (a controller's status write no rule names): counted, not assessed
 	}
 	composite := map[string]any{"crossplane.io/composite": "gate-api"}
 	cases := []c{
 		{name: "calico pod status", user: calico, verb: "patch", resource: "pods", objName: "web-1", sub: "status", want: "calico-cni-pod-status"},
 		{name: "calico pod status, kube-system", user: calico, verb: "patch", resource: "pods", objName: "web-1", sub: "status", ns: "kube-system", want: "calico-cni-pod-status"},
-		{name: "calico update", user: calico, verb: "update", resource: "pods", objName: "web-1", sub: "status"},
+		{name: "calico update", user: calico, verb: "update", resource: "pods", objName: "web-1", sub: "status", oos: true},
 		{name: "calico pod body", user: calico, verb: "patch", resource: "pods", objName: "web-1"},
-		{name: "calico configmap", user: calico, verb: "patch", resource: "configmaps", objName: "x", sub: "status"},
+		{name: "calico configmap", user: calico, verb: "patch", resource: "configmaps", objName: "x", sub: "status", oos: true},
 		{name: "calico refused", user: calico, verb: "patch", resource: "pods", objName: "web-1", sub: "status", code: 409},
 		{name: "person patching pod status", user: "dana@example.com", verb: "patch", resource: "pods", objName: "web-1", sub: "status"},
 
@@ -296,18 +297,23 @@ func TestObserveK8sChartNoiseRulesAreExact(t *testing.T) {
 
 		{name: "disruption controller PDB status", user: disrupt, verb: "update", resource: "poddisruptionbudgets", objName: "coredns", sub: "status", ns: "kube-system", want: "disruption-controller-status"},
 		{name: "disruption controller PDB body", user: disrupt, verb: "update", resource: "poddisruptionbudgets", objName: "coredns", ns: "kube-system"},
-		{name: "disruption controller patch", user: disrupt, verb: "patch", resource: "poddisruptionbudgets", objName: "coredns", sub: "status", ns: "kube-system"},
+		{name: "disruption controller patch", user: disrupt, verb: "patch", resource: "poddisruptionbudgets", objName: "coredns", sub: "status", ns: "kube-system", oos: true},
 		{name: "person writes PDB status", user: "dana@example.com", verb: "update", resource: "poddisruptionbudgets", objName: "coredns", sub: "status", ns: "kube-system"},
 
 		{name: "ESO ExternalSecret status", user: eso, verb: "update", resource: "externalsecrets", objName: "registry-credentials", sub: "status", want: "external-secrets-status"},
 		{name: "ESO ExternalSecret status, argocd namespace", user: eso, verb: "update", resource: "externalsecrets", objName: "x", sub: "status", ns: "argocd-apps", want: "external-secrets-status"},
 		{name: "ESO ExternalSecret body", user: eso, verb: "update", resource: "externalsecrets", objName: "registry-credentials"},
-		{name: "ESO writes a Secret", user: eso, verb: "update", resource: "secrets", objName: "registry-credentials"},
+		{name: "ESO refreshes a Secret", user: eso, verb: "update", resource: "secrets", objName: "registry-credentials", want: "external-secrets-owned-secrets"},
+		{name: "ESO creates a Secret, argocd namespace", user: eso, verb: "create", resource: "secrets", objName: "x", ns: "argocd-apps", want: "external-secrets-owned-secrets"},
+		{name: "ESO deletes a Secret", user: eso, verb: "delete", resource: "secrets", objName: "registry-credentials"},
+		{name: "ESO Secret refused", user: eso, verb: "update", resource: "secrets", objName: "registry-credentials", code: 409},
+		{name: "person writes the Secret ESO owns", user: "dana@example.com", verb: "update", resource: "secrets", objName: "registry-credentials"},
+		{name: "another SA writes a Secret", user: "system:serviceaccount:default:default", verb: "update", resource: "secrets", objName: "registry-credentials"},
 		{name: "ESO ExternalSecret status refused", user: eso, verb: "update", resource: "externalsecrets", objName: "x", sub: "status", code: 409},
 
 		{name: "job controller, the wait Job", user: jobCtl, verb: "update", resource: "jobs", objName: "clearance-awaiting-approval", sub: "status", want: "job-controller-wait-job"},
 		{name: "job controller, the wait Job's pod", user: jobCtl, verb: "create", resource: "pods", objName: "clearance-awaiting-approval-mjd76", want: "job-controller-wait-job"},
-		{name: "job controller, another Job", user: jobCtl, verb: "update", resource: "jobs", objName: "migrate", sub: "status"},
+		{name: "job controller, another Job", user: jobCtl, verb: "update", resource: "jobs", objName: "migrate", sub: "status", oos: true},
 		{name: "job controller, a name that only starts alike", user: jobCtl, verb: "create", resource: "pods", objName: "clearance-awaiting-approvals"},
 	}
 	for i, tc := range cases {
@@ -340,6 +346,12 @@ func TestObserveK8sChartNoiseRulesAreExact(t *testing.T) {
 				}
 				return
 			}
+			if tc.oos {
+				if disp != pipeline.OutOfScope {
+					t.Fatalf("got %v %q, want counted as out of scope: a controller's status write is not a change", disp, rule)
+				}
+				return
+			}
 			if disp != pipeline.Assessed {
 				t.Fatalf("got %v %q, want an assessment: this shape is not noise", disp, rule)
 			}
@@ -347,9 +359,84 @@ func TestObserveK8sChartNoiseRulesAreExact(t *testing.T) {
 	}
 	// every new rule says why, and loads as exact (no pattern, no group)
 	for _, name := range []string{"calico-cni-pod-status", "clearance-argocd-agent-grants", "crossplane-composite-resources", "crossplane-composed-resources",
-		"disruption-controller-status", "external-secrets-status", "job-controller-wait-job"} {
+		"disruption-controller-status", "external-secrets-status", "external-secrets-owned-secrets", "job-controller-wait-job"} {
 		if pipeline.New(rs, nil, vocab.Default()).NoiseWhy(name) == "" {
 			t.Errorf("rule %s is missing or has no why", name)
 		}
+	}
+}
+
+// Platform GitOps (G-ARGO-10a) and the deployment's own noise, as Hangar sets them: the instance's subject is in the rule set,
+// its Applications' namespace is watched and readable, and an extra noise rule is held to the same validator as the chart's own.
+func TestObserveK8sChartPlatformGitopsAndExtraNoise(t *testing.T) {
+	const platform = "system:serviceaccount:argocd:argocd-application-controller"
+	vals := map[string]any{"rules": map[string]any{
+		"platformGitops": map[string]any{"subjects": []string{platform}, "namespaces": []string{"argocd"}},
+		"extraNoise": []any{map[string]any{
+			"name": "notification-prune", "provider": "kubernetes",
+			"why":      "the CronJob removing the notified.notifications.argoproj.io annotation from Rollouts",
+			"identity": map[string]any{"subject": "system:serviceaccount:argo-rollouts:notification-prune"},
+			"shape":    map[string]any{"kinds": []string{"Rollout"}, "verbs": []string{"patch"}, "namespaces": []string{"app-gate-api-prod"}}}}}}
+	vf := filepath.Join(t.TempDir(), "v.yaml")
+	b, _ := yaml.Marshal(vals)
+	if err := os.WriteFile(vf, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	objs := renderObserve(t, "-f", vf)
+	doc, _ := get(find(objs, "ConfigMap", "clearance-observe-k8s-rules"), "data", "observe-rules.yaml").(string)
+	rs, err := pipeline.Load([]byte(doc))
+	if err != nil {
+		t.Fatalf("%v\n%s", err, doc)
+	}
+	if !strings.Contains(doc, `platform_gitops: ["`+platform+`"]`) {
+		t.Errorf("the platform instance is not in identities:\n%s", doc)
+	}
+	args := strings.Join(toStrings(get(container(t, find(objs, "Deployment", "clearance-observe-k8s")), "args")), " ")
+	if !strings.Contains(args, "--watch-namespaces=app-gate-api-prod,argocd-apps,argocd ") {
+		t.Errorf("the platform Applications' namespace is not watched: %s", args)
+	}
+	var role obj
+	for _, o := range objs {
+		if o["kind"] == "Role" && get(o, "metadata", "namespace") == "argocd" {
+			role = o
+		}
+	}
+	if role == nil {
+		t.Fatal("no watch Role in the platform instance's namespace")
+	}
+	// the extra rule filters exactly its shape
+	ev := func(user, verb, resource string) pipeline.Disposition {
+		m := map[string]any{"auditID": "e1", "stage": "ResponseComplete", "verb": verb, "level": "Metadata", "stageTimestamp": "2026-11-10T21:12:23Z",
+			"user":           map[string]any{"username": user},
+			"objectRef":      map[string]any{"resource": resource, "namespace": "app-gate-api-prod", "name": "web"},
+			"responseStatus": map[string]any{"code": 200}}
+		raw, _ := json.Marshal(m)
+		_, disp, _, err := pipeline.New(rs, nil, vocab.Default()).Process(pipeline.RawEvent{Provider: pipeline.Kubernetes, Scope: "hangar-prod", Raw: raw})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return disp
+	}
+	const pruner = "system:serviceaccount:argo-rollouts:notification-prune"
+	if d := ev(pruner, "patch", "rollouts"); d != pipeline.Filtered {
+		t.Errorf("the pruner's patch of a Rollout: %v", d)
+	}
+	for name, d := range map[string]pipeline.Disposition{"delete": ev(pruner, "delete", "rollouts"), "another kind": ev(pruner, "patch", "deployments"),
+		"another identity": ev("system:serviceaccount:argo-rollouts:argo-rollouts-x", "patch", "rollouts")} {
+		if d != pipeline.Assessed {
+			t.Errorf("%s: %v, want assessed", name, d)
+		}
+	}
+	// a rule wider than the validator allows fails the render's load, not silently
+	vals["rules"].(map[string]any)["extraNoise"] = []any{map[string]any{"name": "wide", "provider": "kubernetes", "why": "x",
+		"identity": map[string]any{"subject": "system:serviceaccount:argo-rollouts:*"},
+		"shape":    map[string]any{"kinds": []string{"Rollout"}, "verbs": []string{"patch"}}}}
+	b, _ = yaml.Marshal(vals)
+	if err := os.WriteFile(vf, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	doc, _ = get(find(renderObserve(t, "-f", vf), "ConfigMap", "clearance-observe-k8s-rules"), "data", "observe-rules.yaml").(string)
+	if _, err := pipeline.Load([]byte(doc)); !errors.Is(err, pipeline.ErrBlanketNoise) {
+		t.Errorf("a pattern identity in extraNoise must be refused: %v", err)
 	}
 }

@@ -8,6 +8,8 @@ cost_limit: 10000
 
 identities:
   argo_controller: [{{ .Values.rules.argoControllerSubject | quote }}]
+  # Application controllers of Argo CD instances that sync the cluster repository itself (platform GitOps, G-ARGO-10a).
+  platform_gitops: [{{ range $i, $s := .Values.rules.platformGitops.subjects }}{{ if $i }}, {{ end }}{{ $s | quote }}{{ end }}]
   federated_prefix: [{{ range $i, $p := .Values.rules.federatedPrefixes }}{{ if $i }}, {{ end }}{{ $p | quote }}{{ end }}]
   task_id_extra_key: task_id
   apply_roles: []
@@ -17,6 +19,7 @@ annotations:
   grant: {{ .Values.rules.annotations.grant }}
   rendered: {{ .Values.rules.annotations.rendered }}
   strip: [{{ join ", " .Values.rules.annotations.strip }}]
+  tracking_id: {{ .Values.rules.annotations.trackingID }}
   # What a controller keeps on an object it manages is not a rendered field: hashing ignores it (an entry ending in "/" is a prefix).
   controller_owned: [{{ range $i, $a := .Values.rules.annotations.controllerOwned }}{{ if $i }}, {{ end }}{{ $a | quote }}{{ end }}]
   controller_labels: [{{ range $i, $a := .Values.rules.annotations.controllerLabels }}{{ if $i }}, {{ end }}{{ $a | quote }}{{ end }}]
@@ -144,6 +147,11 @@ noise:
     identity: {subject: {{ .Values.rules.externalSecretsSubject | quote }}}
     # Externalsecret is what a Metadata-level audit event yields; ExternalSecret is the real kind.
     shape: {kinds: [ExternalSecret, Externalsecret], verbs: [update], subresources: [status], namespaces: [{{ range $i, $n := $gov }}{{ if $i }}, {{ end }}{{ $n | quote }}{{ end }}]}
+  - name: external-secrets-owned-secrets
+    provider: kubernetes
+    why: the External Secrets controller refreshing the Secrets its ExternalSecrets own (create on first sync, update and patch on every refresh). A Secret is recorded at Metadata, so its owner reference is not visible to a rule; the identity, the kind, the verbs and the governed namespaces are. A change to the ExternalSecret itself is not covered.
+    identity: {subject: {{ .Values.rules.externalSecretsSubject | quote }}}
+    shape: {kinds: [Secret], verbs: [create, update, patch], namespaces: [{{ range $i, $n := $gov }}{{ if $i }}, {{ end }}{{ $n | quote }}{{ end }}]}
   - name: job-controller-wait-job
     provider: kubernetes
     why: the Job controller running the PreSync wait Job the Argo CD plugin injects while a change is held for people (clearance-awaiting-approval, and its pod); it is not a workload and carries no grant.
@@ -153,6 +161,12 @@ noise:
       verbs: [create, update, patch, delete]
       namespaces: [{{ range $i, $n := $gov }}{{ if $i }}, {{ end }}{{ $n | quote }}{{ end }}]
       when: 'event.name == "clearance-awaiting-approval" || event.name.startsWith("clearance-awaiting-approval-")'
+{{- with .Values.rules.extraNoise }}
+
+  # The deployment's own noise rules (values rules.extraNoise): each is an exact identity and the exact shape it writes, and
+  # the loader holds each to the same validator as the rules above.
+{{ toYaml . | indent 2 }}
+{{- end }}
 
 monitoring:
   kubernetes: [ValidatingWebhookConfiguration, MutatingWebhookConfiguration]

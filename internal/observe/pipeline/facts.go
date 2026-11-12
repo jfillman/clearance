@@ -63,6 +63,8 @@ type ObjectGrants interface {
 type facts struct {
 	m     map[string]any
 	grant string
+	// gitops is the Application a platform instance's write is attributed to (SignalPlatformGitops).
+	gitops ArgoApp
 	// derived is the grant a write is attributed to through the object's listing or its owner chain (SignalOwnerGrant,
 	// SignalListedGrant), which is what the assessment names when one of those decides.
 	derived string
@@ -116,12 +118,7 @@ func (p *Pipeline) kubeFacts(e *Event) facts {
 	f["vap_denial"] = vap && !e.Succeeded
 	f["refused"] = !e.Succeeded
 	f["argo_controller"] = argo
-	fed := false
-	for _, pre := range ids.FederatedPrefix {
-		if pre != "" && strings.HasPrefix(e.Subject, pre) {
-			fed = true
-		}
-	}
+	fed := p.federated(e.Subject)
 	f["federated"] = fed
 	f["has_task_id"] = e.TaskID != ""
 	f["impersonated"] = e.Impersonated != ""
@@ -133,8 +130,11 @@ func (p *Pipeline) kubeFacts(e *Event) facts {
 	// A controller is a service account or a system identity acting as itself: no kubectl client, no impersonation, no
 	// federated agent. Derived objects (owner_grant) and status of listed objects (listed_grant) are attributed only
 	// to one, and only when nothing the event says is about a rendered field: see the rules in default.yaml.
-	controller := (e.Type == "serviceaccount" || e.Type == "system") && !f["kubectl"].(bool) && !f["impersonated"].(bool) && !fed
+	controller := p.isController(e)
 	f["controller"] = controller
+	gitops, gitopsOK := p.platformGitops(e, controller)
+	f["platform_gitops"] = gitopsOK
+	f["gitops_app"], f["gitops_revision"] = gitops.Namespace+"/"+gitops.Name, gitops.Revision
 	listed, owner := "", ""
 	if controller && e.Succeeded {
 		listed, owner = p.derivedGrants(e)
@@ -149,7 +149,7 @@ func (p *Pipeline) kubeFacts(e *Event) facts {
 	if derived == "" {
 		derived = owner
 	}
-	return facts{f, grant, derived}
+	return facts{m: f, grant: grant, derived: derived, gitops: gitops}
 }
 
 func (p *Pipeline) awsFacts(e *Event) facts {
@@ -222,7 +222,7 @@ func (p *Pipeline) awsFacts(e *Event) facts {
 		grant = g
 	}
 	f["grant"] = grant
-	return facts{f, grant, ""}
+	return facts{m: f, grant: grant}
 }
 
 // runID is the pipeline run a source identity quotes: "clearance-run/<id>" or "run=<id>".

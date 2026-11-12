@@ -55,6 +55,12 @@ attribute:
       outcome: break-glass
       severity: medium
       detail: written inside a live break-glass window
+    - signal: platform-gitops
+      when: facts.platform_gitops
+      outcome: cleared
+      severity: info
+      confidence: gitops
+      detail: a platform Argo CD instance's application controller wrote an object whose tracking annotation names an Application it syncs (for an object the audit event does not carry, a Secret or a delete, the Application's own list of the resources it manages), so it is that Application's sync of the cluster repository at the revision named, not a change made outside it
     - signal: grant-annotation.no-hash
       when: facts.grant_known && !facts.hash_match && !facts.hash_differs && facts.argo_controller
       outcome: observed-not-attributed

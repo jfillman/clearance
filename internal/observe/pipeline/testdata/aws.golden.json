@@ -1,8 +1,8 @@
 {
   "rule_set": {
     "name": "observe-default",
-    "version": "2026.11.1",
-    "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+    "version": "2026.11.2",
+    "digest": "6656bf63f6d22de17fdba2bd4ac7378f057c1ed292b70ac6b830f33e9cced5eb"
   },
   "events": 18,
   "not_writes": 2,
@@ -31,8 +31,8 @@
       "grant": "clr_aws_001",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "6656bf63f6d22de17fdba2bd4ac7378f057c1ed292b70ac6b830f33e9cced5eb"
       }
     },
     {
@@ -55,8 +55,8 @@
       "grant": "clr_aws_001",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "6656bf63f6d22de17fdba2bd4ac7378f057c1ed292b70ac6b830f33e9cced5eb"
       }
     },
     {
@@ -78,8 +78,8 @@
       "grant": "clr_aws_001",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "6656bf63f6d22de17fdba2bd4ac7378f057c1ed292b70ac6b830f33e9cced5eb"
       }
     },
     {
@@ -101,8 +101,8 @@
       "grant": "clr_aws_002",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "6656bf63f6d22de17fdba2bd4ac7378f057c1ed292b70ac6b830f33e9cced5eb"
       }
     },
     {
@@ -124,8 +124,8 @@
       "grant": "clr_aws_002",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "6656bf63f6d22de17fdba2bd4ac7378f057c1ed292b70ac6b830f33e9cced5eb"
       }
     },
     {
@@ -147,8 +147,8 @@
       "grant": "clr_aws_002",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "6656bf63f6d22de17fdba2bd4ac7378f057c1ed292b70ac6b830f33e9cced5eb"
       }
     },
     {
@@ -168,8 +168,8 @@
       "detail": "the apply role claims a cleared plan, but this resource and action are not in its change set",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "6656bf63f6d22de17fdba2bd4ac7378f057c1ed292b70ac6b830f33e9cced5eb"
       }
     },
     {
@@ -191,8 +191,8 @@
       "grant": "clr_aws_003",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "6656bf63f6d22de17fdba2bd4ac7378f057c1ed292b70ac6b830f33e9cced5eb"
       }
     },
     {
@@ -214,8 +214,8 @@
       "grant": "clr_aws_004",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "6656bf63f6d22de17fdba2bd4ac7378f057c1ed292b70ac6b830f33e9cced5eb"
       }
     },
     {
@@ -236,8 +236,8 @@
       "detail": "an SSO admin role changed the account with no grant; the actor is the source identity the record quotes",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "6656bf63f6d22de17fdba2bd4ac7378f057c1ed292b70ac6b830f33e9cced5eb"
       }
     },
     {
@@ -257,8 +257,8 @@
       "detail": "no grant, attestation, run or plan ties this call to a clearance",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "6656bf63f6d22de17fdba2bd4ac7378f057c1ed292b70ac6b830f33e9cced5eb"
       }
     },
     {
@@ -278,8 +278,8 @@
       "detail": "the root user acted; Root is always an exception",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "6656bf63f6d22de17fdba2bd4ac7378f057c1ed292b70ac6b830f33e9cced5eb"
       }
     },
     {
@@ -299,8 +299,8 @@
       "detail": "the record carries an errorCode; the call was refused and nothing landed",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "6656bf63f6d22de17fdba2bd4ac7378f057c1ed292b70ac6b830f33e9cced5eb"
       }
     },
     {
@@ -321,8 +321,8 @@
       "monitoring": true,
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "6656bf63f6d22de17fdba2bd4ac7378f057c1ed292b70ac6b830f33e9cced5eb"
       }
     },
     {
@@ -343,8 +343,8 @@
       "monitoring": true,
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "6656bf63f6d22de17fdba2bd4ac7378f057c1ed292b70ac6b830f33e9cced5eb"
       }
     }
   ],
@@ -609,8 +609,8 @@
       ],
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "6656bf63f6d22de17fdba2bd4ac7378f057c1ed292b70ac6b830f33e9cced5eb"
       }
     },
     {
@@ -635,8 +635,8 @@
       ],
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "6656bf63f6d22de17fdba2bd4ac7378f057c1ed292b70ac6b830f33e9cced5eb"
       }
     },
     {
@@ -661,8 +661,8 @@
       ],
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "6656bf63f6d22de17fdba2bd4ac7378f057c1ed292b70ac6b830f33e9cced5eb"
       }
     },
     {
@@ -687,8 +687,8 @@
       ],
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "6656bf63f6d22de17fdba2bd4ac7378f057c1ed292b70ac6b830f33e9cced5eb"
       }
     },
     {
@@ -713,8 +713,8 @@
       ],
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "6656bf63f6d22de17fdba2bd4ac7378f057c1ed292b70ac6b830f33e9cced5eb"
       }
     },
     {
@@ -739,8 +739,8 @@
       ],
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "6656bf63f6d22de17fdba2bd4ac7378f057c1ed292b70ac6b830f33e9cced5eb"
       }
     },
     {
@@ -765,8 +765,8 @@
       ],
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "6656bf63f6d22de17fdba2bd4ac7378f057c1ed292b70ac6b830f33e9cced5eb"
       }
     }
   ],
@@ -791,8 +791,8 @@
         "monitoring": true,
         "rule_set": {
           "name": "observe-default",
-          "version": "2026.11.1",
-          "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+          "version": "2026.11.2",
+          "digest": "6656bf63f6d22de17fdba2bd4ac7378f057c1ed292b70ac6b830f33e9cced5eb"
         }
       },
       "health": "degraded",
@@ -819,8 +819,8 @@
         "monitoring": true,
         "rule_set": {
           "name": "observe-default",
-          "version": "2026.11.1",
-          "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+          "version": "2026.11.2",
+          "digest": "6656bf63f6d22de17fdba2bd4ac7378f057c1ed292b70ac6b830f33e9cced5eb"
         }
       },
       "health": "blind",

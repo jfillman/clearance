@@ -102,7 +102,7 @@ watch:
 # complete document in `override` replaces it. Its name and version are in every assessment.
 rules:
   name: observe-hangar
-  version: "2026.11.5"
+  version: "2026.11.6"
   override: ""
   # Argo CD's application controller, as the API server sees it.
   argoControllerSubject: system:serviceaccount:argocd:argocd-application-controller
@@ -113,6 +113,8 @@ rules:
     grant: clearance.hangar.io/grant
     rendered: clearance.hangar.io/rendered
     strip: [clearance.hangar.io/tree, clearance.hangar.io/release, argocd.argoproj.io/tracking-id]
+    # Argo CD's resource-tracking annotation (platform-gitops reads it; the "annotation" and "annotation+label" methods write it).
+    trackingID: argocd.argoproj.io/tracking-id
     # What a controller keeps on an object it manages is not a rendered field, so hashing ignores it: a controller's
     # bookkeeping on a granted object (Argo Rollouts' revision, a notification controller's sent-log) does not make it differ
     # from the grant's render. An entry ending in "/" is a prefix.
@@ -124,6 +126,20 @@ rules:
   governedKinds: [ValidatingWebhookConfiguration, MutatingWebhookConfiguration, ValidatingAdmissionPolicy,
                   ValidatingAdmissionPolicyBinding, ClusterRole, ClusterRoleBinding, Namespace, CustomResourceDefinition]
   hpaNamespaces: []
+  # Argo CD instances that sync the cluster repository itself (platform GitOps), as opposed to the gated instance above
+  # (argoControllerSubject: its writes are cleared by grants). A write by exactly one of these subjects to an object whose
+  # tracking annotation names an Application it syncs is attributed to that Application and its revision
+  # (signal platform-gitops); an untracked object stays out-of-band. namespaces: where those instances keep their
+  # Applications; they are watched (the Applications' revision and resource list are what attribution reads). A subject is
+  # one exact service account, never in argoControllerSubject.
+  platformGitops:
+    subjects: []
+    # e.g. subjects: [system:serviceaccount:argocd:argocd-application-controller], namespaces: [argocd]
+    namespaces: []
+  # Further noise rules of the deployment, each {name, provider: kubernetes, why, identity: {subject}, shape: {kinds, verbs,
+  # namespaces, subresources, when}}: one exact identity and the exact shape it writes, held to the loader's validator
+  # (anything wider fails the load). For a routine writer only this cluster has.
+  extraNoise: []
   # Routine writers with exact noise rules (observe-rules.yaml). Subjects as the API server sees them.
   grantAgentSubject: system:serviceaccount:clearance-system:clearance-argocd-agent
   externalSecretsSubject: system:serviceaccount:external-secrets:external-secrets

@@ -78,7 +78,8 @@ type doc struct {
 
 // Identities are the named sets the attribution facts are built from.
 type Identities struct {
-	ArgoController   []string `yaml:"argo_controller"`   // Kubernetes subjects of Argo CD's controller
+	ArgoController   []string `yaml:"argo_controller"`   // Kubernetes subjects of Argo CD's controller (the gated instance: its writes are cleared by grants)
+	PlatformGitops   []string `yaml:"platform_gitops"`   // Kubernetes subjects of the application controllers of Argo CD instances that sync the cluster repo (G-ARGO-10a)
 	FederatedPrefix  []string `yaml:"federated_prefix"`  // Kubernetes subject prefixes of federated identities
 	ApplyRoles       []string `yaml:"apply_roles"`       // AWS session-issuer ARNs of the apply role(s)
 	SSOAdminRoles    []string `yaml:"sso_admin_roles"`   // AWS session-issuer ARN globs of the SSO admin role(s)
@@ -91,6 +92,9 @@ type AnnotationNames struct {
 	Grant    string   `yaml:"grant"`
 	Rendered string   `yaml:"rendered"`
 	Strip    []string `yaml:"strip"` // other annotations hashing ignores (the gate's tree and release, Argo's tracking id)
+	// TrackingID is the annotation Argo CD puts on every object it applies, naming the Application (default
+	// argocd.argoproj.io/tracking-id; the "annotation" and "annotation+label" tracking methods write it).
+	TrackingID string `yaml:"tracking_id"`
 	// ControllerOwned are the annotations a controller keeps on an object it manages (an entry ending in "/" is a prefix),
 	// and ControllerLabels the labels: hashing ignores them, so a controller's bookkeeping on a granted object does not
 	// make the object differ from what the grant rendered. Never the fields a grant renders.
@@ -284,6 +288,12 @@ func Load(b []byte) (*RuleSet, error) {
 	if rs.ann.Grant == "" || rs.ann.Rendered == "" {
 		return nil, errors.New("observe rules: annotations.grant and annotations.rendered name the gate's annotations")
 	}
+	if rs.ann.TrackingID == "" {
+		rs.ann.TrackingID = DefaultTrackingID
+	}
+	if err := validatePlatformGitops(rs.ids); err != nil {
+		return nil, err
+	}
 	if rs.ids.KubectlUserAgent == "" {
 		rs.ids.KubectlUserAgent = "kubectl"
 	}
@@ -307,6 +317,28 @@ func Load(b []byte) (*RuleSet, error) {
 		return nil, err
 	}
 	return rs, rs.loadClassify()
+}
+
+// DefaultTrackingID is Argo CD's resource-tracking annotation.
+const DefaultTrackingID = "argocd.argoproj.io/tracking-id"
+
+// validatePlatformGitops refuses an identity list that is not exact subjects, or that names a subject the gated
+// instance also uses: one controller cannot be both "its writes are cleared by grants" and "its writes are GitOps".
+func validatePlatformGitops(ids Identities) error {
+	for _, s := range ids.PlatformGitops {
+		switch {
+		case s == "" || strings.ContainsAny(s, "*?[]"):
+			return fmt.Errorf("observe rules: identities.platform_gitops %q: a subject is exact, never a pattern", s)
+		case strings.HasPrefix(s, "system:serviceaccounts") || s == "system:serviceaccount" || s == "system:authenticated" ||
+			s == "system:unauthenticated" || strings.HasPrefix(s, "system:masters"):
+			return fmt.Errorf("observe rules: identities.platform_gitops %q is a group, not an identity", s)
+		case !strings.HasPrefix(s, "system:serviceaccount:") || len(strings.Split(s, ":")) != 4:
+			return fmt.Errorf("observe rules: identities.platform_gitops %q is not one service account (system:serviceaccount:<namespace>:<name>)", s)
+		case slices.Contains(ids.ArgoController, s):
+			return fmt.Errorf("observe rules: identities.platform_gitops %q is also in identities.argo_controller: the gated instance's writes are cleared by grants, not by GitOps", s)
+		}
+	}
+	return nil
 }
 
 func duration(s string, def time.Duration) (time.Duration, error) {

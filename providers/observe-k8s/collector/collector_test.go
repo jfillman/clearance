@@ -248,7 +248,7 @@ func TestFilteredCountersArePersistedReportedAndCleared(t *testing.T) {
 			Count int
 		}
 	}
-	if err := json.Unmarshal([]byte(detail), &d); err != nil || d.Schema != FilteredSchema || len(d.Filtered) != 1 || d.Filtered[0].Rule != "hpa-scale" || d.Filtered[0].Count != 3 || d.RuleSet != "observe-default@2026.11.1" {
+	if err := json.Unmarshal([]byte(detail), &d); err != nil || d.Schema != FilteredSchema || len(d.Filtered) != 1 || d.Filtered[0].Rule != "hpa-scale" || d.Filtered[0].Count != 3 || d.RuleSet != "observe-default@2026.11.2" {
 		t.Fatalf("detail %s (%v)", detail, err)
 	}
 	if c := r.c.Counters(); c.Events != 0 || len(c.Filtered) != 0 {

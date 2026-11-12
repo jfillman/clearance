@@ -22,9 +22,10 @@ const (
 
 // Signals the pipeline's own code recognises by name (the rules that use them are in the bundle).
 const (
-	SignalUnknownGrant = "grant-annotation.unknown"
-	SignalOwnerGrant   = "owner-grant"
-	SignalListedGrant  = "listed-grant"
+	SignalUnknownGrant   = "grant-annotation.unknown"
+	SignalOwnerGrant     = "owner-grant"
+	SignalListedGrant    = "listed-grant"
+	SignalPlatformGitops = "platform-gitops"
 )
 
 type ownerIndex struct {

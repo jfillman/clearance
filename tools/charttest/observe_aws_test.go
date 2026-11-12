@@ -160,7 +160,7 @@ func TestObserveAWSChartRulesAreTheDefaultsPlusTheValues(t *testing.T) {
 		!reflect.DeepEqual(ids["sso_admin_roles"], []any{"arn:aws:iam::111122223333:role/aws-reserved/sso.amazonaws.com/*AWSReservedSSO_Admin_*"}) {
 		t.Errorf("identities: %v", ids)
 	}
-	if got["name"] != "observe-aws" || got["version"] != "2026.11.5" {
+	if got["name"] != "observe-aws" || got["version"] != "2026.11.6" {
 		t.Errorf("name/version %v %v", got["name"], got["version"])
 	}
 	if n, _ := got["noise"].([]any); len(n) != 0 {

@@ -177,7 +177,8 @@ func TestControllerBookkeepingDoesNotChangeTheRenderedHash(t *testing.T) {
 }
 
 // The status of an object a valid grant lists is not a rendered field, and a controller writing it is not a change; the
-// same write by a person, or a body write with no object to hash, is.
+// same write by a person, or a body write with no object to hash, is. (A controller's status write to an object no grant
+// relates to is not assessed at all: TestStatusAndTokenWritesAreNotChanges.)
 func TestStatusOfAListedObjectIsAttributedToItsGrant(t *testing.T) {
 	rs, lk := derivedFixture(t)
 	for _, c := range []struct {
@@ -189,7 +190,7 @@ func TestStatusOfAListedObjectIsAttributedToItsGrant(t *testing.T) {
 		{"controller status", kev{id: "s1", user: rolloutsSA, verb: "patch", resource: "rollouts", name: "web", sub: "status"}, SignalListedGrant, OutcomeCleared},
 		{"person status", kev{id: "s2", user: "dana@example.com", verb: "patch", resource: "rollouts", name: "web", sub: "status"}, "human.no-grant", OutcomeOutOfBand},
 		{"controller body, no object", kev{id: "s3", user: rolloutsSA, verb: "patch", resource: "rollouts", name: "web"}, "service-account.unknown", OutcomeOutOfBand},
-		{"controller status of an unlisted object", kev{id: "s4", user: rolloutsSA, verb: "patch", resource: "rollouts", name: "other", sub: "status"}, "service-account.unknown", OutcomeOutOfBand},
+		{"person status of an unlisted object", kev{id: "s4", user: "dana@example.com", verb: "patch", resource: "rollouts", name: "other", sub: "status"}, "human.no-grant", OutcomeOutOfBand},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			a, disp, _, err := New(rs, lk, vocab.Default()).Process(c.e.raw())

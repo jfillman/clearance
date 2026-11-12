@@ -40,6 +40,8 @@ type Lookups struct {
 	listed  map[string]string   // "<namespace>/<lower-case kind>/<name>" -> grant id (active grants only)
 	windows []agent.Window
 	at      time.Time
+
+	apps argoApps // the watched Argo CD Applications (pipeline.ArgoApplications)
 }
 
 var (
