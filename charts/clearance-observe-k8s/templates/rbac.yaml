@@ -68,7 +68,7 @@ subjects:
 {{- range .Values.watch.resources }}
 {{- if .namespaced }}{{ $_ := set $nsGroups .group (append (get $nsGroups .group | default list) .resource) }}{{ end }}
 {{- end }}
-{{- range (concat .Values.protectedNamespaces (list .Values.argocd.namespace) | uniq) }}
+{{- range (concat .Values.protectedNamespaces (list .Values.argocd.namespace) .Values.rules.platformGitops.namespaces | uniq) }}
 ---
 # Read and watch the kinds the collector keeps the before-state of. No Secret, no write.
 apiVersion: rbac.authorization.k8s.io/v1

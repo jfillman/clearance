@@ -2,7 +2,8 @@
 // transactions and exceptions out, in six stages.
 //
 //	Normalize  flatten the event, canonicalize the stored object                  (event.go)
-//	Scope      keep writes in governed clusters, namespaces, accounts, kinds; count the rest
+//	Scope      keep writes in governed clusters, namespaces, accounts, kinds; count the rest (and the writes that change nothing:
+//	           a controller's status write, a service account's TokenRequest: see notAChange)
 //	Noise      drop legitimate controller writes: one exact identity paired with the exact shape it may touch
 //	Attribute  tie what survives to an authorization, strongest signal first, per provider
 //	Classify   map the outcome to a coverage state and a tier
@@ -31,28 +32,32 @@ import (
 
 // Assessment is what the pipeline made of one event that survived scope and noise.
 type Assessment struct {
-	EventID    string     `json:"event_id"`
-	Provider   string     `json:"provider"`
-	Scope      string     `json:"scope"`
-	Time       time.Time  `json:"time"`
-	Resource   string     `json:"resource"`
-	Verb       string     `json:"verb"`
-	Succeeded  bool       `json:"succeeded"`
-	Actor      string     `json:"actor"`
-	ActorQuote string     `json:"actor_quoted,omitempty"` // the actor the record quotes (AWS sourceIdentity)
-	Outcome    string     `json:"outcome"`
-	Coverage   string     `json:"coverage"`
-	Tier       int        `json:"tier"`
-	Severity   string     `json:"severity"`
-	Signal     string     `json:"signal"`
-	Confidence string     `json:"confidence,omitempty"`
-	Detail     string     `json:"detail"`
-	Grant      string     `json:"grant,omitempty"`
-	Monitoring bool       `json:"monitoring,omitempty"`
-	Diff       []string   `json:"diff,omitempty"`
-	BeforeHash string     `json:"before_hash,omitempty"`
-	AfterHash  string     `json:"after_hash,omitempty"`
-	RuleSet    RuleSetRef `json:"rule_set"`
+	EventID    string    `json:"event_id"`
+	Provider   string    `json:"provider"`
+	Scope      string    `json:"scope"`
+	Time       time.Time `json:"time"`
+	Resource   string    `json:"resource"`
+	Verb       string    `json:"verb"`
+	Succeeded  bool      `json:"succeeded"`
+	Actor      string    `json:"actor"`
+	ActorQuote string    `json:"actor_quoted,omitempty"` // the actor the record quotes (AWS sourceIdentity)
+	Outcome    string    `json:"outcome"`
+	Coverage   string    `json:"coverage"`
+	Tier       int       `json:"tier"`
+	Severity   string    `json:"severity"`
+	Signal     string    `json:"signal"`
+	Confidence string    `json:"confidence,omitempty"`
+	Detail     string    `json:"detail"`
+	// Application and Revision: the Argo CD Application ("<namespace>/<name>") and the revision a platform-gitops write
+	// is attributed to (the detail names them too).
+	Application string     `json:"application,omitempty"`
+	Revision    string     `json:"revision,omitempty"`
+	Grant       string     `json:"grant,omitempty"`
+	Monitoring  bool       `json:"monitoring,omitempty"`
+	Diff        []string   `json:"diff,omitempty"`
+	BeforeHash  string     `json:"before_hash,omitempty"`
+	AfterHash   string     `json:"after_hash,omitempty"`
+	RuleSet     RuleSetRef `json:"rule_set"`
 
 	ev *Event
 	// added and removed are the change's value diff (see valueDelta); hasDelta says the collector supplied one.
@@ -177,6 +182,13 @@ func (p *Pipeline) Process(raw RawEvent) (*Assessment, Disposition, string, erro
 			p.stats.Filtered[rule]++
 			return nil, Filtered, rule, nil
 		}
+	}
+	// A write that changes no object's desired state (a controller's status write, a service account's TokenRequest) is
+	// counted with the scope's out-of-scope writes, not assessed. After noise: a named rule still claims what it names, and
+	// its count carries its why.
+	if p.notAChange(ev) {
+		p.stats.OutOfScope[ev.Scope]++
+		return nil, OutOfScope, ev.Scope, nil
 	}
 	a, err := p.attribute(ev)
 	if err != nil {
@@ -444,6 +456,10 @@ func (p *Pipeline) attribute(e *Event) (*Assessment, error) {
 	a.Grant = f.grant
 	if f.derived != "" && (a.Signal == SignalOwnerGrant || a.Signal == SignalListedGrant) {
 		a.Grant = f.derived
+	}
+	if a.Signal == SignalPlatformGitops && f.gitops.Name != "" {
+		a.Application, a.Revision = f.gitops.Namespace+"/"+f.gitops.Name, f.gitops.Revision
+		a.Detail += " (Application " + a.Application + ", revision " + a.Revision + ")"
 	}
 	if e.Delta != nil {
 		a.hasDelta = true

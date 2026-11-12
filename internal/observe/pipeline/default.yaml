@@ -3,11 +3,14 @@
 # Every rule is CEL over `event` (the normalized event) and, for attribution, `facts` (what the pipeline looked up).
 schema: clearance.observe-rules/v1
 name: observe-default
-version: "2026.11.1"
+version: "2026.11.2"
 cost_limit: 10000
 
 identities:
   argo_controller: ["system:serviceaccount:argocd:argocd-application-controller"]
+  # Application controllers of Argo CD instances that sync the cluster repository itself (not the gated instance above, whose
+  # writes grants clear). Exact service-account subjects. Empty: no write is attributed to platform GitOps.
+  platform_gitops: []
   federated_prefix: ["oidc:", "federated:"]
   task_id_extra_key: task_id
   apply_roles: ["arn:aws:iam::111122223333:role/clearance-apply"]
@@ -17,6 +20,8 @@ annotations:
   grant: clearance.example.com/grant
   rendered: clearance.example.com/rendered
   strip: [clearance.example.com/tree, clearance.example.com/release, argocd.argoproj.io/tracking-id]
+  # Argo CD's resource-tracking annotation (the "annotation" and "annotation+label" methods); platform-gitops reads it.
+  tracking_id: argocd.argoproj.io/tracking-id
   # What a controller keeps on an object it manages is not a rendered field: hashing ignores it, so Argo Rollouts' revision
   # bookkeeping on a granted Rollout does not make it differ from the grant's render. An entry ending in "/" is a prefix.
   controller_owned: [rollout.argoproj.io/, rollouts.argoproj.io/, deployment.kubernetes.io/, notified.notifications.argoproj.io]
@@ -181,6 +186,11 @@ attribute:
       outcome: break-glass
       severity: medium
       detail: written inside a live break-glass window
+    - signal: platform-gitops
+      when: facts.platform_gitops
+      outcome: observed-not-attributed
+      severity: low
+      detail: a platform Argo CD instance's application controller wrote an object whose tracking annotation names an Application it syncs (for an object the audit event does not carry, a Secret or a delete, the Application's own list of the resources it manages); the source is known, the write is not authorized, because the application is not protected (protect it with the Argo CD gate)
     - signal: grant-annotation.no-hash
       when: facts.grant_known && !facts.hash_match && !facts.hash_differs && facts.argo_controller
       outcome: observed-not-attributed

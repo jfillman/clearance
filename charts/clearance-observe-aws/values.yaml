@@ -69,7 +69,7 @@ driftEvery: 24h
 # replaces it whole.
 ruleset:
   name: observe-aws
-  version: "2026.11.5"
+  version: "2026.11.6"
   # Exact CloudTrail session-issuer ARNs of the gated apply roles (a change made under one, inside a recorded apply window, is attributed).
   applyRoles: []
   # Session-issuer ARN globs of the SSO admin roles (console/CLI people).

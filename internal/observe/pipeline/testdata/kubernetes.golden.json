@@ -1,8 +1,8 @@
 {
   "rule_set": {
     "name": "observe-default",
-    "version": "2026.11.1",
-    "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+    "version": "2026.11.2",
+    "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
   },
   "events": 32,
   "not_writes": 3,
@@ -14,26 +14,26 @@
     {
       "rule": "argo-application-bookkeeping",
       "count": 3,
-      "rule_set": "observe-default@2026.11.1",
+      "rule_set": "observe-default@2026.11.2",
       "why": "Argo CD's controller updating the Application objects it manages (sync status, health, operation state) in its own namespace. It writes no workload; the objects it applies are attributed, not filtered."
     },
     {
       "rule": "cert-manager-secret-rotation",
       "count": 2,
-      "rule_set": "observe-default@2026.11.1",
+      "rule_set": "observe-default@2026.11.2",
       "why": "cert-manager rotating the Secrets of Certificates it owns (the owner reference names a Certificate)."
     },
     {
       "rule": "hpa-scale",
       "count": 2,
-      "rule_set": "observe-default@2026.11.1",
+      "rule_set": "observe-default@2026.11.2",
       "why": "the HorizontalPodAutoscaler setting replicas through the /scale subresource."
     }
   ],
   "filtered_lines": [
-    "filtered: 3 events under rule argo-application-bookkeeping (observe-default@2026.11.1)",
-    "filtered: 2 events under rule cert-manager-secret-rotation (observe-default@2026.11.1)",
-    "filtered: 2 events under rule hpa-scale (observe-default@2026.11.1)"
+    "filtered: 3 events under rule argo-application-bookkeeping (observe-default@2026.11.2)",
+    "filtered: 2 events under rule cert-manager-secret-rotation (observe-default@2026.11.2)",
+    "filtered: 2 events under rule hpa-scale (observe-default@2026.11.2)"
   ],
   "assessments": [
     {
@@ -55,8 +55,8 @@
       "after_hash": "587738f9a52170b362685c3d5a9b35b71ffb4fef1f91a66057d972734d069e50",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -82,8 +82,8 @@
       "after_hash": "286e5a44d12add410140207fcefcd4057d9913862fde4b6c8f844a2d68aa98cb",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -107,8 +107,8 @@
       "after_hash": "a6876de2f31e456c2cca04f30cb3b1706fdd677d60a5cd8165688b62df96fd9f",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -132,8 +132,8 @@
       "after_hash": "78054309744a22d4f736bd50a0660ee42b8da65fc983da2c23f49b12a2bb5627",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -158,8 +158,8 @@
       "after_hash": "82a16fe2533d39940534a400bf5aa237cb8e48910bdfa0ec40741947905187b7",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -184,8 +184,8 @@
       "after_hash": "2f8216de9940b3a27cd6e971b6255e78405f831e25212ccc68c8f200579b95f6",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -209,8 +209,8 @@
       "after_hash": "08029f110cc98f9a06fd4a0651fe5c40ad2ce6e158d5ac08f55233d4aa3defb5",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -234,8 +234,8 @@
       "after_hash": "3041bc99ea481f8b52df1d0e413c54b1754750148138e23117934d447250fe91",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -259,8 +259,8 @@
       "after_hash": "b552d9955f1015e1a8207dfb06562cb7e27dcfcbdc47b9e0a6e9dfdf04e5ecb9",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -282,8 +282,8 @@
       "after_hash": "19f9f3730329296cbbfd9b192669d2d1c7072071cb7c83a791dce2c70d358967",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -308,8 +308,8 @@
       "after_hash": "080029d8a4760bf81c943663375845bdc52002700fddf4caca2a9ca693f4a18c",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -333,8 +333,8 @@
       "after_hash": "aa7eb8487881798b3e3a3a3ffd37fca4833f2ad476cde98d449e489b1ff17be9",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -359,8 +359,8 @@
       "after_hash": "70a0a773719e6c8914d07fe47f537861fa3bf80f1a70ea815426c0b63e235853",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -380,8 +380,8 @@
       "detail": "refused by a ValidatingAdmissionPolicy (the audit annotation names the policy); nothing landed",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -401,8 +401,8 @@
       "detail": "the API server refused the request; nothing landed",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -427,8 +427,8 @@
       "after_hash": "bb214a3a7c45b3e79bd3df89930c69df16ccf970eb981f2e03b86f95028ed36b",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -453,8 +453,8 @@
       "after_hash": "8875895b349fcb48f5ab4d60295e5f008874cc439171239b74529e0f5d6bff7b",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -480,8 +480,8 @@
       "after_hash": "4b5f3112777cee93386339f4b5888c527d5fed23e6b327f5931d0289cf2bc990",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -506,8 +506,8 @@
       "after_hash": "c9c90805d30c8ed55a9a899e48f46dde7c489465982192bc815eb42683459b21",
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     }
   ],
@@ -830,8 +830,8 @@
       ],
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -856,8 +856,8 @@
       ],
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -888,8 +888,8 @@
       ],
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -914,8 +914,8 @@
       ],
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -943,8 +943,8 @@
       ],
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -972,8 +972,8 @@
       ],
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -1010,8 +1010,8 @@
       ],
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -1039,8 +1039,8 @@
       ],
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -1068,8 +1068,8 @@
       ],
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -1097,8 +1097,8 @@
       ],
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -1126,8 +1126,8 @@
       ],
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -1155,8 +1155,8 @@
       ],
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     },
     {
@@ -1184,8 +1184,8 @@
       ],
       "rule_set": {
         "name": "observe-default",
-        "version": "2026.11.1",
-        "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+        "version": "2026.11.2",
+        "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
       }
     }
   ],
@@ -1215,8 +1215,8 @@
         "after_hash": "4b5f3112777cee93386339f4b5888c527d5fed23e6b327f5931d0289cf2bc990",
         "rule_set": {
           "name": "observe-default",
-          "version": "2026.11.1",
-          "digest": "e4761ec66b80b16c5a6466d0ca6b9b7fc795dec5a93acc9dcc5c540f8c59f373"
+          "version": "2026.11.2",
+          "digest": "4471afb399609e326234f4cf103a46a5cb129ba0562ee2b70a88dbce9698d061"
         }
       },
       "health": "blind",

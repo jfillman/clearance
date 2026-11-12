@@ -118,9 +118,49 @@ the resource name and both spellings are listed (`ClearanceGrant` and `Clearance
 | `crossplane-composite-resources` | `rules.crossplaneSubject` | update or patch of `rules.crossplaneCompositeKinds` (default `RolloutWatch`) carrying the `crossplane.io/composite` label |
 | `crossplane-composed-resources` | `rules.crossplaneSubject` | create, update or patch of `rules.crossplaneComposedKinds` (default `ServiceAccount`) owned by one of those composites |
 | `disruption-controller-status` | `kube-system:disruption-controller` | update of the `status` subresource of PodDisruptionBudgets |
-| `external-secrets-status` | `rules.externalSecretsSubject` | update of the `status` subresource of ExternalSecrets (the Secrets it writes are not covered) |
+| `external-secrets-status` | `rules.externalSecretsSubject` | update of the `status` subresource of ExternalSecrets |
+| `external-secrets-owned-secrets` (since 0.41.0) | `rules.externalSecretsSubject` | create, update or patch of `Secret`s in the governed namespaces (see below) |
 | `job-controller-wait-job` | `kube-system:job-controller` | the PreSync wait Job `clearance-awaiting-approval` and its pods |
 | `applicationset-status` (since 0.39.1) | the ApplicationSet controller in `argocd.namespace` | update of the `status` subresource of ApplicationSets |
+
+**Why the ExternalSecret rule is by identity and not by ownership.** The Secrets External Secrets refreshes carry an owner
+reference to their `ExternalSecret`, but a Secret is recorded at Metadata (no object) and the collector never reads one, so the
+owner reference is not visible to a rule (this is also why `cert-manager-secret-rotation`, which asks for a `Certificate` owner,
+only matches when an event carries the Secret's metadata). The rule is therefore the identity, the kind, the verbs and the
+governed namespaces. What stays visible: a person, `kubectl` or any other account writing a Secret, External Secrets deleting
+one, and every change to an `ExternalSecret` itself (its spec is an object of the cluster repository: it is attributed through
+`platform-gitops` when Argo CD applies it). The limit of the rule is that External Secrets writing a Secret it was *told* to write
+by a hostile `ExternalSecret` is not seen as a Secret write; the `ExternalSecret` change is.
+
+**Deployment-specific noise (`rules.extraNoise`, since 0.41.0).** A routine writer that only one cluster has (Hangar's
+`notification-prune` CronJob, which strips Argo Rollouts' `notified.notifications.argoproj.io` annotation from Rollouts) is
+not a chart default: the deployment lists it in `rules.extraNoise`, each entry `{name, provider: kubernetes, why, identity:
+{subject}, shape: {kinds, verbs, namespaces, subresources, when}}`. The loader holds it to the same validator as every rule
+above (an exact subject, exact kinds and verbs, a `why`; anything wider fails the load).
+
+**Not changes (since 0.41.0).** Two kinds of write are counted, not assessed, whoever the controller is: a controller's write to
+the `status` subresource, and a service account's `create` on `serviceaccounts/token` (a TokenRequest). They are counted with the
+scope's `out_of_scope` writes. They are never dropped when the actor is a person, a `kubectl` client, an impersonation or a
+federated agent, when the write was refused, when the kind protects monitoring, or (for a node's token) when the actor is a
+kubelet (`system:node:*`, an exact noise rule per named node); a `status` write to an object a grant lists or owns is still
+attributed to the grant. `scale` and every other subresource are as before. A named noise rule is checked first, so the chart's
+status rules above keep their own counts and `why`.
+
+**Platform GitOps (G-ARGO-10a, since 0.41.0).** A cluster can run two Argo CD instances: the gated one (`argoControllerSubject`)
+applies what Clearance cleared, and a platform one applies the cluster repository (RBAC, ExternalSecrets, the platform's own
+Secrets), for which no grant exists. Name the platform instance's application controller in `rules.platformGitops.subjects` (one
+exact service account; never the gated instance's) and its Applications' namespace in `rules.platformGitops.namespaces`, which the
+collector watches (the chart adds the namespace to `--watch-namespaces` and to the watch Role; the Application kind is already
+watched). Then a write by that controller to an object whose Argo CD tracking annotation (`argocd.argoproj.io/tracking-id`, the
+`annotation` and `annotation+label` tracking methods; `rules.annotations.trackingID`) names an Application the collector sees is
+attributed to that Application and to the revision it is synced to (`status.sync.revision`, a multi-source Application's
+`revisions` joined): signal `platform-gitops`, coverage `observed-not-attributed` tier 1 (known source, not authorized), and the
+assessment's detail names the Application and the revision. It is not out-of-band, and it is not cleared: the application is not protected (protect it with the Argo CD gate). See
+[observe-pipeline.md](observe-pipeline.md#platform-gitops). An object with no tracking annotation, an annotation that names another
+object, an Application the collector does not see or one with no revision yet stays out-of-band. **Secrets and deletes carry no
+object**, so no annotation: for those the Application's own `status.resources` list stands in (exactly one Application in the
+controller's namespace must list the object). The collector keeps the Applications' revision and resource list in memory from the
+watch, so a restart re-reads them before it can attribute.
 
 Accepted: the grant agent's writes of its own `ClearanceGrant` objects are not watched here (the agent is the trusted source
 of the grants; its refused creates, AlreadyExists, stay visible as attempted-refused).

@@ -55,6 +55,11 @@ attribute:
       outcome: break-glass
       severity: medium
       detail: written inside a live break-glass window
+    - signal: platform-gitops
+      when: facts.platform_gitops
+      outcome: observed-not-attributed
+      severity: low
+      detail: a platform Argo CD instance's application controller wrote an object whose tracking annotation names an Application it syncs (for an object the audit event does not carry, a Secret or a delete, the Application's own list of the resources it manages); the source is known, the write is not authorized, because the application is not protected (protect it with the Argo CD gate)
     - signal: grant-annotation.no-hash
       when: facts.grant_known && !facts.hash_match && !facts.hash_differs && facts.argo_controller
       outcome: observed-not-attributed

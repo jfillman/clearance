@@ -11,6 +11,18 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ### Added
 
+- **Observe-k8s: `platform-gitops` attribution (G-ARGO-10a).** A write by an Argo CD instance's application controller to an object
+  whose tracking annotation (`argocd.argoproj.io/tracking-id`) names an Application is attributed to that Application and its sync
+  revision (`status.sync.revision`), not out-of-band; a write by that controller to an object with no tracking annotation stays
+  out-of-band. The rule set names the instance exactly (`identities.platform_gitops`, exact service accounts, never one that is also
+  `argo_controller`). Placed after `break-glass.live`, below every grant signal; outcome and coverage `observed-not-attributed`, tier 1: known
+  source, not authorized (the application is not protected; protect it with the Argo CD gate). Never counted as cleared. The assessment carries `application` and `revision` and names both in its detail. A Secret or a
+  delete carries no object, so for those the Application's own `status.resources` stands in (exactly one claimant in the
+  controller's namespace). The collector indexes the Applications it watches (`pipeline.ArgoApplications`, optional on `Lookups`).
+  Chart: `rules.platformGitops.subjects` and `.namespaces` (the namespace is watched and gets a watch Role), `rules.annotations.trackingID`.
+- **Observe-k8s chart: `rules.extraNoise`**, a deployment's own noise rules (an exact identity and the exact shape it writes), held to the
+  same validator as the chart's own; and the rule `external-secrets-owned-secrets` (External Secrets creating, updating or patching
+  Secrets in the governed namespaces; by identity, because a Secret's owner reference is not visible at Metadata).
 - **Argo CD plugin (G-ARGO-10b): a generic renderer, and a parity suite that proves it.** Set the plugin parameter `sources` (the
   Application's original `spec.sources`, unchanged, as JSON) and `clearance-cmp` renders what the Application already uses, as Argo CD
   would: Helm from an HTTP repository, an OCI registry or a git path (value files including multi-source `$ref/` ones, `valuesObject`
@@ -26,6 +38,13 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ### Changed
 
+- **Observe pipeline: a controller's status write and a service account's TokenRequest are not changes.** A succeeded `update` or
+  `patch` of the `status` subresource by a controller (a service account or system identity, not `kubectl`, not impersonation, not a
+  federated agent), and a service account's `create` on `serviceaccounts/token`, are counted under `out_of_scope` and not assessed
+  (false exceptions on hangar-prod: the replicaset and deployment controllers' status writes, `calico-node` minting a token). Never for
+  a refusal, a person, an operation on monitoring or a node's token; a status write to an object a grant lists or owns keeps its
+  attribution (`listed-grant`, `owner-grant`); `scale` and every other subresource are as before. Named noise rules are still checked first.
+- Rule set 2026.11.2 (default) and 2026.11.6 (the Kubernetes and AWS charts); the digests in the golden replay reports change with them.
 - **Any signed-in person may read coverage and observations (O-5, owner decision 2026-11-12).** `GET /v1/coverage`,
   `GET /v1/observations` and `GET /v1/observations/health` on clearance-api were auditor-only; they now take a person
   (an OIDC user on `CLEARANCE_OIDC_ALLOWED_USERS`), a delegate acting for one (Tower's Backstage proxy) and an auditor,
