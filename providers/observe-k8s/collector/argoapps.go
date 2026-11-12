@@ -18,6 +18,11 @@ type argoApps struct {
 type appEntry struct {
 	app       pipeline.ArgoApp
 	resources map[string]struct{} // "<namespace>/<lower-case kind>/<name>"
+	// hooks are the resources of status.operationState.syncResult.resources that carry a hookType (the current or last
+	// operation), same key as resources. hookRevision is that operation's revision (syncResult.revision, or its multi-source
+	// revisions joined with ","); empty when the result names none.
+	hooks        map[string]struct{}
+	hookRevision string
 }
 
 func resKey(ns, kind, name string) string { return ns + "/" + strings.ToLower(kind) + "/" + name }
@@ -39,6 +44,40 @@ func revisionOf(obj map[string]any) string {
 		}
 	}
 	return strings.Join(revs, ",")
+}
+
+// hooksOf reads the sync hooks of the Application's current or last operation: status.operationState.syncResult.resources
+// entries with a hookType (Argo CD v3.5.0 ResourceResult.HookType is empty for a non-hook resource), and the operation's revision.
+func hooksOf(obj map[string]any) (map[string]struct{}, string) {
+	st, _ := obj["status"].(map[string]any)
+	op, _ := st["operationState"].(map[string]any)
+	sr, _ := op["syncResult"].(map[string]any)
+	if sr == nil {
+		return nil, ""
+	}
+	rev, _ := sr["revision"].(string)
+	if rev == "" {
+		var revs []string
+		l, _ := sr["revisions"].([]any)
+		for _, r := range l {
+			if s, _ := r.(string); s != "" {
+				revs = append(revs, s)
+			}
+		}
+		rev = strings.Join(revs, ",")
+	}
+	hooks := map[string]struct{}{}
+	l, _ := sr["resources"].([]any)
+	for _, r := range l {
+		m, _ := r.(map[string]any)
+		kind, _ := m["kind"].(string)
+		name, _ := m["name"].(string)
+		ns, _ := m["namespace"].(string)
+		if ht, _ := m["hookType"].(string); ht != "" && kind != "" && name != "" {
+			hooks[resKey(ns, kind, name)] = struct{}{}
+		}
+	}
+	return hooks, rev
 }
 
 func (x *argoApps) put(typ string, obj map[string]any) {
@@ -66,6 +105,7 @@ func (x *argoApps) put(typ string, obj map[string]any) {
 			}
 		}
 	}
+	e.hooks, e.hookRevision = hooksOf(obj)
 	if x.apps == nil {
 		x.apps = map[string]*appEntry{}
 	}
@@ -100,6 +140,27 @@ func (x *argoApps) managedBy(appNamespace, namespace, kind, name string) (pipeli
 	return found, n == 1
 }
 
+func (x *argoApps) hookOf(appNamespace, namespace, kind, name string) (pipeline.ArgoApp, bool) {
+	k := resKey(namespace, kind, name)
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	var found pipeline.ArgoApp
+	n := 0
+	for _, e := range x.apps {
+		if e.app.Namespace != appNamespace {
+			continue
+		}
+		if _, ok := e.hooks[k]; ok {
+			found = e.app
+			if e.hookRevision != "" {
+				found.Revision = e.hookRevision
+			}
+			n++
+		}
+	}
+	return found, n == 1
+}
+
 // PutApplication records an Application the watch delivered (typ ADDED, MODIFIED or DELETED).
 func (l *Lookups) PutApplication(typ string, obj map[string]any) { l.apps.put(typ, obj) }
 
@@ -119,4 +180,14 @@ func (l *Lookups) ManagedBy(scope, appNamespace, namespace, kind, name string) (
 		return pipeline.ArgoApp{}, false
 	}
 	return l.apps.managedBy(appNamespace, namespace, kind, name)
+}
+
+var _ pipeline.ArgoHooks = (*Lookups)(nil)
+
+// HookOf is the one watched Application in appNamespace whose current or last operation lists the object as a sync hook.
+func (l *Lookups) HookOf(scope, appNamespace, namespace, kind, name string) (pipeline.ArgoApp, bool) {
+	if scope != l.Cluster {
+		return pipeline.ArgoApp{}, false
+	}
+	return l.apps.hookOf(appNamespace, namespace, kind, name)
 }

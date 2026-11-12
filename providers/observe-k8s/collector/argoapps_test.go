@@ -57,3 +57,47 @@ func TestLookupsKnowTheWatchedArgoApplications(t *testing.T) {
 		t.Fatalf("%+v", a)
 	}
 }
+
+// The index carries the hooks of an Application's current or last operation (status.operationState.syncResult.resources
+// entries with a hookType), with that operation's revision; a plain resource of the sync result is not a hook; two claimants,
+// another namespace or another cluster answer nothing; the next operation replaces the list.
+func TestLookupsKnowSyncHooks(t *testing.T) {
+	l := &Lookups{Cluster: "prod-1"}
+	withOp := func(o map[string]any, rev string, rs ...map[string]any) map[string]any {
+		var list []any
+		for _, r := range rs {
+			list = append(list, r)
+		}
+		o["status"].(map[string]any)["operationState"] = map[string]any{"syncResult": map[string]any{"revision": rev, "resources": list}}
+		return o
+	}
+	hook := map[string]any{"group": "batch", "kind": "Job", "namespace": "argocd-apps", "name": "redis-secret-init", "hookType": "PreSync"}
+	plain := map[string]any{"group": "batch", "kind": "Job", "namespace": "argocd-apps", "name": "not-a-hook"}
+	l.PutApplication("ADDED", withOp(appObj("argocd", "install", "synced111"), "oprev222", hook, plain))
+	if a, ok := l.HookOf("prod-1", "argocd", "argocd-apps", "job", "redis-secret-init"); !ok || a.Name != "install" || a.Revision != "oprev222" {
+		t.Fatalf("%+v %v", a, ok)
+	}
+	if _, ok := l.HookOf("prod-1", "argocd", "argocd-apps", "Job", "not-a-hook"); ok {
+		t.Fatal("no hookType: not a hook")
+	}
+	if _, ok := l.HookOf("prod-2", "argocd", "argocd-apps", "Job", "redis-secret-init"); ok {
+		t.Fatal("another cluster")
+	}
+	if _, ok := l.HookOf("prod-1", "argocd-apps", "argocd-apps", "Job", "redis-secret-init"); ok {
+		t.Fatal("another namespace")
+	}
+	l.PutApplication("ADDED", withOp(appObj("argocd", "second", "x"), "y", hook))
+	if _, ok := l.HookOf("prod-1", "argocd", "argocd-apps", "Job", "redis-secret-init"); ok {
+		t.Fatal("two Applications list it: no answer")
+	}
+	l.PutApplication("MODIFIED", withOp(appObj("argocd", "second", "x"), "y"))
+	l.PutApplication("MODIFIED", appObj("argocd", "install", "synced333")) // a new operation clears the list
+	if _, ok := l.HookOf("prod-1", "argocd", "argocd-apps", "Job", "redis-secret-init"); ok {
+		t.Fatal("no operation state: no hooks")
+	}
+	// no syncResult revision: the Application's own
+	l.PutApplication("MODIFIED", withOp(appObj("argocd", "install", "synced111"), "", hook))
+	if a, ok := l.HookOf("prod-1", "argocd", "argocd-apps", "Job", "redis-secret-init"); !ok || a.Revision != "synced111" {
+		t.Fatalf("%+v %v", a, ok)
+	}
+}

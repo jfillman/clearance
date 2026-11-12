@@ -147,7 +147,21 @@ which must be about this very object) and asks the lookups, `ArgoApplications.Ap
 own namespace unless the id carries one) and its revision. A **delete** has no body, so the annotation is read from the object as it stood: the collector's before-state (its watch cache) is the
 event's object for a delete, and its `argocd.argoproj.io/tracking-id` is read exactly as above, under the same rules (it must name this very
 object, a known Application with a revision). This is how a prune of a Role, RoleBinding or ServiceAccount is attributed, which the
-Application's `status.resources` cannot do, because the pruned object is no longer in it. An event with no object and no before-state (a Secret at Metadata, a delete of an unwatched
+Application's `status.resources` cannot do, because the pruned object is no longer in it.
+
+*Cluster-scoped objects (0.41.2).* Argo CD writes the Application's **destination namespace** into the tracking id of a cluster-scoped object
+(v3.5.0, `util/argo/resource_tracking.go`, `UnstructuredToAppInstanceValue`: the namespace of the object, else the one it is given, the Application's
+destination), so a ClusterRole has `clearance-observe-k8s:rbac.authorization.k8s.io/ClusterRole:clearance-system/clearance-observe-k8s`. For an event with
+no namespace the id must still match the object's **group** (`objectRef.apiGroup`), **kind** and **name**, but its namespace part is ignored; a namespaced
+object must match the namespace too. The Application must still be known with a revision.
+
+*Sync hooks (0.41.2).* A hook (an object with `argocd.argoproj.io/hook`, or `helm.sh/hook`, which Argo CD honours; `Skip` is not a hook) carries no tracking
+annotation. When the platform controller writes one, and the object carries no tracking id, the pipeline asks the optional `ArgoHooks.HookOf` lookup: exactly
+one Application of the controller's namespace must list the object, with a `hookType`, in `status.operationState.syncResult.resources` (Argo CD v3.5.0
+`ResourceResult.HookType`, empty for a non-hook; `operationState` is the Application's current or last operation). The attributed revision is that
+operation's (`syncResult.revision`, or `revisions` joined), else `status.sync.revision`. A hook deleted by its hook-delete-policy is read from the
+before-state like any delete. A hook-looking object no Application lists, or two do, stays out-of-band, and a tracking id that names another object is never
+rescued by the hook list. A hook created before the Application's status records it is decided as it stands (out-of-band); the next sync records it. An event with no object and no before-state (a Secret at Metadata, a delete of an unwatched
 kind) carries no annotation: `ArgoApplications.ManagedBy` answers from the Applications' own `status.resources`, only when exactly
 one Application of the controller's namespace lists the object. No Application, no revision, no lookup support: no attribution. It
 sits below every grant signal (an object that names a grant whose hash differs is out-of-band whatever tracking annotation it

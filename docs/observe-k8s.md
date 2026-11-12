@@ -180,6 +180,12 @@ decided at once). Past the timeout the write is decided as it stands (out-of-ban
 **`argo-applications-synced`** (present only when a platform instance is named) is failing while the index has not synced, with the number of
 writes waiting, and for `gapHold` after any write had to be decided at the timeout without it.
 
+*Cluster-scoped objects and sync hooks (0.41.2).* A cluster-scoped object's tracking id carries the Application's destination namespace (Argo CD
+v3.5.0), so for ClusterRole, ClusterRoleBinding and ValidatingAdmissionPolicy writes the id is matched on group, kind and name and its namespace part is
+ignored. A sync hook (`argocd.argoproj.io/hook` or `helm.sh/hook`) has no tracking id: the platform controller's create or hook-delete-policy delete of it is
+attributed when exactly one Application in the platform namespace lists it with a `hookType` in `status.operationState.syncResult.resources`; the collector's
+Application index now keeps that list and the operation's revision. See [observe-pipeline.md](observe-pipeline.md#platform-gitops).
+
 *A prune is attributed from the object as it stood.* A delete carries no body, and the Application's `status.resources` no longer lists what it
 just pruned, so a delete by the platform controller of a tracked Role, RoleBinding or ServiceAccount used to be out-of-band. The collector's
 watch cache holds the object before the delete, and its tracking annotation is read like any other (it must name this very object, a known

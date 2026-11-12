@@ -64,7 +64,7 @@ func (k kev) raw() RawEvent {
 	}
 	m := map[string]any{"auditID": k.id, "stage": "ResponseComplete", "verb": k.verb, "stageTimestamp": "2026-11-10T21:12:23Z",
 		"user":           map[string]any{"username": k.user},
-		"objectRef":      map[string]any{"resource": k.resource, "namespace": "shop", "name": k.name, "subresource": k.sub},
+		"objectRef":      map[string]any{"resource": k.resource, "namespace": "shop", "name": k.name, "subresource": k.sub, "apiGroup": trackedGroup(k.obj)},
 		"responseStatus": map[string]any{"code": k.code}, "userAgent": k.ua}
 	if k.obj != nil {
 		m["level"], m["responseObject"] = "RequestResponse", k.obj

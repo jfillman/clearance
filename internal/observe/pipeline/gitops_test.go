@@ -18,6 +18,15 @@ type apps struct {
 	StaticLookups
 	byName  map[string]ArgoApp   // "<ns>/<name>"
 	managed map[string][]ArgoApp // "<app ns>|<ns>/<lower kind>/<name>"
+	hooks   map[string][]ArgoApp // same key: the sync hooks of an Application's current or last operation
+}
+
+func (a apps) HookOf(scope, appNS, ns, kind, name string) (ArgoApp, bool) {
+	l := a.hooks[appNS+"|"+ns+"/"+strings.ToLower(kind)+"/"+name]
+	if len(l) != 1 {
+		return ArgoApp{}, false
+	}
+	return l[0], true
 }
 
 func (a apps) Application(scope, ns, name string) (ArgoApp, bool) {
@@ -62,6 +71,7 @@ func gitopsLookups() apps {
 		StaticLookups: StaticLookups{},
 		byName:        map[string]ArgoApp{"platform-cd/platform-rbac": sync, "platform-cd/fresh": {Namespace: "platform-cd", Name: "fresh"}},
 		managed:       map[string][]ArgoApp{"platform-cd|shop/secret/db-creds": {sync}, "platform-cd|shop/secret/both": {sync, sync}},
+		hooks:         map[string][]ArgoApp{"platform-cd|shop/job/redis-init": {sync}, "platform-cd|shop/job/twice": {sync, sync}},
 	}
 }
 
@@ -176,9 +186,9 @@ func TestPlatformGitopsIdentitiesAreValidatedAtLoad(t *testing.T) {
 
 func TestTrackingIDParses(t *testing.T) {
 	for in, want := range map[string]trackingID{
-		"argocd-apps-install:/ConfigMap:argocd-apps/argocd-cm": {"", "argocd-apps-install", "ConfigMap", "argocd-apps", "argocd-cm"},
-		"team-a_web:apps/Deployment:shop/web":                  {"team-a", "web", "Deployment", "shop", "web"},
-		"cluster:rbac.authorization.k8s.io/ClusterRole:/admin": {"", "cluster", "ClusterRole", "", "admin"},
+		"argocd-apps-install:/ConfigMap:argocd-apps/argocd-cm": {"", "argocd-apps-install", "ConfigMap", "argocd-apps", "argocd-cm", ""},
+		"team-a_web:apps/Deployment:shop/web":                  {"team-a", "web", "Deployment", "shop", "web", "apps"},
+		"cluster:rbac.authorization.k8s.io/ClusterRole:/admin": {"", "cluster", "ClusterRole", "", "admin", "rbac.authorization.k8s.io"},
 	} {
 		if got, ok := parseTrackingID(in); !ok || got != want {
 			t.Errorf("%s: %+v %v, want %+v", in, got, ok, want)
@@ -243,5 +253,103 @@ func TestStatusWriteToMonitoringIsNotDropped(t *testing.T) {
 	a, disp, _, err := p.Process(kev{id: "w1", user: rsCtlSA, verb: "update", resource: "validatingwebhookconfigurations", name: "x", sub: "status"}.raw())
 	if err != nil || disp != Assessed || a.Outcome != OutcomeMonitoring {
 		t.Fatalf("%v %v %+v", disp, err, a)
+	}
+}
+
+// clusterEvent is a succeeded write to a cluster-scoped object (no namespace in objectRef), by the platform controller.
+func clusterEvent(id, verb, resource, name string, obj map[string]any) fx {
+	return fx{id: id, user: platformCtl, verb: verb, resource: resource, name: name, cluster: true, obj: obj}
+}
+
+// Argo CD (v3.5.0, util/argo/resource_tracking.go, UnstructuredToAppInstanceValue) writes the Application's destination namespace
+// into the tracking id of a cluster-scoped object. Attribution matches group, kind and name and ignores that namespace; the
+// Application must still be known with a revision, and an id that names another object, kind or group stays visible.
+func TestPlatformGitopsClusterScopedObjects(t *testing.T) {
+	rs := platformRules(t, platformCtl)
+	lk := gitopsLookups()
+	rbac := "rbac.authorization.k8s.io"
+	cases := []struct {
+		name   string
+		e      fx
+		signal string
+		app    string
+	}{
+		{"clusterrole with the destination namespace", clusterEvent("c1", "patch", "clusterroles", "obs", tracked("ClusterRole", rbac, "clearance-system", "obs", "platform-rbac")), SignalPlatformGitops, "platform-cd/platform-rbac"},
+		{"clusterrolebinding", clusterEvent("c2", "update", "clusterrolebindings", "obs", tracked("ClusterRoleBinding", rbac, "clearance-system", "obs", "platform-rbac")), SignalPlatformGitops, "platform-cd/platform-rbac"},
+		{"validatingadmissionpolicy", clusterEvent("c3", "update", "validatingadmissionpolicies", "protected", tracked("ValidatingAdmissionPolicy", "admissionregistration.k8s.io", "clearance-system", "protected", "platform-rbac")), SignalPlatformGitops, "platform-cd/platform-rbac"},
+		{"an empty namespace part still matches", clusterEvent("c4", "patch", "clusterroles", "obs", tracked("ClusterRole", rbac, "", "obs", "platform-rbac")), SignalPlatformGitops, "platform-cd/platform-rbac"},
+		{"id names another object", clusterEvent("c5", "patch", "clusterroles", "obs", tracked("ClusterRole", rbac, "clearance-system", "other", "platform-rbac")), "service-account.unknown", ""},
+		{"id names another kind", clusterEvent("c6", "patch", "clusterroles", "obs", func() map[string]any {
+			o := tracked("ClusterRoleBinding", rbac, "clearance-system", "obs", "platform-rbac")
+			o["kind"] = "ClusterRole"
+			return o
+		}()), "service-account.unknown", ""},
+		{"id names another group", fx{id: "c7", user: platformCtl, verb: "patch", resource: "clusterroles", name: "obs", cluster: true, group: rbac,
+			obj: tracked("ClusterRole", "example.io", "clearance-system", "obs", "platform-rbac")}, "service-account.unknown", ""},
+		{"application nobody sees", clusterEvent("c8", "patch", "clusterroles", "obs", tracked("ClusterRole", rbac, "clearance-system", "obs", "ghost")), "service-account.unknown", ""},
+		{"application with no revision", clusterEvent("c9", "patch", "clusterroles", "obs", tracked("ClusterRole", rbac, "clearance-system", "obs", "fresh")), "service-account.unknown", ""},
+		{"a person writing it", fx{id: "c10", user: "dana@example.com", verb: "patch", resource: "clusterroles", name: "obs", cluster: true,
+			obj: tracked("ClusterRole", rbac, "clearance-system", "obs", "platform-rbac")}, "human.no-grant", ""},
+		{"a namespaced object still must match its namespace", fx{id: "c11", user: platformCtl, verb: "patch", resource: "roles", name: "reader",
+			obj: tracked("Role", rbac, "elsewhere", "reader", "platform-rbac")}, "service-account.unknown", ""},
+		{"delete reads the before-state", fx{id: "c12", user: platformCtl, verb: "delete", resource: "clusterroles", name: "obs", cluster: true,
+			before: tracked("ClusterRole", rbac, "clearance-system", "obs", "platform-rbac")}, SignalPlatformGitops, "platform-cd/platform-rbac"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			a, disp := c.e.run(t, New(rs, lk, vocab.Default()))
+			if disp != Assessed || a.Signal != c.signal || a.Application != c.app {
+				t.Fatalf("got %v %s app %q, want %s app %q", disp, a.Signal, a.Application, c.signal, c.app)
+			}
+			if c.app != "" && (a.Outcome != OutcomeNotAttributed || a.Revision == "" || a.Coverage != "observed-not-attributed" || a.Tier != 1) {
+				t.Fatalf("%+v", a)
+			}
+		})
+	}
+}
+
+func hookJob(name, ann, val string) map[string]any {
+	return map[string]any{"kind": "Job", "metadata": map[string]any{"name": name, "namespace": "shop", "annotations": map[string]any{ann: val}}}
+}
+
+// A sync hook carries no tracking annotation: it is attributed when it carries a hook annotation and exactly one Application of
+// the instance lists it (as a hook) in its operation. Deletes (hook-delete-policy) read the annotation from the before-state.
+// An object no Application lists, one two list, a hook-looking object with a tracking id of another object, a person's write
+// and a non-hook annotation stay visible.
+func TestPlatformGitopsSyncHooks(t *testing.T) {
+	rs := platformRules(t, platformCtl)
+	lk := gitopsLookups()
+	cases := []struct {
+		name   string
+		e      fx
+		signal string
+		app    string
+	}{
+		{"create of an argo hook", fx{id: "h1", user: platformCtl, verb: "create", resource: "jobs", name: "redis-init", obj: hookJob("redis-init", "argocd.argoproj.io/hook", "PreSync")}, SignalPlatformGitops, "platform-cd/platform-rbac"},
+		{"create of a helm hook", fx{id: "h2", user: platformCtl, verb: "create", resource: "jobs", name: "redis-init", obj: hookJob("redis-init", "helm.sh/hook", "pre-install")}, SignalPlatformGitops, "platform-cd/platform-rbac"},
+		{"delete by hook-delete-policy uses the before-state", fx{id: "h3", user: platformCtl, verb: "delete", resource: "jobs", name: "redis-init", before: hookJob("redis-init", "argocd.argoproj.io/hook", "PostSync")}, SignalPlatformGitops, "platform-cd/platform-rbac"},
+		{"hook-looking object no Application lists", fx{id: "h4", user: platformCtl, verb: "create", resource: "jobs", name: "stranger", obj: hookJob("stranger", "argocd.argoproj.io/hook", "PreSync")}, "service-account.unknown", ""},
+		{"two Applications list it", fx{id: "h5", user: platformCtl, verb: "create", resource: "jobs", name: "twice", obj: hookJob("twice", "argocd.argoproj.io/hook", "PreSync")}, "service-account.unknown", ""},
+		{"listed but carries no hook annotation", fx{id: "h6", user: platformCtl, verb: "create", resource: "jobs", name: "redis-init", obj: hookJob("redis-init", "example.io/x", "PreSync")}, "service-account.unknown", ""},
+		{"hook annotation Skip", fx{id: "h7", user: platformCtl, verb: "create", resource: "jobs", name: "redis-init", obj: hookJob("redis-init", "argocd.argoproj.io/hook", "Skip")}, "service-account.unknown", ""},
+		{"a person creating the hook", fx{id: "h8", user: "dana@example.com", verb: "create", resource: "jobs", name: "redis-init", obj: hookJob("redis-init", "argocd.argoproj.io/hook", "PreSync")}, "human.no-grant", ""},
+		{"a tracking id of another object is not rescued by the hook list", fx{id: "h9", user: platformCtl, verb: "create", resource: "jobs", name: "redis-init", group: "batch",
+			obj: func() map[string]any {
+				o := tracked("Job", "batch", "shop", "other", "platform-rbac")
+				o["metadata"].(map[string]any)["annotations"].(map[string]any)["argocd.argoproj.io/hook"] = "PreSync"
+				return o
+			}()}, "service-account.unknown", ""},
+		{"the gated instance's controller", fx{id: "h10", user: appsCtl, verb: "create", resource: "jobs", name: "redis-init", obj: hookJob("redis-init", "argocd.argoproj.io/hook", "PreSync")}, "argo-controller.no-grant", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			a, disp := c.e.run(t, New(rs, lk, vocab.Default()))
+			if disp != Assessed || a.Signal != c.signal || a.Application != c.app {
+				t.Fatalf("got %v %s app %q (%s), want %s app %q", disp, a.Signal, a.Application, a.Detail, c.signal, c.app)
+			}
+			if c.app != "" && (a.Outcome != OutcomeNotAttributed || a.Revision == "" || a.Coverage != "observed-not-attributed" || a.Tier != 1) {
+				t.Fatalf("%+v", a)
+			}
+		})
 	}
 }
