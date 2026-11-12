@@ -102,18 +102,19 @@ func TestBulkResolutionWritesOneRecordPerItem(t *testing.T) {
 		t.Fatalf("one record per item: %v", ids)
 	}
 
-	// the same call again: a and b already say the same, so they are skipped; c is recorded in a batch of 1.
+	// the same call again records again: the core does not look up each item's newest resolution (that walked the chain
+	// under the gate's lock); the caller skips same-as-newest rows itself. A repeat is a harmless new record.
 	r = f.do("POST", path, "user:admin", body([]int64{a, b, c}, nil)).want(t, 200, "")
-	if rec := r.body["recorded"].([]any); len(rec) != 1 || rec[0].(map[string]any)["seq"] != float64(c) || len(r.body["skipped"].([]any)) != 2 {
-		t.Fatalf("same-as-newest is skipped: %v", r.body)
+	if rec := r.body["recorded"].([]any); len(rec) != 3 || len(r.body["skipped"].([]any)) != 0 {
+		t.Fatalf("a repeat is recorded: %v", r.body)
 	}
 	// a different note on a is a new record (an edit), batch size 1.
 	r = f.do("POST", path, "user:admin", body([]int64{a, b}, map[string]any{"note": "[bulk] a different note"})).want(t, 200, "")
 	if len(r.body["recorded"].([]any)) != 2 {
 		t.Fatalf("a different note is an edit: %v", r.body)
 	}
-	if n := countTool(f, "resolution"); n != 5 {
-		t.Fatalf("%d resolution records, want 5 (2 + 1 + 2)", n)
+	if n := countTool(f, "resolution"); n != 7 {
+		t.Fatalf("%d resolution records, want 7 (2 + 3 + 2)", n)
 	}
 
 	// reverted with a cause works, and a delegate naming the admin records the person, not the delegate.

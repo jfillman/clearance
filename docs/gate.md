@@ -1952,8 +1952,10 @@ the number of records the call wrote. They are written in one transaction (all o
 
 The answer is `{batch, state, cause, note, by, via, ts, recorded: [{seq, record_seq, scope}], skipped: [{seq, reason}],
 failed: [{seq, error}]}`. An item is **skipped**, not failed, when it is not an observation or a resolvable exception (the
-single route's 404 reasons: a refused or monitoring-protection exception, an unknown seq), when it is named twice, or when
-its newest resolution already has the same `state`, `cause` and `note` (so repeating a call is harmless). `failed` is an
+single route's 404 reasons: a refused or monitoring-protection exception, an unknown seq) or when it is named twice. The
+core does not look up each item's newest resolution (that would walk the chain inside the gate's lock): a repeated call
+records again, which is harmless because the newest resolution wins; a caller that wants to skip unchanged rows (Tower
+does) compares with the history it already read. `failed` is an
 item whose record the vocabulary check refused after the call-level check passed; a store error rolls the whole call back
 and is an error response. Tested: `TestBulkResolutionWritesOneRecordPerItem`.
 

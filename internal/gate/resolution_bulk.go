@@ -27,8 +27,6 @@ const (
 	MaxBulkResolutions = 200
 	// MaxBulkResolutionBody caps POST /v1/observations/resolutions.
 	MaxBulkResolutionBody = 64 << 10
-	// resolutionScanPage is how many records are read per page when looking for the newest resolutions.
-	resolutionScanPage = 1000
 )
 
 // BulkResolutionRequest is POST /v1/observations/resolutions's body: the single route's {state, cause?, note?} for
@@ -150,18 +148,9 @@ func (s *Service) SetResolutions(ctx context.Context, p authn.Principal, req Bul
 			}
 			todo = append(todo, plan{seq, scope, what})
 		}
-		newest, err := newestResolutions(ctx, tx, seen)
-		if err != nil {
-			return err
-		}
-		var write []plan
-		for _, pl := range todo {
-			if r, ok := newest[pl.seq]; ok && sameResolution(r, req) {
-				out.Skipped = append(out.Skipped, BulkResolutionSkipped{Seq: pl.seq, Reason: "its newest resolution already says this"})
-				continue
-			}
-			write = append(write, pl)
-		}
+		// No scan for each item's newest resolution: that walked the chain from the oldest item to the head inside the gate's
+		// lock (PR Lens, #148). A repeat is a new, harmless record; the caller (Tower) skips same-as-newest rows itself.
+		write := todo
 		for _, pl := range write {
 			r := cloneRes(res)
 			r["batch"] = map[string]any{"id": id, "size": json.Number(strconv.Itoa(len(write)))}
@@ -191,59 +180,6 @@ func cloneRes(m map[string]any) map[string]any {
 		c[k] = v
 	}
 	return c
-}
-
-// newestResolutions reads the chain from the lowest wanted seq to its head and returns, for each wanted seq, the newest
-// resolution record about it.
-func newestResolutions(ctx context.Context, tx store.Reader, want map[int64]bool) (map[int64]store.Record, error) {
-	out := map[int64]store.Record{}
-	if len(want) == 0 {
-		return out, nil
-	}
-	from := int64(-1)
-	for s := range want {
-		if from < 0 || s < from {
-			from = s
-		}
-	}
-	for {
-		rs, err := tx.Records(ctx, from, resolutionScanPage)
-		if err != nil {
-			return nil, err
-		}
-		for _, r := range rs {
-			seq, _ := SeqInt(r["seq"])
-			from = seq + 1
-			if r["tool"] != evidence.KindResolution {
-				continue
-			}
-			ab, _ := r["about"].(map[string]any)
-			n, ok := ab["seq"].(json.Number)
-			if !ok {
-				continue
-			}
-			a, err := n.Int64()
-			if err == nil && want[a] {
-				out[a] = r // in seq order: the last one wins
-			}
-		}
-		if len(rs) < resolutionScanPage {
-			return out, nil
-		}
-	}
-}
-
-// sameResolution: the record already says what the request would write (state, cause and note).
-func sameResolution(r store.Record, req BulkResolutionRequest) bool {
-	res, _ := r["resolution"].(map[string]any)
-	str := func(k string) string { s, _ := res[k].(string); return s }
-	deref := func(p *string) string {
-		if p == nil {
-			return ""
-		}
-		return *p
-	}
-	return str("state") == req.State && str("cause") == deref(req.Cause) && str("note") == deref(req.Note)
 }
 
 func (h *Handler) setResolutions(w http.ResponseWriter, r *http.Request) {
