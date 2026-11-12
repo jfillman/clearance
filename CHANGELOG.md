@@ -9,6 +9,20 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Fixed (0.41.2)
+
+Two platform-gitops (G-ARGO-10a) attribution gaps seen live on hangar-prod (observe-k8s, `internal/observe/pipeline`).
+
+- **Cluster-scoped objects are attributed.** Argo CD writes the Application's destination namespace into the tracking id of a cluster-scoped object
+  (v3.5.0, `UnstructuredToAppInstanceValue`), and the "id must name this object" check compared the namespace, so ClusterRole, ClusterRoleBinding and
+  ValidatingAdmissionPolicy writes by the platform controller stayed out-of-band. For an object with no namespace the id is matched on group, kind and
+  name; the Application must still be known with a revision, and an id naming another object, kind or group stays visible. The event now carries
+  `Group` (`objectRef.apiGroup`), compared for every object.
+- **Argo CD sync hooks are attributed.** A hook (`argocd.argoproj.io/hook`, `helm.sh/hook`) carries no tracking id. The platform controller's create
+  or hook-delete-policy delete of one is attributed when exactly one Application in the platform namespace lists it with a `hookType` in
+  `status.operationState.syncResult.resources` (new optional `ArgoHooks` lookup; the collector's Application index keeps that list and the operation's
+  revision). A hook-looking object no Application lists stays visible.
+
 ## [0.41.1] - 2026-11-12
 
 ### Fixed (0.41.1)

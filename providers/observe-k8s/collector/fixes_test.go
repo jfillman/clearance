@@ -91,9 +91,11 @@ func platformRig(t *testing.T, opts ...rigOpt) *rig {
 }
 
 func platformWrite() map[string]any {
-	return auditEv(platformSA, "argocd-application-controller/v3", "patch", "roles", "shop", "reader", 200, map[string]any{"responseObject": map[string]any{
-		"kind": "Role", "metadata": map[string]any{"name": "reader", "namespace": "shop",
-			"annotations": map[string]any{"argocd.argoproj.io/tracking-id": "platform-rbac:rbac.authorization.k8s.io/Role:shop/reader"}}}})
+	return auditEv(platformSA, "argocd-application-controller/v3", "patch", "roles", "shop", "reader", 200, map[string]any{
+		"objectRef": map[string]any{"resource": "roles", "namespace": "shop", "name": "reader", "apiGroup": "rbac.authorization.k8s.io"},
+		"responseObject": map[string]any{
+			"kind": "Role", "metadata": map[string]any{"name": "reader", "namespace": "shop",
+				"annotations": map[string]any{"argocd.argoproj.io/tracking-id": "platform-rbac:rbac.authorization.k8s.io/Role:shop/reader"}}}})
 }
 
 func (r *rig) assessmentSignals() []string {

@@ -18,14 +18,33 @@ type fx struct {
 	obj                                 map[string]any // responseObject
 	before                              map[string]any
 	ua                                  string
+	group                               string // objectRef.apiGroup; default: the group of the object's tracking id
+	cluster                             bool   // a cluster-scoped object: no namespace in objectRef
+}
+
+// trackedGroup is the group an object's tracking id names (what a real audit event of that object carries as apiGroup).
+func trackedGroup(objs ...map[string]any) string {
+	for _, o := range objs {
+		md, _ := o["metadata"].(map[string]any)
+		an, _ := md["annotations"].(map[string]any)
+		if v, _ := an["argocd.argoproj.io/tracking-id"].(string); v != "" {
+			if t, ok := parseTrackingID(v); ok {
+				return t.group
+			}
+		}
+	}
+	return ""
 }
 
 func (f fx) raw() RawEvent {
 	if f.code == 0 {
 		f.code = 200
 	}
-	if f.ns == "" {
+	if f.ns == "" && !f.cluster {
 		f.ns = "shop"
+	}
+	if f.group == "" {
+		f.group = trackedGroup(f.obj, f.before)
 	}
 	st := map[string]any{"code": f.code}
 	if f.reason != "" {
@@ -36,7 +55,7 @@ func (f fx) raw() RawEvent {
 	}
 	m := map[string]any{"auditID": f.id, "stage": "ResponseComplete", "verb": f.verb, "stageTimestamp": "2026-11-12T09:00:00Z",
 		"user":           map[string]any{"username": f.user},
-		"objectRef":      map[string]any{"resource": f.resource, "namespace": f.ns, "name": f.name, "subresource": f.sub},
+		"objectRef":      map[string]any{"resource": f.resource, "namespace": f.ns, "name": f.name, "subresource": f.sub, "apiGroup": f.group},
 		"responseStatus": st, "userAgent": f.ua, "level": "Metadata"}
 	if f.ann != nil {
 		m["annotations"] = f.ann

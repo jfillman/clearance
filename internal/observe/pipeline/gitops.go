@@ -36,10 +36,41 @@ type ArgoApplications interface {
 	ManagedBy(scope, appNamespace, namespace, kind, name string) (ArgoApp, bool)
 }
 
-// trackingID is Argo CD's annotation value: "[<app namespace>_]<app>:<group>/<kind>:<namespace>/<name>".
+// ArgoHooks is an optional part of Lookups, beside ArgoApplications: the sync hooks an Application's operation recorded.
+// A hook (a Job with argocd.argoproj.io/hook, say) is created and deleted by the controller during a sync and carries no
+// tracking annotation, so the only account of it is the Application's status.operationState.syncResult.resources, where Argo CD
+// records every hook it ran with a hookType (v3.5.0, ResourceResult.HookType: "Empty for non-hook resources").
+type ArgoHooks interface {
+	// HookOf is the one Application in appNamespace whose current or last operation's sync result lists the object as a hook
+	// (a resource with a hookType; kind compared without regard to case). The returned Revision is the revision of that
+	// operation (syncResult.revision, or the revisions of a multi-source sync joined with ","), else status.sync.revision. More
+	// than one claimant is no answer.
+	HookOf(scope, appNamespace, namespace, kind, name string) (ArgoApp, bool)
+}
+
+// isHook says an object carries an annotation Argo CD honours as a sync hook: argocd.argoproj.io/hook (any value but Skip,
+// which Argo does not apply at all) or helm.sh/hook (Argo translates Helm's hooks to its own).
+func isHook(ann map[string]string) bool {
+	if v := strings.TrimSpace(ann[annArgoHook]); v != "" {
+		return !strings.EqualFold(v, "Skip")
+	}
+	return strings.TrimSpace(ann[annHelmHook]) != ""
+}
+
+const (
+	annArgoHook = "argocd.argoproj.io/hook"
+	annHelmHook = "helm.sh/hook"
+)
+
+// trackingID is Argo CD's annotation value: "[<app namespace>_]<app>:<group>/<kind>:<namespace>/<name>". For a
+// cluster-scoped object Argo CD (v3.5.0, util/argo/resource_tracking.go, UnstructuredToAppInstanceValue) writes the
+// Application's destination namespace where the object has none: ClusterRole x of an Application deploying to clearance-system
+// carries ":clearance-system/x". The namespace part of a cluster-scoped object's id is therefore the Application's, not the
+// object's, and is not compared.
 type trackingID struct {
 	appNS, app            string
 	kind, namespace, name string
+	group                 string
 }
 
 func parseTrackingID(v string) (trackingID, bool) {
@@ -52,7 +83,7 @@ func parseTrackingID(v string) (trackingID, bool) {
 	if i := strings.Index(parts[0], "_"); i > 0 {
 		t.appNS, t.app = parts[0][:i], parts[0][i+1:]
 	}
-	_, kind, ok := strings.Cut(parts[1], "/")
+	group, kind, ok := strings.Cut(parts[1], "/")
 	if !ok || kind == "" || t.app == "" {
 		return trackingID{}, false
 	}
@@ -60,7 +91,7 @@ func parseTrackingID(v string) (trackingID, bool) {
 	if !ok || name == "" {
 		return trackingID{}, false
 	}
-	t.kind, t.namespace, t.name = kind, ns, name
+	t.kind, t.namespace, t.name, t.group = kind, ns, name, group
 	return t, true
 }
 
@@ -86,7 +117,9 @@ func (p *Pipeline) platformGitops(e *Event, controller bool) (app ArgoApp, ok bo
 	if tid := e.ObjAnnotations[p.rs.ann.TrackingID]; tid != "" {
 		t, good := parseTrackingID(tid)
 		// The annotation must be about this object: a tracking id copied from another object is no attribution.
-		if !good || !strings.EqualFold(t.kind, e.Kind) || t.namespace != e.Namespace || t.name != e.Name {
+		// Group, kind and name always; the namespace only for a namespaced object (see trackingID).
+		if !good || t.group != e.Group || !strings.EqualFold(t.kind, e.Kind) || t.name != e.Name ||
+			(e.Namespace != "" && t.namespace != e.Namespace) {
 			return ArgoApp{}, false
 		}
 		appNS := t.appNS
@@ -94,6 +127,13 @@ func (p *Pipeline) platformGitops(e *Event, controller bool) (app ArgoApp, ok bo
 			appNS = ctrlNS
 		}
 		app, ok = aa.Application(e.Scope, appNS, t.app)
+	} else if isHook(e.ObjAnnotations) {
+		// A sync hook carries no tracking annotation. It is attributed only when exactly one Application of the instance
+		// lists it, as a hook, in its current or last operation's sync result. The annotation is read from the object, or from
+		// the before-state of a delete (hook-delete-policy).
+		if hk, has := p.lk.(ArgoHooks); has {
+			app, ok = hk.HookOf(e.Scope, ctrlNS, e.Namespace, e.Kind, e.Name)
+		}
 	} else if e.After == nil && e.Before == nil && len(e.ObjAnnotations) == 0 && len(e.Labels) == 0 {
 		// The event carries no object (a Secret is recorded at Metadata, a delete of an unwatched kind has no body), so
 		// there is no annotation to read. The instance's own account of what it manages stands in for it.

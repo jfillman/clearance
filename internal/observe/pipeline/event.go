@@ -57,6 +57,7 @@ type Event struct {
 	AdmissionDenied bool
 	ErrorCode       string // AWS errorCode
 	Kind            string // Kubernetes kind; AWS: the service (the event source without ".amazonaws.com")
+	Group           string // Kubernetes API group of the resource (objectRef.apiGroup; empty for the core group)
 	Namespace       string
 	Name            string
 	Subresource     string
@@ -198,7 +199,7 @@ func (rs *RuleSet) normalizeKube(a map[string]any, r RawEvent) (*Event, error) {
 	ref := obj(a["objectRef"])
 	user := obj(a["user"])
 	e := &Event{Provider: Kubernetes, Scope: r.Scope, ID: str(a["auditID"]), Verb: verb, Write: true,
-		Namespace: str(ref["namespace"]), Name: str(ref["name"]), Subresource: str(ref["subresource"]),
+		Namespace: str(ref["namespace"]), Name: str(ref["name"]), Group: str(ref["apiGroup"]), Subresource: str(ref["subresource"]),
 		Subject: str(user["username"]), UserAgent: str(a["userAgent"]), AuditAnnotations: strMap(a["annotations"])}
 	e.Time = parseTime(str(a["stageTimestamp"]), str(a["requestReceivedTimestamp"]))
 	if e.ID == "" || e.Subject == "" {
