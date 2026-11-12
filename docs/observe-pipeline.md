@@ -119,19 +119,13 @@ kind) carries no annotation: `ArgoApplications.ManagedBy` answers from the Appli
 one Application of the controller's namespace lists the object. No Application, no revision, no lookup support: no attribution. It
 sits below every grant signal (an object that names a grant whose hash differs is out-of-band whatever tracking annotation it
 carries) and below a refusal; in a live break-glass window the window decides, as for every controller. The assessment carries the
-Application (`<namespace>/<name>`) and the revision and its detail names both. Its outcome is `cleared`, so the coverage is
-`authorized-and-verified`, tier 0, with confidence `gitops`: see **Classify**.
+Application (`<namespace>/<name>`) and the revision and its detail names both. Its outcome is `observed-not-attributed` (coverage `observed-not-attributed`, tier 1), never `cleared`: see **Classify**.
 
 **Classify** maps the outcome to a coverage state and a tier (`classify`): cleared is `authorized-and-verified`, tier 0;
 observed-not-attributed 1; attempted-refused 1; out-of-band and break-glass 2. Monitoring protection is tier 3 and the
-loader refuses a rule set that lowers it. `platform-gitops` is a `cleared` outcome. The coverage states are fixed by the evidence
-schema ([evidence.md](evidence.md)) and none says "attributed to a change process other than a clearance"; the others are wrong:
-`observed-not-attributed` says the write could not be tied to anything (it is tied to an Application and a revision), and
-`out-of-band-detected` is an exception. So it is `authorized-and-verified` with the honest limit carried in the record: the
-authorization is the cluster repository's own review and merge at the named revision, not a Clearance grant, and what the
-pipeline verified is the attribution (the API server's authenticated identity, the object's tracking annotation, an Application the
-collector watches), not the review. The attribution's `signal` (`platform-gitops`) and confidence (`gitops`) let a reader tell it from
-a grant's clearance. A deployment that wants a different state for it has to add one to the evidence schema first.
+loader refuses a rule set that lowers it. `platform-gitops` is an `observed-not-attributed` outcome: **known source, not authorized**. The write is tied to an Application and a
+revision, but nothing cleared it: the application is not protected, and an application that should be is protected with the Argo CD
+gate, whose grant signals attribute its writes as today. It is not counted as cleared, and it is not an exception.
 
 **Correlate** collapses bursts into a `Transaction`. An event joins an open transaction of its scope, within
 `correlate.window` (30s) of its last event, when it shares the execution context (the grant a record quotes, the AWS

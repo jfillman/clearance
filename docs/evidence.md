@@ -178,13 +178,6 @@ records, `clearance chain verify` ok).
 **Six coverage states.** The four of v1, plus `break-glass` (inside a declared break-glass window) and
 `attempted-refused` (an operation something tried and a control refused: nothing landed).
 
-No state means "attributed to a change process, not to a clearance". An observation the Kubernetes collector attributes to a
-platform GitOps sync (`attribution.signal` `platform-gitops`, rule set 2026.11.2: an Argo CD application controller writing an
-object that its tracking annotation ties to an Application, the revision in the assessment's detail) is assessed
-`authorized-and-verified`, tier 0, and is told apart from a grant's clearance by that signal alone: what was verified is the
-attribution (identity, annotation, an Application the collector watches), and the authorization is the cluster repository's own
-review at that revision, not a Clearance grant ([observe-pipeline.md](observe-pipeline.md#platform-gitops)).
-
 **Six kinds.** A provider posts five of them through `POST /v1/records`, and only when its registration names them in
 `kinds` (a provider with no `kinds` writes every kind *but* these: a registered observed provider is one that opted
 in). The sixth is the core's.

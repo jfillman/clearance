@@ -154,8 +154,8 @@ collector watches (the chart adds the namespace to `--watch-namespaces` and to t
 watched). Then a write by that controller to an object whose Argo CD tracking annotation (`argocd.argoproj.io/tracking-id`, the
 `annotation` and `annotation+label` tracking methods; `rules.annotations.trackingID`) names an Application the collector sees is
 attributed to that Application and to the revision it is synced to (`status.sync.revision`, a multi-source Application's
-`revisions` joined): signal `platform-gitops`, coverage `authorized-and-verified` tier 0 with confidence `gitops`, and the
-assessment's detail names the Application and the revision. It is not out-of-band, and it is not a grant: see
+`revisions` joined): signal `platform-gitops`, coverage `observed-not-attributed` tier 1 (known source, not authorized), and the
+assessment's detail names the Application and the revision. It is not out-of-band, and it is not cleared: the application is not protected (protect it with the Argo CD gate). See
 [observe-pipeline.md](observe-pipeline.md#platform-gitops). An object with no tracking annotation, an annotation that names another
 object, an Application the collector does not see or one with no revision yet stays out-of-band. **Secrets and deletes carry no
 object**, so no annotation: for those the Application's own `status.resources` list stands in (exactly one Application in the

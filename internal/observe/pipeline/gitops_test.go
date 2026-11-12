@@ -85,9 +85,9 @@ func TestPlatformGitopsAttribution(t *testing.T) {
 		app     string
 	}{
 		{"tracked role", role(tracked("Role", "rbac.authorization.k8s.io", "shop", "reader", "platform-rbac")),
-			SignalPlatformGitops, OutcomeCleared, "platform-cd/platform-rbac"},
+			SignalPlatformGitops, OutcomeNotAttributed, "platform-cd/platform-rbac"},
 		{"tracked externalsecret create", kev{id: "g2", user: platformCtl, verb: "create", resource: "externalsecrets", name: "reader",
-			obj: tracked("ExternalSecret", "external-secrets.io", "shop", "reader", "platform-rbac")}, SignalPlatformGitops, OutcomeCleared, "platform-cd/platform-rbac"},
+			obj: tracked("ExternalSecret", "external-secrets.io", "shop", "reader", "platform-rbac")}, SignalPlatformGitops, OutcomeNotAttributed, "platform-cd/platform-rbac"},
 		{"no tracking annotation stays out-of-band", role(untracked), "service-account.unknown", OutcomeOutOfBand, ""},
 		{"tracking id of another object", role(tracked("Role", "rbac.authorization.k8s.io", "shop", "other", "platform-rbac")), "service-account.unknown", OutcomeOutOfBand, ""},
 		{"application nobody sees", role(tracked("Role", "rbac.authorization.k8s.io", "shop", "reader", "ghost")), "service-account.unknown", OutcomeOutOfBand, ""},
@@ -102,7 +102,7 @@ func TestPlatformGitopsAttribution(t *testing.T) {
 			obj: tracked("Role", "rbac.authorization.k8s.io", "shop", "reader", "platform-rbac")}, "response.refused", OutcomeRefused, ""},
 		// A Secret is recorded at Metadata: no object, so no annotation. The instance's own list of what it manages stands in.
 		{"secret the Application manages", kev{id: "g7", user: platformCtl, verb: "update", resource: "secrets", name: "db-creds"},
-			SignalPlatformGitops, OutcomeCleared, "platform-cd/platform-rbac"},
+			SignalPlatformGitops, OutcomeNotAttributed, "platform-cd/platform-rbac"},
 		{"secret no Application lists", kev{id: "g8", user: platformCtl, verb: "update", resource: "secrets", name: "other"}, "service-account.unknown", OutcomeOutOfBand, ""},
 		{"secret two Applications claim", kev{id: "g9", user: platformCtl, verb: "update", resource: "secrets", name: "both"}, "service-account.unknown", OutcomeOutOfBand, ""},
 		{"person writing the managed secret", kev{id: "g10", user: "dana@example.com", verb: "update", resource: "secrets", name: "db-creds"}, "human.no-grant", OutcomeOutOfBand, ""},
@@ -120,7 +120,7 @@ func TestPlatformGitopsAttribution(t *testing.T) {
 				if a.Revision != rev || !strings.Contains(a.Detail, c.app) || !strings.Contains(a.Detail, rev) {
 					t.Fatalf("the detail must name the Application and the revision: %+v", a)
 				}
-				if a.Coverage != "authorized-and-verified" || a.Tier != 0 || a.Confidence != "gitops" {
+				if a.Coverage != "observed-not-attributed" || a.Tier != 1 || a.Confidence != "" {
 					t.Fatalf("coverage %s tier %d confidence %s", a.Coverage, a.Tier, a.Confidence)
 				}
 			}

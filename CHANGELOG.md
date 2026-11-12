@@ -15,9 +15,8 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   whose tracking annotation (`argocd.argoproj.io/tracking-id`) names an Application is attributed to that Application and its sync
   revision (`status.sync.revision`), not out-of-band; a write by that controller to an object with no tracking annotation stays
   out-of-band. The rule set names the instance exactly (`identities.platform_gitops`, exact service accounts, never one that is also
-  `argo_controller`). Placed after `break-glass.live`, below every grant signal; `cleared` outcome, so coverage `authorized-and-verified`
-  tier 0 with confidence `gitops` (no other state fits; the authorization is the cluster repository's review, not a grant, and the
-  record says so through the signal). The assessment carries `application` and `revision` and names both in its detail. A Secret or a
+  `argo_controller`). Placed after `break-glass.live`, below every grant signal; outcome and coverage `observed-not-attributed`, tier 1: known
+  source, not authorized (the application is not protected; protect it with the Argo CD gate). Never counted as cleared. The assessment carries `application` and `revision` and names both in its detail. A Secret or a
   delete carries no object, so for those the Application's own `status.resources` stands in (exactly one claimant in the
   controller's namespace). The collector indexes the Applications it watches (`pipeline.ArgoApplications`, optional on `Lookups`).
   Chart: `rules.platformGitops.subjects` and `.namespaces` (the namespace is watched and gets a watch Role), `rules.annotations.trackingID`.
