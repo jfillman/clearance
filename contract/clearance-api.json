@@ -3704,6 +3704,14 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "coverage",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -3763,7 +3771,7 @@
             "bearer": []
           }
         ],
-        "summary": "Evidence records you may see, newest first; the cursor is seq. outcomes=include (default), exclude or only: the outcome records the core writes beside each allowed decision (outcome_of). installation=<id> keeps one GitHub App installation's records (principal app:<id>)",
+        "summary": "Evidence records you may see, newest first; the cursor is seq. outcomes=include (default), exclude or only: the outcome records the core writes beside each allowed decision (outcome_of). installation=<id> keeps one GitHub App installation's records (principal app:<id>). coverage=<state>[,<state>...] keeps the records in those coverage states (authorized-and-verified, observed-not-attributed, out-of-band-detected, coverage-unavailable, break-glass, attempted-refused)",
         "x-clearance-roles": [
           "person",
           "delegate",
@@ -3886,6 +3894,14 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "coverage",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -3945,7 +3961,7 @@
             "bearer": []
           }
         ],
-        "summary": "Records you may see, counted by rule, tool, agent, app or decision (`by`), with the same filters as the list. outcomes=exclude (default) counts each decision once; include or only count the outcome records too. by=cost sums what runs cost instead, per task (default: the task tree), session (one run), agent or principal (`per`): the model-call outcomes' usage (charged_tokens is what the model proxy charged the session budgets) and the run.finish records' runs and wall seconds; each item's count is its model calls",
+        "summary": "Records you may see, counted by rule, tool, agent, app, decision or coverage (`by`), with the same filters as the list. outcomes=exclude (default) counts each decision once; include or only count the outcome records too. by=cost sums what runs cost instead, per task (default: the task tree), session (one run), agent or principal (`per`): the model-call outcomes' usage (charged_tokens is what the model proxy charged the session budgets) and the run.finish records' runs and wall seconds; each item's count is its model calls",
         "x-clearance-roles": [
           "person",
           "delegate",

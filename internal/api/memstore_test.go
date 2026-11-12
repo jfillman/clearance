@@ -116,6 +116,11 @@ func (m *memStore) matches(r Record, f EvidenceFilter) bool {
 			return false
 		}
 	}
+	if len(f.Coverage) > 0 {
+		if cov, _ := str(r["coverage"]); !in(f.Coverage, cov) {
+			return false
+		}
+	}
 	ts, _ := str(r["ts"])
 	if f.Since != "" && ts < f.Since {
 		return false

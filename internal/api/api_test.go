@@ -1177,3 +1177,33 @@ func TestTheAPIListsATerraformPlanChangeWithItsSubject(t *testing.T) {
 		}
 	})
 }
+
+// coverageEvents are five records in three coverage states (the last sets none: the writer defaults it).
+func coverageEvents() []store.Event {
+	return []store.Event{
+		ev(map[string]any{"principal": "user:alice", "tool": "repo.pr.open", "coverage": "authorized-and-verified"}),
+		ev(map[string]any{"principal": "user:alice", "tool": "deploy.exception", "coverage": "observed-not-attributed"}),
+		ev(map[string]any{"principal": "user:alice", "tool": "deploy.exception", "coverage": "observed-not-attributed"}),
+		ev(map[string]any{"principal": "user:alice", "tool": "deploy.exception", "coverage": "out-of-band-detected"}),
+		ev(map[string]any{"principal": "user:alice", "tool": "session.open"}),
+	}
+}
+
+func TestEvidenceFiltersAndCountsByCoverage(t *testing.T) {
+	each(t, world{events: coverageEvents()}, func(t *testing.T, h *harness) {
+		eqSeqs(t, "one state", seqs(h.ok("/v1/evidence?coverage=observed-not-attributed", "audit")), 2, 1)
+		eqSeqs(t, "several states", seqs(h.ok("/v1/evidence?coverage=out-of-band-detected,authorized-and-verified", "audit")), 4, 3, 0)
+		eqSeqs(t, "state with no records", seqs(h.ok("/v1/evidence?coverage=break-glass", "audit")))
+		eqSeqs(t, "combined with another filter", seqs(h.ok("/v1/evidence?coverage=observed-not-attributed&tool=repo.pr.open", "audit")))
+		h.status(t, 400, "GET", "/v1/evidence?coverage=nope", "audit", "")
+		h.status(t, 400, "GET", "/v1/evidence?coverage=break-glass,nope", "audit", "")
+		got := h.ok("/v1/evidence/counts?by=coverage", "audit")
+		want := `[{"count":2,"key":"authorized-and-verified"},{"count":2,"key":"observed-not-attributed"},{"count":1,"key":"out-of-band-detected"}]`
+		if b, _ := json.Marshal(items(got)); string(b) != want {
+			t.Errorf("by coverage:\n got %s\nwant %s", b, want)
+		}
+		if n := num(h.ok("/v1/evidence/counts?by=tool&coverage=observed-not-attributed", "audit")["total"]); n != 2 {
+			t.Errorf("counts honour coverage: %d", n)
+		}
+	})
+}
