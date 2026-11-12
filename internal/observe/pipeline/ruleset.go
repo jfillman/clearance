@@ -118,6 +118,11 @@ type scopeDoc struct {
 type ChildRule struct {
 	Subject string   `yaml:"subject"`
 	Kinds   []string `yaml:"kinds"`
+	// Verbs the controller may write to those kinds (exact; empty: every write verb). The garbage collector is delete only.
+	Verbs []string `yaml:"verbs"`
+	// PartialMetadataVerbs are further verbs allowed only when the event's body is a PartialObjectMetadata (the garbage
+	// collector's metadata-only client) for one of Kinds: an event that does not carry that body stays visible.
+	PartialMetadataVerbs []string `yaml:"partial_metadata_verbs"`
 }
 
 // Governed is one place whose writes the pipeline keeps. Empty lists mean any.
@@ -229,7 +234,7 @@ type RuleSet struct {
 	governed   []governed
 	noise      []noiseRule
 	noiseBySub map[string][]int
-	children   map[string][]string // controller_children: subject -> kinds
+	children   map[string]ChildRule // controller_children: subject -> rule
 	monitoring MonitoringOps
 	attribute  map[string][]signal
 	classify   map[string]ClassDoc
@@ -454,7 +459,7 @@ const kubeSystemSA = "system:serviceaccount:kube-system:"
 // loadChildren validates scope.controller_children: each subject is one exact kube-system service account, named once, with
 // the kinds of its children listed ("*" for any).
 func (rs *RuleSet) loadChildren(d doc) error {
-	rs.children = map[string][]string{}
+	rs.children = map[string]ChildRule{}
 	for i, c := range d.Scope.ControllerChildren {
 		s := c.Subject
 		switch {
@@ -476,7 +481,12 @@ func (rs *RuleSet) loadChildren(d doc) error {
 		if _, dup := rs.children[s]; dup {
 			return fmt.Errorf("observe rules: scope.controller_children[%d]: %s is listed twice", i, s)
 		}
-		rs.children[s] = c.Kinds
+		for _, v := range append(slices.Clone(c.Verbs), c.PartialMetadataVerbs...) {
+			if !slices.Contains([]string{"create", "update", "patch", "delete", "deletecollection"}, v) {
+				return fmt.Errorf("observe rules: scope.controller_children[%d] (%s): verbs are exact write verbs (create, update, patch, delete, deletecollection), not %q", i, s, v)
+			}
+		}
+		rs.children[s] = c
 	}
 	return nil
 }

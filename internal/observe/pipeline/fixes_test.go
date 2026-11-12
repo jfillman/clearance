@@ -163,7 +163,18 @@ func TestControllerChildrenAreOutOfScope(t *testing.T) {
 		{"owner shown only by the before-state", fx{id: "c9", user: gcSA, verb: "patch", resource: "pods", name: "web-abc12",
 			obj: map[string]any{"kind": "PartialObjectMetadata", "metadata": map[string]any{"name": "web-abc12", "namespace": "shop"}}, before: podOwnedBy("ReplicaSet", "web-5d", true)}, true, ""},
 
+		{"garbage collector deletes a job", fx{id: "c10", user: gcSA, verb: "delete", resource: "jobs", name: "nightly-1"}, true, ""},
+		{"garbage collector deletes a pod", fx{id: "c11", user: gcSA, verb: "delete", resource: "pods", name: "web-abc12"}, true, ""},
+
 		// stays visible
+		{"garbage collector deletes a configmap", fx{id: "w1", user: gcSA, verb: "delete", resource: "configmaps", name: "cfg"}, false, "service-account.unknown"},
+		{"garbage collector deletes a role", fx{id: "w2", user: gcSA, verb: "delete", resource: "roles", name: "reader"}, false, "service-account.unknown"},
+		{"garbage collector deletes a deployment", fx{id: "w3", user: gcSA, verb: "delete", resource: "deployments", name: "web"}, false, "service-account.unknown"},
+		{"garbage collector patches a pod with a plain body", fx{id: "w4", user: gcSA, verb: "patch", resource: "pods", name: "web-abc12", obj: podOwnedBy("ReplicaSet", "web-5d", true)}, false, "service-account.unknown"},
+		{"garbage collector patches a pod, Metadata (no kind carried)", fx{id: "w5", user: gcSA, verb: "patch", resource: "pods", name: "web-abc12"}, false, "service-account.unknown"},
+		{"garbage collector patches a configmap, PartialObjectMetadata", fx{id: "w6", user: gcSA, verb: "patch", resource: "configmaps", name: "cfg",
+			obj: map[string]any{"kind": "PartialObjectMetadata", "metadata": map[string]any{"name": "cfg", "namespace": "shop", "ownerReferences": []any{map[string]any{"kind": "X", "name": "y", "controller": true}}}}}, false, "service-account.unknown"},
+		{"garbage collector updates a pod, PartialObjectMetadata", fx{id: "w7", user: gcSA, verb: "update", resource: "pods", name: "web-abc12", obj: gcPartial}, false, "service-account.unknown"},
 		{"person creates a pod with an ownerReference", fx{id: "v1", user: "dana@example.com", verb: "create", resource: "pods", name: "web-abc12", obj: podOwnedBy("ReplicaSet", "web-5d", true)}, false, "human.no-grant"},
 		{"person creates a pod (Metadata)", fx{id: "v2", user: "dana@example.com", verb: "create", resource: "pods", name: "debug"}, false, "human.no-grant"},
 		{"another service account creates a pod", fx{id: "v3", user: "system:serviceaccount:shop:builder", verb: "create", resource: "pods", name: "web-abc12", obj: podOwnedBy("ReplicaSet", "web-5d", true)}, false, "service-account.unknown"},
@@ -232,13 +243,14 @@ func TestControllerChildrenOfAGrantStayCleared(t *testing.T) {
 func TestControllerChildrenRulesAreValidated(t *testing.T) {
 	base := string(DefaultRules())
 	bad := map[string]string{
-		"a pattern":              `- {subject: "system:serviceaccount:kube-system:*", kinds: [Pod]}`,
-		"another namespace":      `- {subject: "system:serviceaccount:shop:builder", kinds: [Pod]}`,
-		"a person":               `- {subject: "dana@example.com", kinds: [Pod]}`,
-		"no kinds":               `- {subject: "system:serviceaccount:kube-system:replicaset-controller", kinds: []}`,
-		"a kind pattern":         `- {subject: "system:serviceaccount:kube-system:replicaset-controller", kinds: ["Po*"]}`,
-		"a monitoring kind":      `- {subject: "system:serviceaccount:kube-system:replicaset-controller", kinds: [ValidatingWebhookConfiguration]}`,
-		"the same subject twice": `- {subject: "system:serviceaccount:kube-system:job-controller", kinds: [Job]}`,
+		"a pattern":                  `- {subject: "system:serviceaccount:kube-system:*", kinds: [Pod]}`,
+		"another namespace":          `- {subject: "system:serviceaccount:shop:builder", kinds: [Pod]}`,
+		"a person":                   `- {subject: "dana@example.com", kinds: [Pod]}`,
+		"no kinds":                   `- {subject: "system:serviceaccount:kube-system:replicaset-controller", kinds: []}`,
+		"a kind pattern":             `- {subject: "system:serviceaccount:kube-system:replicaset-controller", kinds: ["Po*"]}`,
+		"a monitoring kind":          `- {subject: "system:serviceaccount:kube-system:replicaset-controller", kinds: [ValidatingWebhookConfiguration]}`,
+		"a verb that is not a write": `- {subject: "system:serviceaccount:kube-system:job-controller", kinds: [Job], verbs: [get]}`,
+		"the same subject twice":     `- {subject: "system:serviceaccount:kube-system:job-controller", kinds: [Job]}`,
 	}
 	for name, entry := range bad {
 		t.Run(name, func(t *testing.T) {

@@ -68,10 +68,10 @@ that count is Scope.
   `create secrets` (AlreadyExists), kube-controller-manager's `create serviceaccounts/token`, the platform Argo CD's `patch roles`.
 - *A kube-system controller managing the objects it created* (`scope.controller_children`). A ReplicaSet controller creating the Pods of a
   ReplicaSet, a Deployment controller its ReplicaSets, a Job controller its Pods, a CronJob controller its Jobs, a StatefulSet or DaemonSet
-  controller its Pods; the garbage collector and the TTL-after-finished controller deleting or patching (a `PartialObjectMetadata` patch
-  included) what is finished or orphaned. That is the consequence of a change to desired state someone else made (the Deployment, the Job), not a
+  controller its Pods; the garbage collector and the TTL-after-finished controller deleting what is finished or orphaned (the garbage collector: delete only, of Pod, ReplicaSet and Job, and a `PartialObjectMetadata` patch
+  of those kinds). That is the consequence of a change to desired state someone else made (the Deployment, the Job), not a
   change to desired state. Each entry is one exact service account in `kube-system` (the loader refuses a pattern, another namespace, a person, a
-  monitoring kind, a duplicate) with the kinds of its children (`"*"` for any, which the garbage collector needs). The write counts out of scope
+  monitoring kind, a duplicate) with the kinds of its children (`"*"` for any), optionally `verbs` (exact write verbs; empty: all) and `partial_metadata_verbs` (verbs allowed only when the event body is a `PartialObjectMetadata`; an event that does not carry it stays visible). The default garbage-collector entry is `kinds: [Pod, ReplicaSet, Job]`, `verbs: [delete]`, `partial_metadata_verbs: [patch]`: anything else it writes or deletes (a ConfigMap, a Role, a Deployment, a plain-body patch) stays visible. The write counts out of scope
   when the controller is acting as itself, **the object has a controller `ownerReference`** (as the body, the collector's before-state or an
   earlier event the pipeline remembers shows it) and nothing ties it to a grant. **A Metadata-level event that shows nothing of the object**
   (a create in a namespace the audit policy records at Metadata, a delete) cannot be checked: the controller's identity and the kind it may write

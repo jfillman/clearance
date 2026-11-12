@@ -135,7 +135,7 @@ rules:
     controllerLabels: [rollouts-pod-template-hash, pod-template-hash]
   # kube-system controllers managing the objects they created (a ReplicaSet's Pods, a Deployment's ReplicaSets, a Job's Pods, a
   # CronJob's Jobs; the garbage collector and the TTL controller removing what is finished) are not changes to desired state:
-  # counted out of scope, not assessed. One exact kube-system service account each, with the child kinds ("*": any). The object
+  # counted out of scope, not assessed. One exact kube-system service account each, with the child kinds ("*": any) and optionally verbs (default: every write verb). The object
   # must have a controller ownerReference where the event shows the object; a Metadata-level event that shows nothing of it is
   # judged by the identity and the kind. A person or another service account writing the same kind stays visible. Replacing the
   # list replaces all of it.
@@ -146,7 +146,8 @@ rules:
     - {subject: system:serviceaccount:kube-system:cronjob-controller, kinds: [Job]}
     - {subject: system:serviceaccount:kube-system:statefulset-controller, kinds: [Pod]}
     - {subject: system:serviceaccount:kube-system:daemon-set-controller, kinds: [Pod]}
-    - {subject: system:serviceaccount:kube-system:generic-garbage-collector, kinds: ["*"]}
+    # Delete only, of the kinds it collects, plus a PartialObjectMetadata patch of one of them; anything else it writes stays visible.
+    - {subject: system:serviceaccount:kube-system:generic-garbage-collector, kinds: [Pod, ReplicaSet, Job], verbs: [delete], partial_metadata_verbs: [patch]}
     - {subject: system:serviceaccount:kube-system:ttl-after-finished-controller, kinds: [Job]}
   # Namespaces whose writes are governed, beside protectedNamespaces and the argocd namespace.
   extraGovernedNamespaces: [kube-system]

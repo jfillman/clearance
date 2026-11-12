@@ -80,6 +80,8 @@ type Event struct {
 	// ObjectSeen: the event carries the object's metadata (its body, or the collector's before-state), so Owners and
 	// ControllerOwned say what the object has; false for a Metadata-level event with no before-state, which says nothing.
 	ObjectSeen bool
+	// PartialMetadata: the body is a PartialObjectMetadata (the garbage collector's metadata-only client).
+	PartialMetadata bool
 	// ControllerOwned: the object, after or before the change, has an ownerReference with controller: true.
 	ControllerOwned bool
 
@@ -243,6 +245,7 @@ func (rs *RuleSet) normalizeKube(a map[string]any, r RawEvent) (*Event, error) {
 		}
 	}
 	e.Kind = kindOf(resource, firstObj(after, req))
+	e.PartialMetadata = str(after["kind"]) == "PartialObjectMetadata" || str(req["kind"]) == "PartialObjectMetadata" || str(resp["kind"]) == "PartialObjectMetadata"
 	e.API = verb + "." + resource
 	if e.Name == "" && after != nil {
 		e.Name = str(obj(after["metadata"])["name"])

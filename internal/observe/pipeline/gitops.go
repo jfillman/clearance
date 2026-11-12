@@ -209,9 +209,14 @@ func (p *Pipeline) controllerChild(e *Event) bool {
 	if e.Provider != Kubernetes || !e.Succeeded || e.Monitoring {
 		return false
 	}
-	kinds, ok := p.rs.children[e.Subject]
+	rule, ok := p.rs.children[e.Subject]
+	kinds := rule.Kinds
 	if !ok || (!slices.Contains(kinds, e.Kind) && !slices.Contains(kinds, "*")) || slices.Contains(monitoringKinds, e.Kind) ||
 		!p.isController(e) {
+		return false
+	}
+	if len(rule.Verbs) > 0 && !slices.Contains(rule.Verbs, e.Verb) &&
+		!(e.PartialMetadata && slices.Contains(rule.PartialMetadataVerbs, e.Verb)) {
 		return false
 	}
 	seen, controlled := e.ObjectSeen, e.ControllerOwned

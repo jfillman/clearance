@@ -39,7 +39,7 @@ Five defects found by the live verification of 0.41.0 on hangar-dev (observe-k8s
   objects they created (Pods of a ReplicaSet or Job, ReplicaSets of a Deployment, Jobs of a CronJob) are counted out of scope when the object
   has a controller ownerReference (a Metadata-level event that shows nothing of the object is judged by the identity and the kind). Exact
   service accounts and kinds, validated at load; a person or another service account creating a Pod stays visible; a granted object's
-  derived children keep their `owner-grant` attribution. A `PartialObjectMetadata` body (the garbage collector's) no longer names the kind.
+  derived children keep their `owner-grant` attribution. A `PartialObjectMetadata` body (the garbage collector's) no longer names the kind. The garbage collector is narrowed (owner decision): delete only, of Pod, ReplicaSet and Job, plus a `PartialObjectMetadata` patch of those kinds; everything else it writes stays visible. Entries take optional `verbs` and `partial_metadata_verbs`, validated at load.
   Rule sets `observe-default` 2026.11.3 and the chart's `observe-hangar` 2026.11.7.
 
 ## [0.41.0] - 2026-11-12

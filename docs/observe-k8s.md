@@ -196,7 +196,7 @@ of the grants; its create that finds the grant already there, AlreadyExists, is 
 NotFound or 422 Invalid is not (the deployment controller losing a status update race, a secret-init Job's AlreadyExists, a delete of what
 is gone): it is counted under `out_of_scope` and not assessed. A refusal by a person, `kubectl`, an impersonation, of a monitoring kind, or
 with any other code stays visible as before. And a **kube-system controller managing the objects it created** (`rules.controllerChildren`:
-the ReplicaSet, Deployment, Job, CronJob, StatefulSet and DaemonSet controllers, the garbage collector, the TTL-after-finished controller;
+the ReplicaSet, Deployment, Job, CronJob, StatefulSet and DaemonSet controllers, the garbage collector (delete only, of Pod, ReplicaSet and Job, and a `PartialObjectMetadata` patch of those kinds), the TTL-after-finished controller;
 exact service accounts and the kinds of their children) is not a change to desired state: counted out of scope when the object has a
 controller `ownerReference` (shown by the body or the before-state), and, for a Metadata-level event that shows nothing of the object,
 on the identity and the kind. A person or another service account creating the same Pod stays out-of-band. See
