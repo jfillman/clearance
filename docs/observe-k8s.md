@@ -16,7 +16,8 @@ It is an observed provider ([provider-protocol.md](provider-protocol.md#the-obse
   (an fsynced append-only log). A collector crash, restart or core outage loses nothing the API server was told arrived.
 - **Normalizes and attributes** each write through the O-2 pipeline: cleared (grant annotation and a matching rendered
   hash), out-of-band (hash differs; a person; impersonation; `kubectl`; an unknown service account; Argo CD with no
-  grant), break-glass, attempted-refused (a 403 with an admission-policy denial), observed-not-attributed (a federated
+  grant), break-glass, attempted-refused (a security refusal: a 401, a 403 or an admission denial; not a controller's 409, 404 or 422),
+  observed-not-attributed (a federated
   identity with no `task_id`). The orders are the pipeline's; this package supplies the events and the lookups.
 - **Keeps the object as it stood before** each change in a watch cache (an audit event carries only the new state), so an
   exception has a diff.
@@ -73,6 +74,14 @@ audit log on as a second sink if a longer outage matters ([the runbook](observe-
 
 **The API server is authenticated by mutual TLS**, with its own client CA and a name allowlist; it needs a certificate
 from a CA that is not the cluster's. The kubeconfig it needs is in the runbook.
+
+**A cluster with no gate (`grants.enabled: false`, since 0.41.1).** hangar-dev runs the collector and no Argo CD agent, so it has no
+`ClearanceGrant` CRD and listing the grants answers 404; `lookups-fresh` failed on it for that, and the collector's health was `degraded`
+for no reason it could fix. With `grants.enabled: false` (chart; `--grants-enabled=false`) no grant is listed, the collector's ClusterRole no
+longer asks for `clearancegrants`, only the core's break-glass windows are read, and `lookups-fresh` is ok and says *no gate on this
+cluster*. **It is explicit, not detected.** Treating a 404 as "no grants" would make a gated cluster whose CRD was deleted, or whose role was
+lost, look healthy, which is exactly the failure the check exists to show; so with grants enabled a 404 stays a failure, and its message
+now says what to look at (*set grants.enabled=false if there is no gate, otherwise the CRD is missing*).
 
 **Attribution lookups.** `Lookups` reads the cluster's `ClearanceGrant`s (the Argo CD agent keeps them) and the core's
 open break-glass windows, refreshed each health interval; a failed refresh keeps the last snapshot (a stale answer
@@ -162,8 +171,36 @@ object**, so no annotation: for those the Application's own `status.resources` l
 controller's namespace must list the object). The collector keeps the Applications' revision and resource list in memory from the
 watch, so a restart re-reads them before it can attribute.
 
+*The collector waits for that index (since 0.41.1).* During its own rollout the platform Argo CD is still patching the RBAC that lets the
+collector watch the Applications' namespace; until it lands the list is forbidden, the index is empty, and a write decided then was recorded
+out-of-band for a reason that is the collector's start, not the write's. A succeeded write by a `platformGitops` controller is now **held**
+(in the cursor file, like the grants settle, so a restart loses none) until **every Application watch has listed at least once**, and for
+at most `argoIndexTimeout` (default 5m, `--argo-index-timeout`; `-1s` never waits; at most `MaxHeld` events wait at once, past that a write is
+decided at once). Past the timeout the write is decided as it stands (out-of-band, the cautious answer). The health check
+**`argo-applications-synced`** (present only when a platform instance is named) is failing while the index has not synced, with the number of
+writes waiting, and for `gapHold` after any write had to be decided at the timeout without it.
+
+*A prune is attributed from the object as it stood.* A delete carries no body, and the Application's `status.resources` no longer lists what it
+just pruned, so a delete by the platform controller of a tracked Role, RoleBinding or ServiceAccount used to be out-of-band. The collector's
+watch cache holds the object before the delete, and its tracking annotation is read like any other (it must name this very object, a known
+Application with a revision). That needs the kind **watched**: the chart now watches `roles` and `rolebindings` (ServiceAccounts already were)
+in the protected, Argo CD and platform namespaces, and `watch.extraNamespaces` adds any other (kube-system, say), with the watch Role the
+collector needs there.
+
 Accepted: the grant agent's writes of its own `ClearanceGrant` objects are not watched here (the agent is the trusted source
-of the grants; its refused creates, AlreadyExists, stay visible as attempted-refused).
+of the grants; its create that finds the grant already there, AlreadyExists, is a conflict and is counted out of scope since
+0.41.1, its 403 stays visible as attempted-refused).
+
+**Refusals, and controllers' own children (0.41.1).** `attempted-refused` is a *security* refusal: a 401, a 403 or an admission denial
+(webhook or policy; the audit annotation or the response status message says so, whatever code it carries). A controller's 409 Conflict, 404
+NotFound or 422 Invalid is not (the deployment controller losing a status update race, a secret-init Job's AlreadyExists, a delete of what
+is gone): it is counted under `out_of_scope` and not assessed. A refusal by a person, `kubectl`, an impersonation, of a monitoring kind, or
+with any other code stays visible as before. And a **kube-system controller managing the objects it created** (`rules.controllerChildren`:
+the ReplicaSet, Deployment, Job, CronJob, StatefulSet and DaemonSet controllers, the garbage collector (delete only, of Pod, ReplicaSet and Job, and a `PartialObjectMetadata` patch of those kinds), the TTL-after-finished controller;
+exact service accounts and the kinds of their children) is not a change to desired state: counted out of scope when the object has a
+controller `ownerReference` (shown by the body or the before-state), and, for a Metadata-level event that shows nothing of the object,
+on the identity and the kind. A person or another service account creating the same Pod stays out-of-band. See
+[observe-pipeline.md](observe-pipeline.md#stages).
 
 **One exception, not two.** The Argo CD agent's `deploy.exception` (it names objects and the cluster) and the
 collector's observation (it names who and the diff) of the same change are folded into one row of the packet's
@@ -198,7 +235,8 @@ them. The collector does the strongest check it can:
 | `audit-policy-live` | the live policy records writes | the heartbeat's own audit event: it exists and says which level it was recorded at |
 | `secrets-metadata-only` | the live policy's Secret rule | no Secret event arrived above Metadata (the receiver cut and marked it), and a **canary Secret** the collector patches (and cannot read) comes back at Metadata with no body |
 | `audit-policy-mirror` | the policy the operator keeps in `kube-system/audit-policy` is sound | read by name and held to the Secret rule. It is a **mirror**: it says nothing about the file on the node, and changing it is itself an operation on monitoring |
-| `queue-draining`, `records-posting`, `lookups-fresh` | the collector's own work | queue age, core errors, grant and break-glass snapshot age |
+| `queue-draining`, `records-posting`, `lookups-fresh` | the collector's own work | queue age, core errors, grant and break-glass snapshot age (with `grants.enabled: false`, break-glass only: "no gate on this cluster") |
+| `argo-applications-synced` | platform GitOps writes can be attributed | every Application watch has listed once; present only when `rules.platformGitops` names an instance |
 | `watch-current`, `audit-gap` | the watch cache is current; the audit feed missed nothing | list/watch loops, and the gap tracker |
 
 **The gap, named:** the live policy is not read. A policy that is wrong *only* for something the heartbeat and canary do
@@ -261,13 +299,15 @@ is the documentation). First match wins:
 Under `56-clearance-gate/`, behind `clearance.observe.enabled`, from `charts/clearance-observe-k8s` (the values are
 documented in the chart's `values.yaml`):
 
+- `grants.enabled` (default true): **false on a cluster with no gate** (hangar-dev), or `lookups-fresh` fails on the missing
+  `ClearanceGrant` CRD. Apron must set it for hangar-dev.
 - `cluster` (hangar-prod; must equal the Argo CD agent's cluster name), `coreURL` (+ `hostAliases` on hangar-prod: the
   core is on hangar-dev), `protectedNamespaces`, `argocd.namespace`, `rules.argoControllerSubject`.
 - **Provider registration in the core** (`CLEARANCE_PROVIDERS`): `observe-k8s` with `kinds` `observation`, `assessment`,
   `resolution`, `observation.health`; the collector's service account (`<ns>/clearance-observe-k8s`) in
   `CLEARANCE_FOREIGN_SERVICE_ACCOUNTS`. Its identity is the projected token, audience `clearance`; no secret.
 - **A PersistentVolumeClaim** (5Gi default, ReadWriteOnce, `helm.sh/resource-policy: keep`); one replica, `Recreate`.
-- **RBAC:** a ClusterRole (list on `clearancegrants`; list and watch on the cluster-scoped watched kinds), a Role and
+- **RBAC:** a ClusterRole (list on `clearancegrants` when `grants.enabled`; list and watch on the cluster-scoped watched kinds), a Role and
   RoleBinding per protected namespace and the Argo CD namespace (list and watch on the namespaced watched kinds), a Role
   on the heartbeat ConfigMap and the canary Secret (`patch` by name), and, if `auditPolicyMirror` is set, `get` on that one
   ConfigMap. **No `get`, `list` or `watch` on Secrets anywhere.**

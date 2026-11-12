@@ -104,6 +104,25 @@ type AnnotationNames struct {
 
 type scopeDoc struct {
 	Governed []Governed `yaml:"governed"`
+	// ControllerChildren are the kube-system controllers whose writes to the objects they create and manage are not
+	// changes to desired state (see childRule).
+	ControllerChildren []ChildRule `yaml:"controller_children"`
+}
+
+// ChildRule names one kube-system controller and the kinds of the children it creates, updates, patches and deletes: a
+// ReplicaSet controller's Pods, a Deployment controller's ReplicaSets, a Job controller's Pods, a CronJob controller's Jobs.
+// The subject is one exact service account in kube-system. A write by it to one of these kinds is counted out of scope when
+// the object has a controller ownerReference (or, for a Metadata-level event that does not show the object, when nothing
+// says otherwise). Kinds "*" is any kind (the garbage collector deletes the dependents of anything). A person, another
+// service account, kubectl or an impersonated request creating the same Pod is untouched.
+type ChildRule struct {
+	Subject string   `yaml:"subject"`
+	Kinds   []string `yaml:"kinds"`
+	// Verbs the controller may write to those kinds (exact; empty: every write verb). The garbage collector is delete only.
+	Verbs []string `yaml:"verbs"`
+	// PartialMetadataVerbs are further verbs allowed only when the event's body is a PartialObjectMetadata (the garbage
+	// collector's metadata-only client) for one of Kinds: an event that does not carry that body stays visible.
+	PartialMetadataVerbs []string `yaml:"partial_metadata_verbs"`
 }
 
 // Governed is one place whose writes the pipeline keeps. Empty lists mean any.
@@ -215,6 +234,7 @@ type RuleSet struct {
 	governed   []governed
 	noise      []noiseRule
 	noiseBySub map[string][]int
+	children   map[string]ChildRule // controller_children: subject -> rule
 	monitoring MonitoringOps
 	attribute  map[string][]signal
 	classify   map[string]ClassDoc
@@ -308,6 +328,9 @@ func Load(b []byte) (*RuleSet, error) {
 		return nil, err
 	}
 	if err := rs.loadNoise(d); err != nil {
+		return nil, err
+	}
+	if err := rs.loadChildren(d); err != nil {
 		return nil, err
 	}
 	if err := rs.loadExempt(); err != nil {
@@ -426,6 +449,44 @@ func (rs *RuleSet) loadNoise(d doc) error {
 		key := n.Provider + "\x00" + n.Identity.Subject + "\x00" + n.Identity.Issuer
 		rs.noiseBySub[key] = append(rs.noiseBySub[key], len(rs.noise))
 		rs.noise = append(rs.noise, r)
+	}
+	return nil
+}
+
+// kubeSystemSA is the namespace the controller_children subjects must be in.
+const kubeSystemSA = "system:serviceaccount:kube-system:"
+
+// loadChildren validates scope.controller_children: each subject is one exact kube-system service account, named once, with
+// the kinds of its children listed ("*" for any).
+func (rs *RuleSet) loadChildren(d doc) error {
+	rs.children = map[string]ChildRule{}
+	for i, c := range d.Scope.ControllerChildren {
+		s := c.Subject
+		switch {
+		case s == "" || strings.ContainsAny(s, "*?[]"):
+			return fmt.Errorf("observe rules: scope.controller_children[%d].subject %q: an identity is exact, never a pattern", i, s)
+		case !strings.HasPrefix(s, kubeSystemSA) || len(strings.Split(s, ":")) != 4 || strings.Split(s, ":")[3] == "":
+			return fmt.Errorf("observe rules: scope.controller_children[%d].subject %q is not one service account in kube-system (%s<name>)", i, s, kubeSystemSA)
+		case len(c.Kinds) == 0:
+			return fmt.Errorf("observe rules: scope.controller_children[%d] (%s): kinds names the children the controller writes (\"*\" for any)", i, s)
+		}
+		for _, k := range c.Kinds {
+			if k == "" || (k != "*" && strings.ContainsAny(k, "*?[]")) {
+				return fmt.Errorf("observe rules: scope.controller_children[%d] (%s): kinds are exact (%q), or \"*\" for any", i, s, k)
+			}
+			if slices.Contains(monitoringKinds, k) {
+				return fmt.Errorf("observe rules: scope.controller_children[%d] (%s): %s is a monitoring kind: its changes are never dropped", i, s, k)
+			}
+		}
+		if _, dup := rs.children[s]; dup {
+			return fmt.Errorf("observe rules: scope.controller_children[%d]: %s is listed twice", i, s)
+		}
+		for _, v := range append(slices.Clone(c.Verbs), c.PartialMetadataVerbs...) {
+			if !slices.Contains([]string{"create", "update", "patch", "delete", "deletecollection"}, v) {
+				return fmt.Errorf("observe rules: scope.controller_children[%d] (%s): verbs are exact write verbs (create, update, patch, delete, deletecollection), not %q", i, s, v)
+			}
+		}
+		rs.children[s] = c
 	}
 	return nil
 }

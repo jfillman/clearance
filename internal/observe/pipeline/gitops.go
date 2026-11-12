@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"slices"
 	"strings"
 )
 
@@ -152,4 +153,82 @@ func (p *Pipeline) notAChange(e *Event) bool {
 		return e.Type == "serviceaccount" && p.isController(e)
 	}
 	return false
+}
+
+// ArgoIndexState is an optional part of Lookups: whether the Application index is complete enough to attribute from (every
+// Application watch has listed at least once). A platform-gitops write assessed before it is would find no Application and be
+// recorded out-of-band for a reason that has nothing to do with the write, so the pipeline holds such a write (HoldUnsyncedApplications)
+// until it is true.
+type ArgoIndexState interface {
+	ApplicationsSynced() bool
+}
+
+// PlatformGitopsConfigured says the rule set names a platform Argo CD instance, so the Application index matters.
+func (p *Pipeline) PlatformGitopsConfigured() bool { return len(p.rs.ids.PlatformGitops) > 0 }
+
+// holdForIndex: a succeeded write by a platform instance's application controller, while the Application index has not
+// synced. The write is held, not decided: the caller gives it back as Final after the index syncs or its timeout.
+func (p *Pipeline) holdForIndex(e *Event) bool {
+	if !p.holdIndex || e.Provider != Kubernetes || !e.Succeeded || !contains(p.rs.ids.PlatformGitops, e.Subject) || !p.isController(e) {
+		return false
+	}
+	st, ok := p.lk.(ArgoIndexState)
+	return ok && !st.ApplicationsSynced()
+}
+
+// notARefusal reports whether a failed write by a controller is not a security refusal, and is counted out of scope instead
+// of assessed as attempted-refused. attempted-refused means the system said no to a caller it did not trust: 401, 403, or an
+// admission denial (a webhook or a policy denied it, whatever code it carries). A 409 Conflict (a status update that lost
+// an optimistic-concurrency race, a create that found the object already there), a 404 NotFound (a delete or patch of an
+// object that is gone) and a 422 Invalid that admission did not deny are an ordinary controller's retries: nothing was
+// refused for who the caller is. Never for an operation on monitoring, a person, kubectl, impersonation or a federated agent
+// (a controller is a service account or a system identity acting as itself, see isController), nor for any other code.
+func (p *Pipeline) notARefusal(e *Event) bool {
+	if e.Provider != Kubernetes || e.Succeeded || e.Monitoring || e.AdmissionDenied || !p.isController(e) {
+		return false
+	}
+	switch e.Code {
+	case 404, 409, 422:
+		return true
+	}
+	return false
+}
+
+// controllerChild reports whether a succeeded write is a kube-system controller managing an object it created: a
+// ReplicaSet controller creating the Pods of a ReplicaSet, a Deployment controller its ReplicaSets, a Job controller its Pods,
+// a CronJob controller its Jobs, the garbage collector and the TTL controller removing what is finished. That is the
+// consequence of a desired-state change someone else made (the Deployment, the Job), not a change to desired state, and it
+// is counted out of scope (scope.controller_children names the exact controllers and the kinds).
+//
+// The object must have a controller ownerReference, as the event shows it (the body, the collector's before-state) or the
+// pipeline remembered an earlier event show it. A Metadata-level event that shows nothing of the object cannot be checked;
+// the controller's identity and the child kinds it may write stand for it. An object that is shown without one is not a child.
+// Never an operation on monitoring, a refusal, a person or another service account, and not when attribution can
+// already tie the write to a grant (a granted object's derived children stay cleared and counted as verified).
+func (p *Pipeline) controllerChild(e *Event) bool {
+	if e.Provider != Kubernetes || !e.Succeeded || e.Monitoring {
+		return false
+	}
+	rule, ok := p.rs.children[e.Subject]
+	kinds := rule.Kinds
+	if !ok || (!slices.Contains(kinds, e.Kind) && !slices.Contains(kinds, "*")) || slices.Contains(monitoringKinds, e.Kind) ||
+		!p.isController(e) {
+		return false
+	}
+	if len(rule.Verbs) > 0 && !slices.Contains(rule.Verbs, e.Verb) &&
+		!(e.PartialMetadata && slices.Contains(rule.PartialMetadataVerbs, e.Verb)) {
+		return false
+	}
+	seen, controlled := e.ObjectSeen, e.ControllerOwned
+	if remembered := p.ownersOf(e); len(remembered) > 0 && !controlled {
+		seen = true
+		for _, o := range remembered {
+			controlled = controlled || o.Controller
+		}
+	}
+	if seen && !controlled {
+		return false
+	}
+	listed, owner := p.derivedGrants(e)
+	return listed == "" && owner == ""
 }

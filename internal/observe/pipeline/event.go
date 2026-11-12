@@ -34,25 +34,34 @@ type Delta struct {
 	After  map[string]any `json:"after"`
 }
 
-// Owner is an ownerReference.
-type Owner struct{ Kind, Name string }
+// Owner is an ownerReference. Controller is its controller flag: the one owner that manages the object (a ReplicaSet's
+// Pods, a Deployment's ReplicaSets), as opposed to one that merely owns it.
+type Owner struct {
+	Kind, Name string
+	Controller bool
+}
 
 // Event is the normalized, flat event every later stage reads.
 type Event struct {
 	Provider, Scope, ID string
 	Time                time.Time
 
-	Verb, API   string // Kubernetes: the verb and "<verb>.<resource>"; AWS: the event name for both
-	Write       bool
-	Succeeded   bool
-	Code        int    // Kubernetes response code
-	ErrorCode   string // AWS errorCode
-	Kind        string // Kubernetes kind; AWS: the service (the event source without ".amazonaws.com")
-	Namespace   string
-	Name        string
-	Subresource string
-	ResourceID  string // AWS: the resource the request names
-	Region      string
+	Verb, API string // Kubernetes: the verb and "<verb>.<resource>"; AWS: the event name for both
+	Write     bool
+	Succeeded bool
+	Code      int    // Kubernetes response code
+	Reason    string // Kubernetes responseStatus.reason (Forbidden, Conflict, Invalid, NotFound, ...)
+	// AdmissionDenied: the request was refused by admission (a validating webhook or a ValidatingAdmissionPolicy denied
+	// it, or a webhook that had to answer could not), as the audit annotations or the response status say. Whatever
+	// code the denial carries (a policy's default is 422).
+	AdmissionDenied bool
+	ErrorCode       string // AWS errorCode
+	Kind            string // Kubernetes kind; AWS: the service (the event source without ".amazonaws.com")
+	Namespace       string
+	Name            string
+	Subresource     string
+	ResourceID      string // AWS: the resource the request names
+	Region          string
 
 	// The actor, as the source verified it (Subject, Type, Issuer, SourceIdentity) and as the actor reported it
 	// (SessionName, UserAgent, the claims in the user agent).
@@ -68,6 +77,13 @@ type Event struct {
 	Labels           map[string]string
 	Owners           []Owner
 	UID              string
+	// ObjectSeen: the event carries the object's metadata (its body, or the collector's before-state), so Owners and
+	// ControllerOwned say what the object has; false for a Metadata-level event with no before-state, which says nothing.
+	ObjectSeen bool
+	// PartialMetadata: the body is a PartialObjectMetadata (the garbage collector's metadata-only client).
+	PartialMetadata bool
+	// ControllerOwned: the object, after or before the change, has an ownerReference with controller: true.
+	ControllerOwned bool
 
 	// Before and After are the canonical stored object (server-managed fields and the gate's own annotations
 	// removed); the hashes are what a grant lists. Empty when the event has no object, always for a Secret.
@@ -154,7 +170,9 @@ var kubeKinds = map[string]string{
 
 func kindOf(resource string, o map[string]any) string {
 	// A Status is a delete's answer and DeleteOptions is its request body: neither names what was deleted, the resource does.
-	if k := str(o["kind"]); k != "" && k != "Status" && k != "DeleteOptions" {
+	// PartialObjectMetadata is what the garbage collector's metadata-only client gets back: the object's metadata, under a kind that
+	// is not the object's.
+	if k := str(o["kind"]); k != "" && k != "Status" && k != "DeleteOptions" && k != "PartialObjectMetadata" {
 		return k
 	}
 	if k, ok := kubeKinds[resource]; ok {
@@ -207,13 +225,16 @@ func (rs *RuleSet) normalizeKube(a map[string]any, r RawEvent) (*Event, error) {
 	case strings.HasPrefix(e.Subject, "system:"):
 		e.Type = "system"
 	}
+	message := ""
 	if st := obj(a["responseStatus"]); st != nil {
 		if n, ok := st["code"].(json.Number); ok {
 			c, _ := n.Int64()
 			e.Code = int(c)
 		}
+		e.Reason, message = str(st["reason"]), str(st["message"])
 	}
 	e.Succeeded = e.Code == 0 || (e.Code >= 200 && e.Code < 300)
+	e.AdmissionDenied = !e.Succeeded && admissionDenied(e.AuditAnnotations, message)
 	resource := str(ref["resource"])
 	resp, req := obj(a["responseObject"]), obj(a["requestObject"])
 	after := resp
@@ -224,6 +245,7 @@ func (rs *RuleSet) normalizeKube(a map[string]any, r RawEvent) (*Event, error) {
 		}
 	}
 	e.Kind = kindOf(resource, firstObj(after, req))
+	e.PartialMetadata = str(after["kind"]) == "PartialObjectMetadata" || str(req["kind"]) == "PartialObjectMetadata" || str(resp["kind"]) == "PartialObjectMetadata"
 	e.API = verb + "." + resource
 	if e.Name == "" && after != nil {
 		e.Name = str(obj(after["metadata"])["name"])
@@ -251,9 +273,12 @@ func (rs *RuleSet) normalizeKube(a map[string]any, r RawEvent) (*Event, error) {
 		meta = obj(before["metadata"])
 	}
 	e.ObjAnnotations, e.Labels, e.UID = strMap(meta["annotations"]), strMap(meta["labels"]), str(meta["uid"])
+	e.ObjectSeen = meta != nil
 	for _, o := range asList(meta["ownerReferences"]) {
-		e.Owners = append(e.Owners, Owner{str(obj(o)["kind"]), str(obj(o)["name"])})
+		c, _ := obj(o)["controller"].(bool)
+		e.Owners = append(e.Owners, Owner{str(obj(o)["kind"]), str(obj(o)["name"]), c})
 	}
+	e.ControllerOwned = hasControllerOwner(meta) || hasControllerOwner(obj(before["metadata"]))
 	if strings.EqualFold(e.Kind, "secret") {
 		// A Secret is observed at Metadata only: its object, before or after, is not carried, hashed or diffed.
 		for k := range e.ObjAnnotations {
@@ -275,6 +300,32 @@ func (rs *RuleSet) normalizeKube(a map[string]any, r RawEvent) (*Event, error) {
 		e.ExecKey = "grant:" + g
 	}
 	return e, nil
+}
+
+func hasControllerOwner(meta map[string]any) bool {
+	for _, o := range asList(meta["ownerReferences"]) {
+		if c, _ := obj(o)["controller"].(bool); c {
+			return true
+		}
+	}
+	return false
+}
+
+// admissionDenied says a refusal came from admission: a ValidatingAdmissionPolicy's audit annotation, or the answer the API
+// server gives for a webhook that denied the request, a policy that denied it, a Pod Security violation, or a webhook that
+// failed closed. These are security refusals whatever HTTP code they carry (a policy denies with 422 unless it says otherwise).
+func admissionDenied(annotations map[string]string, message string) bool {
+	for k := range annotations {
+		if strings.HasPrefix(k, "validation.policy.admission.k8s.io/") {
+			return true
+		}
+	}
+	for _, m := range []string{"denied the request", "denied request", "failed calling webhook", "violates PodSecurity"} {
+		if strings.Contains(message, m) {
+			return true
+		}
+	}
+	return false
 }
 
 func firstObj(ms ...map[string]any) map[string]any {

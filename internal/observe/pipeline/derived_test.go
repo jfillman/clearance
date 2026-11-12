@@ -126,12 +126,17 @@ func TestDerivedObjectsAreAttributedToTheirOwnersGrant(t *testing.T) {
 	step("person deletes the pod", kev{id: "b3", user: "dana@example.com", verb: "delete", resource: "pods", name: "web-rs-x1"},
 		"human.no-grant", OutcomeOutOfBand, "")
 	// a refused write is a refusal, whoever it is
-	step("refused", kev{id: "b4", user: rsCtlSA, verb: "update", resource: "replicasets", name: "web-rs", sub: "status", code: 409},
+	step("refused", kev{id: "b4", user: rsCtlSA, verb: "update", resource: "replicasets", name: "web-rs", sub: "status", code: 403},
 		"response.refused", OutcomeRefused, "")
-	// a chain that does not reach a listed object: unseen ReplicaSet, an owner that no grant lists
+	// a chain that does not reach a listed object: unseen ReplicaSet, an owner that no grant lists. The replicaset
+	// controller creating the Pod of a ReplicaSet is not a change to desired state (controllerChild): out of scope.
 	unseen := owned("Pod", "other-rs-x1", "ReplicaSet", "other-rs", "")
-	step("pod of a replicaset never seen", kev{id: "b5", user: rsCtlSA, verb: "create", resource: "pods", name: "other-rs-x1", obj: unseen},
-		"service-account.unknown", OutcomeOutOfBand, "")
+	if _, disp, _, err := p.Process(kev{id: "b5", user: rsCtlSA, verb: "create", resource: "pods", name: "other-rs-x1", obj: unseen}.raw()); err != nil || disp != OutOfScope {
+		t.Fatalf("pod of a replicaset never seen: %v %v, want out-of-scope", disp, err)
+	}
+	// the same Pod written by a service account that is not the controller stays visible
+	step("pod of a replicaset created by another service account", kev{id: "b5b", user: "system:serviceaccount:shop:builder", verb: "create", resource: "pods", name: "other-rs-x2",
+		obj: owned("Pod", "other-rs-x2", "ReplicaSet", "other-rs", "")}, "service-account.unknown", OutcomeOutOfBand, "")
 	lone := owned("ReplicaSet", "lone-rs", "Rollout", "lone", "")
 	step("rs of a rollout no grant lists", kev{id: "b6", user: rolloutsSA, verb: "create", resource: "replicasets", name: "lone-rs", obj: lone},
 		"service-account.unknown", OutcomeOutOfBand, "")

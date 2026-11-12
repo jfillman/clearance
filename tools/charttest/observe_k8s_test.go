@@ -180,7 +180,7 @@ func TestObserveK8sChartRulesLoadInThePipeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the rendered rule set does not load: %v\n%s", err, doc)
 	}
-	if rs.Ref.Name != "observe-hangar" || rs.Ref.Version != "2026.11.6" {
+	if rs.Ref.Name != "observe-hangar" || rs.Ref.Version != "2026.11.7" {
 		t.Errorf("%+v", rs.Ref)
 	}
 	if !strings.Contains(doc, "hangar-prod") || !strings.Contains(doc, "app-gate-api-prod") || !strings.Contains(doc, "argocd-apps") {
@@ -273,14 +273,15 @@ func TestObserveK8sChartNoiseRulesAreExact(t *testing.T) {
 		{name: "calico update", user: calico, verb: "update", resource: "pods", objName: "web-1", sub: "status", oos: true},
 		{name: "calico pod body", user: calico, verb: "patch", resource: "pods", objName: "web-1"},
 		{name: "calico configmap", user: calico, verb: "patch", resource: "configmaps", objName: "x", sub: "status", oos: true},
-		{name: "calico refused", user: calico, verb: "patch", resource: "pods", objName: "web-1", sub: "status", code: 409},
+		{name: "calico refused", user: calico, verb: "patch", resource: "pods", objName: "web-1", sub: "status", code: 403},
 		{name: "person patching pod status", user: "dana@example.com", verb: "patch", resource: "pods", objName: "web-1", sub: "status"},
 
 		{name: "agent creates a grant", user: agentSA, verb: "create", resource: "clearancegrants", objName: "g", obj: map[string]any{"kind": "ClearanceGrant"}, want: "clearance-argocd-agent-grants"},
 		{name: "agent patches a grant, Metadata level", user: agentSA, verb: "patch", resource: "clearancegrants", objName: "g", want: "clearance-argocd-agent-grants"},
 		{name: "agent patches grant status", user: agentSA, verb: "patch", resource: "clearancegrants", objName: "g", sub: "status", want: "clearance-argocd-agent-grants"},
 		{name: "agent deletes a grant", user: agentSA, verb: "delete", resource: "clearancegrants", objName: "g", want: "clearance-argocd-agent-grants"},
-		{name: "agent's refused create (AlreadyExists)", user: agentSA, verb: "create", resource: "clearancegrants", objName: "g", code: 409},
+		{name: "agent's refused create (Forbidden)", user: agentSA, verb: "create", resource: "clearancegrants", objName: "g", code: 403},
+		{name: "agent's create that found the grant there (AlreadyExists) is not a refusal", user: agentSA, verb: "create", resource: "clearancegrants", objName: "g", code: 409, oos: true},
 		{name: "agent writing a configmap", user: agentSA, verb: "patch", resource: "configmaps", objName: "g"},
 		{name: "person writing a grant", user: "dana@example.com", verb: "patch", resource: "clearancegrants", objName: "g"},
 
@@ -306,15 +307,18 @@ func TestObserveK8sChartNoiseRulesAreExact(t *testing.T) {
 		{name: "ESO refreshes a Secret", user: eso, verb: "update", resource: "secrets", objName: "registry-credentials", want: "external-secrets-owned-secrets"},
 		{name: "ESO creates a Secret, argocd namespace", user: eso, verb: "create", resource: "secrets", objName: "x", ns: "argocd-apps", want: "external-secrets-owned-secrets"},
 		{name: "ESO deletes a Secret", user: eso, verb: "delete", resource: "secrets", objName: "registry-credentials"},
-		{name: "ESO Secret refused", user: eso, verb: "update", resource: "secrets", objName: "registry-credentials", code: 409},
+		{name: "ESO Secret refused", user: eso, verb: "update", resource: "secrets", objName: "registry-credentials", code: 403},
+		{name: "ESO Secret update lost a conflict", user: eso, verb: "update", resource: "secrets", objName: "registry-credentials", code: 409, oos: true},
 		{name: "person writes the Secret ESO owns", user: "dana@example.com", verb: "update", resource: "secrets", objName: "registry-credentials"},
 		{name: "another SA writes a Secret", user: "system:serviceaccount:default:default", verb: "update", resource: "secrets", objName: "registry-credentials"},
-		{name: "ESO ExternalSecret status refused", user: eso, verb: "update", resource: "externalsecrets", objName: "x", sub: "status", code: 409},
+		{name: "ESO ExternalSecret status refused", user: eso, verb: "update", resource: "externalsecrets", objName: "x", sub: "status", code: 403},
 
 		{name: "job controller, the wait Job", user: jobCtl, verb: "update", resource: "jobs", objName: "clearance-awaiting-approval", sub: "status", want: "job-controller-wait-job"},
 		{name: "job controller, the wait Job's pod", user: jobCtl, verb: "create", resource: "pods", objName: "clearance-awaiting-approval-mjd76", want: "job-controller-wait-job"},
 		{name: "job controller, another Job", user: jobCtl, verb: "update", resource: "jobs", objName: "migrate", sub: "status", oos: true},
-		{name: "job controller, a name that only starts alike", user: jobCtl, verb: "create", resource: "pods", objName: "clearance-awaiting-approvals"},
+		// not the wait Job's noise rule (the name only starts alike), but a Job controller creating a Pod is a child of its Job
+		// (scope.controller_children): counted out of scope, not assessed.
+		{name: "job controller, a name that only starts alike", user: jobCtl, verb: "create", resource: "pods", objName: "clearance-awaiting-approvals", oos: true},
 	}
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -439,4 +443,102 @@ func TestObserveK8sChartPlatformGitopsAndExtraNoise(t *testing.T) {
 	if _, err := pipeline.Load([]byte(doc)); !errors.Is(err, pipeline.ErrBlanketNoise) {
 		t.Errorf("a pattern identity in extraNoise must be refused: %v", err)
 	}
+}
+
+// A cluster with no gate has no ClearanceGrant CRD: grants.enabled=false drops the collector's list rule and tells it so; the
+// default keeps both.
+func TestObserveK8sChartGrantsEnabled(t *testing.T) {
+	grantRule := func(objs []obj) bool {
+		cr := find(objs, "ClusterRole", "clearance-observe-k8s")
+		for _, r := range rulesOf(cr) {
+			if slices.Contains(toStrings(get(r, "resources")), "clearancegrants") {
+				return true
+			}
+		}
+		return false
+	}
+	args := func(objs []obj) string {
+		return strings.Join(toStrings(get(container(t, find(objs, "Deployment", "clearance-observe-k8s")), "args")), " ")
+	}
+	on := renderObserve(t)
+	if !grantRule(on) || !strings.Contains(args(on), "--grants-enabled=true") {
+		t.Errorf("default: rule %v, args %s", grantRule(on), args(on))
+	}
+	off := renderObserve(t, "--set", "grants.enabled=false")
+	if grantRule(off) || !strings.Contains(args(off), "--grants-enabled=false") {
+		t.Errorf("grants.enabled=false: rule %v, args %s", grantRule(off), args(off))
+	}
+}
+
+// The before-state of a pruned Role, RoleBinding or ServiceAccount is what ties a platform Argo CD delete to its Application:
+// they are watched (list and watch in each watched namespace, extraNamespaces included), and the kube-system controllers that
+// manage the objects they created are in the rule set, which loads.
+func TestObserveK8sChartWatchesRBACAndNamesTheControllerChildren(t *testing.T) {
+	objs := renderObserve(t, "--set", "watch.extraNamespaces={kube-system}")
+	role := find(objs, "Role", "clearance-observe-k8s-watch")
+	var seen bool
+	for _, r := range rulesOf(role) {
+		if get(r, "apiGroups", 0) == "rbac.authorization.k8s.io" {
+			seen = slices.Contains(toStrings(get(r, "resources")), "roles") && slices.Contains(toStrings(get(r, "resources")), "rolebindings")
+		}
+	}
+	if !seen {
+		t.Errorf("the watch Role does not list roles and rolebindings: %v", rulesOf(role))
+	}
+	var inKubeSystem bool
+	for _, o := range objs {
+		if o["kind"] == "Role" && get(o, "metadata", "namespace") == "kube-system" && get(o, "metadata", "name") == "clearance-observe-k8s-watch" {
+			inKubeSystem = true
+		}
+	}
+	if !inKubeSystem {
+		t.Error("watch.extraNamespaces: no watch Role in kube-system")
+	}
+	args := strings.Join(toStrings(get(container(t, find(objs, "Deployment", "clearance-observe-k8s")), "args")), " ")
+	for _, want := range []string{"rbac.authorization.k8s.io/v1/roles=Role", "rbac.authorization.k8s.io/v1/rolebindings=RoleBinding", "--watch-namespaces=app-gate-api-prod,argocd-apps,kube-system"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("args lack %s: %s", want, args)
+		}
+	}
+	cm := find(objs, "ConfigMap", "clearance-observe-k8s-rules")
+	doc, _ := get(cm, "data", "observe-rules.yaml").(string)
+	if _, err := pipeline.Load([]byte(doc)); err != nil {
+		t.Fatalf("the rendered rule set does not load: %v", err)
+	}
+	for _, want := range []string{"system:serviceaccount:kube-system:replicaset-controller", "system:serviceaccount:kube-system:generic-garbage-collector"} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("controller_children lack %s", want)
+		}
+	}
+	// a child list of the deployment's own replaces the default; a pattern in it fails the load
+	good, err := helmObserve(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if i := strings.Index(good, "observe-rules.yaml: |"); i < 0 {
+		t.Fatal("no rules in the render")
+	} else if _, err := pipeline.Load([]byte(dedentBlock(good[i+len("observe-rules.yaml: |"):]))); err != nil {
+		t.Fatalf("the un-indented default render must load, or the negative below proves nothing: %v", err)
+	}
+	bad, err := helmObserve(t, "--set-json", `rules.controllerChildren=[{"subject":"system:serviceaccount:kube-system:*","kinds":["Pod"]}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if i := strings.Index(bad, "observe-rules.yaml: |"); i < 0 {
+		t.Fatal("no rules in the render")
+	} else if _, err := pipeline.Load([]byte(dedentBlock(bad[i+len("observe-rules.yaml: |"):]))); err == nil {
+		t.Error("a pattern subject in controllerChildren loaded")
+	}
+}
+
+// dedentBlock is the YAML block scalar that follows "key: |" in a rendered manifest, up to the next document, un-indented.
+func dedentBlock(s string) string {
+	if i := strings.Index(s, "\n---"); i >= 0 {
+		s = s[:i]
+	}
+	var out []string
+	for _, l := range strings.Split(s, "\n") {
+		out = append(out, strings.TrimPrefix(l, "    "))
+	}
+	return strings.Join(out, "\n")
 }

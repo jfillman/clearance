@@ -58,6 +58,10 @@ type Config struct {
 	// the Argo CD agent writes the ClearanceGrant up to its --grant-interval (30s) later; the collector's own snapshot is
 	// re-read every health interval (1m) and on a miss. Default 3m, past both. Negative: decide at once.
 	GrantSettle time.Duration
+	// ArgoIndexTimeout: a platform Argo CD controller's write is held until the Application index has synced (every
+	// Application watch has listed once), and for at most this long; past it the write is decided as it stands and the
+	// argo-applications-synced check says the index is still not synced. Default 5m. Negative: never hold.
+	ArgoIndexTimeout time.Duration
 	// MaxHeld bounds how many events wait at once (default 1000); past it an event is decided at once.
 	MaxHeld int
 	// Latency is how far behind the source this reader is by design (CloudWatch, Log Analytics): a watch change waits
@@ -89,6 +93,9 @@ func (c *Config) defaults() {
 	}
 	if c.GrantSettle == 0 {
 		c.GrantSettle = 3 * time.Minute
+	}
+	if c.ArgoIndexTimeout == 0 {
+		c.ArgoIndexTimeout = 5 * time.Minute
 	}
 	if c.MaxHeld <= 0 {
 		c.MaxHeld = 1000
@@ -145,13 +152,19 @@ type meta struct {
 
 // heldEvent is an audit event whose write names a grant the lookups did not know when it arrived.
 type heldEvent struct {
-	ID      string          `json:"id"`
-	Grant   string          `json:"grant"`
+	ID    string `json:"id"`
+	Grant string `json:"grant,omitempty"`
+	// Reason is why it waits: "" (the grant is not known yet: due after the settle window) or heldArgoIndex (a platform Argo
+	// CD controller's write, and the Application index has not synced: due when it has, or at the timeout).
+	Reason  string          `json:"reason,omitempty"`
 	Payload json.RawMessage `json:"payload"`
 	Before  json.RawMessage `json:"before,omitempty"` // the object before the change, kept when small
 	At      time.Time       `json:"at"`               // when the queue received it
 	Due     time.Time       `json:"due"`
 }
+
+// heldArgoIndex is heldEvent.Reason for a write waiting on the Application index.
+const heldArgoIndex = "argo-index"
 
 // maxHeldBefore is the largest before-image kept with a held event (the cursor file is rewritten at every commit).
 const maxHeldBefore = 32 << 10
@@ -180,6 +193,9 @@ type Collector struct {
 	watchWant int
 	hbErr     error
 	lkErr     error
+	appSynced map[string]bool // the Application watches (resource/namespace) that have listed at least once
+	idxLate   int             // writes decided at the timeout with the Application index still not synced
+	lastLate  time.Time
 	held      []heldEvent // events waiting out the settle window; the committed copy is meta.Held
 }
 
@@ -197,7 +213,7 @@ func New(cfg Config, d Deps) (*Collector, error) {
 		return nil, errors.New("collector: a cluster, a queue, a pipeline and a core are required")
 	}
 	c := &Collector{cfg: cfg, d: d, pipe: d.Pipeline, cache: NewCache(d.Pipeline.CanonicalHash),
-		gaps: NewGaps(cfg.GapGrace + cfg.Latency), seqs: map[string]int64{}, watchOK: map[string]time.Time{}}
+		gaps: NewGaps(cfg.GapGrace + cfg.Latency), seqs: map[string]int64{}, watchOK: map[string]time.Time{}, appSynced: map[string]bool{}}
 	if m := d.Queue.Meta(); len(m) > 0 {
 		if err := json.Unmarshal(m, &c.meta); err != nil {
 			return nil, fmt.Errorf("collector: the queue's meta: %w", err)
@@ -205,6 +221,10 @@ func New(cfg Config, d Deps) (*Collector, error) {
 	}
 	c.held = append(c.held, c.meta.Held...)
 	d.Pipeline.HoldUnknownGrants(cfg.GrantSettle > 0)
+	d.Pipeline.HoldUnsyncedApplications(cfg.ArgoIndexTimeout > 0)
+	if d.Lookups != nil {
+		d.Lookups.AppsSynced = c.applicationsSynced
+	}
 	if c.meta.Counters.Since.IsZero() {
 		c.meta.Counters.Since = cfg.Now().UTC()
 	}
@@ -401,21 +421,30 @@ func (c *Collector) decide(ev *auditEvent, raw pipeline.RawEvent, at time.Time, 
 	case pipeline.Assessed:
 		b.delta.Assessed++
 		b.items = append(b.items, item{a, levelOf(map[string]any{"level": ev.Level})})
-	case pipeline.Held:
+	case pipeline.Held, pipeline.HeldIndex:
 		c.mu.Lock()
 		full := len(c.held)+len(b.newHeld) >= c.cfg.MaxHeld
 		c.mu.Unlock()
 		if full {
+			if disp == pipeline.HeldIndex {
+				c.mu.Lock()
+				c.idxLate++
+				c.lastLate = c.cfg.Now()
+				c.mu.Unlock()
+			}
 			raw.Final = true // no room to wait: decide it as it stands (out-of-band, the cautious answer)
 			c.decide(ev, raw, at, b)
 			return
 		}
 		h := heldEvent{ID: ev.AuditID, Grant: detail, Payload: raw.Raw, At: at, Due: c.cfg.Now().Add(c.cfg.GrantSettle)}
+		if disp == pipeline.HeldIndex {
+			h.Grant, h.Reason, h.Due = "", heldArgoIndex, c.cfg.Now().Add(c.cfg.ArgoIndexTimeout)
+		}
 		if len(raw.Before) <= maxHeldBefore {
 			h.Before = raw.Before
 		}
 		b.newHeld = append(b.newHeld, h)
-		c.cfg.Log.Debug("held: the grant is not known yet", "audit_id", ev.AuditID, "grant", detail, "due", h.Due)
+		c.cfg.Log.Debug("held", "audit_id", ev.AuditID, "grant", detail, "reason", h.Reason, "due", h.Due)
 	case pipeline.Filtered:
 		b.delta.Filtered[detail]++
 	case pipeline.OutOfScope:
@@ -425,13 +454,16 @@ func (c *Collector) decide(ev *auditEvent, raw pipeline.RawEvent, at time.Time, 
 	}
 }
 
-// dueHeld is the held events whose settle window is over.
+// dueHeld is the held events that are due: a grant-settle one when its window is over, an Application-index one as soon as
+// the index has synced or at its timeout.
 func (c *Collector) dueHeld(now time.Time) []heldEvent {
+	synced := c.applicationsSynced()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var due []heldEvent
 	for _, h := range c.held {
-		if !now.Before(h.Due) {
+		switch {
+		case h.Reason == heldArgoIndex && synced, !now.Before(h.Due):
 			due = append(due, h)
 		}
 	}
@@ -448,6 +480,14 @@ func (c *Collector) release(h heldEvent, b *batch) {
 		return
 	}
 	raw := pipeline.RawEvent{Provider: pipeline.Kubernetes, Scope: c.cfg.Cluster, Raw: h.Payload, Before: h.Before, Final: true}
+	if h.Reason == heldArgoIndex && !c.applicationsSynced() {
+		// the timeout: decided as it stands (the index is empty, so out-of-band), and the check says why
+		c.mu.Lock()
+		c.idxLate++
+		c.lastLate = c.cfg.Now()
+		c.mu.Unlock()
+		c.cfg.Log.Warn("a platform Argo CD write was decided with the Application index still not synced", "audit_id", h.ID, "held_for", c.cfg.Now().Sub(h.At).Round(time.Second))
+	}
 	c.decide(&ev, raw, h.At, b)
 }
 

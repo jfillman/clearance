@@ -3,7 +3,8 @@
 //
 //	Normalize  flatten the event, canonicalize the stored object                  (event.go)
 //	Scope      keep writes in governed clusters, namespaces, accounts, kinds; count the rest (and the writes that change nothing:
-//	           a controller's status write, a service account's TokenRequest: see notAChange)
+//	           a controller's status write, a service account's TokenRequest, a kube-system controller managing the objects it
+//	           created, a controller's conflict or not-found: see notAChange, controllerChild, notARefusal)
 //	Noise      drop legitimate controller writes: one exact identity paired with the exact shape it may touch
 //	Attribute  tie what survives to an authorization, strongest signal first, per provider
 //	Classify   map the outcome to a coverage state and a tier
@@ -72,7 +73,10 @@ const (
 	Assessed Disposition = "assessed"
 	// Held: the object names a grant the lookups do not know yet, and the caller asked for such events to settle
 	// (HoldUnknownGrants). Nothing is counted or correlated; give the event back as Final after the settle window.
-	Held       Disposition = "held"
+	Held Disposition = "held"
+	// HeldIndex: a platform-gitops write, and the Application index has not synced yet (HoldUnsyncedApplications). Nothing is
+	// counted or correlated; give the event back as Final once the index has synced, or after the caller's timeout.
+	HeldIndex  Disposition = "held-index"
 	Filtered   Disposition = "filtered"
 	OutOfScope Disposition = "out-of-scope"
 	NotWrite   Disposition = "not-a-write"
@@ -115,6 +119,7 @@ type Pipeline struct {
 	OnAlert func(Alert)
 
 	holdUnknown bool
+	holdIndex   bool
 	owners      ownerIndex
 
 	mu     sync.Mutex
@@ -140,6 +145,17 @@ func (p *Pipeline) HoldUnknownGrants(on bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.holdUnknown = on
+}
+
+// HoldUnsyncedApplications makes Process answer HeldIndex, instead of deciding, for a succeeded write by a platform Argo CD
+// instance's controller while the lookups say their Application index has not synced (ArgoIndexState). Without the index
+// the write finds no Application and would be recorded out-of-band for a reason that is the collector's, not the write's:
+// during the collector's own rollout, the platform Argo CD is patching the RBAC that lets the collector watch its
+// Applications. A RawEvent with Final set is decided at once either way.
+func (p *Pipeline) HoldUnsyncedApplications(on bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.holdIndex = on
 }
 
 // RuleSet is the rule set in force.
@@ -183,12 +199,17 @@ func (p *Pipeline) Process(raw RawEvent) (*Assessment, Disposition, string, erro
 			return nil, Filtered, rule, nil
 		}
 	}
-	// A write that changes no object's desired state (a controller's status write, a service account's TokenRequest) is
-	// counted with the scope's out-of-scope writes, not assessed. After noise: a named rule still claims what it names, and
+	// A write that changes no object's desired state (a controller's status write, a service account's TokenRequest, a
+	// kube-system controller managing the objects it created), and a controller's failed write that is not a security refusal
+	// (a conflict, a not-found), is counted with the scope's out-of-scope writes, not assessed. After noise: a named rule still claims what it names, and
 	// its count carries its why.
-	if p.notAChange(ev) {
+	if p.notAChange(ev) || p.notARefusal(ev) || p.controllerChild(ev) {
 		p.stats.OutOfScope[ev.Scope]++
 		return nil, OutOfScope, ev.Scope, nil
+	}
+	if !raw.Final && p.holdForIndex(ev) {
+		p.stats.Events-- // counted when it is decided
+		return nil, HeldIndex, "", nil
 	}
 	a, err := p.attribute(ev)
 	if err != nil {

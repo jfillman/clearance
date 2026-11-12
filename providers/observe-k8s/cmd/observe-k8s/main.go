@@ -207,10 +207,12 @@ func run(args []string) error {
 		watches   = fs.String("watch", env("OBSERVE_WATCH", ""), "resources to watch, items separated by semicolons: group/version/resource=Kind, with a trailing ,cluster for a cluster-scoped resource (v1/configmaps=ConfigMap;rbac.authorization.k8s.io/v1/clusterroles=ClusterRole,cluster)")
 		watchNS   = fs.String("watch-namespaces", env("OBSERVE_WATCH_NAMESPACES", ""), "the namespaces the namespaced watches cover, comma-separated")
 		grantAPI  = fs.String("grant-api", env("CLEARANCE_GRANT_API", "clearance.hangar.io/v1"), "the ClearanceGrant CRD's group/version")
+		grantsOn  = fs.Bool("grants-enabled", true, "the cluster has the gate, so the ClearanceGrant CRD exists and its grants are listed (false: no gate on this cluster, no grant is listed, only break-glass windows are read)")
 		healthEv  = fs.Duration("health-interval", time.Minute, "the health record's interval")
 		beatEv    = fs.Duration("heartbeat-interval", 30*time.Second, "how often the heartbeat is written")
 		gapGrace  = fs.Duration("gap-grace", 3*time.Minute, "how long a watch change waits for its audit event before it is an audit gap")
 		settle    = fs.Duration("grant-settle", 3*time.Minute, "how long a write that names a grant the collector does not know yet waits, and the grants are re-read, before it is decided (negative: decide at once)")
+		argoIdx   = fs.Duration("argo-index-timeout", 5*time.Minute, "how long a platform Argo CD controller's write waits for the Application index to sync before it is decided as it stands (negative: never wait)")
 		complete  = fs.Bool("completeness-claimed", true, "each observation claims its feed delivered everything (the core checks the claim against health)")
 		showVer   = fs.Bool("version", false, "print the version")
 	)
@@ -262,12 +264,15 @@ func run(args []string) error {
 		return err
 	}
 	core := &agent.HTTPCore{Client: cc, Feeds: agent.HTTPFeeds{Base: *coreURL, Token: tok}}
-	lookups := &collector.Lookups{Cluster: *cluster, Grants: argoKube, BG: core}
+	lookups := &collector.Lookups{Cluster: *cluster, BG: core}
+	if *grantsOn {
+		lookups.Grants = argoKube // a nil Grants is an explicit "no gate here"; a typed nil would not be
+	}
 	pipe := pipeline.New(rs, lookups, vocab.Default())
 
 	cfg := collector.Config{Cluster: *cluster, Source: *source, Webhook: *reader == "", CompletenessClaimed: *complete,
 		Namespace: *namespace, ServiceAccount: *saName, HeartbeatCM: *hbCM, CanarySecret: *canary, PolicyCM: *policyCM,
-		HealthInterval: *healthEv, HeartbeatInterval: *beatEv, GapGrace: *gapGrace, GrantSettle: *settle, WatchNS: list(*watchNS), Log: log}
+		HealthInterval: *healthEv, HeartbeatInterval: *beatEv, GapGrace: *gapGrace, GrantSettle: *settle, ArgoIndexTimeout: *argoIdx, WatchNS: list(*watchNS), Log: log}
 	cfg.Watches, err = parseWatches(*watches)
 	if err != nil {
 		return err

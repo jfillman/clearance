@@ -491,7 +491,7 @@ func TestFilteredCountsPerRule(t *testing.T) {
 		t.Fatalf("%+v", rep.Filtered)
 	}
 	for _, f := range rep.Filtered {
-		if want[f.Rule] != f.Count || f.RuleSet != "observe-default@2026.11.2" || f.Why == "" {
+		if want[f.Rule] != f.Count || f.RuleSet != "observe-default@2026.11.3" || f.Why == "" {
 			t.Errorf("%+v", f)
 		}
 	}
@@ -517,8 +517,8 @@ func TestClassifyMatchesGateCoverage(t *testing.T) {
 
 func TestDifferentBundleDifferentDigest(t *testing.T) {
 	a := mustRules(t)
-	b, err := Load([]byte(strings.Replace(string(DefaultRules()), `version: "2026.11.2"`, `version: "2026.11.3"`, 1)))
-	if err != nil || a.Ref.Digest == b.Ref.Digest || b.Ref.Version != "2026.11.3" {
+	b, err := Load([]byte(strings.Replace(string(DefaultRules()), `version: "2026.11.3"`, `version: "2026.11.4"`, 1)))
+	if err != nil || a.Ref.Digest == b.Ref.Digest || b.Ref.Version != "2026.11.4" {
 		t.Fatalf("%v %+v %+v", err, a.Ref, b.Ref)
 	}
 }
