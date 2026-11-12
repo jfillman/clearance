@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/jfillman/clearance/internal/argosrc"
 )
 
 // Exec runs a program and returns its stdout; a failure carries its stderr.
@@ -17,12 +19,17 @@ type Exec func(ctx context.Context, dir, name string, args ...string) ([]byte, e
 
 // OSExec is Exec on the real machine. No shell is involved: arguments are never parsed by one.
 func OSExec(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+	return OSRun(ctx, dir, nil, name, args...)
+}
+
+// OSRun is OSExec with extra environment (the generic renderer's: Helm's cache directories, git's allowed protocols).
+func OSRun(ctx context.Context, dir string, env []string, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	// The sidecar's environment carries no credential for these tools: git and helm get a bare one.
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1"}
+	cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1"}, env...)
 	if err := cmd.Run(); err != nil {
 		msg := strings.TrimSpace(errb.String())
 		if len(msg) > 2000 {
@@ -42,6 +49,9 @@ func firstArg(a []string) string {
 
 // Rendered is what the customer's render produced.
 type Rendered struct {
+	Generic    bool                 // rendered from the Application's original sources (PARAM_SOURCES)
+	Sources    []argosrc.Provenance // what each source resolved to (generic only)
+	Release    string               // releaseTracking.releaseId of the value files (generic only; legacy reads the files itself)
 	Manifests  []byte
 	ChartRepo  string
 	ChartTag   string
@@ -129,4 +139,33 @@ func releaseFromValues(cfg Config, srcDir string) string {
 		}
 	}
 	return id
+}
+
+// SourcesRequest is the generic renderer's request for this run: the Application as Argo CD itself would describe it
+// to its own repo-server (name, destination namespace, project, the cluster's version and API versions).
+func SourcesRequest(cfg Config) (argosrc.Request, error) {
+	srcs, err := argosrc.ParseSources(cfg.Sources)
+	if err != nil {
+		return argosrc.Request{}, err
+	}
+	return argosrc.Request{AppName: cfg.AppName, Namespace: cfg.Destination, Project: cfg.Project, KubeVersion: cfg.KubeVersion,
+		APIVersions: cfg.APIVersions, Sources: srcs, KustomizeBuildOptions: cfg.KustomizeBuildOptions}, nil
+}
+
+// RenderSources is the generic mode (G-ARGO-10b): render the Application's original sources as Argo CD would.
+func RenderSources(ctx context.Context, run argosrc.Runner, cfg Config) (*Rendered, error) {
+	req, err := SourcesRequest(cfg)
+	if err != nil {
+		return nil, err
+	}
+	tmp, err := os.MkdirTemp("", "clearance-cmp-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(tmp)
+	res, err := argosrc.Render(ctx, argosrc.Options{Run: run, Work: tmp}, req)
+	if err != nil {
+		return nil, err
+	}
+	return &Rendered{Manifests: res.Manifests, Generic: true, Sources: res.Sources, Release: argosrc.ReleaseIDFromValues(res.ValueDocs)}, nil
 }

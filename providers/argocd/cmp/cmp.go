@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jfillman/clearance/client"
+	"github.com/jfillman/clearance/internal/argosrc"
 )
 
 // Core is the part of the Clearance client the plugin uses.
@@ -19,6 +20,7 @@ type Core interface {
 // Deps are the plugin's collaborators; tests replace them.
 type Deps struct {
 	Exec   Exec
+	Run    argosrc.Runner // the generic renderer's; nil is OSRun
 	Core   Core
 	Cache  Cache
 	Now    func() time.Time
@@ -37,7 +39,17 @@ const (
 // manifests to out. An error is a refusal: the caller exits non-zero, Argo CD shows ComparisonError and nothing
 // syncs (a tier-3 denial, a denied or expired change, an outage hold, a render that fails).
 func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Writer) (Outcome, error) {
-	r, err := Render(ctx, d.Exec, cfg, srcDir)
+	var r *Rendered
+	var err error
+	if cfg.Sources != "" {
+		run := d.Run
+		if run == nil {
+			run = OSRun
+		}
+		r, err = RenderSources(ctx, run, cfg)
+	} else {
+		r, err = Render(ctx, d.Exec, cfg, srcDir)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -45,8 +57,19 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 	if err != nil {
 		return "", err
 	}
-	tree.SetRelease(releaseFromValues(cfg, srcDir))
+	if r.Generic {
+		tree.SetRelease(r.Release)
+	} else {
+		tree.SetRelease(releaseFromValues(cfg, srcDir))
+	}
 	fmt.Fprintf(d.Stderr, "clearance: %s/%s rendered %d objects, tree %s", cfg.App, cfg.Env, len(tree.Hashes), tree.Root[:12])
+	for _, s := range r.Sources {
+		what := s.Repo
+		if s.Chart != "" {
+			what += " chart " + s.Chart
+		}
+		fmt.Fprintf(d.Stderr, ", source %d %s %s@%s", s.Position, s.Type, what, shortRes(s.Resolved))
+	}
 	if r.ChartMerge != "" {
 		fmt.Fprintf(d.Stderr, ", chart %s@%s (%s)", cfg.ChartRepo, cfg.ChartRev, r.ChartMerge[:12])
 	}
@@ -92,6 +115,13 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 		}
 		return "", fmt.Errorf("change %s is %s (tier %d)%s; nothing syncs", ch.ID, ch.State, ch.Tier, why)
 	}
+}
+
+func shortRes(r string) string {
+	if len(r) > 19 {
+		return r[:19]
+	}
+	return r
 }
 
 func emit(tree *Tree, out io.Writer, o Outcome, id string, cfg Config) (Outcome, error) {
@@ -144,6 +174,9 @@ func newCore(cfg Config) (Core, error) {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "parity" { // the parity suite (parity.go), not the plugin
+		os.Exit(parityMain(os.Args[2:], os.Stdout, os.Stderr))
+	}
 	cfg, err := ParseConfig(os.Getenv)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "clearance-cmp:", err)
@@ -154,7 +187,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "clearance-cmp:", err)
 		os.Exit(2)
 	}
-	d := Deps{Exec: OSExec, Core: core, Cache: Cache{Dir: cfg.CacheDir}, Now: time.Now, Stderr: os.Stderr}
+	d := Deps{Exec: OSExec, Run: OSRun, Core: core, Cache: Cache{Dir: cfg.CacheDir}, Now: time.Now, Stderr: os.Stderr}
 	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Second) // Argo CD kills a plugin at 90 s (ARGOCD_EXEC_TIMEOUT)
 	defer cancel()
 	if _, err := Generate(ctx, d, cfg, ".", os.Stdout); err != nil {

@@ -23,6 +23,18 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 - **Observe-k8s chart: `rules.extraNoise`**, a deployment's own noise rules (an exact identity and the exact shape it writes), held to the
   same validator as the chart's own; and the rule `external-secrets-owned-secrets` (External Secrets creating, updating or patching
   Secrets in the governed namespaces; by identity, because a Secret's owner reference is not visible at Metadata).
+- **Argo CD plugin (G-ARGO-10b): a generic renderer, and a parity suite that proves it.** Set the plugin parameter `sources` (the
+  Application's original `spec.sources`, unchanged, as JSON) and `clearance-cmp` renders what the Application already uses, as Argo CD
+  would: Helm from an HTTP repository, an OCI registry or a git path (value files including multi-source `$ref/` ones, `valuesObject`
+  and `values`, parameters, file parameters, release name and namespace, `--include-crds`, the cluster's `KUBE_VERSION` and
+  `KUBE_API_VERSIONS`), Kustomize, and a plain directory (`recurse`, `include`, `exclude`). The code is `internal/argosrc`, written
+  against Argo CD v3.5.0's own. Anything it cannot reproduce (another plugin, jsonnet, `kustomize.patches`, a version range, a remote
+  value file, `.argocd-source.yaml`, submodules, a field it does not know) is refused with an error that names the gap; the Airframe-chart
+  parameters work as before, and setting both is a configuration error. `clearance-cmp parity` renders each Application both ways and
+  compares objects and hashes (identical, differs with the first differing pointer, unsupported, not comparable, error), with a scope
+  audit against the cluster's discovery. Run against all 143 Applications on both clusters: 133 identical (2,130 objects), 6 differ, 3
+  unsupported, 1 not comparable; the report and the parameter contract are in docs/gate.md ("Rendering any source"). `clusterScopedKinds`
+  now also takes `!Kind` (a kind the built-in rules wrongly treat as cluster-scoped).
 
 ### Changed
 
@@ -44,6 +56,9 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 - **`CLEARANCE_API_OBSERVATION_READERS`** (chart `api.observationReaders`): principal globs of machine pollers (the
   `observer` role) that read coverage, observations, observation health and exceptions, whole scope and redacted, and
   nothing else.
+- **The plugin image's Helm and kustomize are Argo CD's: Helm v4.2.1 and kustomize v5.8.1** (were v3.21.3 and v5.7.1; checksum-verified,
+  both architectures). A different Helm renders different objects (found by the parity suite); move them with Argo CD. Takes effect when
+  the image is rebuilt.
 
 ## [0.40.3] - 2026-11-11
 

@@ -14,11 +14,14 @@ import (
 // parameters (PARAM_*, set by the tenant-onboarding ApplicationSet) and the sidecar's own settings (CLEARANCE_*).
 type Config struct {
 	// From Argo CD.
-	AppName     string // ARGOCD_APP_NAME: the Helm release name (D26: the release name is the Application)
-	Destination string // ARGOCD_APP_NAMESPACE: the destination namespace, set on every namespaced object
-	Revision    string // ARGOCD_APP_REVISION: the commit Argo syncs (the merge commit, not a PR head)
-	SourceRepo  string // ARGOCD_APP_SOURCE_REPO_URL: the gitops repository (the plugin's own source)
-	SourcePath  string // ARGOCD_APP_SOURCE_PATH
+	AppName     string   // ARGOCD_APP_NAME: the Helm release name (D26: the release name is the Application)
+	Destination string   // ARGOCD_APP_NAMESPACE: the destination namespace, set on every namespaced object
+	Revision    string   // ARGOCD_APP_REVISION: the commit Argo syncs (the merge commit, not a PR head)
+	SourceRepo  string   // ARGOCD_APP_SOURCE_REPO_URL: the gitops repository (the plugin's own source)
+	SourcePath  string   // ARGOCD_APP_SOURCE_PATH
+	Project     string   // ARGOCD_APP_PROJECT_NAME
+	KubeVersion string   // KUBE_VERSION: the destination cluster's Kubernetes version (set by Argo CD for a plugin)
+	APIVersions []string // KUBE_API_VERSIONS: its API versions, comma separated in the environment
 
 	// Plugin parameters.
 	App          string   // the Hangar app (the change's `app`)
@@ -31,6 +34,12 @@ type Config struct {
 	ValuesJSON   string   // the platform's injected values (what the ApplicationSet gives a Helm source as valuesObject)
 	KustomizeDir string   // an optional kustomize directory rendered beside the chart (the tenant's configmap/)
 	ExtraCluster []string // more cluster-scoped kinds
+
+	// Sources is the generic mode (G-ARGO-10b): the Application's original spec.sources as a JSON array, taken
+	// unchanged (docs/gate.md, "Rendering any source"). Set, it replaces ChartRepo/ChartRev/ChartPath/ValueFiles/
+	// ValuesJSON/KustomizeDir, none of which may then be set.
+	Sources               string
+	KustomizeBuildOptions string // argocd-cm's kustomize.buildOptions, when the cluster sets any
 
 	// The sidecar.
 	CoreURL      string
@@ -57,6 +66,8 @@ func ParseConfig(get func(string) string) (Config, error) {
 	c := Config{
 		AppName: get("ARGOCD_APP_NAME"), Destination: get("ARGOCD_APP_NAMESPACE"), Revision: get("ARGOCD_APP_REVISION"),
 		SourceRepo: get("ARGOCD_APP_SOURCE_REPO_URL"), SourcePath: get("ARGOCD_APP_SOURCE_PATH"),
+		Project: get("ARGOCD_APP_PROJECT_NAME"), KubeVersion: strings.TrimSpace(get("KUBE_VERSION")),
+		Sources: strings.TrimSpace(get("PARAM_SOURCES")), KustomizeBuildOptions: p("kustomizeBuildOptions"),
 		App: p("app"), Env: p("env"), Cluster: p("cluster"), ChartRepo: p("chartRepo"), ChartRev: p("chartRevision"),
 		ChartPath: p("chartPath"), ValuesJSON: p("valuesJson"), KustomizeDir: p("kustomizeDir"),
 		CoreURL: get("CLEARANCE_URL"), TokenFile: orDefault(get("CLEARANCE_TOKEN_FILE"), "/var/run/secrets/tokens/clearance"),
@@ -71,6 +82,11 @@ func ParseConfig(get func(string) string) (Config, error) {
 	for _, k := range strings.Split(p("clusterScopedKinds"), ",") {
 		if k = strings.TrimSpace(k); k != "" {
 			c.ExtraCluster = append(c.ExtraCluster, k)
+		}
+	}
+	for _, v := range strings.Split(get("KUBE_API_VERSIONS"), ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			c.APIVersions = append(c.APIVersions, v)
 		}
 	}
 	var err error
@@ -117,6 +133,14 @@ func (c Config) validate() error {
 	for k, v := range map[string]string{"PARAM_APP": c.App, "PARAM_ENV": c.Env, "PARAM_CLUSTER": c.Cluster} {
 		if v != "" && !nameRx.MatchString(v) {
 			errs = append(errs, fmt.Errorf("%s %q is not a DNS-1123 label", k, v))
+		}
+	}
+	if c.Sources != "" {
+		for k, v := range map[string]string{"PARAM_CHARTREPO": c.ChartRepo, "PARAM_CHARTREVISION": c.ChartRev, "PARAM_CHARTPATH": c.ChartPath,
+			"PARAM_VALUEFILES": strings.Join(c.ValueFiles, ","), "PARAM_VALUESJSON": c.ValuesJSON, "PARAM_KUSTOMIZEDIR": c.KustomizeDir} {
+			if v != "" {
+				errs = append(errs, fmt.Errorf("%s is set with PARAM_SOURCES: the plugin renders either the Airframe chart parameters or the Application's original sources, not both", k))
+			}
 		}
 	}
 	if c.ChartRepo != "" {
