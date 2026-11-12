@@ -1936,6 +1936,29 @@ person signed in themselves the core marks `initiator` verified, and when a dele
 an edit is another record about the same seq, the newest wins when read, and the earlier ones stay in the chain
 ([evidence.md](evidence.md#observations-clearanceevidencev11-o-1)). Tested: `TestAPersonSetsAResolutionCauseAndTheRecordNamesThem`.
 
+### Bulk resolution
+
+`POST /v1/observations/resolutions` on the core resolves many at once, for a person with a long list of old exceptions to
+ratify. Same caller (an admin, or a delegate naming one; anyone else is 403 `DG-RESOLUTION`), and the body is `{items:
+[seq...], state, cause?, note?}`: 1 to 200 seqs (an empty list or more than 200 is 400; send larger selections as several
+calls), and the single route's state, cause and note for every one. The validation is the single route's: a `state` or
+`cause` outside the vocabulary, or `reverted` without a cause, refuses the whole call (400) before anything is written.
+
+**One record per item, never one for many.** Each recorded item gets a `resolution` record of its own, exactly as the
+single route would write it (about that seq, in its scope, `principal`, `initiator` and `resolution.by` naming the
+person, the same `verified` rule for a delegate), so the newest-wins reading, the packet and the verifier see nothing new.
+What is new is `resolution.batch` = `{id, size}` on every record of the call: the same `id` (`bulk-<hex>`), and `size`
+the number of records the call wrote. They are written in one transaction (all or none).
+
+The answer is `{batch, state, cause, note, by, via, ts, recorded: [{seq, record_seq, scope}], skipped: [{seq, reason}],
+failed: [{seq, error}]}`. An item is **skipped**, not failed, when it is not an observation or a resolvable exception (the
+single route's 404 reasons: a refused or monitoring-protection exception, an unknown seq) or when it is named twice. The
+core does not look up each item's newest resolution (that would walk the chain inside the gate's lock): a repeated call
+records again, which is harmless because the newest resolution wins; a caller that wants to skip unchanged rows (Tower
+does) compares with the history it already read. `failed` is an
+item whose record the vocabulary check refused after the call-level check passed; a store error rolls the whole call back
+and is an error response. Tested: `TestBulkResolutionWritesOneRecordPerItem`.
+
 ### A gate exception is resolved the same way
 
 The same route takes the seq of a gate `deploy.exception` (`GET /v1/exceptions` lists them): the Argo CD agent's

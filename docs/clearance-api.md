@@ -87,6 +87,7 @@ one; no token, or a user the allowlist refuses, is 401. Resolving an observation
 | `GET /v1/observations/health` | auditor | person, delegate, auditor, observer |
 | `GET /v1/exceptions` | person, delegate, auditor (a person: only their own runs, agents and apps) | person, delegate, auditor, observer: every exception |
 | `POST /v1/observations/{seq}/resolution` (core) | admin, or a delegate naming an admin | unchanged |
+| `POST /v1/observations/resolutions` (core, bulk, up to 200; [gate.md](gate.md#bulk-resolution)) | n/a | admin, or a delegate naming an admin |
 
 **What a person reads.** The coverage statement carries no record bodies. The observation lists return the records, and
 a person gets each record's `state_change` with the value of every secret-bearing key (`password`, `secret*`, `token`,

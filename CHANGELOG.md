@@ -9,6 +9,15 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Added
+
+- core: `POST /v1/observations/resolutions`, bulk resolution of observations and gate exceptions (admin, or a delegate
+  naming one; 1 to 200 items, the single route's state, cause and note). Each item gets a `resolution` record of its own,
+  exactly as `POST /v1/observations/{seq}/resolution` writes it, and every record of the call carries the same
+  `resolution.batch` `{id, size}`; all are written in one transaction. The answer is `{batch, recorded, skipped,
+  failed}`: an item that is not resolvable or is named twice is skipped with the reason (a repeat is recorded again; Tower
+  skips unchanged rows from the history it read, so the core never walks the chain under the gate's lock). Python client regenerated (`clients/python`). See [gate.md](docs/gate.md#bulk-resolution).
+
 ## [0.43.0] - 2026-11-12
 
 ### Added

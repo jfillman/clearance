@@ -1176,6 +1176,151 @@
         ],
         "type": "object"
       },
+      "GateBulkResolutionFailed": {
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "error",
+          "seq"
+        ],
+        "type": "object"
+      },
+      "GateBulkResolutionRecorded": {
+        "properties": {
+          "record_seq": {
+            "type": "integer"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "record_seq",
+          "scope",
+          "seq"
+        ],
+        "type": "object"
+      },
+      "GateBulkResolutionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "cause": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "items": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items",
+          "state"
+        ],
+        "type": "object"
+      },
+      "GateBulkResolutionResult": {
+        "properties": {
+          "batch": {
+            "type": "string"
+          },
+          "by": {
+            "type": "string"
+          },
+          "cause": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "failed": {
+            "items": {
+              "$ref": "#/components/schemas/GateBulkResolutionFailed"
+            },
+            "type": "array"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recorded": {
+            "items": {
+              "$ref": "#/components/schemas/GateBulkResolutionRecorded"
+            },
+            "type": "array"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/components/schemas/GateBulkResolutionSkipped"
+            },
+            "type": "array"
+          },
+          "state": {
+            "type": "string"
+          },
+          "ts": {
+            "type": "string"
+          },
+          "via": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "batch",
+          "by",
+          "cause",
+          "failed",
+          "note",
+          "recorded",
+          "skipped",
+          "state",
+          "ts",
+          "via"
+        ],
+        "type": "object"
+      },
+      "GateBulkResolutionSkipped": {
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "reason",
+          "seq"
+        ],
+        "type": "object"
+      },
       "GateChange": {
         "properties": {
           "admission": {
@@ -4574,6 +4719,91 @@
         "security": [],
         "summary": "The clearance token verification keys, a JWKS (EC P-256, ES256, kid = the RFC 7638 thumbprint): the key in use and keys retired within the last 24 hours. Public: a verifier checks tokens offline with it.",
         "x-clearance-auth": "none",
+        "x-clearance-max-body": 65536
+      }
+    },
+    "/v1/observations/resolutions": {
+      "post": {
+        "operationId": "setObservationResolutions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GateBulkResolutionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateBulkResolutionResult"
+                }
+              }
+            },
+            "description": "the batch id and each item's outcome"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateErrorBody"
+                }
+              }
+            },
+            "description": "no items, more than 200, a state or cause outside the vocabulary, or a body that is not {items, state, cause?, note?}"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no bearer token, or one the authenticator refused"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateErrorBody"
+                }
+              }
+            },
+            "description": "not an admin, or a delegate naming none"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateErrorBody"
+                }
+              }
+            },
+            "description": "a Clearance that keeps no changes (DG-OFF)"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is over the route's cap"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Bulk resolution: a person (an admin, CLEARANCE_ADMINS, or a delegate naming one in the on-behalf-of header) resolves up to 200 observations or gate exceptions at once with the same state, cause and note as POST /v1/observations/{seq}/resolution. Each item gets a resolution record of its own, exactly as the single route writes it (about that seq, naming the person), never one record for many; every record of the call carries the same resolution.batch {id, size}. The records are written in one transaction. The answer names the batch and, for each item, the record written (recorded), why it was skipped (skipped: not an observation or a resolvable exception, a seq named twice, or its newest resolution already has the same state, cause and note) or why its record was refused (failed). The same validation as the single route: a state or cause outside the vocabulary, or reverted without a cause, refuses the whole call with 400.",
+        "x-clearance-auth": "bearer",
         "x-clearance-max-body": 65536
       }
     },

@@ -281,6 +281,25 @@ var routeTable = []Route{
 			errs(413)[0]},
 	},
 	{
+		Method: "POST", Path: "/v1/observations/resolutions", OperationID: "setObservationResolutions", Auth: AuthBearer,
+		MaxBody: gate.MaxBulkResolutionBody,
+		Summary: "Bulk resolution: a person (an admin, CLEARANCE_ADMINS, or a delegate naming one in the on-behalf-of " +
+			"header) resolves up to 200 observations or gate exceptions at once with the same state, cause and note as " +
+			"POST /v1/observations/{seq}/resolution. Each item gets a resolution record of its own, exactly as the " +
+			"single route writes it (about that seq, naming the person), never one record for many; every record of the " +
+			"call carries the same resolution.batch {id, size}. The records are written in one transaction. The answer " +
+			"names the batch and, for each item, the record written (recorded), why it was skipped (skipped: not an " +
+			"observation or a resolvable exception, a seq named twice, or its newest resolution already has the same " +
+			"state, cause and note) or why its record was refused (failed). The same validation as the single route: a " +
+			"state or cause outside the vocabulary, or reverted without a cause, refuses the whole call with 400.",
+		Request: gate.BulkResolutionRequest{},
+		Responses: []Response{{200, "the batch id and each item's outcome", gate.BulkResolutionResult{}},
+			{400, "no items, more than 200, a state or cause outside the vocabulary, or a body that is not {items, state, cause?, note?}", gate.ErrorBody{}},
+			errs(401)[0], {403, "not an admin, or a delegate naming none", gate.ErrorBody{}},
+			{404, "a Clearance that keeps no changes (DG-OFF)", gate.ErrorBody{}},
+			errs(413)[0]},
+	},
+	{
 		Method: "GET", Path: "/v1/breakglass", OperationID: "listBreakglass", Auth: AuthBearer,
 		MaxBody: DefaultMaxBody,
 		Summary: "The break-glass windows open now (?cluster= narrows them), for a registered provider that honours " +

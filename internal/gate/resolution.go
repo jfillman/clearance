@@ -74,61 +74,15 @@ func (s *Service) SetResolution(ctx context.Context, p authn.Principal, about in
 	}
 	var out *ResolutionRecorded
 	err = s.op(ctx, func(tx store.Tx, w *writer) error {
-		rs, err := tx.Records(ctx, about, 1)
+		scope, what, err := resolutionTarget(ctx, tx, about)
 		if err != nil {
 			return err
 		}
-		if len(rs) == 0 {
-			return gerr("DG-UNKNOWN", "no such observation", "", 404)
+		ev, err := resolutionEvent(w, scope, what, about, person, who, res, req.State)
+		if err != nil {
+			return err
 		}
-		o := rs[0]
-		seq0, _ := SeqInt(o["seq"])
-		if seq0 != about {
-			return gerr("DG-UNKNOWN", "no such observation", "", 404)
-		}
-		scope := ""
-		what := "observation"
-		switch o["tool"] {
-		case evidence.KindObservation:
-			scope, _ = o["scope"].(string)
-		case KindException:
-			what = "exception"
-			k, _ := o["exception"].(map[string]any)["kind"].(string)
-			if !ResolvableExceptionKind(k) {
-				return gerr("DG-UNKNOWN", fmt.Sprintf("seq %d is a %s exception: a person resolves an out-of-band, drift, untraced-apply or digest-mismatch exception", about, k), "", 404)
-			}
-			var ok bool
-			if scope, ok = ExceptionScope(o); !ok {
-				return gerr("DG-UNKNOWN", fmt.Sprintf("seq %d names no destination cluster or workspace to scope a resolution to", about), "", 404)
-			}
-		default:
-			return gerr("DG-UNKNOWN", fmt.Sprintf("seq %d is not an observation or a gate exception: a person resolves one of those", about),
-				"List the scope's observations with GET /v1/observations, the exceptions with GET /v1/exceptions.", 404)
-		}
-		ev := store.Event{
-			"ts": evidence.ISO(w.now), "tool": evidence.KindResolution, "boundary": "deployment",
-			"task_id": nil, "session": nil, "parent": nil, "principal": person, "agent": nil, "target": nil,
-			"decision": nil, "rule": nil, "args_sha256": nil, "tier": nil,
-			"result":     fmt.Sprintf("%s %d resolved %s by %s", what, about, req.State, person),
-			"scope":      scope,
-			"about":      map[string]any{"seq": json.Number(strconv.FormatInt(about, 10))},
-			"resolution": res,
-			"initiator":  map[string]any{"sub": who.sub, "iss": who.iss},
-		}
-		if _, err := observe.Check(evidence.KindResolution, ev, vocab.Get()); err != nil {
-			return &Error{Rule: "DG-RESOLUTION", Message: err.Error(), Status: http.StatusBadRequest,
-				Hint: fmt.Sprintf("state is one of %v; a reverted resolution names its cause, one of %v.", observe.ResolutionStates, observe.RevertCauses)}
-		}
-		wr := w.wr
-		v := maps.Clone(evidence.GatewayVerified)
-		for _, k := range []string{"scope", "about", "resolution", "initiator", "ts"} {
-			v[k] = true
-		}
-		if via != nil {
-			delete(v, "initiator") // a delegate asked: the person is named by the delegate, not signed in
-		}
-		wr.Verified = v
-		rec := w.appendWith(ev, wr)
+		rec := w.appendResolution(ev, via)
 		if w.err != nil {
 			return w.err
 		}
@@ -141,6 +95,77 @@ func (s *Service) SetResolution(ctx context.Context, p authn.Principal, about in
 		return nil, err
 	}
 	return out, nil
+}
+
+// resolutionTarget finds the scope a resolution about seq is written in, and what it is called in the result: an
+// observation's own scope, or a resolvable gate exception's destination. *Error (404 DG-UNKNOWN) when the seq is
+// neither.
+func resolutionTarget(ctx context.Context, tx store.Reader, about int64) (scope, what string, err error) {
+	rs, err := tx.Records(ctx, about, 1)
+	if err != nil {
+		return "", "", err
+	}
+	if len(rs) == 0 {
+		return "", "", gerr("DG-UNKNOWN", "no such observation", "", 404)
+	}
+	o := rs[0]
+	seq0, _ := SeqInt(o["seq"])
+	if seq0 != about {
+		return "", "", gerr("DG-UNKNOWN", "no such observation", "", 404)
+	}
+	what = "observation"
+	switch o["tool"] {
+	case evidence.KindObservation:
+		scope, _ = o["scope"].(string)
+	case KindException:
+		what = "exception"
+		k, _ := o["exception"].(map[string]any)["kind"].(string)
+		if !ResolvableExceptionKind(k) {
+			return "", "", gerr("DG-UNKNOWN", fmt.Sprintf("seq %d is a %s exception: a person resolves an out-of-band, drift, untraced-apply or digest-mismatch exception", about, k), "", 404)
+		}
+		var ok bool
+		if scope, ok = ExceptionScope(o); !ok {
+			return "", "", gerr("DG-UNKNOWN", fmt.Sprintf("seq %d names no destination cluster or workspace to scope a resolution to", about), "", 404)
+		}
+	default:
+		return "", "", gerr("DG-UNKNOWN", fmt.Sprintf("seq %d is not an observation or a gate exception: a person resolves one of those", about),
+			"List the scope's observations with GET /v1/observations, the exceptions with GET /v1/exceptions.", 404)
+	}
+	return scope, what, nil
+}
+
+// resolutionEvent is the resolution record about seq, checked against the observation vocabulary (*Error 400 when
+// the state or cause is outside it).
+func resolutionEvent(w *writer, scope, what string, about int64, person string, who identity, res map[string]any, state string) (store.Event, error) {
+	ev := store.Event{
+		"ts": evidence.ISO(w.now), "tool": evidence.KindResolution, "boundary": "deployment",
+		"task_id": nil, "session": nil, "parent": nil, "principal": person, "agent": nil, "target": nil,
+		"decision": nil, "rule": nil, "args_sha256": nil, "tier": nil,
+		"result":     fmt.Sprintf("%s %d resolved %s by %s", what, about, state, person),
+		"scope":      scope,
+		"about":      map[string]any{"seq": json.Number(strconv.FormatInt(about, 10))},
+		"resolution": res,
+		"initiator":  map[string]any{"sub": who.sub, "iss": who.iss},
+	}
+	if _, err := observe.Check(evidence.KindResolution, ev, vocab.Get()); err != nil {
+		return nil, &Error{Rule: "DG-RESOLUTION", Message: err.Error(), Status: http.StatusBadRequest,
+			Hint: fmt.Sprintf("state is one of %v; a reverted resolution names its cause, one of %v.", observe.ResolutionStates, observe.RevertCauses)}
+	}
+	return ev, nil
+}
+
+// appendResolution seals and appends ev; a delegate asked: the person is named by the delegate, not signed in.
+func (w *writer) appendResolution(ev store.Event, via *string) store.Record {
+	wr := w.wr
+	v := maps.Clone(evidence.GatewayVerified)
+	for _, k := range []string{"scope", "about", "resolution", "initiator", "ts"} {
+		v[k] = true
+	}
+	if via != nil {
+		delete(v, "initiator")
+	}
+	wr.Verified = v
+	return w.appendWith(ev, wr)
 }
 
 func (h *Handler) setResolution(w http.ResponseWriter, r *http.Request) {
