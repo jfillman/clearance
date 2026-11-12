@@ -186,6 +186,11 @@ ignored. A sync hook (`argocd.argoproj.io/hook` or `helm.sh/hook`) has no tracki
 attributed when exactly one Application in the platform namespace lists it with a `hookType` in `status.operationState.syncResult.resources`; the collector's
 Application index now keeps that list and the operation's revision. See [observe-pipeline.md](observe-pipeline.md#platform-gitops).
 
+*Hook cleanup (0.41.4).* The TTL controller's delete of a finished hook Job, and the garbage collector's delete of it and of its ServiceAccount, Role and
+RoleBinding, are attributed to the platform-gitops Application that ran the hook (rules and limits: [observe-pipeline.md](observe-pipeline.md#platform-gitops)).
+That needs the before-state, so the chart now **watches `jobs`** (batch/v1, the same list-and-watch Role as the other watched kinds). The Application
+index keeps the previous operation's hooks for one hour after a new operation replaces them, because a TTL delete can arrive after the next sync.
+
 *A prune is attributed from the object as it stood.* A delete carries no body, and the Application's `status.resources` no longer lists what it
 just pruned, so a delete by the platform controller of a tracked Role, RoleBinding or ServiceAccount used to be out-of-band. The collector's
 watch cache holds the object before the delete, and its tracking annotation is read like any other (it must name this very object, a known

@@ -133,6 +133,9 @@ func (p *Pipeline) kubeFacts(e *Event) facts {
 	controller := p.isController(e)
 	f["controller"] = controller
 	gitops, gitopsOK := p.platformGitops(e, controller)
+	if !gitopsOK {
+		gitops, gitopsOK = p.hookCleanup(e, controller)
+	}
 	f["platform_gitops"] = gitopsOK
 	f["gitops_app"], f["gitops_revision"] = gitops.Namespace+"/"+gitops.Name, gitops.Revision
 	listed, owner := "", ""

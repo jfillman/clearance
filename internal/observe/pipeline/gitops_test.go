@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jfillman/clearance/internal/vocab"
 )
@@ -19,6 +20,16 @@ type apps struct {
 	byName  map[string]ArgoApp   // "<ns>/<name>"
 	managed map[string][]ArgoApp // "<app ns>|<ns>/<lower kind>/<name>"
 	hooks   map[string][]ArgoApp // same key: the sync hooks of an Application's current or last operation
+	prev    map[string][]ArgoApp // same key: the hooks of the operation the current one replaced (within HookCleanupWindow)
+}
+
+func (a apps) HookOfRecent(scope, appNS, ns, kind, name string, at time.Time) (ArgoApp, bool) {
+	k := appNS + "|" + ns + "/" + strings.ToLower(kind) + "/" + name
+	l := append(append([]ArgoApp{}, a.hooks[k]...), a.prev[k]...)
+	if len(l) != 1 {
+		return ArgoApp{}, false
+	}
+	return l[0], true
 }
 
 func (a apps) HookOf(scope, appNS, ns, kind, name string) (ArgoApp, bool) {
@@ -71,7 +82,9 @@ func gitopsLookups() apps {
 		StaticLookups: StaticLookups{},
 		byName:        map[string]ArgoApp{"platform-cd/platform-rbac": sync, "platform-cd/fresh": {Namespace: "platform-cd", Name: "fresh"}},
 		managed:       map[string][]ArgoApp{"platform-cd|shop/secret/db-creds": {sync}, "platform-cd|shop/secret/both": {sync, sync}},
-		hooks:         map[string][]ArgoApp{"platform-cd|shop/job/redis-init": {sync}, "platform-cd|shop/job/twice": {sync, sync}},
+		hooks: map[string][]ArgoApp{"platform-cd|shop/job/redis-init": {sync}, "platform-cd|shop/job/twice": {sync, sync},
+			"platform-cd|shop/serviceaccount/redis-init": {sync}},
+		prev: map[string][]ArgoApp{"platform-cd|shop/job/old-init": {{Namespace: "platform-cd", Name: "platform-rbac", Revision: "aaaa1111"}}},
 	}
 }
 
@@ -348,6 +361,77 @@ func TestPlatformGitopsSyncHooks(t *testing.T) {
 				t.Fatalf("got %v %s app %q (%s), want %s app %q", disp, a.Signal, a.Application, a.Detail, c.signal, c.app)
 			}
 			if c.app != "" && (a.Outcome != OutcomeNotAttributed || a.Revision == "" || a.Coverage != "observed-not-attributed" || a.Tier != 1) {
+				t.Fatalf("%+v", a)
+			}
+		})
+	}
+}
+
+func ownedBy(kind, name, owner, ownerName, ann string) map[string]any {
+	md := map[string]any{"name": name, "namespace": "shop",
+		"ownerReferences": []any{map[string]any{"apiVersion": "batch/v1", "kind": owner, "name": ownerName, "uid": "u1"}}}
+	if ann != "" {
+		md["annotations"] = map[string]any{ann: "PostSync"}
+	}
+	return map[string]any{"kind": kind, "metadata": md}
+}
+
+// Kubernetes removing a finished sync hook (the TTL controller deleting the hook Job, the garbage collector deleting the Job or its
+// owned ServiceAccount, Role, RoleBinding) is the sync's consequence and is attributed to the Application and operation that ran
+// the hook. Nothing else is: a non-hook Job, an object owned by a Job no Application lists, two claimants, another namespace, a
+// person, a Metadata-level event with no before-state, an owner of another kind, another verb.
+func TestPlatformGitopsHookCleanup(t *testing.T) {
+	rs := platformRules(t, platformCtl)
+	lk := gitopsLookups()
+	del := func(id, user, res, name string, before map[string]any) fx {
+		return fx{id: id, user: user, verb: "delete", resource: res, name: name, before: before}
+	}
+	hj := hookJob("redis-init", "argocd.argoproj.io/hook", "PreSync")
+	cases := []struct {
+		name   string
+		e      fx
+		signal string
+		app    string
+		rev    string
+	}{
+		{"ttl deletes the hook job", del("k1", ttlCtlSA, "jobs", "redis-init", hj), SignalPlatformGitops, "platform-cd/platform-rbac", "4771d884218725dff73023ee4ec112f764944129"},
+		{"gc deletes the hook job", del("k2", gcSA, "jobs", "redis-init", hj), SignalPlatformGitops, "platform-cd/platform-rbac", "4771d884218725dff73023ee4ec112f764944129"},
+		{"gc deletes the job's serviceaccount", del("k3", gcSA, "serviceaccounts", "redis-init", ownedBy("ServiceAccount", "redis-init", "Job", "redis-init", "")), SignalPlatformGitops, "platform-cd/platform-rbac", "4771d884218725dff73023ee4ec112f764944129"},
+		{"gc deletes the job's role", del("k4", gcSA, "roles", "redis-init", ownedBy("Role", "redis-init", "Job", "redis-init", "")), SignalPlatformGitops, "platform-cd/platform-rbac", "4771d884218725dff73023ee4ec112f764944129"},
+		{"gc deletes the job's rolebinding", del("k5", gcSA, "rolebindings", "redis-init", ownedBy("RoleBinding", "redis-init", "Job", "redis-init", "")), SignalPlatformGitops, "platform-cd/platform-rbac", "4771d884218725dff73023ee4ec112f764944129"},
+		{"gc deletes a hook serviceaccount that is itself listed", del("k6", gcSA, "serviceaccounts", "redis-init",
+			map[string]any{"kind": "ServiceAccount", "metadata": map[string]any{"name": "redis-init", "namespace": "shop", "annotations": map[string]any{"argocd.argoproj.io/hook": "PreSync"}}}), SignalPlatformGitops, "platform-cd/platform-rbac", "4771d884218725dff73023ee4ec112f764944129"},
+		{"the previous operation's hook, within the window", del("k7", ttlCtlSA, "jobs", "old-init", hookJob("old-init", "argocd.argoproj.io/hook", "PreSync")), SignalPlatformGitops, "platform-cd/platform-rbac", "aaaa1111"},
+		// stays visible
+		{"ttl deletes a job no Application lists", del("n1", ttlCtlSA, "jobs", "nightly", hookJob("nightly", "x/y", "z")), "service-account.unknown", "", ""},
+		{"gc deletes an object owned by a job no Application lists", del("n2", gcSA, "serviceaccounts", "redis-init", ownedBy("ServiceAccount", "redis-init", "Job", "stranger", "")), "service-account.unknown", "", ""},
+		{"gc deletes an object with no hook owner", del("n3", gcSA, "roles", "redis-init", map[string]any{"kind": "Role", "metadata": map[string]any{"name": "redis-init", "namespace": "shop"}}), "service-account.unknown", "", ""},
+		{"owner of another kind", del("n4", gcSA, "serviceaccounts", "redis-init", ownedBy("ServiceAccount", "redis-init", "CronJob", "redis-init", "")), "service-account.unknown", "", ""},
+		{"owned by a hook job but listed under two Applications", del("n5", gcSA, "serviceaccounts", "twice", ownedBy("ServiceAccount", "twice", "Job", "twice", "")), "service-account.unknown", "", ""},
+		{"two Applications claim the job", del("n6", ttlCtlSA, "jobs", "twice", hookJob("twice", "argocd.argoproj.io/hook", "PreSync")), "service-account.unknown", "", ""},
+		{"wrong namespace", fx{id: "n7", user: ttlCtlSA, verb: "delete", resource: "jobs", name: "redis-init", ns: "elsewhere", before: hookJob("redis-init", "argocd.argoproj.io/hook", "PreSync")}, "service-account.unknown", "", ""},
+		{"a person deletes the hook job", del("n8", "dana@example.com", "jobs", "redis-init", hj), "human.no-grant", "", ""},
+		{"no before-state (Metadata)", del("n9", ttlCtlSA, "jobs", "redis-init", nil), "service-account.unknown", "", ""},
+		{"gc, no before-state", del("n10", gcSA, "serviceaccounts", "redis-init", nil), "service-account.unknown", "", ""},
+		{"ttl deletes a non-job", del("n11", ttlCtlSA, "serviceaccounts", "redis-init", ownedBy("ServiceAccount", "redis-init", "Job", "redis-init", "")), "service-account.unknown", "", ""},
+		{"gc patches an owned serviceaccount", fx{id: "n12", user: gcSA, verb: "patch", resource: "serviceaccounts", name: "redis-init", obj: ownedBy("ServiceAccount", "redis-init", "Job", "redis-init", "")}, "service-account.unknown", "", ""},
+		{"another kube-system controller", del("n13", "system:serviceaccount:kube-system:job-controller", "jobs", "redis-init", hj), "service-account.unknown", "", ""},
+		{"gc deletes a hook-annotated object no Application lists", del("n14", gcSA, "serviceaccounts", "other", ownedBy("ServiceAccount", "other", "Pod", "x", "argocd.argoproj.io/hook")), "service-account.unknown", "", ""},
+		{"gc through a kubectl client", fx{id: "n15", user: gcSA, verb: "delete", resource: "jobs", name: "redis-init", before: hj, ua: "kubectl/v1.30"}, "kubectl-agent", "", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			a, disp := c.e.run(t, New(rs, lk, vocab.Default()))
+			if disp == OutOfScope {
+				if c.app != "" {
+					t.Fatalf("counted out of scope, want %s", c.signal)
+				}
+				return // dropped as a controller child: not a finding either way
+			}
+			if disp != Assessed || a.Signal != c.signal || a.Application != c.app || a.Revision != c.rev {
+				t.Fatalf("got %v %s app %q rev %q (%s), want %s app %q rev %q", disp, a.Signal, a.Application, a.Revision, a.Detail, c.signal, c.app, c.rev)
+			}
+			if c.app != "" && (a.Outcome != OutcomeNotAttributed || a.Coverage != "observed-not-attributed" || a.Tier != 1) {
 				t.Fatalf("%+v", a)
 			}
 		})
