@@ -372,6 +372,74 @@ func TestPublishedDefinitionsAreRecordedOnceAndProvenanceReadsThem(t *testing.T)
 	verifyChainLen(t, f, len(f.records()))
 }
 
+func TestProviderBundledDefinitionsAreRecordedAndProvenanceReadsThem(t *testing.T) {
+	f := memFixture(t)
+	id := decisionID(t, f.evaluate(prOpenAllowed, nil))
+	f.do("POST", "/v1/decisions/"+id+"/outcome", gw, effectBody()).want(t, 200, "")
+	team := "group:default/team-gate"
+	bundled := func(version string, doc map[string]any) map[string]any {
+		return map[string]any{"name": "coding-agent", "version": version, "doc": doc}
+	}
+	with := func(b ...any) map[string]any {
+		m := publish([]any{}, nil)
+		m["bundled"] = b
+		return m
+	}
+	a := f.do("PUT", "/v1/definitions", gw, with(bundled("gateway-v0.9.0", codingAgent(team)))).want(t, 200, "")
+	if fmt.Sprint(a.body["added"]) != "[coding-agent]" || a.body["provided"] != float64(1) || a.body["cluster"] != float64(0) {
+		t.Fatal(a.body)
+	}
+	r := f.last()
+	if r["tool"] != "definition.load" || r["agent"] != "coding-agent" || r["principal"] != "provider:autopilot-gateway" ||
+		r["target"] != "provider:autopilot-gateway@gateway-v0.9.0" || r["decision"] != "allow" {
+		t.Fatal(r)
+	}
+	if c := r["caller"].(map[string]any); c["provider"] != "autopilot-gateway" || c["principal"] != gw {
+		t.Fatal(c)
+	}
+	if s := scopeStatus(t, f); !strings.Contains(s, "in-scope") {
+		t.Fatalf("provenance does not see the provider's definition: %s", s)
+	}
+	n := len(f.records())
+
+	// The same set again records nothing; a publish without `bundled` (an older provider) keeps it.
+	f.do("PUT", "/v1/definitions", gw, with(bundled("gateway-v0.9.0", codingAgent(team)))).want(t, 200, "")
+	a = f.do("PUT", "/v1/definitions", gw, publish([]any{}, nil)).want(t, 200, "")
+	if len(f.records()) != n || a.body["provided"] != float64(1) || fmt.Sprint(a.body["removed"]) != "[]" {
+		t.Fatal(a.body)
+	}
+
+	// A pin of the same name cannot shadow it: the pin is rejected, once.
+	pin := map[string]any{"source": pinSource("coding-agent"), "owner": team, "doc": codingAgent(team)}
+	m := with(bundled("gateway-v0.9.0", codingAgent(team)))
+	m["pins"] = []any{pin}
+	a = f.do("PUT", "/v1/definitions", gw, m).want(t, 200, "")
+	if len(a.body["rejected"].([]any)) != 1 || a.body["cluster"] != float64(0) || a.body["provided"] != float64(1) {
+		t.Fatal(a.body)
+	}
+	if r := f.last(); r["tool"] != "definition.reject" || !strings.Contains(fmt.Sprint(r["result"]), "provided by autopilot-gateway") {
+		t.Fatal(r)
+	}
+
+	// A malformed one is a definition.reject with the core's reason, and the earlier good one is gone with it.
+	bad := bundled("gateway-v0.9.1", map[string]any{"name": "coding-agent"})
+	a = f.do("PUT", "/v1/definitions", gw, with(bad)).want(t, 200, "")
+	if fmt.Sprint(a.body["removed"]) != "[coding-agent]" || a.body["provided"] != nil ||
+		!strings.HasPrefix(fmt.Sprint(a.body["rejected"].([]any)[0].(map[string]any)["reason"]), "schema: ") {
+		t.Fatal(a.body)
+	}
+	if s := scopeStatus(t, f); !strings.Contains(s, "AS004") {
+		t.Fatalf("a rejected definition is not live: %s", s)
+	}
+
+	// An empty bundled list clears; bad shapes are 400s.
+	f.do("PUT", "/v1/definitions", gw, with()).want(t, 200, "")
+	f.do("PUT", "/v1/definitions", gw, with(map[string]any{"name": "x", "doc": map[string]any{}})).want(t, 400, "version")
+	f.do("PUT", "/v1/definitions", gw, with(map[string]any{"name": "", "version": "v", "doc": map[string]any{}})).want(t, 400, "name")
+	f.do("PUT", "/v1/definitions", gw, with(map[string]any{"name": "x", "version": "v"})).want(t, 400, "doc")
+	verifyChainLen(t, f, len(f.records()))
+}
+
 func TestPublishingDefinitionsIsRefused(t *testing.T) {
 	team := "group:default/team-gate"
 	good := func() map[string]any {

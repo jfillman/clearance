@@ -331,3 +331,115 @@ func TestAPlainDictGatewayRefusesClusterDefinitions(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// -- definitions that ship with the provider (source kind provider) ---------------------------------------------
+
+func provided(t *testing.T, name, version string) definitions.Loaded {
+	t.Helper()
+	d := doc(name, ownerG, "")
+	src := definitions.Source{Kind: "provider", Provider: definitions.Str("autopilot-gateway"), Version: definitions.Str(version)}
+	l, r := definitions.FromProvided(d, name, src, parseDef)
+	if r != nil {
+		t.Fatal(r)
+	}
+	return *l
+}
+
+func TestAProvidedDefinitionLoadsAndIsRecordedOnce(t *testing.T) {
+	svc, st := service(t)
+	l := provided(t, "parachute", "gateway-v0.9.0")
+	if l.Source.Pin() != "provider:autopilot-gateway@gateway-v0.9.0" {
+		t.Fatal(l.Source.Pin())
+	}
+	ch, err := svc.Apply(context.Background(), []definitions.Loaded{l}, nil)
+	if err != nil || !reflect.DeepEqual(ch.Added, []string{"parachute"}) {
+		t.Fatal(ch, err)
+	}
+	if _, ok := svc.Registry.Get("parachute"); !ok {
+		t.Fatal("the provided definition is not live")
+	}
+	rs := records(t, st)
+	if len(rs) != 1 || rs[0]["tool"] != "definition.load" || rs[0]["principal"] != "provider:autopilot-gateway" ||
+		rs[0]["target"] != "provider:autopilot-gateway@gateway-v0.9.0" {
+		t.Fatal(rs)
+	}
+	// Again: nothing. A new build with the same document is a change (the evidence names the build), once.
+	if ch, _ := svc.Apply(context.Background(), []definitions.Loaded{l}, nil); ch.Any() || len(records(t, st)) != 1 {
+		t.Fatal(ch)
+	}
+	ch, _ = svc.Apply(context.Background(), []definitions.Loaded{provided(t, "parachute", "gateway-v0.9.1")}, nil)
+	if !reflect.DeepEqual(ch.Changed, []string{"parachute"}) || len(records(t, st)) != 2 {
+		t.Fatal(ch)
+	}
+	// The stored row reads back as a provider definition after a restart.
+	var rows []map[string]any
+	for _, r := range storedRows(t, st) {
+		var m map[string]any
+		dec := json.NewDecoder(strings.NewReader(string(r.Record)))
+		dec.UseNumber()
+		_ = dec.Decode(&m)
+		rows = append(rows, m)
+	}
+	fresh := definitions.NewRegistry(nil)
+	fresh.ApplyRecords(rows, parseDef)
+	if s, ok := fresh.Source("parachute"); !ok || s.Kind != "provider" || s.Pin() != "provider:autopilot-gateway@gateway-v0.9.1" {
+		t.Fatal(s, ok)
+	}
+}
+
+func TestAPinCannotShadowAProvidedDefinition(t *testing.T) {
+	svc, _ := service(t)
+	prov := provided(t, "gate-triage", "v1")
+	pinned, r := fromPin(doc("gate-triage", ownerG, ""), pin, nil)
+	if r != nil {
+		t.Fatal(r)
+	}
+	ch, err := svc.Apply(context.Background(), []definitions.Loaded{*pinned, prov}, nil)
+	if err != nil || !reflect.DeepEqual(ch.Added, []string{"gate-triage"}) || len(ch.Rejected) != 1 ||
+		!strings.Contains(ch.Rejected[0].Reason, "provided by autopilot-gateway") {
+		t.Fatal(ch, err)
+	}
+	if s, _ := svc.Registry.Source("gate-triage"); s.Kind != "provider" {
+		t.Fatal(s)
+	}
+}
+
+func TestAProvidedNameThatIsBundledIsRejected(t *testing.T) {
+	svc, _ := service(t)
+	ch, _ := svc.Apply(context.Background(), []definitions.Loaded{provided(t, "triage-agent", "v1")}, nil)
+	if len(ch.Rejected) != 1 || !strings.Contains(ch.Rejected[0].Reason, "bundled platform definition") {
+		t.Fatal(ch)
+	}
+}
+
+func TestAMalformedProvidedDefinitionIsRejected(t *testing.T) {
+	src := definitions.Source{Kind: "provider", Provider: definitions.Str("p"), Version: definitions.Str("v1")}
+	if _, r := definitions.FromProvided(doc("agent-a", ownerG, ""), "agent-b", src, parseDef); r == nil || !strings.Contains(r.Reason, "published as 'agent-b'") {
+		t.Fatal(r)
+	}
+	if _, r := definitions.FromProvided(map[string]any{"name": "agent-a"}, "agent-a", src, parseDef); r == nil || !strings.HasPrefix(r.Reason, "schema: ") {
+		t.Fatal(r)
+	}
+	if _, r := definitions.FromProvided("x", "agent-a", src, parseDef); r == nil {
+		t.Fatal("not a mapping")
+	}
+}
+
+func TestKeepingProvidedSurvivesAPublishWithoutThem(t *testing.T) {
+	svc, _ := service(t)
+	ctx := context.Background()
+	if _, err := svc.Apply(ctx, []definitions.Loaded{provided(t, "parachute", "v1")}, nil); err != nil {
+		t.Fatal(err)
+	}
+	ch, err := svc.ApplyKeeping(ctx, nil, nil, svc.Writer.OrCore(), nil, true)
+	if err != nil || ch.Any() {
+		t.Fatal(ch, err)
+	}
+	if _, ok := svc.Registry.Get("parachute"); !ok {
+		t.Fatal("dropped")
+	}
+	ch, _ = svc.ApplyKeeping(ctx, nil, nil, svc.Writer.OrCore(), nil, false)
+	if !reflect.DeepEqual(ch.Removed, []string{"parachute"}) {
+		t.Fatal(ch)
+	}
+}

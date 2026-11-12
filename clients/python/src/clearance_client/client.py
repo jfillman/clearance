@@ -212,17 +212,24 @@ class CoreClient:
 
     def publish_definitions(
         self, pins: list[m.PinnedDefinition | Mapping[str, Any]],
-        rejected: list[m.RejectedPin | Mapping[str, Any]] | None = None, *, provider: str | None = None
+        rejected: list[m.RejectedPin | Mapping[str, Any]] | None = None, *, provider: str | None = None,
+        bundled: list[m.ProvidedDefinition | Mapping[str, Any]] | None = None
     ) -> m.DefinitionsResult:
         """Replace the core's cluster-pinned agent definitions with this provider's whole set (PUT /v1/definitions;
         the provider is registered with definitions: true). The core decides each pin itself and records what
-        changed; publishing the same set again records nothing, so it is retried like an evaluation."""
+        changed; publishing the same set again records nothing, so it is retried like an evaluation.
+
+        bundled is the definitions that ship with the provider itself (name, version, doc), decided and recorded
+        like pins. None leaves the set the core already holds for the provider; [] clears it. A core older than
+        this field refuses the request as a whole (CoreRequestError 400, unknown field): send without it then."""
         prov = provider or self.provider
         if not prov:
             raise ValueError("no provider: pass provider= or set it on the client")
         body: dict[str, Any] = {"provider": prov, "pins": [_as_dict(p) for p in pins]}
         if rejected:
             body["rejected"] = [_as_dict(r) for r in rejected]
+        if bundled is not None:
+            body["bundled"] = [_as_dict(b) for b in bundled]
         return self._call("publishDefinitions", body, retry=_RETRY_ANY)
 
     def register_change(self, change: Mapping[str, Any]) -> m.GateChange:

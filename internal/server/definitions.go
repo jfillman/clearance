@@ -30,6 +30,20 @@ type DefinitionsRequest struct {
 	// Rejected are the pins the provider could not load itself (an incomplete spec.source, a file the broker
 	// refused), each with its reason.
 	Rejected []RejectedPin `json:"rejected,omitempty"`
+	// Bundled are the definitions that ship with the provider itself (Autopilot: the gateway image's agents/
+	// directory), published by name and version, with no repository pin. The core parses each with the same schema,
+	// holds it beside the pins (a pin of the same name is rejected, never the other way round) and records each
+	// change once, like a pin's. Absent: the provider's earlier bundled set is kept; an empty list clears it. A
+	// core without this field refuses the whole request (unknown field), which is how a provider detects it.
+	Bundled []ProvidedDefinition `json:"bundled,omitempty"`
+}
+
+// ProvidedDefinition is one definition that ships with the provider: its name, the provider build it ships in
+// (the gateway image's version) and its document. The core knows the provider from the authenticated caller.
+type ProvidedDefinition struct {
+	Name    string         `json:"name" contract:"required"`
+	Version string         `json:"version" contract:"required"`
+	Doc     map[string]any `json:"doc" contract:"required"`
 }
 
 // PinnedDefinition is one fetched pin.
@@ -69,6 +83,8 @@ type DefinitionsResult struct {
 	Rejected []definitions.RejectedView `json:"rejected"`
 	Cleared  []definitions.RejectedView `json:"cleared"`
 	Cluster  int                        `json:"cluster"`
+	// Provided is how many of the provider's own bundled definitions are now live.
+	Provided int `json:"provided,omitempty"`
 }
 
 var k8sName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?\z`)
@@ -113,9 +129,15 @@ func (s *Server) definitions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	pl, pr, err := s.decideProvided(&body, prov.Name)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	loaded, rejected = append(loaded, pl...), append(rejected, pr...)
 	wr := s.coreWriter(definitionVerified)
-	ch, err := s.opt.Definitions.ApplyWith(r.Context(), loaded, rejected, wr,
-		map[string]any{"caller": callerField(prov, p)})
+	ch, err := s.opt.Definitions.ApplyKeeping(r.Context(), loaded, rejected, wr,
+		map[string]any{"caller": callerField(prov, p)}, body.Bundled == nil)
 	if err != nil {
 		s.log.ErrorContext(r.Context(), "definitions: publishing failed", "error", err.Error())
 		writeError(w, http.StatusServiceUnavailable, "the definitions could not be recorded")
@@ -124,7 +146,11 @@ func (s *Server) definitions(w http.ResponseWriter, r *http.Request) {
 	out := DefinitionsResult{Added: nonNil(ch.Added), Changed: nonNil(ch.Changed), Removed: nonNil(ch.Removed),
 		Rejected: views(ch.Rejected), Cleared: views(ch.Cleared)}
 	for _, row := range s.opt.Definitions.Registry.Records() {
-		if row.State == "loaded" {
+		switch {
+		case row.State != "loaded":
+		case row.Source.Kind == "provider":
+			out.Provided++
+		default:
 			out.Cluster++
 		}
 	}
@@ -179,6 +205,41 @@ func (s *Server) decidePins(b *DefinitionsRequest) ([]definitions.Loaded, []defi
 			return nil, nil, fmt.Errorf("rejected[%d]: %w", i, err)
 		}
 		rejected = append(rejected, definitions.Rejected{Name: rj.Name, Source: src, Reason: rj.Reason})
+	}
+	return loaded, rejected, nil
+}
+
+// decideProvided checks the provider's own bundled definitions and decides each (definitions.FromProvided): one the
+// core refuses becomes a rejection with the core's reason.
+func (s *Server) decideProvided(b *DefinitionsRequest, provider string) ([]definitions.Loaded, []definitions.Rejected, error) {
+	if len(b.Bundled) > MaxPins {
+		return nil, nil, fmt.Errorf("at most %d bundled definitions", MaxPins)
+	}
+	var loaded []definitions.Loaded
+	var rejected []definitions.Rejected
+	for i, d := range b.Bundled {
+		if d.Name == "" || len(d.Name) > MaxPinText {
+			return nil, nil, fmt.Errorf("bundled[%d]: name is 1 to %d bytes", i, MaxPinText)
+		}
+		if err := text("name", d.Name); err != nil {
+			return nil, nil, fmt.Errorf("bundled[%d]: %w", i, err)
+		}
+		if d.Version == "" || len(d.Version) > MaxPinText {
+			return nil, nil, fmt.Errorf("bundled[%d]: version is the provider build the definition ships in, 1 to %d bytes", i, MaxPinText)
+		}
+		if err := text("version", d.Version); err != nil {
+			return nil, nil, fmt.Errorf("bundled[%d]: %w", i, err)
+		}
+		if d.Doc == nil {
+			return nil, nil, fmt.Errorf("bundled[%d]: doc is the definition's document", i)
+		}
+		src := definitions.Source{Kind: "provider", Provider: &provider, Version: definitions.Str(d.Version)}
+		l, rej := definitions.FromProvided(d.Doc, d.Name, src, s.opt.ParseDefinition)
+		if rej != nil {
+			rejected = append(rejected, *rej)
+		} else {
+			loaded = append(loaded, *l)
+		}
 	}
 	return loaded, rejected, nil
 }

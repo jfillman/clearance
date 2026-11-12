@@ -55,7 +55,9 @@ type Definition struct {
 // rejected pin's reason ("schema: ...") show.
 type Parser func(doc map[string]any) (Definition, error)
 
-// Source is where a definition came from: "bundled" (the image's agents/ directory) or "cluster" (an Agent XR's pin).
+// Source is where a definition came from: "bundled" (the core's own CLEARANCE_AGENTS_DIR), "cluster" (an Agent XR's
+// pin) or "provider" (a definition the provider enforces that ships with it, published by name and version: the
+// gateway image's agents/ directory; there is no repository pin to name).
 type Source struct {
 	Kind      string
 	Repo      *string
@@ -64,6 +66,9 @@ type Source struct {
 	Namespace *string
 	XR        *string
 	LoadedAt  *string
+	// Provider and Version name the publishing provider and the build its definition ships in (kind provider).
+	Provider *string
+	Version  *string
 }
 
 // Str is a convenience for a Source's optional fields.
@@ -86,12 +91,17 @@ func eqp(a, b *string) bool {
 // Equal is the dataclass equality of two sources.
 func (s Source) Equal(o Source) bool {
 	return s.Kind == o.Kind && eqp(s.Repo, o.Repo) && eqp(s.Path, o.Path) && eqp(s.Commit, o.Commit) &&
-		eqp(s.Namespace, o.Namespace) && eqp(s.XR, o.XR) && eqp(s.LoadedAt, o.LoadedAt)
+		eqp(s.Namespace, o.Namespace) && eqp(s.XR, o.XR) && eqp(s.LoadedAt, o.LoadedAt) &&
+		eqp(s.Provider, o.Provider) && eqp(s.Version, o.Version)
 }
 
-// Pin is one line: "repo@short path", or "bundled".
+// Pin is one line: "repo@short path", "provider:<name>@<version>", or "bundled".
 func (s Source) Pin() string {
-	if s.Kind != "cluster" {
+	switch s.Kind {
+	case "provider":
+		return fmt.Sprintf("provider:%s@%s", deref(s.Provider), deref(s.Version))
+	case "cluster":
+	default:
 		return "bundled"
 	}
 	return fmt.Sprintf("%s@%s %s", pycompat.Str(strOrNone(s.Repo)), pycompat.Truncate(deref(s.Commit), 7), pycompat.Str(strOrNone(s.Path)))
@@ -113,12 +123,14 @@ type SourceView struct {
 	Namespace *string `json:"namespace,omitempty"`
 	XR        *string `json:"xr,omitempty"`
 	LoadedAt  *string `json:"loaded_at,omitempty"`
+	Provider  *string `json:"provider,omitempty"`
+	Version   *string `json:"version,omitempty"`
 	Pin       string  `json:"pin"`
 }
 
 // View is Source.view().
 func (s Source) View() SourceView {
-	return SourceView{s.Kind, s.Repo, s.Path, s.Commit, s.Namespace, s.XR, s.LoadedAt, s.Pin()}
+	return SourceView{s.Kind, s.Repo, s.Path, s.Commit, s.Namespace, s.XR, s.LoadedAt, s.Provider, s.Version, s.Pin()}
 }
 
 // SourceFromView is Source.from_view (kind defaults to "cluster").
@@ -134,7 +146,7 @@ func SourceFromView(v map[string]any) Source {
 		kind = k
 	}
 	return Source{Kind: kind, Repo: get("repo"), Path: get("path"), Commit: get("commit"), Namespace: get("namespace"),
-		XR: get("xr"), LoadedAt: get("loaded_at")}
+		XR: get("xr"), LoadedAt: get("loaded_at"), Provider: get("provider"), Version: get("version")}
 }
 
 // Loaded is a pin that became a definition, with the document it was parsed from (kept for the read API).
@@ -218,6 +230,26 @@ func FromPin(doc any, source Source, owner string, reserved func(string) bool, p
 	return &Loaded{d, source, m}, nil
 }
 
+// FromProvided decides one definition the provider publishes as shipping with it (Source kind provider, name and
+// version). The same schema as a pin's, and the file's name is the one published; there is no XR, so no owner or
+// identity rule beyond the schema: the provider enforces its own definitions, the core only needs to know them.
+// Never fails: a bad one is a Rejected.
+func FromProvided(doc any, name string, source Source, parse Parser) (*Loaded, *Rejected) {
+	m, ok := doc.(map[string]any)
+	if !ok {
+		return nil, &Rejected{name, source, "the definition is not a mapping"}
+	}
+	d, err := parse(m)
+	if err != nil {
+		return nil, &Rejected{name, source, "schema: " + err.Error()}
+	}
+	if d.Name != name {
+		return nil, &Rejected{name, source, fmt.Sprintf("the document's name is %s; it is published as %s",
+			pycompat.Repr(d.Name), pycompat.Repr(name))}
+	}
+	return &Loaded{d, source, m}, nil
+}
+
 func ownerRepr(d Definition) string {
 	if !d.HasOwner {
 		return "None"
@@ -294,6 +326,23 @@ func (r *Registry) Version() int {
 	return r.version
 }
 
+// keepProvided adds the provider-kind definitions and rejections the registry holds to a publish that did not
+// carry its provider set (an older provider), so that publish does not unload them. r.mu is held.
+func (r *Registry) keepProvided(loaded []Loaded, rejected []Rejected) ([]Loaded, []Rejected) {
+	loaded, rejected = append([]Loaded(nil), loaded...), append([]Rejected(nil), rejected...)
+	for _, l := range r.cluster {
+		if l.Source.Kind == "provider" {
+			loaded = append(loaded, l)
+		}
+	}
+	for _, x := range r.rejected {
+		if x.Source.Kind == "provider" {
+			rejected = append(rejected, x)
+		}
+	}
+	return loaded, rejected
+}
+
 // Rejected is the current rejections.
 func (r *Registry) Rejected() []Rejected {
 	r.mu.RLock()
@@ -358,6 +407,26 @@ type plan struct {
 }
 
 func (r *Registry) plan(loaded []Loaded, rejected []Rejected) plan {
+	// A provider's own definition is never shadowed by a pin: the pin is rejected, the provider's loads.
+	provided := map[string]Source{}
+	for _, l := range loaded {
+		if l.Source.Kind == "provider" {
+			provided[l.Name()] = l.Source
+		}
+	}
+	rejected = append([]Rejected(nil), rejected...)
+	if len(provided) > 0 {
+		kept := make([]Loaded, 0, len(loaded))
+		for _, l := range loaded {
+			if ps, ok := provided[l.Name()]; ok && l.Source.Kind != "provider" {
+				rejected = append(rejected, Rejected{l.Name(), l.Source, fmt.Sprintf("%s is a definition provided by %s; a pin cannot replace it",
+					pycompat.Repr(l.Name()), deref(ps.Provider))})
+				continue
+			}
+			kept = append(kept, l)
+		}
+		loaded = kept
+	}
 	byName := map[string]Loaded{}
 	var order []string
 	dupes := map[string]bool{}
@@ -419,6 +488,7 @@ func (r *Registry) plan(loaded []Loaded, rejected []Rejected) plan {
 		case !ok:
 			ch.Added = append(ch.Added, l.Name())
 		case deref(o.Source.Commit) != deref(l.Source.Commit) || (o.Source.Commit == nil) != (l.Source.Commit == nil) ||
+			deref(o.Source.Version) != deref(l.Source.Version) || o.Source.Kind != l.Source.Kind ||
 			!pycompat.Equal(anyDoc(o.Doc), anyDoc(l.Doc)):
 			ch.Changed = append(ch.Changed, l.Name())
 		}

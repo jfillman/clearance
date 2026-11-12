@@ -18,7 +18,7 @@ CONTRACT_VERSION = "1.0.0"
 
 RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "run.finish", "human.answer", "session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome", "deploy.exception", "deploy.degraded", "federated.decision", "observation", "assessment", "resolution", "observation.health", "observation.verification")
 
-__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateReason", "GateRequirement", "GateResolutionRecorded", "GateResolutionRequest", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
+__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateReason", "GateRequirement", "GateResolutionRecorded", "GateResolutionRequest", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProvidedDefinition", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -255,11 +255,13 @@ class DefinitionsRequest(Model):
 
     _STRICT: ClassVar[bool] = True
     _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("bundled", "bundled", ("list", ("ref", "ProvidedDefinition")), False),
         Field("pins", "pins", ("list", ("ref", "PinnedDefinition")), True),
         Field("provider", "provider", ("str",), True),
         Field("rejected", "rejected", ("list", ("ref", "RejectedPin")), False),
     )
 
+    bundled: list[ProvidedDefinition] | None = None
     pins: list[PinnedDefinition]
     provider: str
     rejected: list[RejectedPin] | None = None
@@ -275,6 +277,7 @@ class DefinitionsResult(Model):
         Field("changed", "changed", ("list", ("str",)), True),
         Field("cleared", "cleared", ("list", ("ref", "DefinitionsRejectedView")), True),
         Field("cluster", "cluster", ("int",), True),
+        Field("provided", "provided", ("int",), False),
         Field("rejected", "rejected", ("list", ("ref", "DefinitionsRejectedView")), True),
         Field("removed", "removed", ("list", ("str",)), True),
     )
@@ -283,6 +286,7 @@ class DefinitionsResult(Model):
     changed: list[str]
     cleared: list[DefinitionsRejectedView]
     cluster: int
+    provided: int | None = None
     rejected: list[DefinitionsRejectedView]
     removed: list[str]
 
@@ -299,7 +303,9 @@ class DefinitionsSourceView(Model):
         Field("namespace", "namespace", ("nullable", ("str",)), False),
         Field("path", "path", ("nullable", ("str",)), False),
         Field("pin", "pin", ("str",), True),
+        Field("provider", "provider", ("nullable", ("str",)), False),
         Field("repo", "repo", ("nullable", ("str",)), False),
+        Field("version", "version", ("nullable", ("str",)), False),
         Field("xr", "xr", ("nullable", ("str",)), False),
     )
 
@@ -309,7 +315,9 @@ class DefinitionsSourceView(Model):
     namespace: str | None = None
     path: str | None = None
     pin: str
+    provider: str | None = None
     repo: str | None = None
+    version: str | None = None
     xr: str | None = None
 
 
@@ -1512,6 +1520,22 @@ class ProvenanceViolation(Model):
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
+class ProvidedDefinition(Model):
+    """Contract schema ProvidedDefinition (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("doc", "doc", ("map", ("any",)), True),
+        Field("name", "name", ("str",), True),
+        Field("version", "version", ("str",), True),
+    )
+
+    doc: dict[str, Any]
+    name: str
+    version: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
 class ProviderEvent(Model):
     """Contract schema ProviderEvent (a request type: unknown keys are refused by the core)."""
 
@@ -2111,6 +2135,7 @@ MODELS: dict[str, type[Model]] = {
     "ProvenanceRecordSummary": ProvenanceRecordSummary,
     "ProvenanceVerdict": ProvenanceVerdict,
     "ProvenanceViolation": ProvenanceViolation,
+    "ProvidedDefinition": ProvidedDefinition,
     "ProviderEvent": ProviderEvent,
     "Ready": Ready,
     "RecordRef": RecordRef,
