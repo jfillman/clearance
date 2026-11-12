@@ -449,6 +449,15 @@ func (r *Registry) plan(loaded []Loaded, rejected []Rejected) plan {
 		if dupes[n] {
 			continue
 		}
+		if b, ok := r.bundled[n]; ok && byName[n].Source.Kind == "provider" {
+			// The core's own bundled definition wins. A provider that ships the same document (a deployment that
+			// also mounts the image's agents/ into the core) has nothing to say: not loaded, not rejected.
+			if !pycompat.Equal(anyDoc(b.Raw), anyDoc(byName[n].Doc)) {
+				rej = append(rej, Rejected{n, byName[n].Source, fmt.Sprintf("%s differs from the core's own bundled definition, which wins",
+					pycompat.Repr(n))})
+			}
+			continue
+		}
 		if _, ok := r.bundled[n]; ok {
 			rej = append(rej, Rejected{n, byName[n].Source, fmt.Sprintf("%s is a bundled platform definition; a pin cannot replace it", pycompat.Repr(n))})
 			continue

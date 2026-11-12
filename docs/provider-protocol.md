@@ -189,7 +189,7 @@ PUT /v1/definitions
   once, like a pin's: `definition.load` (`loaded provider:autopilot-gateway@gateway-v0.9.0`; a new build of the same
   definition is `re-pinned`), `definition.unload`, `definition.reject`. The principal is `provider:<provider>`.
 - A provider's definition is never shadowed: a pin of the same name is rejected (`'x' is a definition provided by
-  <provider>; a pin cannot replace it`), and a name the core itself bundles (`CLEARANCE_AGENTS_DIR`) is rejected.
+  <provider>; a pin cannot replace it`), and a name the core itself bundles (`CLEARANCE_AGENTS_DIR`) keeps the core's definition: the same document is ignored (a deployment that mounts the image's `agents/` into the core too), a different one is rejected (`differs from the core's own bundled definition`).
 - `bundled` absent keeps the set the core holds for the provider (a publish from a provider that does not send it
   unloads nothing); an empty list clears it. The answer's `provided` is how many are live (`cluster` counts pins).
 - A core older than this field refuses the whole request (`400`, unknown field). A provider that sends `bundled`

@@ -404,10 +404,19 @@ func TestAPinCannotShadowAProvidedDefinition(t *testing.T) {
 	}
 }
 
-func TestAProvidedNameThatIsBundledIsRejected(t *testing.T) {
-	svc, _ := service(t)
-	ch, _ := svc.Apply(context.Background(), []definitions.Loaded{provided(t, "triage-agent", "v1")}, nil)
-	if len(ch.Rejected) != 1 || !strings.Contains(ch.Rejected[0].Reason, "bundled platform definition") {
+func TestACoreBundledNameWinsOverAProvidedOne(t *testing.T) {
+	svc, st := service(t)
+	// The same document: nothing to load, nothing to reject, nothing recorded.
+	same := provided(t, "triage-agent", "v1")
+	b, _ := svc.Registry.Get("triage-agent")
+	same.Doc = b.Raw
+	ch, err := svc.Apply(context.Background(), []definitions.Loaded{same}, nil)
+	if err != nil || ch.Any() || len(records(t, st)) != 0 {
+		t.Fatal(ch, err)
+	}
+	// A different one is a rejection that says the core's wins.
+	ch, _ = svc.Apply(context.Background(), []definitions.Loaded{provided(t, "triage-agent", "v1")}, nil)
+	if len(ch.Rejected) != 1 || !strings.Contains(ch.Rejected[0].Reason, "core's own bundled definition") {
 		t.Fatal(ch)
 	}
 }

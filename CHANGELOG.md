@@ -16,7 +16,7 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   `agents/` lives in its own image, and the core learned only `CLEARANCE_AGENTS_DIR` (unset on Hangar) and the cluster pins.
   `PUT /v1/definitions` now takes an optional `bundled` list, the definitions that ship with the provider (`name`, `version` of the
   build, `doc`), decided with the agent-definition schema and held as source kind `provider`: a pin cannot shadow one, a name in
-  `CLEARANCE_AGENTS_DIR` wins over one, and each change is one `definition.load` / `definition.unload` / `definition.reject`
+  `CLEARANCE_AGENTS_DIR` wins over one (the same document is ignored, a different one rejected), and each change is one `definition.load` / `definition.unload` / `definition.reject`
   (principal `provider:<provider>`, target `provider:<provider>@<version>`). `bundled` absent keeps the provider's earlier set, so
   an older provider unloads nothing; the answer gains `provided`. The Go and Python clients take it (`PublishDefinitions`,
   `publish_definitions(bundled=)`). Rollout: release the core first, then the gateway that sends `bundled` (a gateway that sends it to
