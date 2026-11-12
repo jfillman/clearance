@@ -170,15 +170,16 @@ func (p *Pipeline) platformGitops(e *Event, controller bool) (app ArgoApp, ok bo
 // A hook Job with ttlSecondsAfterFinished is deleted by the TTL controller; its dependents (the hook ServiceAccount, Role,
 // RoleBinding, owned by the Job) and sometimes the Job itself by the garbage collector. Those are the consequence of the sync,
 // not a new change, and carry no tracking annotation. Deny by default: all of these must hold.
-//   - the actor is exactly the TTL controller deleting a Job, or exactly the garbage collector deleting any object, a succeeded
-//     "delete", acting as itself (isController);
+//   - the actor is exactly the TTL controller deleting a Job, or exactly the garbage collector deleting any object (a succeeded
+//     "delete"), or exactly the garbage collector patching a Job's finalizers off through its metadata-only client (a succeeded
+//     "patch" with a PartialObjectMetadata body, 0.42.1), acting as itself (isController);
 //   - the event shows the deleted object (the response body or the collector's before-state: ObjectSeen), never a Metadata-level
 //     event that shows nothing;
 //   - the object is a Job that exactly one Application in a platform instance's namespace lists as a hook (HookOfRecent: the
 //     current operation, or the previous one within HookCleanupWindow); or, for the garbage collector only, a namespaced object
 //     with an ownerReference of kind Job naming such a hook Job, or one that itself carries a hook annotation and is so listed.
 //
-// A person, another service account and a different verb never match. Attribution is to the Application and the revision of the
+// A person, another service account, a full-object patch and any other verb never match. Attribution is to the Application and the revision of the
 // operation that listed the hook, like the hook's own write.
 func (p *Pipeline) hookCleanup(e *Event, controller bool) (ArgoApp, bool) {
 	gc := e.Subject == subjGC
