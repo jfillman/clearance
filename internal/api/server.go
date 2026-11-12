@@ -155,7 +155,7 @@ func (s *Server) endpoint(rt Route) http.HandlerFunc {
 			}
 			notePrincipal(r, p.ID)
 			var aerr *apiError
-			if v, aerr = s.opt.Access.Viewer(r.Context(), p, r.Header.Get(vocab.Get().OnBehalfOfHeader)); aerr != nil {
+			if v, aerr = s.opt.Access.ViewerFor(r.Context(), p, r.Header.Get(vocab.Get().OnBehalfOfHeader), rt.Roles); aerr != nil {
 				aerr.write(w)
 				return
 			}

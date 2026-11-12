@@ -488,6 +488,10 @@ foreign workloads by public issuer (Tower). Roles are principal globs in config:
 | `observer` | `CLEARANCE_API_OBSERVATION_READERS` (a machine poller) | `GET /v1/coverage`, `/v1/observations`, `/v1/observations/health`, `/v1/exceptions`, whole scope, redacted like a person; nothing else (O-5) |
 | `feed` | `CLEARANCE_API_FEED_READERS` (a grant-sync agent) | its clusters' grant feed and the changes on them, with their tokens; nothing else (C-1) |
 
+A machine principal may hold more than one machine role (Tower's backend is a `notifier` and an `observer`). Each
+route takes the first role it admits, in the order `auditor`, `feed`, `notifier`, `observer`; a route that admits none
+of them refuses the principal by its first (0.41.3).
+
 A record's visibility is decided by its session's owner and agent, so a person never sees another team's agents'
 sessions through a filter.
 

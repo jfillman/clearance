@@ -9,6 +9,14 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Fixed (0.41.3)
+
+- clearance-api: a machine principal holding several machine roles is resolved per route (`Access.ViewerFor`). Tower's
+  backend, both a `notifier` (`CLEARANCE_API_NOTIFIERS`) and an observation reader
+  (`CLEARANCE_API_OBSERVATION_READERS`), was always the notifier, so its alert poll of `GET /v1/coverage` answered 403
+  (seen live on hangar-prod 2026-11-12 with Backstage `clearance.alerts.enabled`). Persons, delegates and a principal
+  with one role are unchanged.
+
 ## [0.41.2] - 2026-11-12
 
 ### Fixed (0.41.2)
