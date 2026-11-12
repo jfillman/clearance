@@ -9,6 +9,8 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-11-12
+
 ### Added
 
 - **Observe-k8s: `platform-gitops` attribution (G-ARGO-10a).** A write by an Argo CD instance's application controller to an object
@@ -1139,7 +1141,8 @@ What the Autopilot gateway needs of the core before the hangar-dev cutover (R-3e
   scope, narrow-only limits, CEL policy, sessions, the hash-chained audit log and the gateway; the Hangar pack's
   `glidepath.*` and `airframe.*` tools over glidepath-api and a GET-only Kubernetes adapter.
 
-[Unreleased]: https://github.com/jfillman/clearance/compare/v0.40.3...HEAD
+[Unreleased]: https://github.com/jfillman/clearance/compare/v0.41.0...HEAD
+[0.41.0]: https://github.com/jfillman/clearance/compare/v0.40.3...v0.41.0
 [0.40.3]: https://github.com/jfillman/clearance/compare/v0.40.2...v0.40.3
 [0.40.2]: https://github.com/jfillman/clearance/compare/v0.40.1...v0.40.2
 [0.40.1]: https://github.com/jfillman/clearance/compare/v0.40.0...v0.40.1
