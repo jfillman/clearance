@@ -9,6 +9,8 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-11-12
+
 ### Added
 
 - clearance-api: `GET /v1/evidence` takes `coverage`, one coverage state or a comma-separated list of them
@@ -1260,7 +1262,8 @@ What the Autopilot gateway needs of the core before the hangar-dev cutover (R-3e
   scope, narrow-only limits, CEL policy, sessions, the hash-chained audit log and the gateway; the Hangar pack's
   `glidepath.*` and `airframe.*` tools over glidepath-api and a GET-only Kubernetes adapter.
 
-[Unreleased]: https://github.com/jfillman/clearance/compare/v0.42.1...HEAD
+[Unreleased]: https://github.com/jfillman/clearance/compare/v0.43.0...HEAD
+[0.43.0]: https://github.com/jfillman/clearance/compare/v0.42.1...v0.43.0
 [0.42.1]: https://github.com/jfillman/clearance/compare/v0.42.0...v0.42.1
 [0.42.0]: https://github.com/jfillman/clearance/compare/v0.41.4...v0.42.0
 [0.41.4]: https://github.com/jfillman/clearance/compare/v0.41.3...v0.41.4
