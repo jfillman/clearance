@@ -502,8 +502,23 @@ func checkResolution(ev map[string]any) error {
 	if err != nil {
 		return err
 	}
-	if err := only("resolution", r, "state", "cause", "by", "note"); err != nil {
+	if err := only("resolution", r, "state", "cause", "by", "note", "batch"); err != nil {
 		return err
+	}
+	if b, present := r["batch"]; present {
+		bm, ok := b.(map[string]any)
+		if !ok {
+			return bad("resolution.batch is {id, size}")
+		}
+		if err := only("resolution.batch", bm, "id", "size"); err != nil {
+			return err
+		}
+		if id, err := text("resolution.batch.id", bm["id"], 128); err != nil || id == "" {
+			return bad("resolution.batch.id is the batch's id")
+		}
+		if n, ok := intOf(bm["size"]); !ok || n < 1 {
+			return bad("resolution.batch.size is how many resolutions the batch recorded (at least 1)")
+		}
 	}
 	st, _ := r["state"].(string)
 	if !slices.Contains(ResolutionStates, st) {

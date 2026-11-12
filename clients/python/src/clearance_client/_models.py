@@ -18,7 +18,7 @@ CONTRACT_VERSION = "1.0.0"
 
 RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "run.finish", "human.answer", "session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome", "deploy.exception", "deploy.degraded", "federated.decision", "observation", "assessment", "resolution", "observation.health", "observation.verification")
 
-__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateReason", "GateRequirement", "GateResolutionRecorded", "GateResolutionRequest", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProvidedDefinition", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
+__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateBulkResolutionFailed", "GateBulkResolutionRecorded", "GateBulkResolutionRequest", "GateBulkResolutionResult", "GateBulkResolutionSkipped", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateReason", "GateRequirement", "GateResolutionRecorded", "GateResolutionRequest", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProvidedDefinition", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -515,6 +515,98 @@ class GateBreakglassRequest(Model):
     env: str
     reason: str
     ttl: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class GateBulkResolutionFailed(Model):
+    """Contract schema GateBulkResolutionFailed."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("error", "error", ("str",), True),
+        Field("seq", "seq", ("int",), True),
+    )
+
+    error: str
+    seq: int
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class GateBulkResolutionRecorded(Model):
+    """Contract schema GateBulkResolutionRecorded."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("record_seq", "record_seq", ("int",), True),
+        Field("scope", "scope", ("str",), True),
+        Field("seq", "seq", ("int",), True),
+    )
+
+    record_seq: int
+    scope: str
+    seq: int
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class GateBulkResolutionRequest(Model):
+    """Contract schema GateBulkResolutionRequest (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("cause", "cause", ("nullable", ("str",)), False),
+        Field("items", "items", ("list", ("int",)), True),
+        Field("note", "note", ("nullable", ("str",)), False),
+        Field("state", "state", ("str",), True),
+    )
+
+    cause: str | None = None
+    items: list[int]
+    note: str | None = None
+    state: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class GateBulkResolutionResult(Model):
+    """Contract schema GateBulkResolutionResult."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("batch", "batch", ("str",), True),
+        Field("by", "by", ("str",), True),
+        Field("cause", "cause", ("nullable", ("str",)), True),
+        Field("failed", "failed", ("list", ("ref", "GateBulkResolutionFailed")), True),
+        Field("note", "note", ("nullable", ("str",)), True),
+        Field("recorded", "recorded", ("list", ("ref", "GateBulkResolutionRecorded")), True),
+        Field("skipped", "skipped", ("list", ("ref", "GateBulkResolutionSkipped")), True),
+        Field("state", "state", ("str",), True),
+        Field("ts", "ts", ("str",), True),
+        Field("via", "via", ("nullable", ("str",)), True),
+    )
+
+    batch: str
+    by: str
+    cause: str | None
+    failed: list[GateBulkResolutionFailed]
+    note: str | None
+    recorded: list[GateBulkResolutionRecorded]
+    skipped: list[GateBulkResolutionSkipped]
+    state: str
+    ts: str
+    via: str | None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class GateBulkResolutionSkipped(Model):
+    """Contract schema GateBulkResolutionSkipped."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("reason", "reason", ("str",), True),
+        Field("seq", "seq", ("int",), True),
+    )
+
+    reason: str
+    seq: int
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -2095,6 +2187,11 @@ MODELS: dict[str, type[Model]] = {
     "GateApproval": GateApproval,
     "GateBreakglass": GateBreakglass,
     "GateBreakglassRequest": GateBreakglassRequest,
+    "GateBulkResolutionFailed": GateBulkResolutionFailed,
+    "GateBulkResolutionRecorded": GateBulkResolutionRecorded,
+    "GateBulkResolutionRequest": GateBulkResolutionRequest,
+    "GateBulkResolutionResult": GateBulkResolutionResult,
+    "GateBulkResolutionSkipped": GateBulkResolutionSkipped,
     "GateChange": GateChange,
     "GateChangeWithAuditSeq": GateChangeWithAuditSeq,
     "GateClearanceAnswer": GateClearanceAnswer,
@@ -2180,6 +2277,7 @@ OPERATIONS: dict[str, Operation] = {
     "reviewDefinition": Operation("POST", "/v1/definitions/review", "bearer", 65536, None, ReviewResult),
     "githubWebhook": Operation("POST", "/v1/github/webhook", "github-signature", 26214400, None, WebhookAnswer),
     "getKeys": Operation("GET", "/v1/keys", "none", 65536, None, TokenJWKS),
+    "setObservationResolutions": Operation("POST", "/v1/observations/resolutions", "bearer", 65536, GateBulkResolutionRequest, GateBulkResolutionResult),
     "setObservationResolution": Operation("POST", "/v1/observations/{seq}/resolution", "bearer", 16384, GateResolutionRequest, GateResolutionRecorded),
     "verifyProvenance": Operation("POST", "/v1/provenance", "bearer", 4194304, None, ProvenanceVerdict),
     "appendRecord": Operation("POST", "/v1/records", "provider", 262144, RecordRequest, RecordRef),

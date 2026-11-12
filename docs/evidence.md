@@ -196,7 +196,7 @@ in). The sixth is the core's.
 a later `reverted` for the same seq: the newest wins. A person sets what a person knows (why it happened,
 or that it was ratified) with `POST /v1/observations/{seq}/resolution` on the core ([gate.md](gate.md#a-persons-resolution-of-an-observation-o-5)):
 a `resolution` record about the same seq, in the same shape, naming the person (`principal`, `initiator` {sub, iss}, and
-`resolution.by`). An edit is another record; **the newest record about a seq is the resolution when it is read**
+`resolution.by`; a record written by the bulk route also carries `resolution.batch` `{id, size}`, [gate.md](gate.md#bulk-resolution)). An edit is another record; **the newest record about a seq is the resolution when it is read**
 (the coverage statement, the packet and the verifier all read it that way), and every earlier one stays in the chain,
 so who set which cause and when is never lost. `GET /v1/observations?kind=resolution` is the history.
 The same route resolves a gate `deploy.exception` (kinds out-of-band, drift, untraced-apply, digest-mismatch): the
