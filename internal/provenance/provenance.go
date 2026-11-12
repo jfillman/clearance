@@ -5,8 +5,16 @@
 //
 //	identity  confirmed | not-agent | unattested (a warning) | AI001 forged trailers | AI002 agents' login, no record |
 //	          AI003 commits added after the agent's | AI004 trailers differ from the record
-//	scope     in-scope | not-agent | unattested (a warning) | AS001 a path the agent's commit did not carry | AS002 a path the definition
-//	          denies | AS003 the repo left repos.allow | AS004 the definition is gone
+//	scope     in-scope | not-agent | unattested (a warning) | needs-person (a warning) | person-merged | AS001 a path the
+//	          agent's commit did not carry | AS002 a path the definition denies | AS003 the repo left repos.allow | AS004 the
+//	          definition is gone | AS005 a PR that needed a person was merged by a bot or an agents' login
+//
+// needs-person: the receipt says the PR is human-merge (`merge: person`) and names the paths that need a person
+// (`needsPerson`, set by the tool that opened it: a Flight environment, Flight values; Glidepath's `propose` scope
+// class). While the PR is open the verdict is ok but never success (the App's check concludes neutral, titled "needs a
+// person: <paths>"), so nothing that requires success can read it as approved. When the PR is merged, by a login that is
+// not a bot and not an agents' login the verdict is person-merged (success); by a bot or an agents' login it is AS005
+// (failure). The merge is read from GitHub (merged, merged_by), never from the PR's own text.
 //
 // unattested: Clearance has no record of the PR and it carries none of the other agent signals, but a commit carries
 // an AI coding agent's co-author trailer (vocab.AICoauthors): agent work outside Clearance, with no attestation. It is
@@ -19,6 +27,7 @@ import (
 	"fmt"
 	"github.com/jfillman/clearance/internal/vocab"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/jfillman/clearance/internal/definitions"
@@ -44,6 +53,14 @@ const (
 
 // Unattested is the status of agent work Clearance has no record of: an AI co-author trailer and nothing else.
 const Unattested = "unattested"
+
+// NeedsPerson is the scope status of an agent PR that only a person may merge and that is not merged yet; PersonMerged
+// the status once a person did. MergePerson is the receipt's `merge` value that marks a PR human-merge.
+const (
+	NeedsPerson  = "needs-person"
+	PersonMerged = "person-merged"
+	MergePerson  = "person"
+)
 
 var (
 	shaRx  = regexp.MustCompile(`^[0-9a-f]{40}\z`)
@@ -71,6 +88,11 @@ type Request struct {
 	// Coauthors are the PR's Co-Authored-By, Assisted-by and Generated-by trailers, each with its commit; Verify
 	// matches them against vocab.AICoauthors.
 	Coauthors []CoauthorTrailer
+	// Merged is whether GitHub says the PR is merged, MergedBy the login that merged it and MergedByBot whether that
+	// account is a bot (GitHub's account type, or a [bot] login). Only a human-merge PR's verdict reads them.
+	Merged      bool
+	MergedBy    string
+	MergedByBot bool
 }
 
 // CoauthorTrailer is one co-author trailer line and the commit whose message carries it.
@@ -79,7 +101,8 @@ type CoauthorTrailer struct {
 	Trailer string `json:"trailer"`
 }
 
-var requestKeys = map[string]bool{"repo": true, "pr": true, "head": true, "paths": true, "author": true, "trailers": true, "coauthors": true}
+var requestKeys = map[string]bool{"repo": true, "pr": true, "head": true, "paths": true, "author": true, "trailers": true, "coauthors": true,
+	"merged": true, "mergedBy": true, "mergedByBot": true}
 
 // ParseRequest is Request.from_dict, refusing unknown fields (strict decoding; provenance.py ignored them).
 func ParseRequest(v any) (Request, error) {
@@ -152,12 +175,32 @@ func ParseRequest(v any) (Request, error) {
 			coauthors = append(coauthors, c)
 		}
 	}
+	req := Request{Repo: strings.ToLower(repo), PR: pr, Head: head, Paths: paths, Author: author, Trailers: known, Coauthors: coauthors}
+	for _, k := range []struct {
+		key string
+		dst *bool
+	}{{"merged", &req.Merged}, {"mergedByBot", &req.MergedByBot}} {
+		if v, present := d[k.key]; present && v != nil {
+			b, ok := v.(bool)
+			if !ok {
+				return Request{}, &BadRequest{k.key + " is a boolean"}
+			}
+			*k.dst = b
+		}
+	}
+	if v, present := d["mergedBy"]; present && v != nil {
+		s, ok := v.(string)
+		if !ok {
+			return Request{}, &BadRequest{"mergedBy is a string"}
+		}
+		req.MergedBy = s
+	}
 	for k := range d {
 		if !requestKeys[k] {
 			return Request{}, &BadRequest{"unknown field " + pycompat.Repr(k)}
 		}
 	}
-	return Request{strings.ToLower(repo), pr, head, paths, author, known, coauthors}, nil
+	return req, nil
 }
 
 func parseCoauthor(x any) (CoauthorTrailer, error) {
@@ -203,6 +246,9 @@ func (r Request) Body() map[string]any {
 		}
 		out["coauthors"] = cs
 	}
+	if r.Merged { // absent until merged, so a request for an open PR digests as it did before
+		out["merged"], out["mergedBy"], out["mergedByBot"] = true, r.MergedBy, r.MergedByBot
+	}
 	return out
 }
 
@@ -223,6 +269,10 @@ type Check struct {
 	Violations *[]Violation `json:"violations,omitempty"`
 	// Coauthor is the AI co-author trailer an unattested verdict rests on (the first that matched).
 	Coauthor *CoauthorTrailer `json:"coauthor,omitempty"`
+	// NeedsPerson are the changed paths that need a person's merge, on a needs-person, person-merged or AS005 verdict.
+	NeedsPerson []string `json:"needs_person,omitempty"`
+	// MergedBy is who merged the PR, on a person-merged or AS005 verdict.
+	MergedBy string `json:"merged_by,omitempty"`
 }
 
 func check(ok bool, status, message, hint string, rule *string) Check {
@@ -287,6 +337,9 @@ func Verify(req Request, receipts []store.Record, defs Lookup, agentLogins []str
 	for _, a := range agentLogins {
 		if strings.ToLower(a) == strings.ToLower(req.Author) {
 			byAgentLogin = true
+		}
+		if req.Merged && strings.EqualFold(a, req.MergedBy) {
+			req.MergedByBot = true // merged as one of the agents' own logins: not a person, whatever GitHub calls the account
 		}
 	}
 	if rec == nil {
@@ -410,6 +463,13 @@ func scopeOf(req Request, rec store.Record, eff map[string]any, defs Lookup) Che
 		violations = append(violations, Violation{p, "AS002", fmt.Sprintf("denied to %s (path-not-allowed, R015)", d.Name)})
 	}
 	if len(violations) == 0 {
+		if need := humanMergePaths(req, eff); len(need) > 0 {
+			c := humanMerge(req, d.Name, need)
+			if c.Violations == nil {
+				c.Violations = &violations
+			}
+			return c
+		}
 		c := check(true, "in-scope", fmt.Sprintf("%d changed paths, all inside %s's scope", len(req.Paths), d.Name), "", nil)
 		c.Violations = &violations
 		return c
@@ -422,5 +482,53 @@ func scopeOf(req Request, rec store.Record, eff map[string]any, defs Lookup) Che
 	c := check(false, "violations", fmt.Sprintf("%d scope violations; first: %s (%s)", len(violations), where, first.Message),
 		"An agent may not change these paths. Revert them, or have a person make the change in a PR of their own.", rule(first.Rule))
 	c.Violations = &violations
+	return c
+}
+
+// humanMergePaths are the PR's changed paths that its receipt says need a person's merge: the receipt's `needsPerson`, when
+// the same receipt says `merge: person`, intersected with what the PR changed. Nothing the PR says about itself counts.
+func humanMergePaths(req Request, eff map[string]any) []string {
+	if m, _ := eff["merge"].(string); m != MergePerson {
+		return nil
+	}
+	list, _ := eff["needsPerson"].([]any)
+	changed := map[string]bool{}
+	for _, p := range req.Paths {
+		changed[scope.Normal(p)] = true
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, x := range list {
+		p, ok := x.(string)
+		if n := scope.Normal(p); ok && changed[n] && !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// humanMerge is the scope verdict of an in-scope agent PR that needs a person: pending until it is merged, then decided by
+// who merged it.
+func humanMerge(req Request, agent string, need []string) Check {
+	list := strings.Join(need, ", ")
+	var c Check
+	switch {
+	case !req.Merged:
+		c = check(true, NeedsPerson, fmt.Sprintf("needs a person: %s", list),
+			"This agent PR proposes a change only a person may merge. It is not approved until one does: an agent or bot merging it fails this check.", nil)
+	case req.MergedByBot || req.MergedBy == "":
+		who := req.MergedBy
+		if who == "" {
+			who = "an unknown account"
+		}
+		c = check(false, "violations", fmt.Sprintf("needs a person: %s, but it was merged by %s, not a person", list, who),
+			"A person must merge this PR. Treat the merge as a break-glass: check what it changed and who has write access.", rule("AS005"))
+		c.Violations = &[]Violation{{need[0], "AS005", "merged by " + who + ", not a person"}}
+	default:
+		c = check(true, PersonMerged, fmt.Sprintf("needs a person: %s; merged by %s", list, req.MergedBy), "", nil)
+	}
+	c.NeedsPerson, c.MergedBy = need, req.MergedBy
 	return c
 }

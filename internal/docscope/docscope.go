@@ -1,5 +1,6 @@
 // Package docscope is field scope over a structured document an agent changes: which JSON pointers of a YAML file
-// an agent may change (open), may only tighten (tighten, along an order), or may never change (human), plus
+// an agent may change (open), may only tighten (tighten, along an order), may never change (human), or may change only in a
+// pull request a person must merge (propose, optionally only for some kinds of change: proposeOn), plus
 // structural invariants over keyed collections and counted items that a pointer diff alone cannot see.
 //
 // It is generic: the file it applies to, the pointer rules, the invariants, every rule id and hint are a policy
@@ -95,19 +96,23 @@ type Config struct {
 	Rules []Rule
 	// WholeFile is reported when the file cannot be reasoned about (it does not parse, is not a mapping, the check
 	// cannot be evaluated); Human for a human-only or uncovered field (the rule's own `why` is the hint when it has
-	// one); Loosened for a tighten-only field moved the other way.
-	WholeFile, Human, Loosened Finding
-	Keyed                      []Keyed
-	Counted                    []Counted
+	// one); Loosened for a tighten-only field moved the other way. Propose is reported for a change to a propose field:
+	// this check cannot mark the pull request human-merge, so it refuses it and the hint names the tool that can. It is
+	// required when any rule is propose.
+	WholeFile, Human, Loosened, Propose Finding
+	Keyed                               []Keyed
+	Counted                             []Counted
 }
 
-// Rule is one pointer rule: a JSON-pointer pattern (`*` one segment, `**` any number), its scope (human, open or
-// tighten), why it is human-only, and for tighten its order ("bool", "int", or a list loosest first) and the value
-// an unset field has.
+// Rule is one pointer rule: a JSON-pointer pattern (`*` one segment, `**` any number), its scope (human, open, tighten
+// or propose), why it is human-only, for tighten its order ("bool", "int", or a list loosest first) and the value an
+// unset field has, and for propose the kinds of change ("added", "changed", "removed") that are propose (empty: every
+// kind); any other kind of change to the field is human.
 type Rule struct {
 	Pattern    string
 	AgentScope string
 	Why        string
+	ProposeOn  []string
 	Order      any
 	Default    any
 	hasDefault bool
@@ -133,6 +138,8 @@ func ParseRules(data []byte) ([]Rule, error) {
 				err = json.Unmarshal(v, &sr.AgentScope)
 			case "why":
 				err = json.Unmarshal(v, &sr.Why)
+			case "proposeOn":
+				err = json.Unmarshal(v, &sr.ProposeOn)
 			case "order":
 				sr.Order, err = pycompat.DecodeJSON(v)
 			case "default":
@@ -145,8 +152,16 @@ func ParseRules(data []byte) ([]Rule, error) {
 				return nil, fmt.Errorf("docscope: rule %d: %w", i, err)
 			}
 		}
-		if sr.Pattern == "" || (sr.AgentScope != "human" && sr.AgentScope != "open" && sr.AgentScope != "tighten") {
+		if sr.Pattern == "" || (sr.AgentScope != "human" && sr.AgentScope != "open" && sr.AgentScope != "tighten" && sr.AgentScope != "propose") {
 			return nil, fmt.Errorf("docscope: rule %d: bad pattern or agentScope", i)
+		}
+		for _, k := range sr.ProposeOn {
+			if k != "added" && k != "changed" && k != "removed" {
+				return nil, fmt.Errorf("docscope: rule %d: proposeOn names %q, not added, changed or removed", i, k)
+			}
+		}
+		if len(sr.ProposeOn) > 0 && sr.AgentScope != "propose" {
+			return nil, fmt.Errorf("docscope: rule %d: proposeOn is for a propose rule", i)
 		}
 		sr.segs = segments(sr.Pattern)
 		out = append(out, sr)
@@ -162,6 +177,11 @@ func (c *Config) Prepare() error {
 	for _, f := range []Finding{c.WholeFile, c.Human, c.Loosened} {
 		if f.Rule == "" || f.Hint == "" {
 			return errors.New("docscope: whole_file, human and loosened each need a rule and a hint")
+		}
+	}
+	for _, r := range c.Rules {
+		if r.AgentScope == "propose" && (c.Propose.Rule == "" || c.Propose.Hint == "") {
+			return errors.New("docscope: a propose rule needs the document's propose finding (a rule and a hint)")
 		}
 	}
 	for i := range c.Keyed {
@@ -383,6 +403,19 @@ func pointerMatches(pat, ptr []string) bool {
 		return (pat[i] == "*" || pat[i] == ptr[j]) && gofn(i+1, j+1)
 	}
 	return gofn(0, 0)
+}
+
+// proposes says whether a change of this kind to the rule's field is propose (else a propose rule reads human).
+func (r *Rule) proposes(kind string) bool {
+	if len(r.ProposeOn) == 0 {
+		return true
+	}
+	for _, k := range r.ProposeOn {
+		if k == kind {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Config) ruleFor(pointer string) *Rule {
@@ -929,7 +962,12 @@ func (c *Config) scopeProblems(base any, head *pycompat.Map) ([]Problem, error) 
 		} else if _, m := ch.b.(missingT); m {
 			what = "added"
 		}
-		if r == nil || r.AgentScope == "human" {
+		if r != nil && r.AgentScope == "propose" && r.proposes(what) {
+			// A propose field: allowed only in a PR a person merges, which this check cannot mark. Refused here; the tools
+			// that mark their PRs (glidepath.cicd.propose, airframe.apply) are not file-writing tools and meet no document check.
+			problems = append(problems, Problem{ch.ptr, c.Propose.Rule,
+				ch.ptr + " " + what + ": a propose field, which needs a person to merge", c.Propose.Hint})
+		} else if r == nil || r.AgentScope == "human" || r.AgentScope == "propose" {
 			msg := ch.ptr + " " + what + ": a human-only field"
 			hint := c.Human.Hint
 			if r == nil {

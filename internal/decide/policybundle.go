@@ -87,6 +87,7 @@ type DocumentSpec struct {
 	WholeFile docscope.Finding   `json:"whole_file"`
 	Human     docscope.Finding   `json:"human"`
 	Loosened  docscope.Finding   `json:"loosened"`
+	Propose   docscope.Finding   `json:"propose,omitempty"` // required when a rule is propose (contract version 2)
 	Keyed     []docscope.Keyed   `json:"keyed,omitempty"`
 	Counted   []docscope.Counted `json:"counted,omitempty"`
 }
@@ -251,7 +252,7 @@ func LoadBundle(data []byte, fetch Fetch) (*Bundle, error) {
 				}
 			}
 			if src == nil { // the source is unavailable: the document is checked, its rules are not there yet
-				cfg := &docscope.Config{File: d.File, WholeFile: d.WholeFile, Human: d.Human, Loosened: d.Loosened,
+				cfg := &docscope.Config{File: d.File, WholeFile: d.WholeFile, Human: d.Human, Loosened: d.Loosened, Propose: d.Propose,
 					Keyed: d.Keyed, Counted: d.Counted}
 				if err := cfg.Prepare(); err != nil {
 					return nil, fmt.Errorf("decide: policy bundle %s: document %s: %w", spec.Name, d.Name, err)
@@ -273,7 +274,7 @@ func LoadBundle(data []byte, fetch Fetch) (*Bundle, error) {
 		if err != nil {
 			return nil, fmt.Errorf("decide: policy bundle %s: document %s: %w", spec.Name, d.Name, err)
 		}
-		cfg := &docscope.Config{File: d.File, Rules: pr, WholeFile: d.WholeFile, Human: d.Human, Loosened: d.Loosened,
+		cfg := &docscope.Config{File: d.File, Rules: pr, WholeFile: d.WholeFile, Human: d.Human, Loosened: d.Loosened, Propose: d.Propose,
 			Keyed: d.Keyed, Counted: d.Counted}
 		if err := cfg.Prepare(); err != nil {
 			return nil, fmt.Errorf("decide: policy bundle %s: document %s: %w", spec.Name, d.Name, err)

@@ -199,6 +199,26 @@ func TestSchemaRejects(t *testing.T) {
 	}
 }
 
+// profile.airframe.proposeFlight is a boolean and nothing else under airframe is new: a policy bundle reads it (a definition that
+// does not set it cannot ask airframe.apply for the production half of an app).
+func TestAirframeProposeFlightIsABoolean(t *testing.T) {
+	d := doc(t)
+	prof(d)["repos"] = map[string]any{"allow": []any{"jfillman/*"}}
+	prof(d)["airframe"] = map[string]any{"apps": []any{"*"}, "proposeFlight": true}
+	if _, err := profile.Parse(d); err != nil {
+		t.Fatal(err)
+	}
+	prof(d)["airframe"] = map[string]any{"apps": []any{"*"}, "proposeFlight": "yes"}
+	_, err := profile.Parse(d)
+	if err == nil || !strings.Contains(err.Error(), "profile/airframe/proposeFlight: 'yes' is not of type 'boolean'") {
+		t.Fatal(err)
+	}
+	prof(d)["airframe"] = map[string]any{"proposeFlights": true}
+	if _, err := profile.Parse(d); err == nil || !strings.Contains(err.Error(), "Additional properties are not allowed") {
+		t.Fatal(err)
+	}
+}
+
 func TestFileNameMustMatchAgentName(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "other.yaml", doc(t))
