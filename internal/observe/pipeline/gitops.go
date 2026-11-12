@@ -170,21 +170,27 @@ func (p *Pipeline) platformGitops(e *Event, controller bool) (app ArgoApp, ok bo
 // A hook Job with ttlSecondsAfterFinished is deleted by the TTL controller; its dependents (the hook ServiceAccount, Role,
 // RoleBinding, owned by the Job) and sometimes the Job itself by the garbage collector. Those are the consequence of the sync,
 // not a new change, and carry no tracking annotation. Deny by default: all of these must hold.
-//   - the actor is exactly the TTL controller deleting a Job, or exactly the garbage collector deleting any object, a succeeded
-//     "delete", acting as itself (isController);
+//   - the actor is exactly the TTL controller deleting a Job, or exactly the garbage collector deleting any object (a succeeded
+//     "delete"), or exactly the garbage collector patching a Job's finalizers off through its metadata-only client (a succeeded
+//     "patch" with a PartialObjectMetadata body, 0.42.1), acting as itself (isController);
 //   - the event shows the deleted object (the response body or the collector's before-state: ObjectSeen), never a Metadata-level
 //     event that shows nothing;
 //   - the object is a Job that exactly one Application in a platform instance's namespace lists as a hook (HookOfRecent: the
 //     current operation, or the previous one within HookCleanupWindow); or, for the garbage collector only, a namespaced object
 //     with an ownerReference of kind Job naming such a hook Job, or one that itself carries a hook annotation and is so listed.
 //
-// A person, another service account and a different verb never match. Attribution is to the Application and the revision of the
+// A person, another service account, a full-object patch and any other verb never match. Attribution is to the Application and the revision of the
 // operation that listed the hook, like the hook's own write.
 func (p *Pipeline) hookCleanup(e *Event, controller bool) (ArgoApp, bool) {
-	if !e.Succeeded || !controller || e.Provider != Kubernetes || e.Verb != "delete" || !e.ObjectSeen || e.Name == "" || e.Namespace == "" {
+	gc := e.Subject == subjGC
+	// The garbage collector finishes a foreground delete of the hook Job by patching its finalizers off through the
+	// metadata-only client (a PartialObjectMetadata body), seen live on hangar-prod 2026-11-12 right after the TTL
+	// controller's delete. That patch is part of the same cleanup; any other patch is not.
+	gcFinalize := gc && e.Verb == "patch" && e.PartialMetadata && strings.EqualFold(e.Kind, "Job")
+	if !e.Succeeded || !controller || e.Provider != Kubernetes || (e.Verb != "delete" && !gcFinalize) || !e.ObjectSeen ||
+		e.Name == "" || e.Namespace == "" {
 		return ArgoApp{}, false
 	}
-	gc := e.Subject == subjGC
 	if !gc && !(e.Subject == subjTTLController && strings.EqualFold(e.Kind, "Job")) {
 		return ArgoApp{}, false
 	}

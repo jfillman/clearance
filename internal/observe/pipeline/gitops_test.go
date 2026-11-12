@@ -402,7 +402,13 @@ func TestPlatformGitopsHookCleanup(t *testing.T) {
 		{"gc deletes a hook serviceaccount that is itself listed", del("k6", gcSA, "serviceaccounts", "redis-init",
 			map[string]any{"kind": "ServiceAccount", "metadata": map[string]any{"name": "redis-init", "namespace": "shop", "annotations": map[string]any{"argocd.argoproj.io/hook": "PreSync"}}}), SignalPlatformGitops, "platform-cd/platform-rbac", "4771d884218725dff73023ee4ec112f764944129"},
 		{"the previous operation's hook, within the window", del("k7", ttlCtlSA, "jobs", "old-init", hookJob("old-init", "argocd.argoproj.io/hook", "PreSync")), SignalPlatformGitops, "platform-cd/platform-rbac", "aaaa1111"},
+		{"gc patches the hook job's finalizers off (metadata only)", fx{id: "k8", user: gcSA, verb: "patch", resource: "jobs", name: "redis-init",
+			obj: map[string]any{"kind": "PartialObjectMetadata", "apiVersion": "meta.k8s.io/v1", "metadata": map[string]any{"name": "redis-init", "namespace": "shop"}}},
+			SignalPlatformGitops, "platform-cd/platform-rbac", "4771d884218725dff73023ee4ec112f764944129"},
 		// stays visible
+		{"gc patches the hook job with a full object", fx{id: "n16", user: gcSA, verb: "patch", resource: "jobs", name: "redis-init", obj: hj}, "service-account.unknown", "", ""},
+		{"gc metadata patch on a job no Application lists", fx{id: "n17", user: gcSA, verb: "patch", resource: "jobs", name: "nightly",
+			obj: map[string]any{"kind": "PartialObjectMetadata", "apiVersion": "meta.k8s.io/v1", "metadata": map[string]any{"name": "nightly", "namespace": "shop"}}}, "service-account.unknown", "", ""},
 		{"ttl deletes a job no Application lists", del("n1", ttlCtlSA, "jobs", "nightly", hookJob("nightly", "x/y", "z")), "service-account.unknown", "", ""},
 		{"gc deletes an object owned by a job no Application lists", del("n2", gcSA, "serviceaccounts", "redis-init", ownedBy("ServiceAccount", "redis-init", "Job", "stranger", "")), "service-account.unknown", "", ""},
 		{"gc deletes an object with no hook owner", del("n3", gcSA, "roles", "redis-init", map[string]any{"kind": "Role", "metadata": map[string]any{"name": "redis-init", "namespace": "shop"}}), "service-account.unknown", "", ""},

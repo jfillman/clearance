@@ -9,6 +9,14 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Fixed (0.42.1)
+
+- observe-k8s: the garbage collector's metadata-only patch that removes a hook Job's finalizers after the TTL controller
+  deletes it (a PartialObjectMetadata body) is part of the same hook cleanup and attributed with it. Seen live on
+  hangar-prod 2026-11-12 on 0.42.0: the TTL delete came through attributed, the garbage collector's patch stayed
+  out-of-band. Only a PartialObjectMetadata patch of a listed hook Job by exactly the garbage collector; a full-object
+  patch, or a Job no Application lists, stays visible.
+
 ## [0.42.0] - 2026-11-12
 
 ### Fixed
