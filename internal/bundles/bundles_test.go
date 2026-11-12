@@ -251,3 +251,81 @@ func TestNoBundlesIsTheCoreAlone(t *testing.T) {
 		t.Fatal(e.Policy())
 	}
 }
+
+// Glidepath's contract version 2: a `propose` pointer rule (a new Flight environment's cluster). The hangar bundle names version
+// 2 and carries a propose finding; the generic file tool, which cannot mark its PR human-merge, is refused with that rule and its
+// hint, while a change the contract keeps open is decided as before. A bundle that has a propose rule and no finding fails the load.
+func TestAProposeFieldIsRefusedOnTheGenericFileTool(t *testing.T) {
+	var bundle map[string]any
+	raw, err := os.ReadFile(decidetest.FixtureBundle())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = json.Unmarshal(raw, &bundle)
+	bundle["sources"].([]any)[0].(map[string]any)["compatible"] = []any{1, 2}
+	doc := bundle["documents"].([]any)[0].(map[string]any)
+	doc["propose"] = map[string]any{"rule": "GP-SCOPE-004", "hint": "use glidepath.cicd.propose, which marks the PR for a person to merge"}
+	withFinding, _ := json.Marshal(bundle)
+	delete(doc, "propose")
+	without, _ := json.Marshal(bundle)
+
+	var contractDoc map[string]any
+	craw, _ := os.ReadFile(decidetest.FixtureSource())
+	_ = json.Unmarshal(craw, &contractDoc)
+	contractDoc["contractVersion"] = 2
+	rules := contractDoc["scope"].(map[string]any)["rules"].([]any)
+	contractDoc["scope"].(map[string]any)["rules"] = append([]any{map[string]any{
+		"pattern": "/deploy/environments/*/cluster", "agentScope": "propose", "proposeOn": []any{"added"}}}, rules...)
+	v2, _ := json.Marshal(contractDoc)
+
+	engine := func(bundleJSON []byte) (*decide.Engine, error) {
+		s, _, _ := serve(t, v2, 0)
+		path := filepath.Join(t.TempDir(), "bundle.json")
+		if err := os.WriteFile(path, bundleJSON, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		tok := filepath.Join(t.TempDir(), "token")
+		_ = os.WriteFile(tok, []byte("projected-token\n"), 0o600)
+		src, _ := json.Marshal(map[string]any{"glidepath": map[string]string{"url": s.URL + "/v1/contract", "tokenFile": tok}})
+		c, err := bundles.FromEnv(func(k string) string {
+			return map[string]string{"CLEARANCE_BUNDLES": path, "CLEARANCE_BUNDLE_SOURCES": string(src),
+				"CLEARANCE_BUNDLE_SOURCE_WAIT": "0s", "CLEARANCE_ENV_LOWER_PREFIXES": "pr-,agent-"}[k]
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return bundles.Engine(context.Background(), c, nil)
+	}
+
+	if _, err := engine(without); err == nil || !strings.Contains(err.Error(), "propose finding") {
+		t.Fatalf("a propose rule with no finding loaded: %v", err)
+	}
+	e, err := engine(withFinding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := "deploy: {environments: [{name: dev, tier: ground}]}"
+	flight := `deploy: {environments: [{name: dev, tier: ground}, {name: staging, tier: flight, cluster: hangar-prod}]}`
+	args := func(content string) string {
+		b, _ := json.Marshal(map[string]any{"repo": "jfillman/gate-api", "branch": "b", "title": "t",
+			"files": []any{map[string]any{"path": "cicd.yaml", "before": before, "content": content}}})
+		return string(b)
+	}
+	d := decideOn(t, e, "repo.pr.open", args(flight))
+	if d.Decision || d.Context.Rule != "GP-SCOPE-004" {
+		t.Fatalf("%+v", d.Context)
+	}
+	var hint string
+	for _, p := range d.Context.Problems {
+		if p.Rule == "GP-SCOPE-004" {
+			hint = p.Hint
+		}
+	}
+	if !strings.Contains(hint, "glidepath.cicd.propose") {
+		t.Fatalf("problems %+v", d.Context.Problems)
+	}
+	ground := `deploy: {environments: [{name: dev, tier: ground}, {name: qa, tier: ground}]}`
+	if d := decideOn(t, e, "repo.pr.open", args(ground)); !d.Decision {
+		t.Fatalf("a Ground environment is open: %+v", d.Context)
+	}
+}

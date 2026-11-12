@@ -271,6 +271,42 @@ Not covered: the **Copilot coding agent** (the cloud agent) authors its commits 
 co-author, so its PRs are known by their author, not a trailer; Cursor's own docs describe a `Made with Cursor`
 trailer, which is not a co-author trailer and is not matched. A deployment adds either by its own matchers.
 
+## A PR that needs a person: `needs-person` (A-11, Built)
+
+**Why.** Glidepath's `propose` scope class (its contract version 2) lets an agent propose a Flight environment, its release step
+and the Flight values, in a pull request that a person must merge (owner decision 2026-11-12: the agent configures every
+environment named, a person approves anything that touches prod). There are no GitHub rulesets on the private repos (free plan), so
+nothing can make GitHub require "a person". This verdict makes the check say it, and fail when it is not so.
+
+**The mark.** The tool that opens such a PR (Autopilot's `glidepath.cicd.propose` and `airframe.apply`, never the agent) puts
+`merge: person` and `needsPerson: [paths]` in the call's result, which Clearance records in the receipt (`effect`) like `pr`,
+`commit` and `paths`. Nothing the PR says about itself is read: a PR without that receipt is not a proposal, and a receipt
+without it is an ordinary agent PR. The bundle's `receipt` list for those tools names the two keys.
+
+**The verdict** (scope only; identity is unchanged), after the AS001 to AS004 checks pass and only when the receipt's
+`needsPerson` names a path the PR changed:
+
+| PR state | `scope.status` | `ok` | The check run |
+|---|---|---|---|
+| open | `needs-person` | true | **neutral**, titled `needs a person: <paths>` (never success) |
+| merged by a login that is not a bot (GitHub's account type `User`, no `[bot]` login) and not one of `AGENT_LOGINS` | `person-merged` | true | success |
+| merged by a bot, an agents' login, or no one GitHub names | `violations`, rule **AS005** | false | failure, the path annotated |
+
+The App now also handles `pull_request` `closed` when the PR was merged, so the merge replaces the neutral check run with
+success or failure on the same head commit. It reads `merged` and `merged_by` from `GET /pulls/{n}` (the token already reads pull
+requests). `POST /v1/provenance` takes `merged`, `mergedBy` and `mergedByBot` for a caller that gathers the PR itself; an open PR sends
+none of them. The verdict's check carries `needs_person` (the paths) and, once merged, `merged_by`.
+
+**What reads it.** The neutral is a pending decision. Glidepath's readers (the promotion fan-in, `PROM-03`, the guardrail wait,
+the release log) treat a neutral Clearance check as success for `unattested` and match the title prefix `needs a person` to
+treat this one as not success; `detect-bypass-merge` reads it as success only when the merger is a person and reports a bypass
+otherwise (Glidepath docs/admin/contract.md, "propose"). `needs-person` is neither a deny rule nor a tier rule: the core's
+decisions do not read it.
+
+**What it cannot do.** It does not stop anyone with write access from pressing merge, and a merge by a person who is not the
+right person is not detected here (who may merge is the repo's collaborator list). It makes a merge by an agent, a bot or an
+unknown account visible and red, and it keeps a proposal from reading as approved.
+
 ## The Go core (R-1c, Built, deployed on hangar-dev 2026-11-03)
 
 `internal/provenance` (`POST /v1/provenance`, the `provenance.verify` and `app.installation` records) and

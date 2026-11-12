@@ -47,7 +47,10 @@ const (
 	IdentityCheck = "Clearance / agent-identity"
 	ScopeCheck    = "Clearance / agent-scope"
 	CommentMarker = "<!-- clearance:provenance -->"
-	MaxPages      = 30
+	// NeedsPersonTitle starts the title of the agent-scope check run of a PR that needs a person's merge; Glidepath's
+	// readers match it (docs/provenance-app.md).
+	NeedsPersonTitle = "needs a person: "
+	MaxPages         = 30
 	// MaxCommitPages is GitHub's limit on a PR's commit list: 250 commits, 100 to a page.
 	MaxCommitPages = 3
 	MaxAnnotations = 50
@@ -225,6 +228,11 @@ func Wanted(event string, payload map[string]any) bool {
 	action, _ := payload["action"].(string)
 	switch event {
 	case "pull_request":
+		if action == "closed" { // a merge decides a PR that needed a person (provenance.NeedsPerson); a close without one decides nothing
+			pr, _ := payload["pull_request"].(map[string]any)
+			merged, _ := pr["merged"].(bool)
+			return merged
+		}
 		return prActions[action]
 	case "check_run", "check_suite":
 		return action == "rerequested"
@@ -620,6 +628,13 @@ func (a *App) Gather(ctx context.Context, token, repo string, pr int64) (provena
 	if u, ok := p["user"].(map[string]any); ok {
 		author, _ = u["login"].(string)
 	}
+	merged, _ := p["merged"].(bool)
+	mergedBy, mergedByBot := "", false
+	if mb, ok := p["merged_by"].(map[string]any); ok && merged {
+		mergedBy, _ = mb["login"].(string)
+		typ, _ := mb["type"].(string)
+		mergedByBot = typ != "User" || strings.HasSuffix(strings.ToLower(mergedBy), "[bot]") // an account that is not a user is not a person
+	}
 	var paths []any
 	for page := 1; page <= MaxPages; page++ {
 		status, doc, err := a.gh.call(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d/files?per_page=100&page=%d", repo, pr, page), "token", token, nil)
@@ -700,8 +715,12 @@ func (a *App) Gather(ctx context.Context, token, repo string, pr int64) (provena
 	if paths == nil {
 		paths = []any{}
 	}
-	req, err := provenance.ParseRequest(map[string]any{"repo": repo, "pr": pr, "head": head, "author": author,
-		"paths": paths, "trailers": trailers, "coauthors": coauthors})
+	body := map[string]any{"repo": repo, "pr": pr, "head": head, "author": author,
+		"paths": paths, "trailers": trailers, "coauthors": coauthors}
+	if merged {
+		body["merged"], body["mergedBy"], body["mergedByBot"] = true, mergedBy, mergedByBot
+	}
+	req, err := provenance.ParseRequest(body)
 	if err != nil {
 		return provenance.Request{}, err
 	}
@@ -718,8 +737,11 @@ func messageLines(msg string) []string {
 }
 
 func (a *App) postCheck(ctx context.Context, token, repo, head, name string, result provenance.Check, violations []provenance.Violation, v provenance.Verdict) (CheckRun, error) {
-	// An unattested verdict (agent work outside Clearance) is a warning: neutral, never failure (2026-11-04).
-	warn := result.OK && result.Status == provenance.Unattested
+	// An unattested verdict (agent work outside Clearance) is a warning: neutral, never failure (2026-11-04). So is a PR that
+	// needs a person and has none merging it yet: neutral, never success, titled "needs a person: <paths>" (Glidepath's readers
+	// match that title and do not read it as success).
+	needs := result.OK && result.Status == provenance.NeedsPerson
+	warn := (result.OK && result.Status == provenance.Unattested) || needs
 	word := "Failed"
 	switch {
 	case warn:
@@ -728,6 +750,9 @@ func (a *App) postCheck(ctx context.Context, token, repo, head, name string, res
 		word = "Passed"
 	}
 	title := word + ": " + result.Status
+	if needs {
+		title = NeedsPersonTitle + strings.Join(result.NeedsPerson, ", ")
+	}
 	if result.Rule != nil && *result.Rule != "" {
 		title += " (" + *result.Rule + ")"
 	}
@@ -735,7 +760,14 @@ func (a *App) postCheck(ctx context.Context, token, repo, head, name string, res
 	if !result.OK && result.Hint != "" {
 		summary += "\n\n**Fix:** " + result.Hint
 	}
-	if warn {
+	if needs {
+		summary = result.Message + "\n\nThis agent PR proposes a change that only a person may merge (a change a document's scope marks `propose`: a " +
+			"production environment or its values). The check is neutral, never success, until it is merged: by a person, it passes; by a bot " +
+			"or one of the agents' logins, it fails (AS005)."
+		if result.Hint != "" {
+			summary += "\n\n**Note:** " + result.Hint
+		}
+	} else if warn {
 		summary = "This PR was co-authored by an AI agent outside Clearance, so it carries no Clearance attestation."
 		if c := result.Coauthor; c != nil {
 			summary += fmt.Sprintf("\n\nCommit `%s` carries the trailer `%s`.", truncate(c.Commit, 12), strings.ReplaceAll(c.Trailer, "`", "'"))

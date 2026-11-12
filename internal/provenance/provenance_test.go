@@ -371,3 +371,127 @@ func TestBadCoauthorsAreRefused(t *testing.T) {
 		}
 	}
 }
+
+// --- Glidepath's propose scope class: a PR that needs a person (docs/provenance-app.md) ---------------------------------
+
+// openedForAPerson writes the receipt of a PR an agent opened with its tool's human-merge mark: merge: person and the
+// paths that need a person (what the tool, not the agent, sets).
+func (f *fixture) openedForAPerson(t *testing.T, needs []string, paths ...string) map[string]string {
+	t.Helper()
+	err := f.st.Atomic(f.ctx, func(tx store.Tx) error {
+		_, err := tx.Append(f.ctx, store.Event{"ts": "2026-09-26T12:00:00Z", "task_id": "t-000000000001", "session": "s-000001", "parent": nil,
+			"principal": "user:alice", "agent": "coding-agent", "tool": "glidepath.cicd.propose", "tier": "T1", "decision": "allow", "rule": nil,
+			"target": "jfillman/flight-api", "args_sha256": strings.Repeat("0", 64), "result": "ok",
+			"effect": map[string]any{"pr": json.Number("1"), "commit": commit, "branch": "agent/t-1", "repo": "jfillman/flight-api",
+				"merge": "person", "needsPerson": anyList(needs), "paths": anyList(paths)}}, evidence.Core(""))
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return map[string]string{"task": "t-000000000001", "session": "s-000001", "agent": "coding-agent"}
+}
+
+func (f *fixture) askProposal(t *testing.T, tr map[string]string, over map[string]any) provenance.Verdict {
+	t.Helper()
+	o := map[string]any{"trailers": tr, "paths": anyList([]string{"cicd.yaml"})}
+	for k, v := range over {
+		o[k] = v
+	}
+	return f.ask(t, o)
+}
+
+func TestAnOpenProposalNeedsAPersonAndIsNeverPlainSuccess(t *testing.T) {
+	f := newFixture(t)
+	tr := f.openedForAPerson(t, []string{"cicd.yaml"}, "cicd.yaml")
+	v := f.askProposal(t, tr, nil)
+	if !v.Scope.OK || v.Scope.Status != provenance.NeedsPerson || !strings.HasPrefix(v.Scope.Message, "needs a person: cicd.yaml") {
+		t.Fatalf("%+v", v.Scope)
+	}
+	if !reflect.DeepEqual(v.Scope.NeedsPerson, []string{"cicd.yaml"}) {
+		t.Fatalf("%v", v.Scope.NeedsPerson)
+	}
+	if !v.Identity.OK || v.Identity.Status != "confirmed" {
+		t.Fatalf("identity %+v", v.Identity)
+	}
+	if got := f.last(t)["result"]; got != "identity:confirmed scope:needs-person" {
+		t.Fatalf("recorded %v", got)
+	}
+}
+
+func TestAProposalMergedByAPersonPasses(t *testing.T) {
+	f := newFixture(t)
+	tr := f.openedForAPerson(t, []string{"cicd.yaml"}, "cicd.yaml")
+	v := f.askProposal(t, tr, map[string]any{"merged": true, "mergedBy": "riley", "mergedByBot": false})
+	if !v.Scope.OK || v.Scope.Status != provenance.PersonMerged || v.Scope.MergedBy != "riley" {
+		t.Fatalf("%+v", v.Scope)
+	}
+}
+
+func TestAProposalMergedByABotOrAnAgentLoginFailsAS005(t *testing.T) {
+	for name, over := range map[string]map[string]any{
+		"a bot account":     {"merged": true, "mergedBy": "some-app[bot]", "mergedByBot": true},
+		"the agents' login": {"merged": true, "mergedBy": strings.ToUpper(bot), "mergedByBot": false},
+		"nobody named":      {"merged": true, "mergedBy": "", "mergedByBot": false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			tr := f.openedForAPerson(t, []string{"cicd.yaml"}, "cicd.yaml")
+			v := f.askProposal(t, tr, over)
+			if v.Scope.OK || rule(v.Scope) != "AS005" || !strings.Contains(v.Scope.Message, "not a person") {
+				t.Fatalf("%+v", v.Scope)
+			}
+			if v.Scope.Violations == nil || len(*v.Scope.Violations) != 1 || (*v.Scope.Violations)[0].Path != "cicd.yaml" {
+				t.Fatalf("%+v", v.Scope.Violations)
+			}
+		})
+	}
+}
+
+func TestOnlyThePathsTheReceiptNamesAndThePRChangedNeedAPerson(t *testing.T) {
+	f := newFixture(t)
+	// The tool said only cicd.yaml needs a person; the PR also changes build.yaml (carried, in scope): one needs-person path.
+	tr := f.openedForAPerson(t, []string{"cicd.yaml", "not-in-the-pr.yaml"}, "cicd.yaml", "build.yaml")
+	v := f.askProposal(t, tr, map[string]any{"paths": anyList([]string{"cicd.yaml", "build.yaml"})})
+	if v.Scope.Status != provenance.NeedsPerson || !reflect.DeepEqual(v.Scope.NeedsPerson, []string{"cicd.yaml"}) {
+		t.Fatalf("%+v", v.Scope)
+	}
+	// None of them in the PR: an ordinary in-scope agent PR.
+	f2 := newFixture(t)
+	tr = f2.openedForAPerson(t, []string{"cicd.yaml"}, "build.yaml")
+	v = f2.askProposal(t, tr, map[string]any{"paths": anyList([]string{"build.yaml"})})
+	if v.Scope.Status != "in-scope" {
+		t.Fatalf("%+v", v.Scope)
+	}
+}
+
+func TestTheMarkIsTheReceiptsNotThePRs(t *testing.T) {
+	// A receipt without merge: person is not a proposal, whatever else it carries; a PR that lists paths the receipt never
+	// carried fails AS001 before the mark is read.
+	f := newFixture(t)
+	tr := f.opened(t, "cicd.yaml")
+	if v := f.askProposal(t, tr, nil); v.Scope.Status != "in-scope" {
+		t.Fatalf("%+v", v.Scope)
+	}
+	f2 := newFixture(t)
+	tr = f2.openedForAPerson(t, []string{"cicd.yaml"}, "cicd.yaml")
+	v := f2.askProposal(t, tr, map[string]any{"paths": anyList([]string{"cicd.yaml", "extra.yaml"})})
+	if v.Scope.OK || rule(v.Scope) != "AS001" {
+		t.Fatalf("%+v", v.Scope)
+	}
+}
+
+func TestMergedFieldsAreTypedAndAbsentWhenOpen(t *testing.T) {
+	for _, bad := range []map[string]any{{"merged": "yes"}, {"mergedBy": 3}, {"mergedByBot": "no"}} {
+		if _, err := provenance.ParseRequest(body(bad)); err == nil {
+			t.Errorf("accepted %v", bad)
+		}
+	}
+	r, err := provenance.ParseRequest(body(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, has := r.Body()["merged"]; has {
+		t.Fatal("an open PR's request digests with a merged field")
+	}
+}
