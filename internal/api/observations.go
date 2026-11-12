@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -130,13 +131,29 @@ func (s *Server) collect(ctx context.Context, f EvidenceFilter, v *Viewer, max i
 	return out, true, nil
 }
 
-// getCoverage is GET /v1/coverage: the three-part statement of a scope's window (observe.Statement).
+// ScopeStatements is GET /v1/coverage with no scope: the statement of every scope observed, in scope order.
+type ScopeStatements struct {
+	From   string              `json:"from"`
+	To     string              `json:"to"`
+	Scopes []observe.Statement `json:"scopes"`
+	// Truncated: more scopes were observed than MaxCoverageScopes, or a read of the scope list was cut.
+	Truncated bool `json:"truncated"`
+}
+
+// MaxCoverageScopes caps the scopes one unscoped coverage answer carries.
+const MaxCoverageScopes = 100
+
+// getCoverage is GET /v1/coverage: the three-part statement of a scope's window (observe.Statement), or with no scope
+// the statements of every scope observed in it ({from, to, scopes: [...]}).
 func (s *Server) getCoverage(w http.ResponseWriter, r *http.Request, v *Viewer) {
 	q := query(r)
-	scope, aerr := scopeOf(q)
-	if aerr != nil {
-		aerr.write(w)
-		return
+	scope := ""
+	if q["scope"] != "" {
+		var aerr *apiError
+		if scope, aerr = scopeOf(q); aerr != nil {
+			aerr.write(w)
+			return
+		}
 	}
 	now := s.opt.Clock().UTC()
 	to, from := now, time.Time{}
@@ -172,6 +189,67 @@ func (s *Server) getCoverage(w http.ResponseWriter, r *http.Request, v *Viewer) 
 		}
 	}
 	ctx := r.Context()
+	if scope != "" {
+		st, err := s.statement(ctx, v, scope, from, to, now)
+		if err != nil {
+			s.readFailed(w, r, err)
+			return
+		}
+		writeJSON(w, 200, st)
+		return
+	}
+	scopes, cut, err := s.scopesIn(ctx, v, from, to)
+	if err != nil {
+		s.readFailed(w, r, err)
+		return
+	}
+	out := ScopeStatements{From: evidence.ISO(from), To: evidence.ISO(to), Scopes: []observe.Statement{}, Truncated: cut}
+	if len(scopes) > MaxCoverageScopes {
+		scopes, out.Truncated = scopes[:MaxCoverageScopes], true
+	}
+	for _, sc := range scopes {
+		st, err := s.statement(ctx, v, sc, from, to, now)
+		if err != nil {
+			s.readFailed(w, r, err)
+			return
+		}
+		out.Scopes = append(out.Scopes, st)
+	}
+	writeJSON(w, 200, out)
+}
+
+// scopesIn is the scopes with an observation, audit gap or health record in the window, or a health record before it
+// (a scope whose feed went quiet is still a scope), sorted. cut says a read hit MaxCoverageRecords.
+func (s *Server) scopesIn(ctx context.Context, v *Viewer, from, to time.Time) ([]string, bool, error) {
+	seen := map[string]bool{}
+	cut := false
+	f, t := evidence.ISO(from), evidence.ISO(to)
+	for _, rd := range []struct {
+		tools        []string
+		since, until string
+	}{{[]string{evidence.KindObservation, evidence.KindAuditGap}, f, t}, {[]string{evidence.KindHealth}, "", t}} {
+		rs, c, err := s.collect(ctx, EvidenceFilter{Tools: rd.tools, Since: rd.since, Until: rd.until, Outcomes: OutcomesInclude}, v, MaxCoverageRecords)
+		if err != nil {
+			return nil, false, err
+		}
+		cut = cut || c
+		for _, r := range rs {
+			if sc, _ := r["scope"].(string); sc != "" && scopeParam.MatchString(sc) {
+				seen[sc] = true
+			}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for sc := range seen {
+		out = append(out, sc)
+	}
+	sort.Strings(out)
+	return out, cut, nil
+}
+
+// statement is the coverage statement of one scope and window.
+func (s *Server) statement(ctx context.Context, v *Viewer, scope string, from, to, now time.Time) (observe.Statement, error) {
+	var err error
 	base := EvidenceFilter{Scope: scope, Outcomes: OutcomesInclude}
 	input := observe.Input{Scope: scope, Window: observe.Window{From: from, To: to}}
 	read := func(tools []string, since, until string) []Record {
@@ -195,10 +273,9 @@ func (s *Server) getCoverage(w http.ResponseWriter, r *http.Request, v *Viewer) 
 	input.Health = read([]string{evidence.KindHealth}, "", t)
 	input.Gaps = read([]string{evidence.KindAuditGap}, f, t)
 	if err != nil {
-		s.readFailed(w, r, err)
-		return
+		return observe.Statement{}, err
 	}
-	writeJSON(w, 200, observe.Build(input, now))
+	return observe.Build(input, now), nil
 }
 
 // Redaction for a person. The providers keep secrets out of an observation at the source (observe-k8s records a Secret at
@@ -265,17 +342,26 @@ func redactValue(v any, depth int) any {
 	return v
 }
 
-// redactForPerson returns r with its state_change redacted (r is not changed); a record with none is returned as is.
+// redactForPerson returns r with its state_change and exception objects redacted, naming them in redacted (r is not changed); a record with none is returned as is.
 func redactForPerson(r Record) Record {
-	sc, ok := r["state_change"]
-	if !ok {
-		return r
+	var done []any
+	out := r
+	for _, k := range []string{"state_change", "exception"} {
+		x, ok := r[k]
+		if !ok || x == nil {
+			continue
+		}
+		if done == nil {
+			out = make(Record, len(r)+1)
+			for kk, vv := range r {
+				out[kk] = vv
+			}
+		}
+		out[k] = redactValue(x, 0)
+		done = append(done, k)
 	}
-	out := make(Record, len(r)+1)
-	for k, v := range r {
-		out[k] = v
+	if done != nil {
+		out["redacted"] = done
 	}
-	out["state_change"] = redactValue(sc, 0)
-	out["state_change_redacted"] = true
 	return out
 }

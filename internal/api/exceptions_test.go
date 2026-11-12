@@ -114,9 +114,11 @@ func TestTheExceptionsListIsWhatThePacketReads(t *testing.T) {
 			eqSeqs(t, "kind none", seqs(h.ok("/v1/exceptions?kind=drift", "audit")))
 			eqSeqs(t, "page", seqs(h.ok("/v1/exceptions?limit=2", "audit")), 4, 3)
 			eqSeqs(t, "after", seqs(h.ok("/v1/exceptions?after=3", "audit")), 2, 1)
-			// scoped like the evidence list: carol owns flight-api and sees its exceptions; bob sees none
+			// O-5: every person reads every exception, the owner and the stranger alike; a machine principal does not
 			eqSeqs(t, "owner", seqs(h.ok("/v1/exceptions", "carol")), 4, 3, 2, 1)
-			eqSeqs(t, "stranger", seqs(h.ok("/v1/exceptions", "bob")))
+			eqSeqs(t, "stranger", seqs(h.ok("/v1/exceptions", "bob")), 4, 3, 2, 1)
+			eqSeqs(t, "delegate for a stranger", seqs(h.do("GET", "/v1/exceptions", "tower", "user:alice").json(t)), 4, 3, 2, 1)
+			h.status(t, 403, "GET", "/v1/exceptions", "svc", "")
 			h.status(t, 400, "GET", "/v1/exceptions?kind=sideways", "audit", "")
 			h.status(t, 400, "GET", "/v1/exceptions?tool=repo.read", "audit", "")
 			h.status(t, 400, "GET", "/v1/exceptions?decision=allow", "audit", "")

@@ -26,6 +26,8 @@ import (
 //	CLEARANCE_API_DSN                   the read-only role's DSN (required)
 //	CLEARANCE_API_AUDITORS              principal globs, comma-separated: every read, the chain check, full=1
 //	CLEARANCE_API_NOTIFIERS             principal globs: the notifier role (no Clearance read is a notifier's)
+//	CLEARANCE_API_OBSERVATION_READERS   principal globs: machine pollers that read coverage, observations, observation
+//	                                    health and exceptions (whole scope, redacted like a person) and nothing else
 //	CLEARANCE_DELEGATES                 principal globs that may name a person in the on-behalf-of header (a portal)
 //	CLEARANCE_API_FEED_READERS          <principal glob>=<cluster> pairs, comma-separated: the grant-sync agents
 //	                                    that read a cluster's grant feed (cleared changes and their tokens)
@@ -47,6 +49,7 @@ type Config struct {
 	DSN                            string
 	Listen                         string
 	Auditors, Notifiers, Delegates []string
+	ObservationReaders             []string
 	FeedReaders                    []FeedReader
 	AgentsDir                      string
 	DefinitionsEvery               time.Duration
@@ -79,7 +82,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	}
 	cfg := Config{DSN: get("CLEARANCE_API_DSN", ""), AgentsDir: get("CLEARANCE_AGENTS_DIR", ""),
 		Auditors: list(get("CLEARANCE_API_AUDITORS", "")), Notifiers: list(get("CLEARANCE_API_NOTIFIERS", "")),
-		Delegates:  list(get("CLEARANCE_DELEGATES", "")),
+		Delegates: list(get("CLEARANCE_DELEGATES", "")), ObservationReaders: list(get("CLEARANCE_API_OBSERVATION_READERS", "")),
 		GatewayURL: get("CLEARANCE_GATEWAY_URL", ""), CoreURL: get("CLEARANCE_CORE_URL", ""),
 		BackstageURL: get("BACKSTAGE_URL", ""), BackstageTokenFile: get("BACKSTAGE_TOKEN_FILE", backstage.DefaultTokenFile)}
 	if cfg.DSN == "" {
@@ -172,7 +175,7 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 		log.Warn("api: the stored definitions are not readable yet; retrying", "error", err.Error())
 	}
 	access := &Access{Delegates: cfg.Delegates, Notifiers: cfg.Notifiers, Auditors: cfg.Auditors,
-		FeedReaders: cfg.FeedReaders, Owners: defs.Owners}
+		ObservationReaders: cfg.ObservationReaders, FeedReaders: cfg.FeedReaders, Owners: defs.Owners}
 	if cfg.BackstageURL != "" {
 		cat := backstage.NewCatalog(cfg.BackstageURL, cfg.BackstageTokenFile, 0, log)
 		dir := backstage.NewDirectory(cat, 0, nil)
@@ -200,7 +203,7 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- hs.Serve(ln) }()
 	log.Info("clearance api serving", "addr", ln.Addr().String(), "agents", len(defs.Names()),
-		"auditors", cfg.Auditors, "notifiers", cfg.Notifiers, "delegates", cfg.Delegates, "feed_readers", len(cfg.FeedReaders),
+		"auditors", cfg.Auditors, "notifiers", cfg.Notifiers, "observation_readers", cfg.ObservationReaders, "delegates", cfg.Delegates, "feed_readers", len(cfg.FeedReaders),
 		"catalog", cfg.BackstageURL != "", "policy", eng.Policy().Bundle)
 	if ready != nil {
 		ready(ln.Addr().String())

@@ -115,7 +115,8 @@ var ExceptionTools = gate.ExceptionTools()
 // listExceptions is GET /v1/exceptions: what the packet's exceptions section lists (C-4, C-5 read it): every
 // deploy.exception (out-of-band, drift, untraced-apply, digest-mismatch), every provider's degraded-mode report
 // (deploy.degraded), every break-glass window opened and closed, and every runtime read allowed while the core was
-// unreachable (tool.call, coverage-unavailable). Newest first, the cursor is seq, scoped like the evidence list.
+// unreachable (tool.call, coverage-unavailable). Newest first, the cursor is seq. Whole scope for every reader (O-5),
+// redacted for all but an auditor.
 func (s *Server) listExceptions(w http.ResponseWriter, r *http.Request, v *Viewer) {
 	q := query(r)
 	f, aerr := evidenceFilter(map[string]string{"app": q["app"], "tool": q["tool"], "since": q["since"],
@@ -136,7 +137,7 @@ func (s *Server) listExceptions(w http.ResponseWriter, r *http.Request, v *Viewe
 		f.Kind = k
 	}
 	f.Exceptions = true
-	s.evidencePage(w, r, v, q, f)
+	s.observationPage(w, r, v, q, f)
 }
 
 func (s *Server) evidencePage(w http.ResponseWriter, r *http.Request, v *Viewer, q map[string]string, f EvidenceFilter) {

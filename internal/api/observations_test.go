@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jfillman/clearance/internal/authn"
 	"github.com/jfillman/clearance/internal/core"
 	"github.com/jfillman/clearance/internal/evidence"
 	"github.com/jfillman/clearance/internal/server"
@@ -97,7 +98,7 @@ func (f *fakeObserved) firstTS() time.Time {
 	return ts
 }
 
-func (f *fakeObserved) harness(t *testing.T, at time.Time) *harness {
+func (f *fakeObserved) harness(t *testing.T, at time.Time, opts ...option) *harness {
 	build := func(t *testing.T, _ world) (Store, string) {
 		if f.dsn != "" {
 			return openReader(t, f.dsn), f.dsn
@@ -109,7 +110,7 @@ func (f *fakeObserved) harness(t *testing.T, at time.Time) *harness {
 		return st, ""
 	}
 	return newHarness(t, backend{"observed", build}, world{},
-		func(o *Options) { o.Clock = func() time.Time { return at } })
+		append([]option{func(o *Options) { o.Clock = func() time.Time { return at } }}, opts...)...)
 }
 
 var _ = context.Background
@@ -258,7 +259,7 @@ func checkAnySignedInPersonReadsObservationsAndCoverage(t *testing.T, f *fakeObs
 		"after": map[string]any{"instanceType": "t3.micro", "MasterUserPassword": "hunter2-plain",
 			"containers": []any{map[string]any{"name": "DB_PASSWORD", "value": "hunter3-plain"}, map[string]any{"name": "REGION", "value": "ca-central-1"}}}}
 	f.post("observation", ev)
-	h := f.harness(t, start.Add(time.Minute))
+	h := f.harness(t, start.Add(time.Minute), func(o *Options) { o.Access.ObservationReaders = []string{"ns/poller"} })
 	paths := []string{"/v1/observations?scope=" + obsScope, "/v1/observations/health?scope=" + obsScope, "/v1/coverage?scope=" + obsScope}
 	for _, who := range []string{"carol", "alice", "bob", "audit"} { // alice owns nothing and is in no group: still a person
 		for _, p := range paths {
@@ -287,7 +288,7 @@ func checkAnySignedInPersonReadsObservationsAndCoverage(t *testing.T, f *fakeObs
 		if strings.Contains(body, "hunter") {
 			t.Fatalf("%s read a secret value: %s", who, body)
 		}
-		for _, keep := range []string{"t3.micro", "ca-central-1", "state_change_redacted"} {
+		for _, keep := range []string{"t3.micro", "ca-central-1", "redacted"} {
 			if !strings.Contains(body, keep) {
 				t.Fatalf("%s: %q was redacted or missing: %s", who, keep, body)
 			}
@@ -372,5 +373,77 @@ func checkCoverageStaysBlindAfterAMonitoringFlipUntilTheCollectorIsHealthy(t *te
 	st = h.ok(url, "audit")
 	if src := st["health"].(map[string]any)["sources"].([]any)[0].(map[string]any); src["state"] == nil || src["now"] != "healthy" {
 		t.Fatalf("the collector's healthy record ends the flip: %v", src)
+	}
+}
+
+// O-5: a configured machine poller (CLEARANCE_API_OBSERVATION_READERS) reads the four observation routes, whole scope and
+// redacted like a person, and nothing else; another machine principal is refused. GET /v1/coverage with no scope answers
+// every observed scope.
+func TestAnObservationReaderAndTheScopeList(t *testing.T) {
+	onBoth(t, checkAnObservationReaderAndTheScopeList)
+}
+
+func checkAnObservationReaderAndTheScopeList(t *testing.T, f *fakeObserved) {
+	start := time.Now().UTC().Truncate(time.Second)
+	f.post("observation.health", obsHealth("healthy"))
+	ev := obsEvent("e-1", "RunInstances", true)
+	ev["state_change"] = map[string]any{"before": map[string]any{}, "after": map[string]any{"MasterUserPassword": "hunter2-plain", "size": "small"}}
+	f.post("observation", ev)
+	other := obsEvent("e-2", "RunInstances", true)
+	other["scope"] = "aws:210987654321"
+	f.post("observation", other)
+	h := f.harness(t, start.Add(time.Minute), func(o *Options) {
+		o.Access.ObservationReaders = []string{"ns/poller", "ns/other-*"}
+		principals["poller"] = authn.Principal{ID: "ns/poller", Kind: authn.KindServiceAccount}
+	})
+	defer delete(principals, "poller")
+	for _, p := range []string{"/v1/observations?scope=" + obsScope, "/v1/observations/health?scope=" + obsScope,
+		"/v1/coverage?scope=" + obsScope, "/v1/coverage", "/v1/exceptions"} {
+		h.status(t, 200, "GET", p, "poller", "")
+		h.status(t, 403, "GET", p, "svc", "") // another machine principal
+	}
+	if body := string(h.get("/v1/observations?scope="+obsScope, "poller").body); strings.Contains(body, "hunter2") || !strings.Contains(body, "small") {
+		t.Fatalf("the poller's read: %s", body)
+	}
+	// nothing else
+	for _, p := range []string{"/v1/evidence", "/v1/policy", "/v1/receipts", "/v1/clearances/counts", "/v1/evidence/verify"} {
+		h.status(t, 403, "GET", p, "poller", "")
+	}
+	for _, who := range []string{"alice", "poller"} {
+		l := h.ok("/v1/coverage", who)
+		sc, _ := l["scopes"].([]any)
+		if len(sc) != 2 || l["truncated"] != false {
+			t.Fatalf("%s: %v", who, l)
+		}
+		first := sc[0].(map[string]any)
+		if first["scope"] != obsScope || sc[1].(map[string]any)["scope"] != "aws:210987654321" {
+			t.Fatalf("scopes not sorted: %v", sc)
+		}
+		if first["state"] == nil || first["health"] == nil || first["text"] == nil {
+			t.Fatalf("a scope's statement: %v", first)
+		}
+	}
+	// a single scope answers as it did
+	if st := h.ok("/v1/coverage?scope="+obsScope, "alice"); st["scope"] != obsScope || st["scopes"] != nil {
+		t.Fatal(st)
+	}
+}
+
+// O-5: a person's (or poller's) record has the secret-bearing values of state_change and of a deploy.exception's
+// exception object redacted, and says which fields; a record with neither is returned as is, and the input is not changed.
+func TestRedactForPersonCoversStateChangeAndExceptionObjects(t *testing.T) {
+	in := Record{"tool": "deploy.exception", "exception": map[string]any{"kind": "out-of-band",
+		"objects": []any{map[string]any{"name": "API_TOKEN", "value": "tok-plain"}, map[string]any{"kind": "Deployment", "password": "pw-plain"}}}}
+	out := redactForPerson(in)
+	b, _ := json.Marshal(out)
+	if strings.Contains(string(b), "plain") || !strings.Contains(string(b), "Deployment") || !strings.Contains(string(b), `"redacted":["exception"]`) {
+		t.Fatal(string(b))
+	}
+	if b, _ := json.Marshal(in); !strings.Contains(string(b), "tok-plain") {
+		t.Fatal("the stored record was changed")
+	}
+	plain := Record{"tool": "observation.health"}
+	if got := redactForPerson(plain); got["redacted"] != nil {
+		t.Fatal(got)
 	}
 }

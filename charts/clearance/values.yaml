@@ -351,6 +351,9 @@ api:
   # CLEARANCE_API_AUDITORS and CLEARANCE_API_NOTIFIERS: principal globs.
   auditors: []
   notifiers: []
+  # CLEARANCE_API_OBSERVATION_READERS: principal globs of machine pollers that read coverage, observations, observation
+  # health and exceptions (whole scope, redacted like a person) and nothing else.
+  observationReaders: []
   # CLEARANCE_API_FEED_READERS: who reads a cluster's grant feed (GET /v1/clearances?cluster=<c>&state=cleared, the
   # cleared changes with their tokens), each {principal: <glob>, cluster: <name or "*">}: a protected cluster's
   # grant-sync agent. A feed reader reads nothing else.

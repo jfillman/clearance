@@ -15,9 +15,13 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   `GET /v1/observations` and `GET /v1/observations/health` on clearance-api were auditor-only; they now take a person
   (an OIDC user on `CLEARANCE_OIDC_ALLOWED_USERS`), a delegate acting for one (Tower's Backstage proxy) and an auditor,
   and a person reads the whole scope. A person's observation records have their `state_change` redacted by key name
-  (`state_change_redacted: true`); an auditor reads them as stored. `GET /v1/exceptions` already took a person and is
-  unchanged (still scoped like the evidence list), as is the resolution write (admin only). The contract is
-  regenerated (`roles` only).
+  (`redacted` names the fields); an auditor reads them as stored. `GET /v1/exceptions` is the same: every person reads
+  every exception, with `state_change` and `exception` redacted. The resolution write is unchanged (admin only).
+- **`GET /v1/coverage` with no `scope`** answers every observed scope's statement (`{from, to, scopes, truncated}`)
+  instead of 400.
+- **`CLEARANCE_API_OBSERVATION_READERS`** (chart `api.observationReaders`): principal globs of machine pollers (the
+  `observer` role) that read coverage, observations, observation health and exceptions, whole scope and redacted, and
+  nothing else.
 
 ## [0.40.3] - 2026-11-11
 
