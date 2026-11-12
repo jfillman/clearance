@@ -239,9 +239,60 @@ func checkTheObservationAndHealthListsAreByScopeAndForAuditors(t *testing.T, f *
 	h.status(t, 400, "GET", "/v1/observations?scope="+obsScope+"&kind=health", "audit", "")
 	h.status(t, 400, "GET", "/v1/coverage?scope="+obsScope+"&from=yesterday", "audit", "")
 	h.status(t, 400, "GET", "/v1/coverage?scope="+obsScope+"&from=2026-11-09T10:00:00Z&to=2026-11-09T09:00:00Z", "audit", "")
-	h.status(t, 403, "GET", "/v1/observations?scope="+obsScope, "carol", "")
-	h.status(t, 403, "GET", "/v1/coverage?scope="+obsScope, "carol", "")
 	h.status(t, 401, "GET", "/v1/coverage?scope="+obsScope, "", "")
+}
+
+// O-5 (owner decision 2026-11-12): any signed-in person reads the observation routes, a delegate acting for one does,
+// and the read is of the whole scope (not the per-person evidence scope, which would show a person none of it). An
+// unauthenticated caller, a token the authenticator refuses (a non-allowlisted OIDC user is refused there) and a
+// machine principal are still refused. The resolution write is not touched here.
+func TestAnySignedInPersonReadsObservationsAndCoverage(t *testing.T) {
+	onBoth(t, checkAnySignedInPersonReadsObservationsAndCoverage)
+}
+
+func checkAnySignedInPersonReadsObservationsAndCoverage(t *testing.T, f *fakeObserved) {
+	start := time.Now().UTC().Truncate(time.Second)
+	f.post("observation.health", obsHealth("healthy"))
+	ev := obsEvent("e-1", "RunInstances", true)
+	ev["state_change"] = map[string]any{"before": map[string]any{},
+		"after": map[string]any{"instanceType": "t3.micro", "MasterUserPassword": "hunter2-plain",
+			"containers": []any{map[string]any{"name": "DB_PASSWORD", "value": "hunter3-plain"}, map[string]any{"name": "REGION", "value": "ca-central-1"}}}}
+	f.post("observation", ev)
+	h := f.harness(t, start.Add(time.Minute))
+	paths := []string{"/v1/observations?scope=" + obsScope, "/v1/observations/health?scope=" + obsScope, "/v1/coverage?scope=" + obsScope}
+	for _, who := range []string{"carol", "alice", "bob", "audit"} { // alice owns nothing and is in no group: still a person
+		for _, p := range paths {
+			h.status(t, 200, "GET", p, who, "")
+		}
+	}
+	for _, p := range paths {
+		h.status(t, 200, "GET", p, "tower", "user:alice") // Tower's proxy: the delegate naming a person
+		h.status(t, 403, "GET", p, "tower", "")           // the delegate for nobody is not a person
+		h.status(t, 403, "GET", p, "svc", "")             // a machine principal
+		h.status(t, 401, "GET", p, "", "")                // no token
+		h.status(t, 401, "GET", p, "mallory", "")         // a token the authenticator refuses (not on CLEARANCE_OIDC_ALLOWED_USERS)
+	}
+	eqSeqs(t, "person sees the scope", seqs(h.ok(paths[0], "alice")), 1)
+	if st := h.ok(paths[2], "alice"); st["state"] == nil || st["scope"] != obsScope {
+		t.Fatalf("statement %v", st)
+	}
+	// An auditor reads the record as stored; a person reads it with secret-bearing values redacted.
+	raw := string(h.get(paths[0], "audit").body)
+	if !strings.Contains(raw, "hunter2-plain") || !strings.Contains(raw, "hunter3-plain") {
+		t.Fatalf("the auditor's read is as stored: %s", raw)
+	}
+	bodies := map[string]string{"alice": string(h.get(paths[0], "alice").body), "carol": string(h.get(paths[0], "carol").body),
+		"tower for alice": string(h.do("GET", paths[0], "tower", "user:alice").body)}
+	for who, body := range bodies {
+		if strings.Contains(body, "hunter") {
+			t.Fatalf("%s read a secret value: %s", who, body)
+		}
+		for _, keep := range []string{"t3.micro", "ca-central-1", "state_change_redacted"} {
+			if !strings.Contains(body, keep) {
+				t.Fatalf("%s: %q was redacted or missing: %s", who, keep, body)
+			}
+		}
+	}
 }
 
 // O-5: the coverage statement counts the observations the trail verified after the fact, and lists the verification

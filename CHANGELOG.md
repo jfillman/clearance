@@ -9,6 +9,16 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Changed
+
+- **Any signed-in person may read coverage and observations (O-5, owner decision 2026-11-12).** `GET /v1/coverage`,
+  `GET /v1/observations` and `GET /v1/observations/health` on clearance-api were auditor-only; they now take a person
+  (an OIDC user on `CLEARANCE_OIDC_ALLOWED_USERS`), a delegate acting for one (Tower's Backstage proxy) and an auditor,
+  and a person reads the whole scope. A person's observation records have their `state_change` redacted by key name
+  (`state_change_redacted: true`); an auditor reads them as stored. `GET /v1/exceptions` already took a person and is
+  unchanged (still scoped like the evidence list), as is the resolution write (admin only). The contract is
+  regenerated (`roles` only).
+
 ## [0.40.3] - 2026-11-11
 
 ### Fixed

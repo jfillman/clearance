@@ -140,6 +140,11 @@ func (s *Server) listExceptions(w http.ResponseWriter, r *http.Request, v *Viewe
 }
 
 func (s *Server) evidencePage(w http.ResponseWriter, r *http.Request, v *Viewer, q map[string]string, f EvidenceFilter) {
+	s.evidencePageAs(w, r, v, q, f, false)
+}
+
+// evidencePageAs is evidencePage; redact gives each record's state_change redacted (an observation read by a person).
+func (s *Server) evidencePageAs(w http.ResponseWriter, r *http.Request, v *Viewer, q map[string]string, f EvidenceFilter, redact bool) {
 	limit, aerr := limitOf(q)
 	if aerr != nil {
 		aerr.write(w)
@@ -158,6 +163,11 @@ func (s *Server) evidencePage(w http.ResponseWriter, r *http.Request, v *Viewer,
 	if err != nil {
 		s.readFailed(w, r, err)
 		return
+	}
+	if redact {
+		for i := range items {
+			items[i] = redactForPerson(items[i])
+		}
 	}
 	page := EvidencePage{Items: projectAll(items)}
 	if len(items) == limit && limit > 0 {

@@ -3474,8 +3474,10 @@
             "bearer": []
           }
         ],
-        "summary": "The coverage statement for a scope and window (from and to, RFC 3339; default the last 24 hours): what was cleared and verified, what was seen and not cleared (by coverage state, with how each ended), what could not be seen (the stretches a feed was blind or degraded, and the audit gaps), and the health of each feed, with each item's newest resolution (state, cause, who set it and when) and how many of the window's observations had their source verified (source_integrity). clean is true only when nothing was seen uncleared and every feed was healthy for the whole window: a window with no healthy health record, or whose last record has gone stale, is blind and never clean. Auditors only",
+        "summary": "The coverage statement for a scope and window (from and to, RFC 3339; default the last 24 hours): what was cleared and verified, what was seen and not cleared (by coverage state, with how each ended), what could not be seen (the stretches a feed was blind or degraded, and the audit gaps), and the health of each feed, with each item's newest resolution (state, cause, who set it and when) and how many of the window's observations had their source verified (source_integrity). clean is true only when nothing was seen uncleared and every feed was healthy for the whole window: a window with no healthy health record, or whose last record has gone stale, is blind and never clean. Any signed-in person (O-5): an observation is about an account or a cluster, so a person reads every scope; secret-bearing keys in a record's state_change are redacted for a person",
         "x-clearance-roles": [
+          "person",
+          "delegate",
           "auditor"
         ]
       }
@@ -4477,8 +4479,10 @@
             "bearer": []
           }
         ],
-        "summary": "The observation records (clearance.evidence/v1.1) of one scope, newest first; the cursor is seq. kind=observation (default), assessment, resolution (every edit of a resolution is a record of its own: the history) or observation.verification (a feed's later proof an observation was delivered unaltered). scope is required: the account, cluster or workspace observed; source narrows to one feed. Auditors only",
+        "summary": "The observation records (clearance.evidence/v1.1) of one scope, newest first; the cursor is seq. kind=observation (default), assessment, resolution (every edit of a resolution is a record of its own: the history) or observation.verification (a feed's later proof an observation was delivered unaltered). scope is required: the account, cluster or workspace observed; source narrows to one feed. Any signed-in person (O-5): an observation is about an account or a cluster, so a person reads every scope; secret-bearing keys in a record's state_change are redacted for a person",
         "x-clearance-roles": [
+          "person",
+          "delegate",
           "auditor"
         ]
       }
@@ -4593,8 +4597,10 @@
             "bearer": []
           }
         ],
-        "summary": "The health of the feeds behind a scope's observations, newest first: observation.health records (healthy, degraded or blind per source, with the checks that produced it) and the observation.audit-gap records written when a feed dropped. scope is required. Auditors only",
+        "summary": "The health of the feeds behind a scope's observations, newest first: observation.health records (healthy, degraded or blind per source, with the checks that produced it) and the observation.audit-gap records written when a feed dropped. scope is required. Any signed-in person (O-5): an observation is about an account or a cluster, so a person reads every scope; secret-bearing keys in a record's state_change are redacted for a person",
         "x-clearance-roles": [
+          "person",
+          "delegate",
           "auditor"
         ]
       }

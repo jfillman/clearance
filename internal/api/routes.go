@@ -121,20 +121,20 @@ var routeTable = []Route{
 			"(breakglass.open, breakglass.close with what changed in it) and every runtime read allowed during an " +
 			"outage (tool.call, coverage-unavailable). tool narrows to one of those",
 		Response: EvidencePage{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).listExceptions},
-	{OperationID: "listObservations", Method: "GET", Path: "/v1/observations", Roles: []string{RoleAuditor},
+	{OperationID: "listObservations", Method: "GET", Path: "/v1/observations", Roles: PersonRoles,
 		Params: []string{"scope", "source", "kind", "since", "until", "limit", "after"},
 		Summary: "The observation records (clearance.evidence/v1.1) of one scope, newest first; the cursor is seq. " +
 			"kind=observation (default), assessment, resolution (every edit of a resolution is a record of its own: the history) or " +
 			"observation.verification (a feed's later proof an observation was delivered unaltered). scope is required: the account, cluster or workspace " +
-			"observed; source narrows to one feed. Auditors only",
+			"observed; source narrows to one feed. Any signed-in person (O-5): an observation is about an account or a cluster, so a person reads every scope; secret-bearing keys in a record's state_change are redacted for a person",
 		Response: EvidencePage{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).listObservations},
-	{OperationID: "listObservationHealth", Method: "GET", Path: "/v1/observations/health", Roles: []string{RoleAuditor},
+	{OperationID: "listObservationHealth", Method: "GET", Path: "/v1/observations/health", Roles: PersonRoles,
 		Params: []string{"scope", "source", "since", "until", "limit", "after"},
 		Summary: "The health of the feeds behind a scope's observations, newest first: observation.health records " +
 			"(healthy, degraded or blind per source, with the checks that produced it) and the observation.audit-gap " +
-			"records written when a feed dropped. scope is required. Auditors only",
+			"records written when a feed dropped. scope is required. Any signed-in person (O-5): an observation is about an account or a cluster, so a person reads every scope; secret-bearing keys in a record's state_change are redacted for a person",
 		Response: EvidencePage{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).listObservationHealth},
-	{OperationID: "getCoverage", Method: "GET", Path: "/v1/coverage", Roles: []string{RoleAuditor},
+	{OperationID: "getCoverage", Method: "GET", Path: "/v1/coverage", Roles: PersonRoles,
 		Params: []string{"scope", "from", "to"},
 		Summary: "The coverage statement for a scope and window (from and to, RFC 3339; default the last 24 hours): " +
 			"what was cleared and verified, what was seen and not cleared (by coverage state, with how each ended), " +
@@ -142,7 +142,7 @@ var routeTable = []Route{
 			"of each feed, with each item's newest resolution (state, cause, who set it and when) and how many of the window's " +
 			"observations had their source verified (source_integrity). clean is true only when nothing was seen uncleared and every feed was healthy for the " +
 			"whole window: a window with no healthy health record, or whose last record has gone stale, is blind and " +
-			"never clean. Auditors only",
+			"never clean. Any signed-in person (O-5): an observation is about an account or a cluster, so a person reads every scope; secret-bearing keys in a record's state_change are redacted for a person",
 		Response: observe.Statement{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).getCoverage},
 	{OperationID: "getEvidence", Method: "GET", Path: "/v1/evidence/{seq}", Roles: PersonRoles, Params: []string{},
 		Summary:  "One evidence record with its hash",
