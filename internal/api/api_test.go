@@ -592,6 +592,20 @@ func TestViewers(t *testing.T) {
 	if n, _ := v("tower", ""); n.Role != RoleNotifier {
 		t.Errorf("tower alone is a notifier: %+v", n)
 	}
+	// Tower's backend is a notifier and an observation reader: each route sees the role it admits (clearance#O-5 alerts).
+	both := &Access{Notifiers: []string{tower}, ObservationReaders: []string{tower}}
+	if o, _ := both.ViewerFor(bg, principals["tower"], "", ObservationRoles); o.Role != RoleObserver {
+		t.Errorf("tower on an observation read: %+v", o)
+	}
+	if o, _ := both.ViewerFor(bg, principals["tower"], "", []string{RoleNotifier}); o.Role != RoleNotifier {
+		t.Errorf("tower on a notifier route: %+v", o)
+	}
+	if o, _ := both.ViewerFor(bg, principals["tower"], "", []string{RolePerson}); o.Role != RoleNotifier {
+		t.Errorf("tower on a person route keeps its first role (refused by it): %+v", o)
+	}
+	if o, _ := both.Viewer(bg, principals["tower"], ""); o.Role != RoleNotifier {
+		t.Errorf("tower with no route: %+v", o)
+	}
 	d, _ := v("tower", "user:bob")
 	if d.Role != RolePerson || d.Person != "user:bob" || d.Via != tower || !in(d.Agents, "orchestrator") || d.role() != RoleDelegate {
 		t.Errorf("tower for bob: %+v", d)

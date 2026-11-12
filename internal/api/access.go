@@ -121,6 +121,14 @@ const MaxOnBehalfOf = 200
 
 // Viewer is api.py Access.viewer for an authenticated principal and the on-behalf-of header (vocab).
 func (a *Access) Viewer(ctx context.Context, p authn.Principal, onBehalfOf string) (*Viewer, *apiError) {
+	return a.ViewerFor(ctx, p, onBehalfOf, nil)
+}
+
+// ViewerFor is Viewer for a route that admits roles. A machine principal may hold several machine roles (Tower's
+// backend is a notifier and an observation reader): the first of them, in the order auditor, feed, notifier, observer,
+// that the route admits is the viewer, else the first it holds (so the route refuses it by that role). A person and a
+// delegate are unaffected. Empty roles is the first held.
+func (a *Access) ViewerFor(ctx context.Context, p authn.Principal, onBehalfOf string, roles []string) (*Viewer, *apiError) {
 	if onBehalfOf != "" {
 		if !pycompat.MatchAny(p.ID, a.Delegates) {
 			return nil, errorf(403, "%s may not act for a person", p.ID)
@@ -130,8 +138,9 @@ func (a *Access) Viewer(ctx context.Context, p authn.Principal, onBehalfOf strin
 		}
 		return a.person(ctx, onBehalfOf, p.ID), nil
 	}
+	var held []*Viewer
 	if pycompat.MatchAny(p.ID, a.Auditors) {
-		return &Viewer{Role: RoleAuditor, Person: p.ID}, nil
+		held = append(held, &Viewer{Role: RoleAuditor, Person: p.ID})
 	}
 	var clusters []string
 	for _, f := range a.FeedReaders {
@@ -141,18 +150,26 @@ func (a *Access) Viewer(ctx context.Context, p authn.Principal, onBehalfOf strin
 	}
 	if len(clusters) > 0 {
 		sort.Strings(clusters)
-		return &Viewer{Role: RoleFeed, Person: p.ID, Clusters: clusters}, nil
+		held = append(held, &Viewer{Role: RoleFeed, Person: p.ID, Clusters: clusters})
 	}
 	if pycompat.MatchAny(p.ID, a.Notifiers) {
-		return &Viewer{Role: RoleNotifier}, nil
+		held = append(held, &Viewer{Role: RoleNotifier})
 	}
-	if p.IsPerson() {
+	if len(held) == 0 && p.IsPerson() {
 		return a.person(ctx, p.ID, ""), nil
 	}
-	if pycompat.MatchAny(p.ID, a.ObservationReaders) {
-		return &Viewer{Role: RoleObserver, Person: p.ID}, nil
+	if !p.IsPerson() && pycompat.MatchAny(p.ID, a.ObservationReaders) {
+		held = append(held, &Viewer{Role: RoleObserver, Person: p.ID})
 	}
-	return nil, errorf(403, "%s is not a person, delegate, notifier or auditor", p.ID)
+	if len(held) == 0 {
+		return nil, errorf(403, "%s is not a person, delegate, notifier or auditor", p.ID)
+	}
+	for _, v := range held {
+		if allowed(v.Role, roles) {
+			return v, nil
+		}
+	}
+	return held[0], nil
 }
 
 func (a *Access) person(ctx context.Context, person, via string) *Viewer {
