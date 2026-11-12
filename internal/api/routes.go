@@ -107,10 +107,11 @@ type Ready struct {
 var routeTable = []Route{
 	{OperationID: "listEvidence", Method: "GET", Path: "/v1/evidence", Roles: PersonRoles,
 		Params: []string{"task", "session", "agent", "tool", "principal", "decision", "rule", "app", "since", "until",
-			"limit", "after", "outcomes", "installation"},
+			"limit", "after", "outcomes", "installation", "coverage"},
 		Summary: "Evidence records you may see, newest first; the cursor is seq. outcomes=include (default), exclude " +
 			"or only: the outcome records the core writes beside each allowed decision (outcome_of). installation=<id> " +
-			"keeps one GitHub App installation's records (principal app:<id>)",
+			"keeps one GitHub App installation's records (principal app:<id>). coverage=<state>[,<state>...] keeps the records in " +
+			"those coverage states (authorized-and-verified, observed-not-attributed, out-of-band-detected, coverage-unavailable, break-glass, attempted-refused)",
 		Response: EvidencePage{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).listEvidence},
 	{OperationID: "listExceptions", Method: "GET", Path: "/v1/exceptions", Roles: ObservationRoles,
 		Params: []string{"tool", "kind", "app", "since", "until", "limit", "after"},
@@ -153,8 +154,8 @@ var routeTable = []Route{
 		Response: Verified{}, Errors: []int{401, 403, 503}, serve: (*Server).verifyEvidence},
 	{OperationID: "countEvidence", Method: "GET", Path: "/v1/evidence/counts", Roles: PersonRoles,
 		Params: []string{"by", "per", "task", "session", "agent", "tool", "principal", "decision", "rule", "app", "since",
-			"until", "outcomes", "installation"},
-		Summary: "Records you may see, counted by rule, tool, agent, app or decision (`by`), with the same filters as " +
+			"until", "outcomes", "installation", "coverage"},
+		Summary: "Records you may see, counted by rule, tool, agent, app, decision or coverage (`by`), with the same filters as " +
 			"the list. outcomes=exclude (default) counts each decision once; include or only count the outcome records too. " +
 			"by=cost sums what runs cost instead, per task (default: the task tree), session (one run), agent or " +
 			"principal (`per`): the model-call outcomes' usage (charged_tokens is what the model proxy charged the " +

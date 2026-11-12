@@ -9,6 +9,13 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Added
+
+- clearance-api: `GET /v1/evidence` takes `coverage`, one coverage state or a comma-separated list of them
+  (`authorized-and-verified`, `observed-not-attributed`, `out-of-band-detected`, `coverage-unavailable`,
+  `break-glass`, `attempted-refused`); an unknown state is a 400. `GET /v1/evidence/counts` takes it too and adds
+  `by=coverage`, so a view can show the total per state.
+
 ### Fixed
 
 - store: a write no longer aborts when its caller goes away. The Postgres store ran a decision's append and commit on

@@ -22,7 +22,7 @@ import (
 // CountBy are the record fields evidence counts group by; ChangeCountBy the change fields (api.py COUNT_BY,
 // CHANGE_COUNT_BY). ChangeStates are a change's states.
 var (
-	CountBy       = []string{"rule", "tool", "agent", "app", "decision"}
+	CountBy       = []string{"rule", "tool", "agent", "app", "decision", "coverage"}
 	ChangeCountBy = []string{"state", "tier", "app", "env", "cleared_by"}
 	ChangeStates  = gate.States
 	outcomeModes  = []string{OutcomesInclude, OutcomesExclude, OutcomesOnly}
@@ -84,6 +84,17 @@ func evidenceFilter(q map[string]string, outcomesDefault string) (EvidenceFilter
 		return f, aerr
 	}
 	f.Installation = inst
+	if raw := strings.TrimSpace(q["coverage"]); raw != "" {
+		for _, c := range strings.Split(raw, ",") {
+			c = strings.TrimSpace(c)
+			if !in(evidence.Coverage, c) {
+				return f, errorf(400, "coverage is one or more of %s (comma-separated)", strings.Join(evidence.Coverage, ", "))
+			}
+			if !in(f.Coverage, c) {
+				f.Coverage = append(f.Coverage, c)
+			}
+		}
+	}
 	for k, v := range map[string]string{"since": f.Since, "until": f.Until} {
 		if v != "" && !isoTime.MatchString(v) {
 			return f, errorf(400, "%s is an ISO time", k)

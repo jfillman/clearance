@@ -25,6 +25,8 @@ type EvidenceFilter struct {
 	Task, Session, Agent, Tool, Principal, Decision, Rule, App string
 	// Installation keeps the records of one GitHub App installation (principal app:<id>).
 	Installation string
+	// Coverage keeps the records whose coverage is one of these states (evidence.Coverage); empty is every record.
+	Coverage     []string
 	Since, Until string // compared with the record's ts as text, as api.py does
 	Outcomes     string // OutcomesInclude (""), OutcomesExclude, OutcomesOnly
 	// Exceptions keeps only the records the packet's exceptions section lists (GET /v1/exceptions): the tools of

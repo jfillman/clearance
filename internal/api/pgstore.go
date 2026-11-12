@@ -77,6 +77,9 @@ func (b *q) evidenceFilter(f EvidenceFilter) {
 	if f.Installation != "" {
 		b.add("e.record->>'principal' = " + b.arg(InstallationPrincipal(f.Installation)))
 	}
+	if len(f.Coverage) > 0 {
+		b.add("e.record->>'coverage' = ANY(" + b.arg(f.Coverage) + ")")
+	}
 	if f.Since != "" {
 		b.add("e.record->>'ts' >= " + b.arg(f.Since))
 	}
