@@ -382,7 +382,7 @@ func TestProviderBundledDefinitionsAreRecordedAndProvenanceReadsThem(t *testing.
 	}
 	with := func(b ...any) map[string]any {
 		m := publish([]any{}, nil)
-		m["bundled"] = b
+		m["bundled"] = append([]any{}, b...) // never nil: with() is the empty list, which clears
 		return m
 	}
 	a := f.do("PUT", "/v1/definitions", gw, with(bundled("gateway-v0.9.0", codingAgent(team)))).want(t, 200, "")
@@ -432,8 +432,12 @@ func TestProviderBundledDefinitionsAreRecordedAndProvenanceReadsThem(t *testing.
 		t.Fatalf("a rejected definition is not live: %s", s)
 	}
 
-	// An empty bundled list clears; bad shapes are 400s.
-	f.do("PUT", "/v1/definitions", gw, with()).want(t, 200, "")
+	// An empty bundled list clears (a good one first, so there is something to clear); bad shapes are 400s.
+	f.do("PUT", "/v1/definitions", gw, with(bundled("gateway-v0.9.2", codingAgent(team)))).want(t, 200, "")
+	a = f.do("PUT", "/v1/definitions", gw, with()).want(t, 200, "")
+	if fmt.Sprint(a.body["removed"]) != "[coding-agent]" || a.body["provided"] != nil {
+		t.Fatal(a.body)
+	}
 	f.do("PUT", "/v1/definitions", gw, with(map[string]any{"name": "x", "doc": map[string]any{}})).want(t, 400, "version")
 	f.do("PUT", "/v1/definitions", gw, with(map[string]any{"name": "", "version": "v", "doc": map[string]any{}})).want(t, 400, "name")
 	f.do("PUT", "/v1/definitions", gw, with(map[string]any{"name": "x", "version": "v"})).want(t, 400, "doc")

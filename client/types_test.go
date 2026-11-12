@@ -202,3 +202,14 @@ func TestAPlanSubjectWithNilListsParses(t *testing.T) {
 		}
 	}
 }
+
+func TestAnEmptyBundledListIsSentAndANilOneIsNot(t *testing.T) {
+	b, err := json.Marshal(client.DefinitionsRequest{Provider: "p", Pins: []client.PinnedDefinition{}, Bundled: []client.ProvidedDefinition{}})
+	if err != nil || !strings.Contains(string(b), `"bundled":[]`) {
+		t.Fatal(string(b), err)
+	}
+	b, err = json.Marshal(client.DefinitionsRequest{Provider: "p", Pins: []client.PinnedDefinition{}})
+	if err != nil || strings.Contains(string(b), "bundled") {
+		t.Fatal(string(b), err)
+	}
+}

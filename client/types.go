@@ -411,6 +411,19 @@ type DefinitionsRequest struct {
 	Bundled []ProvidedDefinition `json:"bundled,omitempty"`
 }
 
+// MarshalJSON keeps an empty non-nil Bundled on the wire as [] (which clears the provider's set); omitempty alone
+// would drop it, and the core would read it as absent (keep).
+func (r DefinitionsRequest) MarshalJSON() ([]byte, error) {
+	type plain DefinitionsRequest
+	if r.Bundled != nil && len(r.Bundled) == 0 {
+		return json.Marshal(struct {
+			plain
+			Bundled []ProvidedDefinition `json:"bundled"`
+		}{plain(r), r.Bundled})
+	}
+	return json.Marshal(plain(r))
+}
+
 // ProvidedDefinition is one definition that ships with the provider: its name, the provider build it ships in and
 // its document.
 type ProvidedDefinition struct {
