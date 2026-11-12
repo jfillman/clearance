@@ -3,7 +3,7 @@
 # Every rule is CEL over `event` (the normalized event) and, for attribution, `facts` (what the pipeline looked up).
 schema: clearance.observe-rules/v1
 name: observe-default
-version: "2026.11.2"
+version: "2026.11.3"
 cost_limit: 10000
 
 identities:
@@ -35,6 +35,21 @@ scope:
       kinds: [ValidatingWebhookConfiguration, MutatingWebhookConfiguration, ValidatingAdmissionPolicy,
               ValidatingAdmissionPolicyBinding, ClusterRole, ClusterRoleBinding, Namespace]
     - {provider: aws, scopes: ["111122223333", "444455556666"]}
+  # kube-system controllers managing the objects they created (a ReplicaSet's Pods, a Deployment's ReplicaSets, a Job's Pods,
+  # a CronJob's Jobs; the garbage collector and the TTL controller removing what is finished): the consequence of someone else's
+  # change to desired state, not one. Counted out of scope. One exact kube-system service account each, with the child kinds
+  # ("*": any). The object must have a controller ownerReference where the event shows the object; a Metadata-level event that
+  # shows nothing of it is judged by the identity and the kind. A person or another service account writing the same kind
+  # stays visible.
+  controller_children:
+    - {subject: "system:serviceaccount:kube-system:replicaset-controller", kinds: [Pod]}
+    - {subject: "system:serviceaccount:kube-system:deployment-controller", kinds: [ReplicaSet]}
+    - {subject: "system:serviceaccount:kube-system:job-controller", kinds: [Pod]}
+    - {subject: "system:serviceaccount:kube-system:cronjob-controller", kinds: [Job]}
+    - {subject: "system:serviceaccount:kube-system:statefulset-controller", kinds: [Pod]}
+    - {subject: "system:serviceaccount:kube-system:daemon-set-controller", kinds: [Pod]}
+    - {subject: "system:serviceaccount:kube-system:generic-garbage-collector", kinds: ["*"]}
+    - {subject: "system:serviceaccount:kube-system:ttl-after-finished-controller", kinds: [Job]}
 
 # Noise: one exact identity paired with the exact shape it may touch. The loader refuses anything wider (a pattern, a
 # service-account group, a namespace of service accounts, no kinds or verbs): "anything from a service account" is not

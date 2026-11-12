@@ -9,6 +9,39 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Fixed (0.41.1)
+
+Five defects found by the live verification of 0.41.0 on hangar-dev (observe-k8s, `internal/observe/pipeline`).
+
+- **Observe-k8s: `lookups-fresh` no longer fails on a cluster with no gate.** The check listed `ClearanceGrant`s, a CRD that exists only
+  where the Argo CD agent is installed, so hangar-dev's collector was `degraded` ("not read: kubernetes API: 404") since 0.40.0. New chart
+  value `grants.enabled` (default `true`; `--grants-enabled`): `false` lists no grant, drops the `clearancegrants` rule from the
+  ClusterRole and reports "no gate on this cluster" (break-glass windows are still read). Explicit, not detected: with grants enabled a 404
+  stays a failure (a deleted CRD or a lost role on a gated cluster must not look healthy), and its message says to set the value if there is
+  no gate. **Apron: set `grants.enabled: false` for hangar-dev.**
+- **Observe-k8s: platform GitOps writes wait for the Application index.** During the collector's own rollout the platform Argo CD was still
+  patching the RBAC that lets the collector watch its Applications; the index was empty and tracked writes were recorded out-of-band. A
+  succeeded write by a `platformGitops` controller is now held (durable, with the grant settle) until every Application watch has listed
+  once, for at most `argoIndexTimeout` (default `5m`, `--argo-index-timeout`; `-1s` never waits), then decided as it stands. New check
+  `argo-applications-synced` (only when a platform instance is named). New pipeline disposition `HeldIndex`, `Pipeline.HoldUnsyncedApplications`,
+  `ArgoIndexState` (optional on `Lookups`).
+- **Observe-k8s: a platform Argo CD prune is attributed.** A delete has no body and the Application's `status.resources` no longer lists the
+  pruned object, so a delete of a tracked Role, RoleBinding or ServiceAccount was out-of-band. The tracking annotation is now read from the
+  collector's before-state (the watch cache), under the same rules as any other write. The chart now watches `roles` and `rolebindings`
+  (new `watch.extraNamespaces` adds namespaces such as `kube-system`).
+- **Observe-pipeline: `attempted-refused` means a security refusal.** A controller's 409 Conflict (a lost status update, AlreadyExists), 404
+  NotFound and 422 Invalid that admission did not deny are no longer refusals: counted under `out_of_scope`, not assessed. 401, 403 and an
+  admission denial (a policy's audit annotation, or a webhook/policy/Pod Security denial in the response message, whatever the code), any
+  other code, and every refusal by a person, `kubectl`, an impersonation or of a monitoring kind stay as before. The event now carries
+  `Reason` and `AdmissionDenied`.
+- **Observe-pipeline: controllers' own children are out of scope.** `scope.controller_children` (chart `rules.controllerChildren`): the
+  kube-system ReplicaSet, Deployment, Job, CronJob, StatefulSet, DaemonSet, garbage-collector and TTL-after-finished controllers writing the
+  objects they created (Pods of a ReplicaSet or Job, ReplicaSets of a Deployment, Jobs of a CronJob) are counted out of scope when the object
+  has a controller ownerReference (a Metadata-level event that shows nothing of the object is judged by the identity and the kind). Exact
+  service accounts and kinds, validated at load; a person or another service account creating a Pod stays visible; a granted object's
+  derived children keep their `owner-grant` attribution. A `PartialObjectMetadata` body (the garbage collector's) no longer names the kind.
+  Rule sets `observe-default` 2026.11.3 and the chart's `observe-hangar` 2026.11.7.
+
 ## [0.41.0] - 2026-11-12
 
 ### Added

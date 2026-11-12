@@ -24,6 +24,12 @@ coreURL: ""
 tokenAudience: clearance
 # The ClearanceGrant CRD's group/version (G-ARGO-2).
 grantAPI: clearance.hangar.io/v1
+grants:
+  # The cluster has the gate (the Argo CD agent and the ClearanceGrant CRD), so the collector lists the grants. Set false on a
+  # cluster with no gate (hangar-dev runs none): no ClearanceGrant is listed, the collector's role does not ask for the
+  # resource, and the lookups-fresh check reports "no gate on this cluster". It is explicit on purpose: on a gated cluster a
+  # 404 on the grant list (the CRD deleted, the role missing) is a failure the check must show, not "no grants".
+  enabled: true
 
 # The namespaces the gate protects (labelled clearance.hangar.io/protected=true). The collector lists and watches the
 # kinds below in these namespaces (never Secrets) and the audit policy records their desired-state writes with bodies.
@@ -77,6 +83,9 @@ auditPolicyMirror: ""
 # on ~470 CRDs). A CRD write is still observed through its audit event (governedKinds), with no before-object.
 watch:
   enabled: true
+  # Namespaces watched beside protectedNamespaces, the Argo CD namespace and rules.platformGitops.namespaces: a namespace whose
+  # objects the platform Argo CD prunes and the collector should hold the before-state of (kube-system, say).
+  extraNamespaces: []
   resources:
     - {group: "", version: v1, resource: configmaps, kind: ConfigMap, namespaced: true}
     - {group: "", version: v1, resource: services, kind: Service, namespaced: true}
@@ -88,6 +97,10 @@ watch:
     - {group: networking.k8s.io, version: v1, resource: networkpolicies, kind: NetworkPolicy, namespaced: true}
     - {group: networking.k8s.io, version: v1, resource: ingresses, kind: Ingress, namespaced: true}
     - {group: argoproj.io, version: v1alpha1, resource: applications, kind: Application, namespaced: true}
+    # Roles and RoleBindings: the platform Argo CD prunes them, and a delete carries no object, so the tracking annotation that
+    # ties the delete to its Application is read from the object as it stood (the before-state).
+    - {group: rbac.authorization.k8s.io, version: v1, resource: roles, kind: Role, namespaced: true}
+    - {group: rbac.authorization.k8s.io, version: v1, resource: rolebindings, kind: RoleBinding, namespaced: true}
     # A Rollout's live object carries fields its render leaves out, so a controller's bookkeeping on it is judged by what it
     # changed against the object as it was (grant-annotation+unchanged): that needs the before-state.
     - {group: argoproj.io, version: v1alpha1, resource: rollouts, kind: Rollout, namespaced: true}
@@ -102,7 +115,7 @@ watch:
 # complete document in `override` replaces it. Its name and version are in every assessment.
 rules:
   name: observe-hangar
-  version: "2026.11.6"
+  version: "2026.11.7"
   override: ""
   # Argo CD's application controller, as the API server sees it.
   argoControllerSubject: system:serviceaccount:argocd:argocd-application-controller
@@ -120,6 +133,21 @@ rules:
     # from the grant's render. An entry ending in "/" is a prefix.
     controllerOwned: [rollout.argoproj.io/, rollouts.argoproj.io/, deployment.kubernetes.io/, notified.notifications.argoproj.io]
     controllerLabels: [rollouts-pod-template-hash, pod-template-hash]
+  # kube-system controllers managing the objects they created (a ReplicaSet's Pods, a Deployment's ReplicaSets, a Job's Pods, a
+  # CronJob's Jobs; the garbage collector and the TTL controller removing what is finished) are not changes to desired state:
+  # counted out of scope, not assessed. One exact kube-system service account each, with the child kinds ("*": any). The object
+  # must have a controller ownerReference where the event shows the object; a Metadata-level event that shows nothing of it is
+  # judged by the identity and the kind. A person or another service account writing the same kind stays visible. Replacing the
+  # list replaces all of it.
+  controllerChildren:
+    - {subject: system:serviceaccount:kube-system:replicaset-controller, kinds: [Pod]}
+    - {subject: system:serviceaccount:kube-system:deployment-controller, kinds: [ReplicaSet]}
+    - {subject: system:serviceaccount:kube-system:job-controller, kinds: [Pod]}
+    - {subject: system:serviceaccount:kube-system:cronjob-controller, kinds: [Job]}
+    - {subject: system:serviceaccount:kube-system:statefulset-controller, kinds: [Pod]}
+    - {subject: system:serviceaccount:kube-system:daemon-set-controller, kinds: [Pod]}
+    - {subject: system:serviceaccount:kube-system:generic-garbage-collector, kinds: ["*"]}
+    - {subject: system:serviceaccount:kube-system:ttl-after-finished-controller, kinds: [Job]}
   # Namespaces whose writes are governed, beside protectedNamespaces and the argocd namespace.
   extraGovernedNamespaces: [kube-system]
   # Cluster-scoped kinds whose writes are governed.
@@ -158,6 +186,11 @@ gapGrace: 3m
 # re-read, and only then is it decided. Keep it longer than the agent's grant interval plus healthInterval. "-1s": decide
 # at once.
 grantSettle: 3m
+# A platform Argo CD controller's write waits for the Application index (every Application watch has listed once) and for at
+# most this long: during the collector's own rollout the platform Argo CD is still patching the RBAC that lets the collector
+# watch its Applications. Past it the write is decided as it stands, and the argo-applications-synced check says the index never
+# came. "-1s": never wait.
+argoIndexTimeout: 5m
 
 # hangar-prod reaches the lab core over plain HTTP through a host alias to the other cluster's ingress.
 hostAliases: []

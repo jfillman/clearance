@@ -212,7 +212,7 @@ func TestStatusAndTokenWritesAreNotChanges(t *testing.T) {
 		{"node token (a named kubelet is an exact noise rule)", kev{id: "n7", user: "system:node:worker-9", verb: "create", resource: "serviceaccounts", name: "x", sub: "token"}, false, OutcomeOutOfBand},
 		{"refused status write", kev{id: "n8", user: rsCtlSA, verb: "update", resource: "replicasets", name: "x", sub: "status", code: 403}, false, OutcomeRefused},
 		{"scale is untouched", kev{id: "n9", user: rsCtlSA, verb: "update", resource: "deployments", name: "x", sub: "scale"}, false, OutcomeOutOfBand},
-		{"another subresource is untouched", kev{id: "n10", user: rsCtlSA, verb: "update", resource: "pods", name: "x", sub: "ephemeralcontainers"}, false, OutcomeOutOfBand},
+		{"another subresource is untouched", kev{id: "n10", user: rsCtlSA, verb: "update", resource: "services", name: "x", sub: "ephemeralcontainers"}, false, OutcomeOutOfBand},
 		{"a write with no subresource is untouched", kev{id: "n11", user: rsCtlSA, verb: "update", resource: "deployments", name: "x"}, false, OutcomeOutOfBand},
 		{"status of an object a grant lists keeps its attribution", kev{id: "n12", user: rolloutsSA, verb: "patch", resource: "rollouts", name: "web", sub: "status"}, false, OutcomeCleared},
 	}

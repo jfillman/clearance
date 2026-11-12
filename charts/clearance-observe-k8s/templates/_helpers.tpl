@@ -14,8 +14,8 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 app.kubernetes.io/name: {{ include "observe.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
-{{/* the namespaces the namespaced watches cover: the protected ones, the Argo CD namespace, and where the platform GitOps instances keep their Applications */}}
+{{/* the namespaces the namespaced watches cover: the protected ones, the Argo CD namespace, where the platform GitOps instances keep their Applications, and watch.extraNamespaces */}}
 {{- define "observe.watchNamespaces" -}}
-{{- $ns := concat .Values.protectedNamespaces (list .Values.argocd.namespace) .Values.rules.platformGitops.namespaces | uniq -}}
+{{- $ns := concat .Values.protectedNamespaces (list .Values.argocd.namespace) .Values.rules.platformGitops.namespaces .Values.watch.extraNamespaces | uniq -}}
 {{- join "," $ns -}}
 {{- end -}}

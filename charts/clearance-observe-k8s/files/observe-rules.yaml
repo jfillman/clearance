@@ -33,6 +33,12 @@ scope:
       scopes: [{{ .Values.cluster | quote }}]
       kinds: [{{ join ", " .Values.rules.governedKinds }}]
 
+  # kube-system controllers managing the objects they created: not changes to desired state, counted out of scope.
+{{- with .Values.rules.controllerChildren }}
+  controller_children:
+{{ toYaml . | indent 4 }}
+{{- end }}
+
 {{- $gov := concat .Values.protectedNamespaces (list .Values.argocd.namespace) .Values.rules.extraGovernedNamespaces | uniq }}
 noise:
   - name: argo-application-bookkeeping

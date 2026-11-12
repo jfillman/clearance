@@ -51,6 +51,35 @@ objects a grant relates to. It is not a Normalize decision, because Normalize de
 under `not_writes`) and a status write is a write that is outside what a coverage statement is about; the stage that already owns
 that count is Scope.
 
+**Not refusals, and controller children** (since the rule set 2026.11.3, collector 0.41.1). Two more things are counted under
+`out_of_scope`, in the same place as the not-changes above (after the named noise rules, before attribution):
+
+- *A controller's failed write that is not a security refusal.* `attempted-refused` means the system said no to a caller it did not
+  trust: a **401**, a **403**, or an **admission denial** (a validating webhook or a ValidatingAdmissionPolicy denied the request, a Pod Security
+  violation, or a webhook that had to answer and failed closed; whatever code the denial carries, because a policy denies with 422 unless it says
+  otherwise). The event carries `responseStatus.code`, `reason` and `message`, and the audit annotations
+  (`validation.policy.admission.k8s.io/*` for a policy); Normalize reads them into `Event.Code`, `Reason` and `AdmissionDenied`. A **409
+  Conflict** (a status update that lost an optimistic-concurrency race; a create that found the object there, AlreadyExists), a **404
+  NotFound** (a delete or patch of what is gone) and a **422 Invalid** that admission did not deny are a controller's ordinary retries: nothing
+  was refused for who the caller is. Only when the caller is a *controller* (a service account or system identity acting as itself: the same
+  test as for status writes). Never counted out: a refusal by a person, a `kubectl` client, an impersonation or a federated agent; a
+  refusal of a monitoring kind; a 401, a 403 or an admission denial; any other code (a 5xx stays visible: a webhook that fails closed
+  answers 500). Observed on hangar-dev: the deployment controller's `update deployments/status` (409), a redis secret-init Job's
+  `create secrets` (AlreadyExists), kube-controller-manager's `create serviceaccounts/token`, the platform Argo CD's `patch roles`.
+- *A kube-system controller managing the objects it created* (`scope.controller_children`). A ReplicaSet controller creating the Pods of a
+  ReplicaSet, a Deployment controller its ReplicaSets, a Job controller its Pods, a CronJob controller its Jobs, a StatefulSet or DaemonSet
+  controller its Pods; the garbage collector and the TTL-after-finished controller deleting or patching (a `PartialObjectMetadata` patch
+  included) what is finished or orphaned. That is the consequence of a change to desired state someone else made (the Deployment, the Job), not a
+  change to desired state. Each entry is one exact service account in `kube-system` (the loader refuses a pattern, another namespace, a person, a
+  monitoring kind, a duplicate) with the kinds of its children (`"*"` for any, which the garbage collector needs). The write counts out of scope
+  when the controller is acting as itself, **the object has a controller `ownerReference`** (as the body, the collector's before-state or an
+  earlier event the pipeline remembers shows it) and nothing ties it to a grant. **A Metadata-level event that shows nothing of the object**
+  (a create in a namespace the audit policy records at Metadata, a delete) cannot be checked: the controller's identity and the kind it may write
+  stand for the owner reference there. An object that *is* shown without a controller owner is not a child and stays visible. A person, another
+  service account or a `kubectl` client writing the same Pod stays visible, and a derived child of a granted object keeps its `owner-grant`
+  attribution (the coverage statement counts it as verified, which a drop would not). The kind is read from the resource, not from a
+  `PartialObjectMetadata` body.
+
 **Noise** drops legitimate controller writes. A rule pairs **one exact identity** with **the exact shape it may
 touch**: `identity.subject` (exact, never a pattern) with `shape.kinds` and `shape.verbs` (exact), optionally
 namespaces, subresources and a CEL `when`. Each rule says `why`. The loader refuses everything wider
@@ -79,7 +108,8 @@ provider**; the first rule whose `when` holds decides, and the last is a catch-a
 (what the pipeline looked up through `Lookups`: grants and their rendered hashes, break-glass windows, attestations,
 runs, sessions, plans, apply windows). The orders in `default.yaml`:
 
-*Kubernetes*: a 403 with a VAP denial in the audit annotations (attempted-refused); any other refusal; the grant
+*Kubernetes*: a 403 (or any refusal) with a VAP denial in the audit annotations (attempted-refused); any other refusal that is
+not counted out as above (a 401, a 403, an admission denial, a code outside 404/409/422, or any refusal by a person); the grant
 annotation with the live object's hash among the grant's rendered hashes (cleared; the stamp annotation is only a
 claim, the grant's own list is what matches); **`owner-grant`**, a controller (a service account or system identity: not a
 `kubectl` client, not impersonation, not a federated agent) writing an object whose `ownerReferences` chain reaches an
@@ -114,7 +144,10 @@ subjects; the loader refuses a pattern, a group, and a subject that is also in `
 instance's writes are cleared by grants, not by GitOps). The pipeline reads the annotation from the object the event carries
 (`annotations.tracking_id`, default `argocd.argoproj.io/tracking-id`; value `[<app namespace>_]<app>:<group>/<kind>:<namespace>/<name>`,
 which must be about this very object) and asks the lookups, `ArgoApplications.Application`, for the Application (in the controller's
-own namespace unless the id carries one) and its revision. An event with no object (a Secret at Metadata, a delete of an unwatched
+own namespace unless the id carries one) and its revision. A **delete** has no body, so the annotation is read from the object as it stood: the collector's before-state (its watch cache) is the
+event's object for a delete, and its `argocd.argoproj.io/tracking-id` is read exactly as above, under the same rules (it must name this very
+object, a known Application with a revision). This is how a prune of a Role, RoleBinding or ServiceAccount is attributed, which the
+Application's `status.resources` cannot do, because the pruned object is no longer in it. An event with no object and no before-state (a Secret at Metadata, a delete of an unwatched
 kind) carries no annotation: `ArgoApplications.ManagedBy` answers from the Applications' own `status.resources`, only when exactly
 one Application of the controller's namespace lists the object. No Application, no revision, no lookup support: no attribution. It
 sits below every grant signal (an object that names a grant whose hash differs is out-of-band whatever tracking annotation it
@@ -228,8 +261,11 @@ reports the pipeline's per-rule counters in the `noise-filtered` check of that h
 which the packet sums over its window into `packet.Params.Filtered` (the *"filtered: N events under rule X"* line). The
 AWS collector ([observe-aws.md](observe-aws.md), O-4) does the same for CloudTrail.
 
-`Lookups` has two optional extensions. `ArgoApplications` backs `platform-gitops` (the collector indexes the Argo CD
+`Lookups` has three optional extensions. `ArgoApplications` backs `platform-gitops` (the collector indexes the Argo CD
 Applications it watches: their revision and their `status.resources`); without it nothing is attributed to GitOps.
+`ArgoIndexState` (`ApplicationsSynced`) says the index has synced; with `Pipeline.HoldUnsyncedApplications(true)` a succeeded write by a
+`platform_gitops` controller is answered `HeldIndex` while it has not, so the collector can wait for the index (a write decided against
+an empty index is recorded out-of-band for the collector's start, not the write); a `Final` event is decided as it stands.
 The other, `ObjectGrants`: an event with no object (a Secret at Metadata, a delete) carries no
 grant annotation, so for Argo CD's controller only the pipeline asks which active grant lists that namespace, kind and name,
 and the answer feeds the same facts the annotation would, so the event reaches `grant-annotation.no-hash`

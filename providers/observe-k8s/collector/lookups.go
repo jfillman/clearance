@@ -2,6 +2,8 @@ package collector
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -20,7 +22,10 @@ type BreakGlassSource interface {
 	Breakglass(ctx context.Context, cluster string) ([]agent.Window, error)
 }
 
-// Lookups backs the pipeline's attribution over the cluster's grants and the core's break-glass windows. It reads from a
+// Lookups backs the pipeline's attribution over the cluster's grants and the core's break-glass windows. A cluster with no
+// gate has no ClearanceGrant CRD: Grants is then nil (the deployment's explicit setting, grants.enabled=false), no grant is
+// listed, and only the break-glass windows are read. A cluster that has the gate and cannot list its grants (the CRD gone, the
+// role missing) is not that case and is not told apart by guessing from the error: it is a failing lookups-fresh check. It reads from a
 // snapshot, refreshed by Refresh; a failed refresh keeps the last snapshot (a stale answer attributes less, never more:
 // an unknown grant is out-of-band) and says so through Age. It implements pipeline.Lookups and pipeline.ObjectGrants.
 type Lookups struct {
@@ -42,12 +47,32 @@ type Lookups struct {
 	at      time.Time
 
 	apps argoApps // the watched Argo CD Applications (pipeline.ArgoApplications)
+
+	// AppsSynced says every Application watch has listed at least once (the collector sets it). Nil: nothing to wait for.
+	AppsSynced func() bool
 }
 
 var (
-	_ pipeline.Lookups      = (*Lookups)(nil)
-	_ pipeline.ObjectGrants = (*Lookups)(nil)
+	_ pipeline.Lookups        = (*Lookups)(nil)
+	_ pipeline.ObjectGrants   = (*Lookups)(nil)
+	_ pipeline.ArgoIndexState = (*Lookups)(nil)
 )
+
+// GrantsEnabled: the cluster has a gate, so the ClearanceGrants are listed.
+func (l *Lookups) GrantsEnabled() bool { return l.Grants != nil }
+
+// ApplicationsSynced is pipeline.ArgoIndexState: whether the Application index can be attributed from.
+func (l *Lookups) ApplicationsSynced() bool { return l.AppsSynced == nil || l.AppsSynced() }
+
+// grantListError explains a 404 on the grant list. It is an error, never "no grants": on a gated cluster a missing CRD or
+// a missing role must not look healthy.
+func grantListError(err error) error {
+	var se *agent.StatusError
+	if errors.As(err, &se) && se.Code == 404 {
+		return fmt.Errorf("%w (the ClearanceGrant resource is not served here: if this cluster has no gate, set grants.enabled=false; if it has one, the CRD is missing or deleted)", err)
+	}
+	return err
+}
 
 func trimSHA(s string) string { return strings.TrimPrefix(s, "sha256:") }
 
@@ -63,9 +88,12 @@ func (l *Lookups) now() time.Time {
 // the carried trees' too, are what Grant answers from (an object stamped with an older, still live change is cleared
 // by that change's grant).
 func (l *Lookups) Refresh(ctx context.Context) error {
-	grants, err := l.Grants.ListGrants(ctx)
-	if err != nil {
-		return err
+	var grants []agent.Grant
+	if l.Grants != nil {
+		var err error
+		if grants, err = l.Grants.ListGrants(ctx); err != nil {
+			return grantListError(err)
+		}
 	}
 	now := l.now()
 	byID := map[string][]string{}
@@ -100,6 +128,7 @@ func (l *Lookups) Refresh(ctx context.Context) error {
 	}
 	var windows []agent.Window
 	if l.BG != nil {
+		var err error
 		if windows, err = l.BG.Breakglass(ctx, l.Cluster); err != nil {
 			return err
 		}

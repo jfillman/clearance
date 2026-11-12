@@ -24,6 +24,7 @@ const (
 	CheckWatch    = "watch-current"
 	CheckGap      = "audit-gap"
 	CheckLookups  = "lookups-fresh"
+	CheckArgoApps = "argo-applications-synced"
 	CheckFiltered = "noise-filtered"
 	heartbeatAnn  = "observe-k8s.clearance.hangar.io/beat"
 	lookupsMaxAge = 5 // health intervals
@@ -235,12 +236,75 @@ func (c *Collector) checks(ctx context.Context, now time.Time) []HealthCheck {
 		age := c.d.Lookups.Age()
 		ok := lkErr == nil && age <= lookupsMaxAge*cfg.HealthInterval
 		d := fmt.Sprintf("grants and break-glass windows read %s ago", age.Round(time.Second))
+		if !c.d.Lookups.GrantsEnabled() {
+			d = fmt.Sprintf("no gate on this cluster (grants.enabled=false: no ClearanceGrant is listed); break-glass windows read %s ago", age.Round(time.Second))
+		}
 		if lkErr != nil {
 			d = "not read: " + lkErr.Error()
 		}
 		add(CheckLookups, ok, d)
 	}
+	if want := c.applicationWatches(); c.pipe.PlatformGitopsConfigured() && want > 0 {
+		c.mu.Lock()
+		have, late, lastLate, held := len(c.appSynced), c.idxLate, c.lastLate, c.heldIndexCount()
+		c.mu.Unlock()
+		ok := have >= want
+		d := fmt.Sprintf("%d of %d Application watches have listed; the index is what a platform GitOps write is attributed from", have, want)
+		if ok {
+			d = fmt.Sprintf("all %d Application watches have listed", want)
+		} else if held > 0 {
+			d += fmt.Sprintf("; %d platform GitOps writes are waiting for it (at most %s)", held, cfg.ArgoIndexTimeout)
+		}
+		if late > 0 {
+			d += fmt.Sprintf("; %d writes were decided at the timeout without it (the last %s)", late, ago(now, lastLate))
+			if !lastLate.IsZero() && now.Sub(lastLate) <= cfg.GapHold {
+				ok = false
+			}
+		}
+		add(CheckArgoApps, ok, d)
+	}
 	return out
+}
+
+// applicationWatches is how many Application watch loops the collector runs (one per Application kind and namespace).
+func (c *Collector) applicationWatches() int {
+	if c.d.Kube == nil {
+		return 0
+	}
+	n := 0
+	for _, w := range c.cfg.Watches {
+		if w.Kind == "Application" {
+			if w.Namespaced {
+				n += len(c.cfg.WatchNS)
+			} else {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// applicationsSynced: every Application watch has listed at least once, so the index holds the Applications the collector
+// is allowed to see. True when no Application is watched (the index is then empty for good, as it always was).
+func (c *Collector) applicationsSynced() bool {
+	want := c.applicationWatches()
+	if want == 0 {
+		return true
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.appSynced) >= want
+}
+
+// heldIndexCount is how many writes wait for the Application index. The caller holds c.mu.
+func (c *Collector) heldIndexCount() int {
+	n := 0
+	for _, h := range c.held {
+		if h.Reason == heldArgoIndex {
+			n++
+		}
+	}
+	return n
 }
 
 func copyTimes(m map[string]time.Time) map[string]time.Time {
@@ -412,6 +476,9 @@ func (c *Collector) watchLoop(ctx context.Context, w WatchSpec, ns string) {
 		}
 		c.mu.Lock()
 		c.watchOK[key] = c.cfg.Now()
+		if w.Kind == "Application" {
+			c.appSynced[key] = true
+		}
 		c.mu.Unlock()
 		for ctx.Err() == nil {
 			err := c.d.Kube.Watch(ctx, path, rv, func(typ string, o map[string]any) {
