@@ -406,6 +406,30 @@ type DefinitionsRequest struct {
 	Provider string             `json:"provider"`
 	Pins     []PinnedDefinition `json:"pins"`
 	Rejected []RejectedPin      `json:"rejected,omitempty"`
+	// Bundled are the definitions that ship with the provider itself. nil keeps the set the core holds for the
+	// provider; an empty slice clears it. A core older than this field refuses the request (400, unknown field).
+	Bundled []ProvidedDefinition `json:"bundled,omitempty"`
+}
+
+// MarshalJSON keeps an empty non-nil Bundled on the wire as [] (which clears the provider's set); omitempty alone
+// would drop it, and the core would read it as absent (keep).
+func (r DefinitionsRequest) MarshalJSON() ([]byte, error) {
+	type plain DefinitionsRequest
+	if r.Bundled != nil && len(r.Bundled) == 0 {
+		return json.Marshal(struct {
+			plain
+			Bundled []ProvidedDefinition `json:"bundled"`
+		}{plain(r), r.Bundled})
+	}
+	return json.Marshal(plain(r))
+}
+
+// ProvidedDefinition is one definition that ships with the provider: its name, the provider build it ships in and
+// its document.
+type ProvidedDefinition struct {
+	Name    string         `json:"name"`
+	Version string         `json:"version"`
+	Doc     map[string]any `json:"doc"`
 }
 
 // PinnedDefinition is one fetched pin: its source, its Agent XR's spec.owner and the file's document.
@@ -440,6 +464,7 @@ type DefinitionsResult struct {
 	Rejected []RejectedView `json:"rejected"`
 	Cleared  []RejectedView `json:"cleared"`
 	Cluster  int            `json:"cluster"`
+	Provided int            `json:"provided,omitempty"`
 }
 
 // RejectedView is a rejection as the core keeps it.
@@ -458,6 +483,8 @@ type SourceView struct {
 	Namespace *string `json:"namespace,omitempty"`
 	XR        *string `json:"xr,omitempty"`
 	LoadedAt  *string `json:"loaded_at,omitempty"`
+	Provider  *string `json:"provider,omitempty"`
+	Version   *string `json:"version,omitempty"`
 	Pin       string  `json:"pin"`
 }
 

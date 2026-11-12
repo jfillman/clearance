@@ -965,7 +965,19 @@
           "pin": {
             "type": "string"
           },
+          "provider": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "repo": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
             "type": [
               "string",
               "null"

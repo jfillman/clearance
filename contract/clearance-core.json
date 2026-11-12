@@ -743,6 +743,12 @@
       "DefinitionsRequest": {
         "additionalProperties": false,
         "properties": {
+          "bundled": {
+            "items": {
+              "$ref": "#/components/schemas/ProvidedDefinition"
+            },
+            "type": "array"
+          },
           "pins": {
             "items": {
               "$ref": "#/components/schemas/PinnedDefinition"
@@ -786,6 +792,9 @@
             "type": "array"
           },
           "cluster": {
+            "type": "integer"
+          },
+          "provided": {
             "type": "integer"
           },
           "rejected": {
@@ -843,7 +852,19 @@
           "pin": {
             "type": "string"
           },
+          "provider": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "repo": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
             "type": [
               "string",
               "null"
@@ -2479,6 +2500,27 @@
           "message",
           "path",
           "rule"
+        ],
+        "type": "object"
+      },
+      "ProvidedDefinition": {
+        "additionalProperties": false,
+        "properties": {
+          "doc": {
+            "additionalProperties": {},
+            "type": "object"
+          },
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "doc",
+          "name",
+          "version"
         ],
         "type": "object"
       },
@@ -4323,7 +4365,7 @@
             "bearer": []
           }
         ],
-        "summary": "The provider's whole set of cluster-pinned agent definitions (its Agent XR loader's pins and rejections) replaces the set the core holds. The core decides each pin itself (schema, name, owner, workload identity, not a bundled name) and records each change once as definition.load, definition.unload or definition.reject; provenance then reads the pinned definitions. Only the provider registered with definitions: true.",
+        "summary": "The provider's whole set of cluster-pinned agent definitions (its Agent XR loader's pins and rejections) replaces the set the core holds. The core decides each pin itself (schema, name, owner, workload identity, not a bundled name) and records each change once as definition.load, definition.unload or definition.reject; provenance then reads the pinned definitions. The optional bundled list is the definitions that ship with the provider itself (name, build version, document): decided with the same schema, held beside the pins (a pin cannot shadow one) and recorded the same way; absent keeps the provider's earlier bundled set. Only the provider registered with definitions: true.",
         "x-clearance-auth": "provider",
         "x-clearance-max-body": 4194304
       }

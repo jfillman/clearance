@@ -134,6 +134,17 @@ def test_the_gateways_held_kinds_a_refusal_and_published_definitions(core):
     assert again.rejected == [] and again.added == []
 
 
+def test_publish_definitions_with_the_providers_bundled_set(core):
+    c = cc.CoreClient(core.url, token=GW, provider="autopilot-gateway")
+    bad = {"name": "parachute", "version": "gateway-v0.9.0", "doc": {"name": "parachute"}}
+    res = c.publish_definitions([], bundled=[bad])
+    assert not res.provided and [r.name for r in res.rejected] == ["parachute"]
+    assert res.rejected[0].source.kind == "provider" and res.rejected[0].source.version == "gateway-v0.9.0"
+    # None leaves the provider's set alone; [] clears it.
+    assert c.publish_definitions([]).rejected == []
+    assert [r.name for r in c.publish_definitions([], bundled=[]).cleared] == ["parachute"]
+
+
 def test_the_gate(core):
     change = {"app": "gate-api", "env": "prod", "cluster": "hangar-prod", "repo": "jfillman/gitops-gate-api",
               "pr": 7, "head": HEAD, "base": "b" * 40, "proposer": "user:dana", "proposerKind": "person",

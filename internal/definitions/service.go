@@ -33,6 +33,14 @@ func (s *Service) Apply(ctx context.Context, loaded []Loaded, rejected []Rejecte
 // PUT /v1/definitions). extra may not name a field Event sets.
 func (s *Service) ApplyWith(ctx context.Context, loaded []Loaded, rejected []Rejected, w evidence.Writer,
 	extra map[string]any) (Changes, error) {
+	return s.ApplyKeeping(ctx, loaded, rejected, w, extra, false)
+}
+
+// ApplyKeeping is ApplyWith, optionally keeping the definitions the provider published as shipping with it (source
+// kind provider) when loaded and rejected carry none: a publish from a provider that does not send that set must
+// not unload what an earlier publish of it loaded.
+func (s *Service) ApplyKeeping(ctx context.Context, loaded []Loaded, rejected []Rejected, w evidence.Writer,
+	extra map[string]any, keepProvided bool) (Changes, error) {
 	if s.Registry == nil {
 		return Changes{}, ErrNotRegistry
 	}
@@ -40,6 +48,9 @@ func (s *Service) ApplyWith(ctx context.Context, loaded []Loaded, rejected []Rej
 	defer s.mu.Unlock()
 	s.Registry.mu.Lock()
 	defer s.Registry.mu.Unlock()
+	if keepProvided {
+		loaded, rejected = s.Registry.keepProvided(loaded, rejected)
+	}
 	p := s.Registry.plan(loaded, rejected)
 	ch := p.changes
 	if !ch.Any() {
@@ -99,8 +110,11 @@ func (s *Service) ApplyWith(ctx context.Context, loaded []Loaded, rejected []Rej
 // Event is _definition_record's event: the pin as principal, the agent, the source's pin as target.
 func Event(now time.Time, tool, name string, src Source, decision string, rule any, result string) store.Event {
 	principal := "platform"
-	if src.Kind == "cluster" {
+	switch src.Kind {
+	case "cluster":
 		principal = fmt.Sprintf("pin:%s/%s", pycompat.Str(strOrNone(src.Namespace)), pycompat.Str(strOrNone(src.XR)))
+	case "provider":
+		principal = "provider:" + deref(src.Provider)
 	}
 	return store.Event{
 		"ts": pycompat.ISO(now), "task_id": nil, "session": nil, "parent": nil, "principal": principal,

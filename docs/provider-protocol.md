@@ -169,6 +169,33 @@ PUT /v1/definitions
 - The answer is what changed: `{"added", "changed", "removed", "rejected", "cleared", "cluster"}`.
 - At most 256 pins and 256 rejections, 4 MiB.
 
+#### The provider's own definitions
+
+Definitions that ship with the provider (Autopilot's gateway image bundles `parachute`, `app-provisioner` and the
+other platform agents in its `agents/` directory) are not pinned to a repository, so they ride the same request as
+`bundled`, each with the build it ships in:
+
+```json
+PUT /v1/definitions
+{"provider": "autopilot-gateway", "pins": [],
+ "bundled": [{"name": "parachute", "version": "gateway-v0.9.0", "doc": {"name": "parachute", "...": "..."}}]}
+```
+
+- The core decides each one with the same agent-definition schema, and the document's name must be the published
+  name. There is no XR, so no owner or identity rule beyond the schema: the provider enforces its own definitions;
+  the core needs to know them so provenance (AS002 to AS004, the `Clearance / agent-scope` check) can evaluate a pull
+  request one of them opened.
+- Each is a definition with source kind `provider` (pin line `provider:<provider>@<version>`). Changes are recorded
+  once, like a pin's: `definition.load` (`loaded provider:autopilot-gateway@gateway-v0.9.0`; a new build of the same
+  definition is `re-pinned`), `definition.unload`, `definition.reject`. The principal is `provider:<provider>`.
+- A provider's definition is never shadowed: a pin of the same name is rejected (`'x' is a definition provided by
+  <provider>; a pin cannot replace it`), and a name the core itself bundles (`CLEARANCE_AGENTS_DIR`) keeps the core's definition: the same document is ignored (a deployment that mounts the image's `agents/` into the core too), a different one is rejected (`differs from the core's own bundled definition`).
+- `bundled` absent keeps the set the core holds for the provider (a publish from a provider that does not send it
+  unloads nothing); an empty list clears it. The answer's `provided` is how many are live (`cluster` counts pins).
+- A core older than this field refuses the whole request (`400`, unknown field). A provider that sends `bundled`
+  retries without it and keeps running; its bundled agents are then unknown to that core (AS004), so upgrade the
+  core.
+
 ## The deployment role
 
 For every change to a protected environment:
