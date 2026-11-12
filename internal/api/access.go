@@ -17,8 +17,9 @@ const (
 	RolePerson   = "person"
 	RoleDelegate = "delegate"
 	RoleNotifier = "notifier"
-	RoleFeed     = "feed" // a grant-sync agent: the cleared changes and their tokens, for its clusters only
-	RoleAny      = "any"  // no token asked (the contract, the keys)
+	RoleFeed     = "feed"     // a grant-sync agent: the cleared changes and their tokens, for its clusters only
+	RoleObserver = "observer" // CLEARANCE_API_OBSERVATION_READERS: a machine poller of the observation reads (O-5)
+	RoleAny      = "any"      // no token asked (the contract, the keys)
 )
 
 // FeedRoles are the roles that may read the gate's changes and their tokens: people's, and a feed reader's.
@@ -50,6 +51,10 @@ func ParseFeedReaders(v string) ([]FeedReader, error) {
 // PersonRoles are the roles of every person read (api.py PERSON_ROLES). An auditor may call any route a person may.
 var PersonRoles = []string{RolePerson, RoleDelegate, RoleAuditor}
 
+// ObservationRoles are the roles of the observation reads (O-5): every person, a delegate for one, an auditor, and a
+// configured machine poller.
+var ObservationRoles = []string{RolePerson, RoleDelegate, RoleAuditor, RoleObserver}
+
 // Viewer is who is reading and what they may see (api.py Viewer).
 //
 //	auditor   every read (CLEARANCE_API_AUDITORS)
@@ -59,6 +64,7 @@ var PersonRoles = []string{RolePerson, RoleDelegate, RoleAuditor}
 //	delegate  everything the person named in the on-behalf-of header may (CLEARANCE_DELEGATES, e.g. a portal)
 //	notifier  CLEARANCE_API_NOTIFIERS: kept so the role resolves as at api.py, but no Clearance read is a
 //	          notifier's since the inbox feed moved to the gateway (R-3)
+//	observer  CLEARANCE_API_OBSERVATION_READERS: coverage, observations, observation health and exceptions, whole scope; nothing else
 //	feed      CLEARANCE_API_FEED_READERS: the changes on its clusters, with their tokens (the grant feed); nothing else
 type Viewer struct {
 	Role   string
@@ -100,9 +106,12 @@ type Ownership interface {
 // Access resolves a caller to a Viewer (api.py Access).
 type Access struct {
 	Delegates, Notifiers, Auditors []string // principal globs (fnmatchcase)
-	FeedReaders                    []FeedReader
-	Directory                      Directory
-	Ownership                      Ownership
+	// ObservationReaders are principal globs that read the observation reads (coverage, observations, observation
+	// health, exceptions) and nothing else.
+	ObservationReaders []string
+	FeedReaders        []FeedReader
+	Directory          Directory
+	Ownership          Ownership
 	// Owners is each live agent definition's owner group, by agent name ("" when it names none).
 	Owners func() map[string]string
 }
@@ -139,6 +148,9 @@ func (a *Access) Viewer(ctx context.Context, p authn.Principal, onBehalfOf strin
 	}
 	if p.IsPerson() {
 		return a.person(ctx, p.ID, ""), nil
+	}
+	if pycompat.MatchAny(p.ID, a.ObservationReaders) {
+		return &Viewer{Role: RoleObserver, Person: p.ID}, nil
 	}
 	return nil, errorf(403, "%s is not a person, delegate, notifier or auditor", p.ID)
 }

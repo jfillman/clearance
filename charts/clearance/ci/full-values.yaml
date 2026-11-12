@@ -118,6 +118,7 @@ externalSecrets:
 api:
   auditors: ["user:auditor"]
   notifiers: ["tower/backstage"]
+  observationReaders: ["hangar-prod/observe/poller"]
   feedReaders:
     - {principal: "hangar-prod/clearance-system/clearance-agent", cluster: hangar-prod}
   gatewayURL: http://autopilot-gateway.autopilot-system.svc:8080

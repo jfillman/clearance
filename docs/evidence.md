@@ -242,7 +242,7 @@ in what the provider reported (an object of kind Secret with `data`, `stringData
 name an assessment) in the same `scope`, or the core refuses it. Nothing is rewritten: the latest assessment of an
 observation, and the latest resolution, win when read.
 
-**Reading it.** clearance-api (auditors) lists observations and health by scope (`GET /v1/observations`,
+**Reading it.** clearance-api (any signed-in person, since O-5; an auditor reads the records unredacted) lists observations and health by scope (`GET /v1/observations`,
 `GET /v1/observations/health`) and answers `GET /v1/coverage?scope=&from=&to=` with the three-part statement the packet
 prints (C-5): *cleared and verified*, *seen, not cleared* (by coverage state, with each one's resolution and cause) and
 *could not see* (the blind and degraded stretches and the audit gaps), with the health of each feed (`clearance packet` builds the same statement per scope from the chain itself, [packet.md](packet.md)). `clean` is true only
