@@ -734,3 +734,42 @@ func anyStrings(v any) []string {
 	}
 	return out
 }
+
+// cancelingStore cancels the request's context once the decision's write is under way: the gateway's 250 ms timeout
+// firing while a slow append is in flight.
+type cancelingStore struct {
+	store.Store
+	cancel func()
+}
+
+func (c *cancelingStore) Atomic(ctx context.Context, fn func(tx store.Tx) error) error {
+	return c.Store.Atomic(ctx, func(tx store.Tx) error {
+		c.cancel()
+		return fn(tx)
+	})
+}
+
+func TestADecisionIsRecordedWhenTheClientCancelsMidWrite(t *testing.T) {
+	f := memFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ps, err := server.ParseProviders(providersJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := server.New(context.Background(), server.Options{Store: &cancelingStore{Store: f.core.Store, cancel: cancel},
+		Engine: f.core.Engine, Auth: core.DevAuthenticator(), Providers: ps, Version: "test", MaxClockSkew: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", "/access/v1/evaluation", bytes.NewReader(request(t, modelAllowed, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+gw)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if n := len(f.records()); n != 1 {
+		t.Fatalf("the decision was made, so it is recorded even though the client has gone: %d records (%d %s)", n, rec.Code, rec.Body)
+	}
+}

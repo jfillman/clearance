@@ -16,6 +16,19 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   `break-glass`, `attempted-refused`); an unknown state is a 400. `GET /v1/evidence/counts` takes it too and adds
   `by=coverage`, so a view can show the total per state.
 
+### Fixed
+
+- store: a write no longer aborts when its caller goes away. The Postgres store ran a decision's append and commit on
+  the HTTP request's context, so the gateway's decision timeout (250 ms) cancelling the request during a 306 ms
+  append aborted the transaction mid-write (`pg: append: timeout: context already done: context canceled`), pgx
+  closed the writer connection and with it the advisory lock, and the reconnect ran on the same cancelled context
+  (`failed SASL auth: context canceled`): two more decisions and an outcome got 503 until it recovered. `Atomic`, the
+  transaction's own statements and the reconnect and re-lock now run detached from the caller's cancellation
+  (`context.WithoutCancel`) and bounded by a new `Options.WriteTimeout` (default 5s). A decision that was made is
+  recorded whether or not the client is still waiting; the answer to a client that has gone is simply not read. A
+  context already done when `Atomic` is called still starts nothing. The in-memory store follows the same rule, and the
+  store conformance suite gains `CancelDuringWrite`. Seen live on hangar-dev 2026-11-12.
+
 ## [0.42.1] - 2026-11-12
 
 ### Fixed (0.42.1)

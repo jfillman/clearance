@@ -55,6 +55,7 @@ func Run(t *testing.T, open Opener) {
 		{"Breakglass", testBreakglass},
 		{"Concurrent", testConcurrent},
 		{"CancelledContext", testCancelled},
+		{"CancelDuringWrite", testCancelDuringWrite},
 		{"PythonChainExtended", testPythonChainExtended},
 	} {
 		t.Run(c.name, func(t *testing.T) { c.fn(t, open) })
@@ -589,6 +590,30 @@ func testCancelled(t *testing.T, open Opener) {
 	verifies(t, s, 0)
 	appendOne(t, s, store.Event{"tool": "y"})
 	verifies(t, s, 1)
+}
+
+// testCancelDuringWrite: a caller that gives up once its write has started (an HTTP client's timeout) does not abort
+// it: the record is committed, the writer keeps working (for pg: the same connection and lock, no reconnect), and the
+// chain is intact.
+func testCancelDuringWrite(t *testing.T, open Opener) {
+	s := open(t, nil)
+	appendOne(t, s, store.Event{"tool": "before"})
+	ctx, cancel := context.WithCancel(bg)
+	var rec store.Record
+	if err := s.Atomic(ctx, func(tx store.Tx) error {
+		cancel() // the client has gone; the write is under way
+		var err error
+		rec, err = tx.Append(ctx, store.Event{"tool": "decided"}, Writer)
+		return err
+	}); err != nil {
+		t.Fatalf("a cancel during the write must not abort it: %v", err)
+	}
+	if rec == nil {
+		t.Fatal("no record returned")
+	}
+	verifies(t, s, 2)
+	appendOne(t, s, store.Event{"tool": "after"})
+	verifies(t, s, 3)
 }
 
 // GoEvents are the events Go appends to the Python fixture chain (internal/evidence/testdata); the result must
