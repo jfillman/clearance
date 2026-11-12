@@ -50,7 +50,16 @@ func setOf(xs ...string) map[string]bool {
 	return m
 }
 
+// isClusterScoped is whether kind takes no namespace. extra is the Application's clusterScopedKinds: a kind in it is
+// cluster-scoped; `!Kind` says the opposite, for a kind the built-in rules guess wrongly (CloudNativePG's `Cluster`
+// is namespaced, though it is named Cluster*). The parity suite's scope audit lists what the cluster's discovery
+// says differently from the built-in rules.
 func isClusterScoped(kind string, extra []string) bool {
+	for _, k := range extra {
+		if k == "!"+kind {
+			return false
+		}
+	}
 	if clusterScoped[kind] || strings.HasPrefix(kind, "Cluster") {
 		return true
 	}
