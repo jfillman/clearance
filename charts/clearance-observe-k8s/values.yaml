@@ -94,6 +94,9 @@ watch:
     - {group: apps, version: v1, resource: statefulsets, kind: StatefulSet, namespaced: true}
     - {group: apps, version: v1, resource: daemonsets, kind: DaemonSet, namespaced: true}
     - {group: batch, version: v1, resource: cronjobs, kind: CronJob, namespaced: true}
+    # Jobs: a finished sync hook Job is deleted by the TTL controller or the garbage collector, and the delete carries no object;
+    # its annotations and its dependents' ownerReferences are read from the before-state (platform-gitops hook cleanup, 0.41.4).
+    - {group: batch, version: v1, resource: jobs, kind: Job, namespaced: true}
     - {group: networking.k8s.io, version: v1, resource: networkpolicies, kind: NetworkPolicy, namespaced: true}
     - {group: networking.k8s.io, version: v1, resource: ingresses, kind: Ingress, namespaced: true}
     - {group: argoproj.io, version: v1alpha1, resource: applications, kind: Application, namespaced: true}

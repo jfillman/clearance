@@ -3,6 +3,7 @@ package pipeline
 import (
 	"slices"
 	"strings"
+	"time"
 )
 
 // Platform GitOps (G-ARGO-10a) and what is not a change.
@@ -47,6 +48,26 @@ type ArgoHooks interface {
 	// than one claimant is no answer.
 	HookOf(scope, appNamespace, namespace, kind, name string) (ArgoApp, bool)
 }
+
+// ArgoHookHistory is an optional part of Lookups, beside ArgoHooks: the sync hooks of the operation an Application's current one
+// replaced, kept for a bounded window (HookCleanupWindow) after the replacement. The TTL controller and the garbage collector
+// remove a finished hook Job minutes after the sync that ran it, and the next operation may already have replaced the list.
+type ArgoHookHistory interface {
+	// HookOfRecent is HookOf, also counting the previous operation's hooks when the current one replaced them no longer ago than
+	// the window at the time "at". An Application whose current operation lists the object answers with the current operation
+	// (revision and all); otherwise one whose previous operation does answers with that operation's revision. More than one
+	// claimant, across both lists, is no answer.
+	HookOfRecent(scope, appNamespace, namespace, kind, name string, at time.Time) (ArgoApp, bool)
+}
+
+// HookCleanupWindow is how long after an operation was replaced its hooks still count for HookOfRecent. Kubernetes removes a hook
+// Job when its ttlSecondsAfterFinished passes (seconds to minutes, rarely more); an hour covers that and no more.
+const HookCleanupWindow = time.Hour
+
+const (
+	subjTTLController = "system:serviceaccount:kube-system:ttl-after-finished-controller"
+	subjGC            = "system:serviceaccount:kube-system:generic-garbage-collector"
+)
 
 // isHook says an object carries an annotation Argo CD honours as a sync hook: argocd.argoproj.io/hook (any value but Skip,
 // which Argo does not apply at all) or helm.sh/hook (Argo translates Helm's hooks to its own).
@@ -138,6 +159,81 @@ func (p *Pipeline) platformGitops(e *Event, controller bool) (app ArgoApp, ok bo
 		// The event carries no object (a Secret is recorded at Metadata, a delete of an unwatched kind has no body), so
 		// there is no annotation to read. The instance's own account of what it manages stands in for it.
 		app, ok = aa.ManagedBy(e.Scope, ctrlNS, e.Namespace, e.Kind, e.Name)
+	}
+	if !ok || app.Revision == "" {
+		return ArgoApp{}, false
+	}
+	return app, true
+}
+
+// hookCleanup is the Application and revision of the platform GitOps change whose sync hook Kubernetes itself is removing, or "".
+// A hook Job with ttlSecondsAfterFinished is deleted by the TTL controller; its dependents (the hook ServiceAccount, Role,
+// RoleBinding, owned by the Job) and sometimes the Job itself by the garbage collector. Those are the consequence of the sync,
+// not a new change, and carry no tracking annotation. Deny by default: all of these must hold.
+//   - the actor is exactly the TTL controller deleting a Job, or exactly the garbage collector deleting any object, a succeeded
+//     "delete", acting as itself (isController);
+//   - the event shows the deleted object (the response body or the collector's before-state: ObjectSeen), never a Metadata-level
+//     event that shows nothing;
+//   - the object is a Job that exactly one Application in a platform instance's namespace lists as a hook (HookOfRecent: the
+//     current operation, or the previous one within HookCleanupWindow); or, for the garbage collector only, a namespaced object
+//     with an ownerReference of kind Job naming such a hook Job, or one that itself carries a hook annotation and is so listed.
+//
+// A person, another service account and a different verb never match. Attribution is to the Application and the revision of the
+// operation that listed the hook, like the hook's own write.
+func (p *Pipeline) hookCleanup(e *Event, controller bool) (ArgoApp, bool) {
+	if !e.Succeeded || !controller || e.Provider != Kubernetes || e.Verb != "delete" || !e.ObjectSeen || e.Name == "" || e.Namespace == "" {
+		return ArgoApp{}, false
+	}
+	gc := e.Subject == subjGC
+	if !gc && !(e.Subject == subjTTLController && strings.EqualFold(e.Kind, "Job")) {
+		return ArgoApp{}, false
+	}
+	hk, has := p.lk.(ArgoHookHistory)
+	if !has || len(p.rs.ids.PlatformGitops) == 0 {
+		return ArgoApp{}, false
+	}
+	// The platform instances' namespaces: the Applications are searched there, and nowhere else.
+	var nss []string
+	for _, s := range p.rs.ids.PlatformGitops {
+		if ns := controllerSubjectNS(s); ns != "" && !slices.Contains(nss, ns) {
+			nss = append(nss, ns)
+		}
+	}
+	// listed is the one Application, over all those namespaces, that lists this object as a hook; two is none.
+	listed := func(kind, name string) (ArgoApp, bool) {
+		var found ArgoApp
+		n := 0
+		for _, ns := range nss {
+			if a, ok := hk.HookOfRecent(e.Scope, ns, e.Namespace, kind, name, e.Time); ok {
+				found = a
+				n++
+			}
+		}
+		return found, n == 1
+	}
+	var app ArgoApp
+	var ok bool
+	switch {
+	case strings.EqualFold(e.Kind, "Job"):
+		app, ok = listed("Job", e.Name)
+	case gc && isHook(e.ObjAnnotations):
+		app, ok = listed(e.Kind, e.Name)
+	}
+	if !ok && gc && !strings.EqualFold(e.Kind, "Job") {
+		// The object is owned by a hook Job. Every Job owner must be one Application's hook; two different Applications' is none.
+		var owned ArgoApp
+		n := 0
+		for _, o := range e.Owners {
+			if o.Kind != "Job" || o.Name == "" {
+				continue
+			}
+			a, good := listed("Job", o.Name)
+			if !good || (n > 0 && (a.Namespace != owned.Namespace || a.Name != owned.Name)) {
+				return ArgoApp{}, false
+			}
+			owned, n = a, n+1
+		}
+		app, ok = owned, n > 0
 	}
 	if !ok || app.Revision == "" {
 		return ArgoApp{}, false

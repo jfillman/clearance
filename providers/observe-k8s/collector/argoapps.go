@@ -3,6 +3,7 @@ package collector
 import (
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/jfillman/clearance/internal/observe/pipeline"
 )
@@ -15,6 +16,18 @@ type argoApps struct {
 	apps map[string]*appEntry // "<namespace>/<name>"
 }
 
+func sameKeys(a, b map[string]struct{}) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k := range a {
+		if _, ok := b[k]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 type appEntry struct {
 	app       pipeline.ArgoApp
 	resources map[string]struct{} // "<namespace>/<lower-case kind>/<name>"
@@ -23,6 +36,12 @@ type appEntry struct {
 	// revisions joined with ","); empty when the result names none.
 	hooks        map[string]struct{}
 	hookRevision string
+	// prevHooks are the hooks of the operation the current one replaced (hooks or revision changed, and it listed some), with
+	// its revision and when it was replaced. Kubernetes removes a finished hook Job (TTL controller, garbage collector) minutes
+	// after the sync, and a later operation may already have replaced the list. Used only by hookOfRecent, for the window.
+	prevHooks    map[string]struct{}
+	prevRevision string
+	prevAt       time.Time
 }
 
 func resKey(ns, kind, name string) string { return ns + "/" + strings.ToLower(kind) + "/" + name }
@@ -80,7 +99,7 @@ func hooksOf(obj map[string]any) (map[string]struct{}, string) {
 	return hooks, rev
 }
 
-func (x *argoApps) put(typ string, obj map[string]any) {
+func (x *argoApps) put(typ string, obj map[string]any, now time.Time) {
 	ns, name, _ := metaOf(obj)
 	if name == "" {
 		return
@@ -108,6 +127,15 @@ func (x *argoApps) put(typ string, obj map[string]any) {
 	e.hooks, e.hookRevision = hooksOf(obj)
 	if x.apps == nil {
 		x.apps = map[string]*appEntry{}
+	}
+	if old := x.apps[k]; old != nil {
+		switch {
+		case len(old.hooks) > 0 && (old.hookRevision != e.hookRevision || !sameKeys(old.hooks, e.hooks)):
+			// the operation changed: remember the one it replaced
+			e.prevHooks, e.prevRevision, e.prevAt = old.hooks, old.hookRevision, now
+		default:
+			e.prevHooks, e.prevRevision, e.prevAt = old.prevHooks, old.prevRevision, old.prevAt
+		}
 	}
 	x.apps[k] = e
 }
@@ -161,8 +189,38 @@ func (x *argoApps) hookOf(appNamespace, namespace, kind, name string) (pipeline.
 	return found, n == 1
 }
 
+// hookOfRecent is hookOf, also counting an Application's previous operation's hooks when the current operation replaced them no
+// longer than window before "at". The current operation wins for an Application that lists the object in both. One claimant only.
+func (x *argoApps) hookOfRecent(appNamespace, namespace, kind, name string, at time.Time, window time.Duration) (pipeline.ArgoApp, bool) {
+	k := resKey(namespace, kind, name)
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	var found pipeline.ArgoApp
+	n := 0
+	for _, e := range x.apps {
+		if e.app.Namespace != appNamespace {
+			continue
+		}
+		if _, ok := e.hooks[k]; ok {
+			found = e.app
+			if e.hookRevision != "" {
+				found.Revision = e.hookRevision
+			}
+			n++
+		} else if _, ok := e.prevHooks[k]; ok && !at.After(e.prevAt.Add(window)) {
+			found = e.app
+			found.Revision = e.prevRevision
+			if found.Revision == "" {
+				found.Revision = e.app.Revision
+			}
+			n++
+		}
+	}
+	return found, n == 1
+}
+
 // PutApplication records an Application the watch delivered (typ ADDED, MODIFIED or DELETED).
-func (l *Lookups) PutApplication(typ string, obj map[string]any) { l.apps.put(typ, obj) }
+func (l *Lookups) PutApplication(typ string, obj map[string]any) { l.apps.put(typ, obj, l.now()) }
 
 var _ pipeline.ArgoApplications = (*Lookups)(nil)
 
@@ -190,4 +248,15 @@ func (l *Lookups) HookOf(scope, appNamespace, namespace, kind, name string) (pip
 		return pipeline.ArgoApp{}, false
 	}
 	return l.apps.hookOf(appNamespace, namespace, kind, name)
+}
+
+var _ pipeline.ArgoHookHistory = (*Lookups)(nil)
+
+// HookOfRecent is HookOf over the current operation's hooks and, for pipeline.HookCleanupWindow after a replacement, the previous
+// operation's.
+func (l *Lookups) HookOfRecent(scope, appNamespace, namespace, kind, name string, at time.Time) (pipeline.ArgoApp, bool) {
+	if scope != l.Cluster {
+		return pipeline.ArgoApp{}, false
+	}
+	return l.apps.hookOfRecent(appNamespace, namespace, kind, name, at, pipeline.HookCleanupWindow)
 }

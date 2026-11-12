@@ -9,6 +9,17 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Fixed (0.41.4)
+
+- observe-k8s: Kubernetes' own removal of a finished Argo CD sync hook is no longer reported out-of-band (seen live on hangar-prod 2026-11-12:
+  the TTL controller deleting a hook Job, the garbage collector deleting it and its ServiceAccount, Role and RoleBinding). It is attributed to
+  the platform-gitops Application and operation that ran the hook (`hookCleanup`), only for exactly `kube-system:ttl-after-finished-controller`
+  deleting a Job, or exactly `kube-system:generic-garbage-collector` deleting an object, and only when exactly one Application in a platform
+  instance's namespace lists the Job as a hook (or the object itself is a listed hook, or a `Job` ownerReference names one), read from the
+  delete's before-state; no before-state, no attribution. `scope.controller_children` is not widened. The collector's Application index keeps the
+  hooks of the operation a new one replaced for one hour (`ArgoHookHistory.HookOfRecent`), since a TTL delete can arrive after the next sync. The
+  chart now watches `jobs` so the before-state exists.
+
 ## [0.41.3] - 2026-11-12
 
 ### Fixed (0.41.3)

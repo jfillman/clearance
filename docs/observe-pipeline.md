@@ -168,6 +168,20 @@ sits below every grant signal (an object that names a grant whose hash differs i
 carries) and below a refusal; in a live break-glass window the window decides, as for every controller. The assessment carries the
 Application (`<namespace>/<name>`) and the revision and its detail names both. Its outcome is `observed-not-attributed` (coverage `observed-not-attributed`, tier 1), never `cleared`: see **Classify**.
 
+*Hook cleanup (0.41.4).* Kubernetes removes a finished hook itself: the TTL controller deletes a hook Job with `ttlSecondsAfterFinished`, and the garbage
+collector deletes the Job's dependents (the hook ServiceAccount, Role, RoleBinding, owned by the Job) and sometimes the Job. These are the sync's
+consequence, not a new change, but `scope.controller_children` does not cover them (the hook Job has no controller ownerReference, and the dependents
+are not of the kinds the garbage collector may delete), and it is deliberately not widened. Instead the write is attributed to the Application and
+operation that ran the hook (`platform-gitops`, same outcome and severity as the hook's own write), only when **all** of these hold: the actor is exactly
+`system:serviceaccount:kube-system:ttl-after-finished-controller` deleting a Job, or exactly `system:serviceaccount:kube-system:generic-garbage-collector`
+deleting an object, acting as itself; the event shows the object (the delete's before-state; a Metadata-level event with none is never attributed); and
+exactly one Application in a platform instance's namespace lists the Job as a hook, or (garbage collector only) the object is owned (`ownerReferences`,
+kind `Job`) by such a hook Job, or carries a hook annotation and is itself so listed. Two claimants, another namespace, a person, another verb and an
+owner of another kind stay out-of-band. The optional `ArgoHookHistory.HookOfRecent` also counts the hooks of the operation the current one replaced, for
+`HookCleanupWindow` (one hour) after the replacement, with that operation's revision: a TTL delete can arrive after the next sync has replaced
+the list, and the previous operation is the one that ran the hook. The current operation wins. While the Application index has not synced such a delete
+is held like any platform-gitops write.
+
 **Classify** maps the outcome to a coverage state and a tier (`classify`): cleared is `authorized-and-verified`, tier 0;
 observed-not-attributed 1; attempted-refused 1; out-of-band and break-glass 2. Monitoring protection is tier 3 and the
 loader refuses a rule set that lowers it. `platform-gitops` is an `observed-not-attributed` outcome: **known source, not authorized**. The write is tied to an Application and a
