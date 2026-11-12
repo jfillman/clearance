@@ -181,10 +181,15 @@ func (p *Pipeline) platformGitops(e *Event, controller bool) (app ArgoApp, ok bo
 // A person, another service account and a different verb never match. Attribution is to the Application and the revision of the
 // operation that listed the hook, like the hook's own write.
 func (p *Pipeline) hookCleanup(e *Event, controller bool) (ArgoApp, bool) {
-	if !e.Succeeded || !controller || e.Provider != Kubernetes || e.Verb != "delete" || !e.ObjectSeen || e.Name == "" || e.Namespace == "" {
+	gc := e.Subject == subjGC
+	// The garbage collector finishes a foreground delete of the hook Job by patching its finalizers off through the
+	// metadata-only client (a PartialObjectMetadata body), seen live on hangar-prod 2026-11-12 right after the TTL
+	// controller's delete. That patch is part of the same cleanup; any other patch is not.
+	gcFinalize := gc && e.Verb == "patch" && e.PartialMetadata && strings.EqualFold(e.Kind, "Job")
+	if !e.Succeeded || !controller || e.Provider != Kubernetes || (e.Verb != "delete" && !gcFinalize) || !e.ObjectSeen ||
+		e.Name == "" || e.Namespace == "" {
 		return ArgoApp{}, false
 	}
-	gc := e.Subject == subjGC
 	if !gc && !(e.Subject == subjTTLController && strings.EqualFold(e.Kind, "Job")) {
 		return ArgoApp{}, false
 	}

@@ -174,7 +174,8 @@ consequence, not a new change, but `scope.controller_children` does not cover th
 are not of the kinds the garbage collector may delete), and it is deliberately not widened. Instead the write is attributed to the Application and
 operation that ran the hook (`platform-gitops`, same outcome and severity as the hook's own write), only when **all** of these hold: the actor is exactly
 `system:serviceaccount:kube-system:ttl-after-finished-controller` deleting a Job, or exactly `system:serviceaccount:kube-system:generic-garbage-collector`
-deleting an object, acting as itself; the event shows the object (the delete's before-state; a Metadata-level event with none is never attributed); and
+deleting an object, or the garbage collector's metadata-only patch (a `PartialObjectMetadata` body) of a hook Job that removes its finalizers
+after the TTL delete (0.42.1), acting as itself; the event shows the object (the delete's before-state; a Metadata-level event with none is never attributed); and
 exactly one Application in a platform instance's namespace lists the Job as a hook, or (garbage collector only) the object is owned (`ownerReferences`,
 kind `Job`) by such a hook Job, or carries a hook annotation and is itself so listed. Two claimants, another namespace, a person, another verb and an
 owner of another kind stay out-of-band. The optional `ArgoHookHistory.HookOfRecent` also counts the hooks of the operation the current one replaced, for
