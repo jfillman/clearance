@@ -45,10 +45,10 @@ the inbox, trigger history, results), so the Go API serves only Clearance's own 
 
 | api.py operation | Path | Go `clearance api` |
 |---|---|---|
-| listEvidence | `GET /v1/evidence` | **ported**; adds `outcomes` (below) and `installation` (C-10) |
+| listEvidence | `GET /v1/evidence` | **ported**; adds `outcomes` (below), `installation` (C-10) and `coverage` (one state or a comma-separated list: `authorized-and-verified`, `observed-not-attributed`, `out-of-band-detected`, `coverage-unavailable`, `break-glass`, `attempted-refused`; unknown is 400) |
 | getEvidence | `GET /v1/evidence/{seq}` | **ported** |
 | verifyEvidence | `GET /v1/evidence/verify` | **ported** (auditors) |
-| countEvidence | `GET /v1/evidence/counts` | **ported**; takes every list filter, adds `outcomes` and `installation`; `by=cost` (A-4, below) |
+| countEvidence | `GET /v1/evidence/counts` | **ported**; takes every list filter, adds `outcomes`, `installation` and `coverage`; `by=coverage` totals per state; `by=cost` (A-4, below) |
 | getPolicy | `GET /v1/policy` | **ported** |
 | explainPolicy | `GET /v1/policy/explain` | **ported** (`decide.(*Engine).Trace`) |
 | listReceipts | `GET /v1/receipts` | **ported**; adds `installation` (C-10) |
@@ -357,7 +357,7 @@ All list endpoints are cursor-paginated (`limit`, max 200; `after`), newest firs
 | `GET /v1/evidence` | records filtered by `task`, `session`, `agent`, `tool`, `principal`, `decision`, `rule`, `app`, `since`, `until`; cursor is `seq` |
 | `GET /v1/evidence/{seq}` | one record, with its hash and assurance state; every served record is in the clearance.evidence/v1 shape, a v0-draft row with the `provider` and `subject` the api derived named in `projected` ([evidence.md](evidence.md)) |
 | `GET /v1/evidence/verify` | the chain checked from genesis (or `from`/`to`): `ok`, `count`, `head`, first bad `seq` |
-| `GET /v1/evidence/counts` | records you may see counted by `by` (rule, tool, agent, app, decision), same filters as the list: the 7-day hits on the Policy page. `by=cost` sums what runs cost instead, `per` task tree (default), session, agent or principal ([cost counts](#cost-counts-bycost)) |
+| `GET /v1/evidence/counts` | records you may see counted by `by` (rule, tool, agent, app, decision, coverage), same filters as the list: the 7-day hits on the Policy page. `by=cost` sums what runs cost instead, `per` task tree (default), session, agent or principal ([cost counts](#cost-counts-bycost)) |
 | `GET /v1/policy` | the policy in force: deny rules in evaluation order (id, name, CEL, message, hint, and the bundle it came from as `pack`), the tool registry with tiers, `core` plus the loaded bundles as `packs` |
 | `GET /v1/policy/explain` | "would this be allowed?": `agent`, `tool`, `args` (JSON); the real policy on a fresh session of that definition, the decision and every rule's verdict in order (the path). Records nothing, spends nothing |
 | `GET /v1/receipts` | PR receipts (`repo`, `pr`): what Clearance's agents opened, the commit, the paths |
