@@ -117,3 +117,8 @@ mkdocs-techdocs-core && mkdocs serve`.
 
 - [clearance-api](docs/clearance-api.md): the read API, the Go port and the design as built in Python (v0.13.0 to v0.25.0).
 - [The deployment gate](docs/gate.md), [the evidence record](docs/evidence.md), [the provider protocol](docs/provider-protocol.md).
+
+## License
+
+Copyright 2026 James Fillman. All rights reserved. Clearance is proprietary software; see
+[LICENSE](LICENSE). It is not open source and is published for reference and evaluation only.

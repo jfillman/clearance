@@ -1,0 +1,6 @@
+Clearance
+Copyright 2026 James Fillman. All rights reserved.
+
+Clearance is proprietary software. See the LICENSE file in this repository. Third-party
+dependencies are used under their own licenses; see go.mod and the per-client manifests
+under clients/.
