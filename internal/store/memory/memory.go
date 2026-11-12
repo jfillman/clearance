@@ -85,7 +85,7 @@ func (s *Store) Atomic(ctx context.Context, fn func(tx store.Tx) error) (err err
 	s.write.Lock()
 	defer s.write.Unlock()
 	if err := ctx.Err(); err != nil {
-		return err
+		return err // not started: nothing was written
 	}
 	s.mu.RLock()
 	closed, head := s.closed, s.head
@@ -103,9 +103,7 @@ func (s *Store) Atomic(ctx context.Context, fn func(tx store.Tx) error) (err err
 	if err := fn(t); err != nil {
 		return err // nothing staged reaches the committed state
 	}
-	if err := ctx.Err(); err != nil {
-		return err // a commit after the deadline would be one the caller has given up on
-	}
+	// A cancel after the write began does not undo it (the pg store's contract: a decision that was made is recorded).
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.records = append(s.records, t.records...)
@@ -164,9 +162,6 @@ func (t *tx) Append(ctx context.Context, event store.Event, w evidence.Writer) (
 		return nil, err
 	}
 	defer t.mu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	rec, full, err := evidence.Seal(t.head, event, w)
 	if err != nil {
 		return nil, err

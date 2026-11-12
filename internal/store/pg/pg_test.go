@@ -475,3 +475,28 @@ func TestLiveChainDump(t *testing.T) {
 	seq, h, _ := s.Head(bg)
 	t.Logf("loaded %d live records, extended to seq %d head %s", n, seq, h)
 }
+
+// A client that cancels mid-write (the gateway's decision timeout) neither aborts the write nor drops the writer
+// connection, so the advisory lock stays held: no reconnect, no re-lock, and nobody else can take the lock.
+func TestCancelMidWriteKeepsTheWriterConnectionAndLock(t *testing.T) {
+	dsn := newDB(t)
+	s := open(t, dsn)
+	pid := s.conn.PgConn().PID()
+	ctx, cancel := context.WithCancel(bg)
+	if err := s.Atomic(ctx, func(tx store.Tx) error {
+		cancel()
+		_, err := tx.Append(ctx, store.Event{"tool": "decided"}, storetest.Writer)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if s.conn.IsClosed() || s.conn.PgConn().PID() != pid {
+		t.Fatal("the writer connection was dropped by a client's cancel")
+	}
+	if _, err := Open(bg, dsn, Options{}); !errors.Is(err, store.ErrWriterLocked) {
+		t.Fatalf("the lock must still be held: %v", err)
+	}
+	if n, _, _ := s.Head(bg); n != 0 {
+		t.Fatalf("head %d: the record is committed", n)
+	}
+}
