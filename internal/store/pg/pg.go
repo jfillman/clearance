@@ -427,7 +427,7 @@ func (s *Store) Atomic(ctx context.Context, fn func(tx store.Tx) error) (err err
 	if err != nil {
 		return fmt.Errorf("pg: begin: %w", err)
 	}
-	t := &tx{s: s, tx: pgtx, head: s.committedHead()}
+	t := &tx{s: s, tx: pgtx, head: s.committedHead(), ctx: ctx}
 	defer func() {
 		t.mu.Lock()
 		t.done = true
@@ -497,6 +497,9 @@ type tx struct {
 	mu   sync.Mutex
 	done bool
 	head evidence.Checkpoint
+	// ctx is Atomic's own: detached from the caller's cancellation and bounded by WriteTimeout. Every statement of the
+	// transaction runs on it, whatever context the caller passes, so a hung statement still ends at the bound.
+	ctx context.Context
 }
 
 func (t *tx) lock() error {
@@ -509,7 +512,7 @@ func (t *tx) lock() error {
 }
 
 func (t *tx) Append(ctx context.Context, event store.Event, w evidence.Writer) (store.Record, error) {
-	ctx = context.WithoutCancel(ctx) // detached: see Store.Atomic
+	ctx = t.ctx // detached and bounded: see Store.Atomic
 	if err := t.lock(); err != nil {
 		return nil, err
 	}
@@ -546,7 +549,7 @@ func mustObject(text string) map[string]any {
 }
 
 func (t *tx) PutChange(ctx context.Context, c store.Change) error {
-	ctx = context.WithoutCancel(ctx) // detached: see Store.Atomic
+	ctx = t.ctx // detached and bounded: see Store.Atomic
 	if err := t.lock(); err != nil {
 		return err
 	}
@@ -564,7 +567,7 @@ func (t *tx) PutChange(ctx context.Context, c store.Change) error {
 }
 
 func (t *tx) ReplaceDefinitions(ctx context.Context, defs []store.Definition) error {
-	ctx = context.WithoutCancel(ctx) // detached: see Store.Atomic
+	ctx = t.ctx // detached and bounded: see Store.Atomic
 	if err := t.lock(); err != nil {
 		return err
 	}
@@ -584,7 +587,7 @@ func (t *tx) ReplaceDefinitions(ctx context.Context, defs []store.Definition) er
 }
 
 func (t *tx) PutToken(ctx context.Context, tk store.Token) error {
-	ctx = context.WithoutCancel(ctx) // detached: see Store.Atomic
+	ctx = t.ctx // detached and bounded: see Store.Atomic
 	if err := t.lock(); err != nil {
 		return err
 	}
@@ -603,7 +606,7 @@ func (t *tx) PutToken(ctx context.Context, tk store.Token) error {
 }
 
 func (t *tx) PutBreakglass(ctx context.Context, b store.Breakglass) error {
-	ctx = context.WithoutCancel(ctx) // detached: see Store.Atomic
+	ctx = t.ctx // detached and bounded: see Store.Atomic
 	if err := t.lock(); err != nil {
 		return err
 	}
@@ -621,7 +624,7 @@ func (t *tx) PutBreakglass(ctx context.Context, b store.Breakglass) error {
 }
 
 func (t *tx) PutAttestation(ctx context.Context, a store.Attestation) error {
-	ctx = context.WithoutCancel(ctx) // detached: see Store.Atomic
+	ctx = t.ctx // detached and bounded: see Store.Atomic
 	if err := t.lock(); err != nil {
 		return err
 	}
@@ -643,7 +646,7 @@ func (t *tx) PutAttestation(ctx context.Context, a store.Attestation) error {
 }
 
 func (t *tx) PutFeed(ctx context.Context, f store.Feed) error {
-	ctx = context.WithoutCancel(ctx) // detached: see Store.Atomic
+	ctx = t.ctx // detached and bounded: see Store.Atomic
 	if err := t.lock(); err != nil {
 		return err
 	}
@@ -662,7 +665,7 @@ func (t *tx) PutFeed(ctx context.Context, f store.Feed) error {
 }
 
 func (t *tx) UseSigningKey(ctx context.Context, k store.SigningKey, now time.Time) error {
-	ctx = context.WithoutCancel(ctx) // detached: see Store.Atomic
+	ctx = t.ctx // detached and bounded: see Store.Atomic
 	if err := t.lock(); err != nil {
 		return err
 	}
@@ -698,7 +701,7 @@ func (t *tx) Head(ctx context.Context) (int64, string, error) {
 }
 
 func (t *tx) Records(ctx context.Context, from int64, limit int) ([]store.Record, error) {
-	ctx = context.WithoutCancel(ctx) // detached: see Store.Atomic
+	ctx = t.ctx // detached and bounded: see Store.Atomic
 	q, done, err := t.q()
 	if err != nil {
 		return nil, err
@@ -708,7 +711,7 @@ func (t *tx) Records(ctx context.Context, from int64, limit int) ([]store.Record
 }
 
 func (t *tx) Receipts(ctx context.Context, repo string, pr int, tools []string) ([]store.Record, error) {
-	ctx = context.WithoutCancel(ctx) // detached: see Store.Atomic
+	ctx = t.ctx // detached and bounded: see Store.Atomic
 	q, done, err := t.q()
 	if err != nil {
 		return nil, err
@@ -718,7 +721,7 @@ func (t *tx) Receipts(ctx context.Context, repo string, pr int, tools []string) 
 }
 
 func (t *tx) EventRecord(ctx context.Context, provider, kind, source, eventID string) (store.Record, error) {
-	ctx = context.WithoutCancel(ctx) // detached: see Store.Atomic
+	ctx = t.ctx // detached and bounded: see Store.Atomic
 	q, done, err := t.q()
 	if err != nil {
 		return nil, err
@@ -728,7 +731,7 @@ func (t *tx) EventRecord(ctx context.Context, provider, kind, source, eventID st
 }
 
 func (t *tx) LatestHealth(ctx context.Context, scope, source string) (store.Record, error) {
-	ctx = context.WithoutCancel(ctx) // detached: see Store.Atomic
+	ctx = t.ctx // detached and bounded: see Store.Atomic
 	q, done, err := t.q()
 	if err != nil {
 		return nil, err
@@ -738,7 +741,7 @@ func (t *tx) LatestHealth(ctx context.Context, scope, source string) (store.Reco
 }
 
 func (t *tx) Assurance(ctx context.Context, seq int64) (string, error) {
-	ctx = context.WithoutCancel(ctx) // detached: see Store.Atomic
+	ctx = t.ctx // detached and bounded: see Store.Atomic
 	q, done, err := t.q()
 	if err != nil {
 		return "", err
@@ -748,7 +751,7 @@ func (t *tx) Assurance(ctx context.Context, seq int64) (string, error) {
 }
 
 func (t *tx) Change(ctx context.Context, id string) (store.Change, error) {
-	ctx = context.WithoutCancel(ctx) // detached: see Store.Atomic
+	ctx = t.ctx // detached and bounded: see Store.Atomic
 	q, done, err := t.q()
 	if err != nil {
 		return store.Change{}, err
@@ -758,7 +761,7 @@ func (t *tx) Change(ctx context.Context, id string) (store.Change, error) {
 }
 
 func (t *tx) ChangesForPR(ctx context.Context, repo string, pr int) ([]store.Change, error) {
-	ctx = context.WithoutCancel(ctx) // detached: see Store.Atomic
+	ctx = t.ctx // detached and bounded: see Store.Atomic
 	q, done, err := t.q()
 	if err != nil {
 		return nil, err
@@ -768,7 +771,7 @@ func (t *tx) ChangesForPR(ctx context.Context, repo string, pr int) ([]store.Cha
 }
 
 func (t *tx) ChangesForHead(ctx context.Context, repo, head string) ([]store.Change, error) {
-	ctx = context.WithoutCancel(ctx) // detached: see Store.Atomic
+	ctx = t.ctx // detached and bounded: see Store.Atomic
 	q, done, err := t.q()
 	if err != nil {
 		return nil, err
@@ -778,7 +781,7 @@ func (t *tx) ChangesForHead(ctx context.Context, repo, head string) ([]store.Cha
 }
 
 func (t *tx) ChangesCleared(ctx context.Context, app, env string) ([]store.Change, error) {
-	ctx = context.WithoutCancel(ctx) // detached: see Store.Atomic
+	ctx = t.ctx // detached and bounded: see Store.Atomic
 	q, done, err := t.q()
 	if err != nil {
 		return nil, err
@@ -788,7 +791,7 @@ func (t *tx) ChangesCleared(ctx context.Context, app, env string) ([]store.Chang
 }
 
 func (t *tx) ChangesHolding(ctx context.Context) ([]store.Change, error) {
-	ctx = context.WithoutCancel(ctx) // detached: see Store.Atomic
+	ctx = t.ctx // detached and bounded: see Store.Atomic
 	q, done, err := t.q()
 	if err != nil {
 		return nil, err
@@ -798,7 +801,7 @@ func (t *tx) ChangesHolding(ctx context.Context) ([]store.Change, error) {
 }
 
 func (t *tx) ChangesUndelivered(ctx context.Context) ([]store.Change, error) {
-	ctx = context.WithoutCancel(ctx) // detached: see Store.Atomic
+	ctx = t.ctx // detached and bounded: see Store.Atomic
 	q, done, err := t.q()
 	if err != nil {
 		return nil, err
@@ -808,7 +811,7 @@ func (t *tx) ChangesUndelivered(ctx context.Context) ([]store.Change, error) {
 }
 
 func (t *tx) Definitions(ctx context.Context) ([]store.Definition, error) {
-	ctx = context.WithoutCancel(ctx) // detached: see Store.Atomic
+	ctx = t.ctx // detached and bounded: see Store.Atomic
 	q, done, err := t.q()
 	if err != nil {
 		return nil, err
@@ -902,7 +905,7 @@ func (r *Reader) SigningKeys(ctx context.Context, since time.Time) ([]store.Sign
 }
 
 func (t *tx) Token(ctx context.Context, changeID string) (store.Token, error) {
-	ctx = context.WithoutCancel(ctx) // detached: see Store.Atomic
+	ctx = t.ctx // detached and bounded: see Store.Atomic
 	q, done, err := t.q()
 	if err != nil {
 		return store.Token{}, err
@@ -912,7 +915,7 @@ func (t *tx) Token(ctx context.Context, changeID string) (store.Token, error) {
 }
 
 func (t *tx) TokensDue(ctx context.Context, due time.Time, keyID string, limit int) ([]store.Token, error) {
-	ctx = context.WithoutCancel(ctx) // detached: see Store.Atomic
+	ctx = t.ctx // detached and bounded: see Store.Atomic
 	q, done, err := t.q()
 	if err != nil {
 		return nil, err
@@ -922,7 +925,7 @@ func (t *tx) TokensDue(ctx context.Context, due time.Time, keyID string, limit i
 }
 
 func (t *tx) SigningKeys(ctx context.Context, since time.Time) ([]store.SigningKey, error) {
-	ctx = context.WithoutCancel(ctx) // detached: see Store.Atomic
+	ctx = t.ctx // detached and bounded: see Store.Atomic
 	q, done, err := t.q()
 	if err != nil {
 		return nil, err
@@ -940,7 +943,7 @@ func (r *Reader) Attestation(ctx context.Context, changeID string) (store.Attest
 }
 
 func (t *tx) Attestation(ctx context.Context, changeID string) (store.Attestation, error) {
-	ctx = context.WithoutCancel(ctx) // detached: see Store.Atomic
+	ctx = t.ctx // detached and bounded: see Store.Atomic
 	q, done, err := t.q()
 	if err != nil {
 		return store.Attestation{}, err
@@ -958,7 +961,7 @@ func (r *Reader) FeedClusters(ctx context.Context) ([]string, error) {
 }
 
 func (t *tx) LiveTokens(ctx context.Context, cluster string, now time.Time, limit int) ([]store.Token, error) {
-	ctx = context.WithoutCancel(ctx) // detached: see Store.Atomic
+	ctx = t.ctx // detached and bounded: see Store.Atomic
 	q, done, err := t.q()
 	if err != nil {
 		return nil, err
@@ -968,7 +971,7 @@ func (t *tx) LiveTokens(ctx context.Context, cluster string, now time.Time, limi
 }
 
 func (t *tx) Feed(ctx context.Context, cluster string) (store.Feed, error) {
-	ctx = context.WithoutCancel(ctx) // detached: see Store.Atomic
+	ctx = t.ctx // detached and bounded: see Store.Atomic
 	q, done, err := t.q()
 	if err != nil {
 		return store.Feed{}, err
@@ -978,7 +981,7 @@ func (t *tx) Feed(ctx context.Context, cluster string) (store.Feed, error) {
 }
 
 func (t *tx) FeedClusters(ctx context.Context) ([]string, error) {
-	ctx = context.WithoutCancel(ctx) // detached: see Store.Atomic
+	ctx = t.ctx // detached and bounded: see Store.Atomic
 	q, done, err := t.q()
 	if err != nil {
 		return nil, err
@@ -1363,7 +1366,7 @@ func (r *Reader) BreakglassOpen(ctx context.Context) ([]store.Breakglass, error)
 }
 
 func (t *tx) Breakglass(ctx context.Context, id string) (store.Breakglass, error) {
-	ctx = context.WithoutCancel(ctx) // detached: see Store.Atomic
+	ctx = t.ctx // detached and bounded: see Store.Atomic
 	q, done, err := t.q()
 	if err != nil {
 		return store.Breakglass{}, err
@@ -1373,7 +1376,7 @@ func (t *tx) Breakglass(ctx context.Context, id string) (store.Breakglass, error
 }
 
 func (t *tx) BreakglassOpen(ctx context.Context) ([]store.Breakglass, error) {
-	ctx = context.WithoutCancel(ctx) // detached: see Store.Atomic
+	ctx = t.ctx // detached and bounded: see Store.Atomic
 	q, done, err := t.q()
 	if err != nil {
 		return nil, err
