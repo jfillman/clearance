@@ -1,6 +1,10 @@
-Clearance
-Copyright 2026 James Fillman. All rights reserved.
+Clearance, the policy and release-clearance engine of the Hangar platform
+Copyright 2026 James Fillman
 
-Clearance is proprietary software. See the LICENSE file in this repository. Third-party
-dependencies are used under their own licenses; see go.mod and the per-client manifests
-under clients/.
+This product includes software developed by James Fillman (https://github.com/jfillman).
+
+Licensed under the Apache License, Version 2.0. See the LICENSE file in this
+repository for the full license text.
+
+"Clearance" and the Clearance logo (brand/) are trademarks of James Fillman. The
+Apache License does not grant permission to use them (Section 6); see brand/README.md.

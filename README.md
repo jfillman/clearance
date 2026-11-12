@@ -120,5 +120,5 @@ mkdocs-techdocs-core && mkdocs serve`.
 
 ## License
 
-Copyright 2026 James Fillman. All rights reserved. Clearance is proprietary software; see
-[LICENSE](LICENSE). It is not open source and is published for reference and evaluation only.
+Copyright 2026 James Fillman. Licensed under the [Apache License, Version 2.0](LICENSE).
+See [NOTICE](NOTICE) for attribution and trademark notes, and [CONTRIBUTING.md](CONTRIBUTING.md) for how to contribute.
