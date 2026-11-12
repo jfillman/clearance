@@ -249,6 +249,37 @@ func TestAnOutcomeCarriesAHandlersRefusal(t *testing.T) {
 	verifyChainLen(t, f, 2)
 }
 
+// A receipt may mark the PR for a person's merge (merge: person, with the paths that need one): validated like the other
+// paths, kept as the record stores it, and refused without the PR it is about or with any other merge value.
+func TestAnOutcomeCanMarkAPRForAPerson(t *testing.T) {
+	f := memFixture(t)
+	id := decisionID(t, f.evaluate(prOpenAllowed, nil))
+	eff := func(over map[string]any) map[string]any {
+		e := effectBody()["effect"].(map[string]any)
+		for k, v := range over {
+			e[k] = v
+		}
+		return map[string]any{"result": "ok", "effect": e}
+	}
+	for _, c := range []struct {
+		over map[string]any
+		says string
+	}{
+		{map[string]any{"merge": "anyone", "needsPerson": []string{"app.js"}}, "effect.merge"},
+		{map[string]any{"merge": "person"}, "effect.merge goes with"},
+		{map[string]any{"needsPerson": []string{"app.js"}}, "effect.merge"},
+		{map[string]any{"merge": "person", "needsPerson": []string{"../etc/passwd"}}, "needsPerson"},
+		{map[string]any{"merge": "person", "needsPerson": []string{"app.js"}, "pr": 0}, "effect.merge goes with"},
+	} {
+		f.do("POST", "/v1/decisions/"+id+"/outcome", gw, eff(c.over)).want(t, 400, c.says)
+	}
+	f.do("POST", "/v1/decisions/"+id+"/outcome", gw, eff(map[string]any{"merge": "person", "needsPerson": []string{"./app.js", "app.js", "cicd.yaml"}})).want(t, 200, "")
+	e := f.last()["effect"].(map[string]any)
+	if e["merge"] != "person" || !slices.Equal(anyStrings(e["needsPerson"]), []string{"app.js", "cicd.yaml"}) {
+		t.Fatal(e)
+	}
+}
+
 // -- PUT /v1/definitions -------------------------------------------------------------------------------------------
 
 const pinCommit = "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b"

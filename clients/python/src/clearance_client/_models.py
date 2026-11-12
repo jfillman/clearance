@@ -329,6 +329,8 @@ class Effect(Model):
     _FIELDS: ClassVar[tuple[Field, ...]] = (
         Field("branch", "branch", ("str",), False),
         Field("commit", "commit", ("str",), False),
+        Field("merge", "merge", ("str",), False),
+        Field("needsPerson", "needsPerson", ("list", ("str",)), False),
         Field("paths", "paths", ("list", ("str",)), False),
         Field("pr", "pr", ("int",), False),
         Field("repo", "repo", ("str",), False),
@@ -336,6 +338,8 @@ class Effect(Model):
 
     branch: str | None = None
     commit: str | None = None
+    merge: str | None = None
+    needsPerson: list[str] | None = None
     paths: list[str] | None = None
     pr: int | None = None
     repo: str | None = None
@@ -1427,7 +1431,9 @@ class ProvenanceCheck(Model):
     _FIELDS: ClassVar[tuple[Field, ...]] = (
         Field("coauthor", "coauthor", ("nullable", ("ref", "ProvenanceCoauthorTrailer")), False),
         Field("hint", "hint", ("str",), True),
+        Field("merged_by", "merged_by", ("str",), False),
         Field("message", "message", ("str",), True),
+        Field("needs_person", "needs_person", ("list", ("str",)), False),
         Field("ok", "ok", ("bool",), True),
         Field("rule", "rule", ("nullable", ("str",)), True),
         Field("status", "status", ("str",), True),
@@ -1436,7 +1442,9 @@ class ProvenanceCheck(Model):
 
     coauthor: ProvenanceCoauthorTrailer | None = None
     hint: str
+    merged_by: str | None = None
     message: str
+    needs_person: list[str] | None = None
     ok: bool
     rule: str | None
     status: str

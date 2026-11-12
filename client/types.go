@@ -321,13 +321,17 @@ type Refusal struct {
 	Message string `json:"message"`
 }
 
-// Effect is a write's receipt (a pull request's repo, pr, commit, branch and paths).
+// Effect is a write's receipt (a pull request's repo, pr, commit, branch and paths). Merge "person" with NeedsPerson marks a
+// pull request only a person may merge, and the paths that need one: set by the tool that opened it, read by the agent-scope
+// verdict (needs-person).
 type Effect struct {
-	Repo   string   `json:"repo,omitempty"`
-	PR     int64    `json:"pr,omitempty"`
-	Commit string   `json:"commit,omitempty"`
-	Branch string   `json:"branch,omitempty"`
-	Paths  []string `json:"paths,omitempty"`
+	Repo        string   `json:"repo,omitempty"`
+	PR          int64    `json:"pr,omitempty"`
+	Commit      string   `json:"commit,omitempty"`
+	Branch      string   `json:"branch,omitempty"`
+	Paths       []string `json:"paths,omitempty"`
+	Merge       string   `json:"merge,omitempty"`
+	NeedsPerson []string `json:"needsPerson,omitempty"`
 }
 
 // -- POST /v1/records ----------------------------------------------------------------------------------------------
@@ -786,6 +790,11 @@ type ProvenanceRequest struct {
 	// Coauthors are the PR's Co-Authored-By, Assisted-by and Generated-by trailer lines with their commits; the core
 	// matches them against its AI co-author matchers (an unattested verdict, a warning).
 	Coauthors []CoauthorTrailer `json:"coauthors,omitempty"`
+	// Merged, MergedBy and MergedByBot are what GitHub says of a merged PR (merged, merged_by.login, and whether that
+	// account is a bot). Only a human-merge PR's scope verdict (needs-person) reads them; absent for an open PR.
+	Merged      bool   `json:"merged,omitempty"`
+	MergedBy    string `json:"mergedBy,omitempty"`
+	MergedByBot bool   `json:"mergedByBot,omitempty"`
 }
 
 // CoauthorTrailer is one co-author trailer line and the commit whose message carries it.
@@ -804,7 +813,9 @@ type Verdict struct {
 }
 
 // Check is one verdict. Status "unattested" (agent work outside Clearance, an AI co-author trailer) is OK: a warning,
-// and Coauthor names the trailer.
+// and Coauthor names the trailer. Status "needs-person" is OK too and not an approval: the PR's receipt marks it
+// human-merge (merge: person) and NeedsPerson names the paths, and no person has merged it yet; "person-merged" is the
+// same PR once a person did (MergedBy), and rule AS005 is a bot or an agents' login having merged it.
 type Check struct {
 	OK         bool             `json:"ok"`
 	Status     string           `json:"status"`
@@ -813,6 +824,10 @@ type Check struct {
 	Hint       string           `json:"hint"`
 	Violations *[]Violation     `json:"violations,omitempty"`
 	Coauthor   *CoauthorTrailer `json:"coauthor,omitempty"`
+	// NeedsPerson are the changed paths that need a person's merge (needs-person, person-merged, AS005).
+	NeedsPerson []string `json:"needs_person,omitempty"`
+	// MergedBy is who merged the PR (person-merged, AS005).
+	MergedBy string `json:"merged_by,omitempty"`
 }
 
 // Violation is one path an agent's pull request may not touch.

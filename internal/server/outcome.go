@@ -60,6 +60,10 @@ type Effect struct {
 	Commit string   `json:"commit,omitempty"`
 	Branch string   `json:"branch,omitempty"`
 	Paths  []string `json:"paths,omitempty"`
+	// Merge marks the pull request: "person" says only a person may merge it, and NeedsPerson names the paths that need one.
+	// The tool that opened the PR sets them, never the agent; provenance reads them (internal/provenance, needs-person).
+	Merge       string   `json:"merge,omitempty"`
+	NeedsPerson []string `json:"needsPerson,omitempty"`
 }
 
 var (
@@ -288,6 +292,28 @@ func (b *OutcomeRequest) validate() (map[string]any, error) {
 			list = append(list, p)
 		}
 		out["paths"] = list
+	}
+	if e.Merge != "" || e.NeedsPerson != nil {
+		if e.Merge != provenance.MergePerson {
+			return nil, errors.New("effect.merge is \"person\" when effect.needsPerson is set, and nothing else")
+		}
+		if e.Repo == "" || e.PR == 0 || len(e.NeedsPerson) == 0 || len(e.NeedsPerson) > provenance.MaxPaths {
+			return nil, fmt.Errorf("effect.merge goes with effect.repo, effect.pr and one to %d effect.needsPerson paths", provenance.MaxPaths)
+		}
+		ps := make([]string, 0, len(e.NeedsPerson))
+		for _, p := range e.NeedsPerson {
+			n, ok := normalPath(p)
+			if !ok {
+				return nil, fmt.Errorf("effect.needsPerson: %q is not a path inside the repository", p)
+			}
+			ps = append(ps, n)
+		}
+		slices.Sort(ps)
+		list := []any{}
+		for _, p := range slices.Compact(ps) {
+			list = append(list, p)
+		}
+		out["merge"], out["needsPerson"] = e.Merge, list
 	}
 	if len(out) == 0 {
 		return nil, errors.New("effect is empty")

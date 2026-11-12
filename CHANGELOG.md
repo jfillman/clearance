@@ -11,6 +11,24 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ### Added
 
+- A-11, the `propose` scope class (Glidepath contract version 2; [docs/provenance-app.md](docs/provenance-app.md#a-pr-that-needs-a-person-needs-person-a-11-built)).
+  The document field scope (`internal/docscope`, a policy bundle's `documents`) knows a fourth scope, `propose`, with `proposeOn`
+  (`added`, `changed`, `removed`): a change to such a field is one only a person's merge may land, so the file-writing check refuses
+  it under the document's new `propose` finding (rule and hint, required when a rule is propose), naming the tool that can mark the PR.
+  Any other kind of change to the field reads `human`. (A bundle names the contract versions it is written for; Autopilot's Hangar bundle names 1 and 2.)
+- Agent definitions: `profile.airframe.proposeFlight` (boolean, schema `agent-definition.schema.json`, byte-identical in Autopilot).
+  A policy bundle may read it (Hangar's R025: an `airframe.apply` call that asks for the Flight half is refused unless the definition
+  sets it).
+- `Clearance / agent-scope` on an agent PR whose receipt says `merge: person` and names `needsPerson` paths the PR changed: status
+  `needs-person`, ok but **neutral**, titled `needs a person: <paths>`, never success, until the PR is merged. Merged by a person
+  (GitHub account type `User`, not a `[bot]` login, not in `AGENT_LOGINS`): `person-merged`, success. Merged by a bot, an agents'
+  login or no one named: **AS005**, failure. The App handles a merged `pull_request` `closed` event for this (a close without a merge
+  is still ignored) and reads `merged` and `merged_by`. `POST /v1/provenance` takes `merged`, `mergedBy`, `mergedByBot` (absent for an
+  open PR); the verdict's check gains `needs_person` and `merged_by`. Go and Python clients updated.
+- `POST /v1/decisions/{id}/outcome`: the `effect` receipt takes `merge: "person"` and `needsPerson: [paths]` (the paths are
+  normalised like `paths`; `merge` is "person" or absent, and goes with `repo`, `pr` and at least one path). Set by the tool
+  that opened the PR (a bundle names them in a tool's `receipt`), never by the agent; the scope verdict above reads them.
+
 - clearance-api: `GET /v1/evidence` takes `coverage`, one coverage state or a comma-separated list of them
   (`authorized-and-verified`, `observed-not-attributed`, `out-of-band-detected`, `coverage-unavailable`,
   `break-glass`, `attempted-refused`); an unknown state is a 400. `GET /v1/evidence/counts` takes it too and adds

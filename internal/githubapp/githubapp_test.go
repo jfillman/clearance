@@ -71,6 +71,8 @@ type fakeGitHub struct {
 	checkRuns []map[string]any
 	reviews   []review
 	failRev   bool
+	merged    bool
+	mergedBy  map[string]any // GitHub's merged_by: login and type
 	srv       *httptest.Server
 	tokenAuth []string
 }
@@ -122,7 +124,11 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 		f.reviews = append(f.reviews, review{path, body})
 		reply(204, nil)
 	case strings.HasSuffix(path, "/pulls/1"):
-		reply(200, map[string]any{"head": map[string]any{"sha": f.head}, "user": map[string]any{"login": f.author}})
+		doc := map[string]any{"head": map[string]any{"sha": f.head}, "user": map[string]any{"login": f.author}, "merged": f.merged}
+		if f.mergedBy != nil {
+			doc["merged_by"] = f.mergedBy
+		}
+		reply(200, doc)
 	case strings.Contains(path, "/pulls/1/files"):
 		var out []map[string]any
 		for _, x := range f.files {
@@ -450,6 +456,106 @@ func TestAPrClearanceOpenedIsConfirmed(t *testing.T) {
 	recs := e.records(t, "")
 	if recs[len(recs)-1]["result"] != "identity:confirmed scope:in-scope" {
 		t.Fatal(recs[len(recs)-1])
+	}
+}
+
+// -- Glidepath's propose class: a PR that needs a person ------------------------------------------------------------------
+
+// proposal is a PR an agent opened for a person to merge (the receipt says merge: person and names cicd.yaml).
+func proposal(t *testing.T, e *env) (*fakeGitHub, string) {
+	t.Helper()
+	e.prov.Config.AgentLogins = []string{bot}
+	commit := "c0ffee0000000000000000000000000000000000"
+	err := e.st.Atomic(context.Background(), func(tx store.Tx) error {
+		_, err := tx.Append(context.Background(), store.Event{"ts": "2026-09-26T12:00:00Z", "task_id": "t-1", "session": "s-000001", "parent": nil,
+			"principal": "user:alice", "agent": "coding-agent", "tool": "repo.pr.open", "tier": "T1", "decision": "allow", "rule": nil,
+			"target": "jfillman/flight-api", "args_sha256": strings.Repeat("0", 64), "result": "ok",
+			"effect": map[string]any{"pr": json.Number("1"), "commit": commit, "branch": "agent/t-1", "repo": "jfillman/flight-api",
+				"merge": "person", "needsPerson": []any{"cicd.yaml"}, "paths": []any{"cicd.yaml"}}}, evidence.Core(""))
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newFake(t, bot, map[string]string{"Task": "t-1", "Session": "s-000001", "Agent": "coding-agent"}, commit)
+	f.files = []string{"cicd.yaml"}
+	return f, commit
+}
+
+func scopeRun(t *testing.T, f *fakeGitHub) map[string]any {
+	t.Helper()
+	for i := len(f.checkRuns) - 1; i >= 0; i-- {
+		if f.checkRuns[i]["name"] == githubapp.ScopeCheck {
+			return f.checkRuns[i]
+		}
+	}
+	t.Fatal("no agent-scope check run posted")
+	return nil
+}
+
+func TestAProposalIsNeutralTitledNeedsAPersonUntilItIsMerged(t *testing.T) {
+	e := newEnv(t)
+	f, _ := proposal(t, e)
+	runs, err := e.app(t, f, "off").Handle(context.Background(), "pull_request", decode(t, prEvent("opened")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runs[0].(githubapp.CheckRun).Conclusion != "success" || runs[1].(githubapp.CheckRun).Conclusion != "neutral" {
+		t.Fatalf("identity %v, scope %v", runs[0], runs[1])
+	}
+	run := scopeRun(t, f)
+	if title := run["output"].(map[string]any)["title"]; title != "needs a person: cicd.yaml" || !strings.HasPrefix(title.(string), githubapp.NeedsPersonTitle) {
+		t.Fatalf("title %q", title)
+	}
+	if !strings.Contains(run["output"].(map[string]any)["summary"].(string), "neutral, never success") {
+		t.Fatal(run["output"])
+	}
+	recs := e.records(t, "")
+	if recs[len(recs)-1]["result"] != "identity:confirmed scope:needs-person" {
+		t.Fatal(recs[len(recs)-1])
+	}
+}
+
+func TestMergedByAPersonTheCheckPassesAndByABotItFails(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		by       map[string]any
+		conclude string
+		title    string
+	}{
+		{"a person", map[string]any{"login": "riley", "type": "User"}, "success", "Passed: person-merged"},
+		{"a bot", map[string]any{"login": "some-app[bot]", "type": "Bot"}, "failure", "Failed: violations (AS005)"},
+		{"the agents' login", map[string]any{"login": bot, "type": "User"}, "failure", "Failed: violations (AS005)"},
+		{"an organization-type account", map[string]any{"login": "acme", "type": "Organization"}, "failure", "Failed: violations (AS005)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			f, _ := proposal(t, e)
+			f.merged, f.mergedBy = true, tc.by
+			if _, err := e.app(t, f, "off").Handle(context.Background(), "pull_request", decode(t, prEvent("closed"))); err != nil {
+				t.Fatal(err)
+			}
+			run := scopeRun(t, f)
+			if run["conclusion"] != tc.conclude || run["output"].(map[string]any)["title"] != tc.title {
+				t.Fatalf("%v %v", run["conclusion"], run["output"])
+			}
+		})
+	}
+}
+
+func TestOnlyAMergeDecidesAClosedPR(t *testing.T) {
+	merged := prEvent("closed")
+	merged["pull_request"] = map[string]any{"number": 1, "merged": true}
+	if !githubapp.Wanted("pull_request", merged) {
+		t.Fatal("a merged PR's close is wanted")
+	}
+	if githubapp.Wanted("pull_request", prEvent("closed")) {
+		t.Fatal("a close without a merge decides nothing")
+	}
+	unmerged := prEvent("closed")
+	unmerged["pull_request"] = map[string]any{"number": 1, "merged": false}
+	if githubapp.Wanted("pull_request", unmerged) {
+		t.Fatal("merged false is not a merge")
 	}
 }
 

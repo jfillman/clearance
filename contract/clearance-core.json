@@ -892,6 +892,15 @@
           "commit": {
             "type": "string"
           },
+          "merge": {
+            "type": "string"
+          },
+          "needsPerson": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "paths": {
             "items": {
               "type": "string"
@@ -2377,8 +2386,17 @@
           "hint": {
             "type": "string"
           },
+          "merged_by": {
+            "type": "string"
+          },
           "message": {
             "type": "string"
+          },
+          "needs_person": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "ok": {
             "type": "boolean"
@@ -4661,7 +4679,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "description": "provenance.Request: {repo, pr, head, paths, author?, trailers?, coauthors?: [{commit, trailer}]}",
+                "description": "provenance.Request: {repo, pr, head, paths, author?, trailers?, coauthors?: [{commit, trailer}], merged?, mergedBy?, mergedByBot?}",
                 "type": "object"
               }
             }
