@@ -1655,7 +1655,207 @@ differences remain, none in this repository to close:
 Not built: `release.id` on the registration (the request has no such field until C-10's release work lands; the plugin
 could read it from the Rollout's `hangar.io/release-id`), an OCI chart (the chart is a git repository), a private
 chart repository's credential, and `--include-crds` and cluster capabilities (`KUBE_VERSION`, `--api-versions`) on
-the render, which Argo CD's own Helm passes and the Tekton task does not.
+the render, which Argo CD's own Helm passes and the Tekton task does not. The Airframe-chart parameters keep these
+limits; generic mode, below ("Rendering any source"), has all four.
+
+### Rendering any source (G-ARGO-10b, Built; wiring is G-ARGO-10c)
+
+Status: **Built** in `internal/argosrc` (the renderer) and `providers/argocd/cmp` (the mode switch and the parity
+suite), unit-tested, and run read-only against every Application on both clusters (below). Nothing is deployed from it:
+no Application passes `sources` yet. G-ARGO-10c is to have the argocd-agent switch an annotated Application to the
+plugin and hand it the original sources; G-ARGO-10e is the enforcement rollout.
+
+The Airframe-chart parameters above render one thing: the Airframe chart from a git tag, with the gitops repository's
+value files. Most Applications are not that. **Generic mode** renders what the Application already uses, as Argo CD
+would, so the gate can clear it without anyone rewriting the Application: Helm from an HTTP repository, an OCI
+registry or a git path, with value files, inline values, parameters and multi-source `$ref/` value files; Kustomize;
+and a plain directory. Both modes exist side by side. `PARAM_SOURCES` set selects generic mode; the chart parameters
+(`chartRepo`, `chartRevision`, `chartPath`, `valueFiles`, `valuesJson`, `kustomizeDir`) set with it is a configuration
+error (the plugin would have to pick, and a wrong pick renders a different tree). With `sources` unset nothing changed:
+gate-api-prod's path, hashes and tests are as they were.
+
+#### The parameter contract
+
+The plugin gets the Application's **original sources, unchanged**, as one string parameter, `sources`: a JSON array of
+Argo CD `ApplicationSource` objects exactly as they appear in the Application (`spec.sources`, or `spec.source` as a
+one-element array). There is no translation to get wrong: the agent copies the field.
+
+```json
+[
+  {"repoURL": "https://git.example.test/org/chart-repo.git", "path": "charts/app", "targetRevision": "v1.2.3",
+   "helm": {"releaseName": "app", "valueFiles": ["$vals/env/dev.yaml"], "ignoreMissingValueFiles": true,
+            "parameters": [{"name": "image.tag", "value": "1.2.3"}], "valuesObject": {"replicas": 2},
+            "skipCrds": false, "kubeVersion": "", "apiVersions": [], "namespace": ""}},
+  {"repoURL": "https://git.example.test/org/gitops.git", "targetRevision": "main", "ref": "vals"}
+]
+```
+
+| Field of a source | Meaning (all as Argo CD's) |
+| --- | --- |
+| `repoURL`, `targetRevision` | a git repository and a branch, tag or commit (empty is HEAD); with `chart`, an HTTP(S) chart repository, or an OCI registry written without a scheme (`registry.example.test/org/charts`), and the chart version, which must be exact |
+| `path` | the directory in the repository (the repository root when empty) |
+| `chart` | a Helm chart in `repoURL` (HTTP or OCI) |
+| `ref` | names the source for other sources' `$name/path` value files; a source with a `ref` and no `path` renders nothing when there is more than one source |
+| `helm` | `valueFiles`, `parameters` (`name`, `value`, `forceString`), `fileParameters`, `releaseName`, `values`, `valuesObject`, `ignoreMissingValueFiles`, `skipCrds`, `skipTests`, `skipSchemaValidation`, `namespace`, `kubeVersion`, `apiVersions`, `version` (`3` or empty), `passCredentials` (accepted; the sidecar holds no credential) |
+| `kustomize` | `namePrefix`, `nameSuffix`, `images`, `replicas`, `commonLabels`, `commonAnnotations`, `forceCommonLabels`, `forceCommonAnnotations`, `commonAnnotationsEnvsubst`, `labelWithoutSelector`, `labelIncludeTemplates`, `namespace`, `components`, `ignoreMissingComponents` |
+| `directory` | `recurse`, `include`, `exclude` (a `jsonnet` block is accepted and only matters if a `.jsonnet` file is selected) |
+
+The rest of what a render needs comes from the environment Argo CD itself gives a plugin, never from parameters the
+agent could get wrong: `ARGOCD_APP_NAME` (the Helm release name unless a source sets `releaseName`; an
+`<namespace>_<name>` name is reduced to the name, as `argo.ParseInstanceName` does), `ARGOCD_APP_NAMESPACE` (the
+destination namespace, passed to Helm as `--namespace`), `ARGOCD_APP_PROJECT_NAME`, **`KUBE_VERSION`** and
+**`KUBE_API_VERSIONS`** (the destination cluster's version and API versions, comma separated: what Argo CD passes Helm
+as `--kube-version` and `--api-versions`; a source's own `helm.kubeVersion` and `helm.apiVersions` win, as in Argo CD),
+and `ARGOCD_APP_REVISION` (the plugin's own source commit, which the registration still binds). The identity
+parameters `app`, `env` and `cluster` are required as before. Two optional ones: `clusterScopedKinds` (comma
+separated; as before, and now also `!Kind` to say that a kind the built-in rules take for cluster-scoped is
+namespaced, CloudNativePG's `Cluster` being the one found) and `kustomizeBuildOptions` (argocd-cm's
+`kustomize.buildOptions`, which a plugin cannot read; empty on both clusters). An Application with no destination
+namespace renders (Helm gets no `--namespace`, as under Argo CD) but the plugin's own configuration still requires
+`ARGOCD_APP_NAMESPACE`, so it is refused until the gate decides what stamping a namespace-less object means.
+
+#### What it renders, and how
+
+| Source | How it is rendered (Argo CD v3.5.0's code, cited in `internal/argosrc`) |
+| --- | --- |
+| Helm | `helm template . --name-template <release> --namespace <ns> [--kube-version v] [--set k=v]... [--set-string]... [--set-file]... --values <file>... --values <inline> --api-versions <x>... --include-crds` (unless `skipCrds`) run in the chart directory, in Argo CD's order: value files as listed (a `$ref/` file against the referenced source's checkout, a leading `/` against the repository root, others against the chart; globs expanded in lexical order with an explicitly listed file keeping its listed position; duplicates dropped; an absent file dropped only with `ignoreMissingValueFiles`, otherwise Helm refuses it), then the inline values (`valuesObject` over `values`) as one more file, so parameters win over everything. `$VARS` of the `ARGOCD_APP_*` set are expanded in value file paths and parameters (an unknown one to empty, `$$` to `$`). A missing chart dependency is built once (`helm dependency build`) and the template retried, as Argo CD does |
+| Helm chart from a repository | `helm pull` of the exact version (`--repo <url> <chart>`, or `oci://<registry>/<chart>`), unpacked with path and symlink checks; the package's sha256 is recorded |
+| Kustomize | the same `kustomize edit` commands in the same order that Argo CD runs for the Application's kustomize options, in the plugin's own checkout, then `kustomize build` |
+| Directory | the `*.yaml`, `*.yml` and `*.json` files (below the path with `recurse`) that match `include` and not `exclude` (gobwas globs on the path relative to the source's path, `*` crossing `/`), in lexical order; a file with `+argocd:skip-file-rendering` is skipped; a YAML file that does not parse is ignored unless it looks like a manifest; a JSON file must hold one object |
+| Type | an explicit `helm`, `kustomize` or `directory` block, else what the path holds (`Chart.yaml` or a `kustomization.yaml` at its root), as Argo CD decides |
+| Sources | every source is rendered, in order, and the documents are concatenated; two sources rendering one identity is refused (Argo CD reports it as a comparison error) |
+
+Each git source is fetched once at its target revision and the **peeled commit is recorded**, not the branch; each
+chart by the digest of its package. The plugin logs them on stderr (`source 1 Helm <repo>@<commit>`) and the parity
+report carries them. They are not part of the tree digest: the tree is the objects, as for the Airframe chart.
+
+#### What fails closed
+
+An unsupported feature is an `UnsupportedError` naming the gap: the plugin exits 1 and Argo CD shows a
+`ComparisonError`; nothing renders and nothing is stamped. Never a different render, silently.
+
+| Refused | Why |
+| --- | --- |
+| a source field the plugin does not know | Argo CD may act on it |
+| another plugin (`plugin:`), `jsonnet` (a selected `.jsonnet` file), an `oci://` artifact source | different renderers |
+| `kustomize.patches`, `kustomize.version`, kustomize Helm inflation (`--enable-helm` in the build options) | Argo CD rewrites `kustomization.yaml`, picks a binary, or fetches charts with its own repositories and credentials |
+| a remote value file URL, `helm.version` other than 3 | a fetch the plugin does not make; a renderer it does not have |
+| `.argocd-source.yaml` or `.argocd-source-<app>.yaml` in a source's path | Argo CD merges parameter overrides from them |
+| a version constraint (`1.*`, `^1.2`) as a chart version, a git revision that is a semver constraint, `tagPrefix`, an OCI chart with no version | the plugin pins exact revisions; Argo CD resolves a range against the tag list |
+| git submodules; a symlink that leaves its repository | the checkout is not what Argo CD's is |
+| a chart dependency that `helm dependency build` cannot fetch here | the plugin holds no repository definitions or credentials |
+| a repository URL that is not `https`, `http`, `ssh`, `git` or scp-like (`file://`, `ext::`, a local path) | a read of the sidecar's own disk |
+| a private repository or registry | the sidecar has no credential (see the risks below); git or Helm fails and the error says so |
+| a render the stamping reader will not read | see finding 4 below |
+
+#### The parity suite
+
+`clearance-cmp parity` renders each Application's original sources with the generic renderer and compares the result
+with what **Argo CD's own repo-server renders for the same Application** (`argocd --core app manifests`, which uses the
+caller's kube credentials, asks the repo-server and applies nothing), object by object and hash by hash. Both sides go
+through the one canonicalisation and hashing the plugin stamps with (`Canonicalize`, which is `internal/gate/render`,
+the code `clearance register` shares), so *identical* means the plugin would stamp exactly the objects Argo CD
+applies. Per Application it reports **identical**, **differs** (the first difference by object and JSON pointer, and
+whether the plugin's own two renders differ from each other), **unsupported** (the plugin refuses; the gap is named),
+**not comparable** (the Application is already rendered by a plugin) or **error**. Every source is pinned to the commit
+the plugin side resolved and Argo CD is asked for those revisions, so the two sides render the same bytes. Argo CD's
+side is adjusted in the three ways its CLI and repo-server adjust it and the plugin does not: the resource-tracking
+annotation the repo-server adds is removed; the data of a core Secret, which `argocd app manifests` replaces with
+`++++++++` (with `stringData` folded into `data`), is hidden the same way on the plugin's side before comparing (never
+in what is stamped); and a revision is always passed (without one the CLI prints the controller's target objects, with
+hooks removed). The scope audit (`--scopes`, lines of `Kind true|false` from the cluster's discovery) lists the kinds
+whose scope the plugin's built-in rules get wrong for that cluster.
+
+```
+kubectl -n argocd get applications.argoproj.io -o json > apps.json
+KUBECONFIG=<a kubeconfig whose namespace is the Argo CD's> argocd --core cluster get https://kubernetes.default.svc -o json > cluster.json
+kubectl api-resources --no-headers -o wide | awk '{for(i=1;i<=NF;i++) if($i=="true"||$i=="false"){print $(i+1), ($i=="false"?"true":"false"); break}}' > scopes.txt
+KUBECONFIG=<same> clearance-cmp parity --apps apps.json --instance <label> --cluster-info cluster.json --scopes scopes.txt --format md
+```
+
+`--argo-dir` reads Argo CD's manifests from files captured earlier (`<dir>/<application>.yaml`; `--save-argo` keeps
+them), which is how the unit tests run offline; `--save-plugin` keeps the plugin's output, to diff a difference. The
+command reads private repositories with the operator's own git credential helper and prints and stores none. It needs
+`helm`, `kustomize` and `git` on the PATH, **of the versions Argo CD runs** (finding 1); the report names the ones it
+used.
+
+**Result, 2026-11-11** (Argo CD v3.5.0 on both clusters; renderer helm v4.2.1, kustomize v5.8.1; every Application of
+both clusters' two Argo CD instances; 186 sources rendered: 83 Helm, 65 directory, 37 ref, 1 kustomize found by its
+`kustomization.yaml`):
+
+| Instance | Applications | identical | differs | unsupported | not comparable |
+| --- | --- | --- | --- | --- | --- |
+| hangar-dev / argocd | 67 | 61 | 5 | 1 | 0 |
+| hangar-dev / argocd-apps | 25 | 25 | 0 | 0 | 0 |
+| hangar-prod / argocd | 37 | 34 | 1 | 2 | 0 |
+| hangar-prod / argocd-apps | 14 | 13 | 0 | 0 | 1 |
+| **Total** | **143** | **133** | **6** | **3** | **1** |
+
+2,130 objects are hash-identical in the 133. The slowest plugin-side render (fetching included, from a laptop) took
+8.3 s, against the sidecar's 80 s.
+
+| Application | Status | What it is |
+| --- | --- | --- |
+| crossplane (both clusters), loki, rekor, testkube | differs | the chart renders `metadata.annotations: null` on a Service: finding 2 |
+| infisical | differs | the chart renders `updatedAt` from the clock, so its output differs on every render, Argo CD's and the plugin's alike: finding 3 |
+| kube-prometheus-stack (both clusters) | unsupported | a bare `=` in a rule: finding 4 |
+| hangar-prod-root | unsupported | a mapping that repeats a key: finding 4 |
+| gate-api-prod | not comparable | already rendered by the clearance plugin (the Airframe-chart parameters); its original sources are not in the cluster. Its render is the recorded parity above |
+
+**Findings.**
+
+1. **The renderer's Helm must be Argo CD's Helm.** Argo CD v3.5.0 ships Helm 4.2.1 and kustomize 5.8.1
+   (`hack/tool-versions.sh`); the sidecar image had Helm 3.21.3. With Helm 3 the first run differed on tempo, whose
+   config is rendered from a value the Application sets to `null`: Helm 3 kept `opencensus: null` in the
+   rendered config, Argo CD's Helm 4 did not. The Dockerfile now pins Helm v4.2.1 and kustomize v5.8.1 (checksum-verified, both
+   architectures) and says to move them with Argo CD. This also changes the tool the Airframe-chart path runs once
+   the image is rebuilt, to the one Argo CD uses for the same chart; the 11 Applications on the Airframe chart above
+   (`charts/airframe-application` from git) are identical.
+2. **`annotations: null`.** A chart that renders `annotations:` with no value hashes with a null there (so does the
+   Tekton check). Argo CD's repo-server replaces it with a map when it adds the tracking annotation, and the agent
+   (G-ARGO-3) recomputes a hash from the live object with an empty annotations map deleted, so the stamp of such an
+   object cannot equal the agent's recomputation. The shared hashing is untouched here (changing it moves the Tekton
+   check's trees too): it is a decision for `internal/gate/render`, the agent and `register.py` together. Until then
+   an Application with such an object cannot be enforced reliably.
+3. **A chart that is not deterministic** (a clock or a random value in its output) renders a new tree on every refresh:
+   every refresh would register a new change and hold. Such an Application cannot be gated until its chart is fixed or
+   it is exempted.
+4. **Two readers.** The stamping reader is the PyYAML-compatible one `clearance register` uses (YAML 1.1: a bare `=`
+   is the `value` tag, which PyYAML's safe loader refuses), checked against a second, YAML 1.2, reader. Argo CD's
+   reader is laxer: it renders `- =` and a mapping that repeats a key (the last wins). The plugin refuses both, as the
+   Tekton check would. Fixing the source (quote the `=`, remove the duplicate key) clears them.
+5. **Scope.** Argo CD asks the cluster whether a kind is namespaced; the plugin has a list. The audit found, on both
+   clusters, cluster-scoped kinds the list does not have (`CompositeResourceDefinition`, `Composition`,
+   `DeploymentRuntimeConfig`, `Function`, `ManagedResourceActivationPolicy`, `Provider`, `ImageValidatingPolicy`,
+   `TektonConfig`: the plugin would give them the destination namespace) and one it has wrong (CloudNativePG's
+   `Cluster` is namespaced). Both sides of the comparison use the plugin's rules, so these Applications read
+   *identical*, but the stamped objects would carry a namespace the live objects do not (or lack one they have). The
+   `clusterScopedKinds` parameter fixes it (`Composition`, `!Cluster`) and the 10c agent should fill it from the
+   cluster's discovery.
+
+What the comparison is not: it compares the repo-server's render, not what a sync applies (hook ordering,
+server-side apply, `ignoreDifferences`, pruning), and not the live objects, whose state is not the desired state
+(`argocd app manifests --source live` shows those and was not used). It is as of one moment: a branch-tracking source
+(131 of the git sources track `main`) renders what its branch is then.
+
+#### Open for G-ARGO-10c and G-ARGO-10e
+
+* **Argo CD's manifest cache does not see the original sources.** Argo CD caches a plugin's output by the plugin
+  source's own revision and the parameters. A change on `main` of the chart repository or of a `$ref` repository
+  changes neither, so the Application is not re-rendered until the cache expires or someone hard-refreshes. Mitigate by
+  putting the resolved commits into the `sources` the agent writes (and re-writing them when they move).
+* **No credential, and the network.** The sidecar holds no git or registry credential, and these repositories are
+  private. Generic mode needs a credential per call (mint, do not cache) and egress from the repo-server pod to the git
+  host, the chart repositories and the registry.
+* **Tool versions.** They must follow Argo CD's (finding 1): move them together and re-run the parity suite, ideally as
+  a drift check against the live Argo CD.
+* **No fetch cache.** Every render clones and pulls again (8 s at the slowest); the 80 s budget is shared with a core
+  call. A per-revision cache in the sidecar is not built.
+* **The hash and the agent disagree on `annotations: null` and on mis-scoped kinds** (findings 2 and 5): settle them
+  before an Application that has either is enforced.
+* **Not built:** a private chart repository's credential, `helm.passCredentials`, a version range as a revision,
+  `.argocd-source.yaml`, kustomize `patches`, jsonnet, a registry that needs `helm registry login`, and Applications
+  with no destination namespace.
 
 ### Wiring for the manager (hangar-prod to hangar-dev; D29)
 

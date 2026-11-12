@@ -30,13 +30,17 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 
 FROM ${TOOLS_IMAGE} AS tools
 ARG TARGETARCH
-ARG HELM_VERSION=v3.21.3
-ARG KUSTOMIZE_VERSION=v5.7.1
+# The tool versions are Argo CD's own (hack/tool-versions.sh of the Argo CD release the repo-server runs: v3.5.0 ships
+# Helm 4.2.1 and kustomize 5.8.1). The generic renderer (docs/gate.md, "Rendering any source") promises the objects
+# Argo CD renders, and a different Helm renders different objects (null values in a values file, for one): move
+# these with Argo CD, and re-run the parity suite when they move.
+ARG HELM_VERSION=v4.2.1
+ARG KUSTOMIZE_VERSION=v5.8.1
 RUN apk add --no-cache curl
 RUN set -eu; \
     case "${TARGETARCH}" in \
-      amd64) HELM_SHA=15e041a93a590dce8100f39385cd98c84a765c9e36aeeb9e2dc6ff9e4769e2e0; KUSTOMIZE_SHA=ea375e7372f9aa029129d4b2d16c66b7750b7f1213c4f66f910d981c895818d8;; \
-      arm64) HELM_SHA=67f58155079ff9ffab98ba5c88daff0ed9b542f3a4732f5dd426dde7dd0f5244; KUSTOMIZE_SHA=4261a040217df3bd6896597c3986d1465925726e4f22a945304b5233a4dcdbda;; \
+      amd64) HELM_SHA=479dca836e5b45e8bd222400c5591b0e3a647378f03ff96597180db97c17fdae; KUSTOMIZE_SHA=029a7f0f4e1932c52a0476cf02a0fd855c0bb85694b82c338fc648dcb53a819d;; \
+      arm64) HELM_SHA=596b9a73d366c1e72ce67d595c22805480e30914593aafbc9f547694e72814db; KUSTOMIZE_SHA=0953ea3e476f66d6ddfcd911d750f5167b9365aa9491b2326398e289fef2c142;; \
       *) echo "unsupported arch ${TARGETARCH}"; exit 1;; \
     esac; \
     curl -fsSL -o /tmp/helm.tgz "https://get.helm.sh/helm-${HELM_VERSION}-linux-${TARGETARCH}.tar.gz"; \
