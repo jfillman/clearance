@@ -61,10 +61,10 @@ the inbox, trigger history, results), so the Go API serves only Clearance's own 
 | getContract | `GET /v1/contract` | **ported**; an OpenAPI 3.1 document since C-10, naming `x-clearance-core` (`CLEARANCE_CORE_URL`) and `x-clearance-gateway` |
 | (healthz, readyz) | `GET /healthz`, `/readyz` | **ported**; readyz checks the database |
 | (new) listDefinitions | `GET /v1/definitions` | **new**: the definitions Clearance holds, api.py's agent view without the gateway's `hold` |
-| (new) listExceptions | `GET /v1/exceptions` | **new** (C-6): the packet's exceptions: every `deploy.exception` (`kind=` out-of-band, drift, untraced-apply, digest-mismatch, attempted-refused, monitoring-protection), `deploy.degraded`, `breakglass.open`, `breakglass.close`, and every `coverage-unavailable` record; `tool`, `kind`, `app`, `since`, `until`, `limit`, `after`; newest first, cursor `seq`, scoped like the evidence list ([gate.md](gate.md#the-packets-exceptions)) |
-| (new) listObservations | `GET /v1/observations` | **new** (O-1), auditors: a scope's `observation` records (`kind=assessment`, `resolution` (every edit of one is a record of its own: the history) or `observation.verification` for those); `scope` required, `source`, `since`, `until`, `limit`, `after`; newest first, cursor `seq` |
-| (new) listObservationHealth | `GET /v1/observations/health` | **new** (O-1), auditors: a scope's `observation.health` and `observation.audit-gap` records, same parameters |
-| (new) getCoverage | `GET /v1/coverage` | **new** (O-1), auditors: the three-part coverage statement of a scope and window ([below](#observations-and-the-coverage-statement-o-1)) |
+| (new) listExceptions | `GET /v1/exceptions` | **new** (C-6): the packet's exceptions: every `deploy.exception` (`kind=` out-of-band, drift, untraced-apply, digest-mismatch, attempted-refused, monitoring-protection), `deploy.degraded`, `breakglass.open`, `breakglass.close`, and every `coverage-unavailable` record; `tool`, `kind`, `app`, `since`, `until`, `limit`, `after`; newest first, cursor `seq`; (every signed-in person, a delegate for one, an auditor and an observation reader see every exception, O-5; redacted below) ([gate.md](gate.md#the-packets-exceptions)) |
+| (new) listObservations | `GET /v1/observations` | **new** (O-1), any signed-in person, a delegate for one, or an auditor (O-5): a scope's `observation` records (`kind=assessment`, `resolution` (every edit of one is a record of its own: the history) or `observation.verification` for those); `scope` required, `source`, `since`, `until`, `limit`, `after`; newest first, cursor `seq` |
+| (new) listObservationHealth | `GET /v1/observations/health` | **new** (O-1), any signed-in person, a delegate for one, or an auditor (O-5): a scope's `observation.health` and `observation.audit-gap` records, same parameters |
+| (new) getCoverage | `GET /v1/coverage` | **new** (O-1), any signed-in person, a delegate for one, or an auditor (O-5): the three-part coverage statement of a scope and window ([below](#observations-and-the-coverage-statement-o-1)) |
 | (new) getKeys | `GET /v1/keys` | **new** (C-1): the clearance token verification keys, a JWKS, from `clearance_signing_keys`; public |
 | (new) getGrantFeed | `GET /v1/grant-feeds/{cluster}` | **new** (C-10): the cluster's **signed** grant feed, for grant-sync (below) |
 | (new) listInstallations | `GET /v1/github/installations` | **new** (C-10): the GitHub App's installations as the records name them |
@@ -72,9 +72,32 @@ the inbox, trigger history, results), so the Go API serves only Clearance's own 
 
 ### Observations and the coverage statement (O-1)
 
-Built. Three auditor-only reads over the observation kinds ([evidence.md](evidence.md#observations-clearanceevidencev11-o-1)).
-They are auditor-only because an observation is about an account or a cluster, not an agent or an app, so there is no
-narrower scope to give a person; a person gets 403.
+Built. Three reads over the observation kinds ([evidence.md](evidence.md#observations-clearanceevidencev11-o-1)).
+Since O-5 (owner decision 2026-11-12) **any signed-in person** may read them (an OIDC user on
+`CLEARANCE_OIDC_ALLOWED_USERS`, or a delegate such as Tower's Backstage proxy acting for one), and an auditor still may.
+An observation is about an account or a cluster, not an agent or an app, so a person reads the whole scope rather than
+the per-person evidence scope. A person is refused (403) only when the caller is not a person or a delegate acting for
+one; no token, or a user the allowlist refuses, is 401. Resolving an observation stays admin-only: `POST
+/v1/observations/{seq}/resolution` is on the core and is unchanged.
+
+| Route | Before O-5 | After O-5 |
+| --- | --- | --- |
+| `GET /v1/coverage` | auditor | person, delegate, auditor, observer (machine reader) |
+| `GET /v1/observations` | auditor | person, delegate, auditor, observer |
+| `GET /v1/observations/health` | auditor | person, delegate, auditor, observer |
+| `GET /v1/exceptions` | person, delegate, auditor (a person: only their own runs, agents and apps) | person, delegate, auditor, observer: every exception |
+| `POST /v1/observations/{seq}/resolution` (core) | admin, or a delegate naming an admin | unchanged |
+
+**What a person reads.** The coverage statement carries no record bodies. The observation lists return the records, and
+a person gets each record's `state_change` with the value of every secret-bearing key (`password`, `secret*`, `token`,
+`credentials`, `userdata`, `environment`, a `{name, value}` pair whose name is one, and so on) replaced by `[redacted]`,
+naming the redacted fields in `redacted` (`["state_change"]`, and `["exception"]` on a `deploy.exception`, whose `objects` can be live objects); an auditor reads the record as stored (the stored hash covers the unredacted
+record). The providers also keep secrets out at the source (observe-k8s records a Secret at Metadata with no
+`state_change`, the core refuses a Secret observation that carries one, observe-aws strips request keys that carry
+credentials), so the redaction is a second line, not the only one. It is by key name: a secret held under an innocuous
+key in a non-Secret object is not recognised.
+
+**No scope:** `GET /v1/coverage` (no `scope`) answers `{from, to, scopes: [statement, ...], truncated}`: the statement below for every scope with an observation, audit gap or health record, sorted by scope (each statement names its `scope`; at most 100 scopes, then `truncated`). With a `scope` the answer is the single statement, unchanged.
 
 `GET /v1/coverage?scope=&from=&to=` (RFC 3339; `to` defaults to now and is never in the future, `from` to 24 hours
 before it; at most 92 days) answers:
@@ -244,6 +267,7 @@ gateway, never by the App), the receipts of pull requests that installation chec
 | `CLEARANCE_API_DSN` | (required) | the read-only role's DSN |
 | `CLEARANCE_API_AUDITORS` | none | principal globs: every read, the chain check, `full=1` |
 | `CLEARANCE_API_NOTIFIERS` | none | principal globs: the notifier role |
+| `CLEARANCE_API_OBSERVATION_READERS` | none | principal globs: the `observer` role, machine pollers that read `GET /v1/coverage`, `/v1/observations`, `/v1/observations/health` and `/v1/exceptions` (whole scope, redacted like a person) and nothing else (O-5) |
 | `CLEARANCE_API_FEED_READERS` | none | `<principal glob>=<cluster>` pairs, comma-separated: the grant feed's readers (C-1) |
 | `CLEARANCE_DELEGATES` | none | principal globs that may name a person in the on-behalf-of header (`CLEARANCE_ON_BEHALF_OF_HEADER`; Hangar sets `X-Hangar-On-Behalf-Of`) |
 | `CLEARANCE_AGENTS_DIR` | none | the bundled definitions; cluster pins come from `clearance_definitions` |
@@ -461,6 +485,7 @@ foreign workloads by public issuer (Tower). Roles are principal globs in config:
 | `delegate` | `CLEARANCE_DELEGATES` (Tower) | everything a person may, for the person named in `X-Hangar-On-Behalf-Of` |
 | `notifier` | `CLEARANCE_API_NOTIFIERS` (Tower) | the inbox feed across everyone (for notifications), nothing else |
 | `auditor` | `CLEARANCE_API_AUDITORS` | every read, including definitions' full instructions and the chain check |
+| `observer` | `CLEARANCE_API_OBSERVATION_READERS` (a machine poller) | `GET /v1/coverage`, `/v1/observations`, `/v1/observations/health`, `/v1/exceptions`, whole scope, redacted like a person; nothing else (O-5) |
 | `feed` | `CLEARANCE_API_FEED_READERS` (a grant-sync agent) | its clusters' grant feed and the changes on them, with their tokens; nothing else (C-1) |
 
 A record's visibility is decided by its session's owner and agent, so a person never sees another team's agents'

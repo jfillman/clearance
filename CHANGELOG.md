@@ -26,6 +26,17 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ### Changed
 
+- **Any signed-in person may read coverage and observations (O-5, owner decision 2026-11-12).** `GET /v1/coverage`,
+  `GET /v1/observations` and `GET /v1/observations/health` on clearance-api were auditor-only; they now take a person
+  (an OIDC user on `CLEARANCE_OIDC_ALLOWED_USERS`), a delegate acting for one (Tower's Backstage proxy) and an auditor,
+  and a person reads the whole scope. A person's observation records have their `state_change` redacted by key name
+  (`redacted` names the fields); an auditor reads them as stored. `GET /v1/exceptions` is the same: every person reads
+  every exception, with `state_change` and `exception` redacted. The resolution write is unchanged (admin only).
+- **`GET /v1/coverage` with no `scope`** answers every observed scope's statement (`{from, to, scopes, truncated}`)
+  instead of 400.
+- **`CLEARANCE_API_OBSERVATION_READERS`** (chart `api.observationReaders`): principal globs of machine pollers (the
+  `observer` role) that read coverage, observations, observation health and exceptions, whole scope and redacted, and
+  nothing else.
 - **The plugin image's Helm and kustomize are Argo CD's: Helm v4.2.1 and kustomize v5.8.1** (were v3.21.3 and v5.7.1; checksum-verified,
   both architectures). A different Helm renders different objects (found by the parity suite); move them with Argo CD. Takes effect when
   the image is rebuilt.

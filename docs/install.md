@@ -161,6 +161,7 @@ unset, so the core's default applies. Lists are joined with commas.
 | `api.replicas` | 2 | |
 | `api.pdb.{enabled,minAvailable}` | true, 1 | |
 | `api.auditors`, `api.notifiers` | | `CLEARANCE_API_AUDITORS`, `CLEARANCE_API_NOTIFIERS`. |
+| `api.observationReaders` | | `CLEARANCE_API_OBSERVATION_READERS`: principal globs of machine pollers that read coverage, observations, observation health and exceptions, nothing else (O-5). |
 | `api.feedReaders` | | `CLEARANCE_API_FEED_READERS`: `[{principal, cluster}]`, who reads a cluster's grant feed (a grant-sync agent). |
 | `api.pool`, `api.definitionsInterval` | 5, 30 | `CLEARANCE_API_POOL`, `CLEARANCE_API_DEFINITIONS_INTERVAL`. |
 | `api.resources`, `api.serviceAccount.*`, `api.topologySpreadConstraints` and the same pod settings as the core | | |
