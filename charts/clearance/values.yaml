@@ -433,6 +433,11 @@ web:
   clientSecret:
     existingSecret: ""
     key: client-secret
+  # CLEARANCE_WEB_UPSTREAM_AUDIENCE: the audience the core and clearance-api require of an ID token (oidc.audience, e.g.
+  # clearance). Empty: the web's own client id is the audience, which they refuse. Set, the login asks Dex for the extra scope
+  # audience:server:client_id:<audience> and accepts only a token with aud=[<audience>, <clientID>], azp=<clientID>. Dex
+  # must list this client in the `clearance` client's trustedPeers.
+  upstreamAudience: ""
   # CLEARANCE_WEB_API_URL and _CORE_URL: "" is this release's api and core Services (needs api.enabled).
   apiURL: ""
   coreURL: ""

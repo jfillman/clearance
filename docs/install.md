@@ -178,6 +178,7 @@ unset, so the core's default applies. Lists are joined with commas.
 | `web.enabled` | false | The standalone web UI (`clearance web`, [web.md](web.md)): a Deployment of one replica (sessions are in memory; the chart refuses more), a Service, a ServiceAccount with no token. |
 | `web.publicURL`, `web.issuer`, `web.clientID` | none, none, `clearance-web` | `CLEARANCE_WEB_PUBLIC_URL`, `_ISSUER`, `_CLIENT_ID`. `publicURL` and `issuer` are required when enabled. |
 | `web.clientSecret.existingSecret`, `web.clientSecret.key` | none, `client-secret` | The Secret holding the confidential client's secret, mounted read-only at `/etc/clearance/web/client-secret` (`CLEARANCE_WEB_CLIENT_SECRET_FILE`). Required; never a value. |
+| `web.upstreamAudience` | none | `CLEARANCE_WEB_UPSTREAM_AUDIENCE`: the audience the core and api require (`oidc.audience`, e.g. `clearance`). Set it with Dex: the login then asks for `audience:server:client_id:<audience>`. See [web.md](web.md#the-token-the-core-accepts-dex-cross-client-trust). |
 | `web.apiURL`, `web.coreURL`, `web.gatewayURL` | this release's api and core Services, none | `CLEARANCE_WEB_API_URL`, `_CORE_URL`, `_GATEWAY_URL` (the gateway's person controls; unset, `/api/gateway/*` does not exist). |
 | `web.sessionTTL`, `idleTimeout`, `freshMaxAge`, `requestTimeout`, `maxSessions`, `maxBodyBytes`, `maxResponseBytes` | server defaults | The matching `CLEARANCE_WEB_*` limits, set only when non-empty. |
 | `web.resources`, `web.serviceAccount.*`, `web.podLabels`, `web.nodeSelector`, ... | | The same pod settings as the api. |

@@ -21,6 +21,7 @@ type Config struct {
 	Issuer           string        // CLEARANCE_WEB_ISSUER: the people IdP
 	ClientID         string        // CLEARANCE_WEB_CLIENT_ID
 	ClientSecretFile string        // CLEARANCE_WEB_CLIENT_SECRET_FILE: a file holding the confidential client's secret
+	UpstreamAudience string        // CLEARANCE_WEB_UPSTREAM_AUDIENCE: the audience the core and clearance-api require (Dex cross-client trust); empty: the client's own
 	APIURL           string        // CLEARANCE_WEB_API_URL: clearance-api (reads)
 	CoreURL          string        // CLEARANCE_WEB_CORE_URL: the core (writes)
 	GatewayURL       string        // CLEARANCE_WEB_GATEWAY_URL: the agent gateway's person controls (optional)
@@ -43,8 +44,8 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	c := Config{
 		Listen: getenv("CLEARANCE_WEB_LISTEN"), PublicURL: getenv("CLEARANCE_WEB_PUBLIC_URL"),
 		Issuer: getenv("CLEARANCE_WEB_ISSUER"), ClientID: getenv("CLEARANCE_WEB_CLIENT_ID"),
-		ClientSecretFile: getenv("CLEARANCE_WEB_CLIENT_SECRET_FILE"),
-		APIURL:           getenv("CLEARANCE_WEB_API_URL"), CoreURL: getenv("CLEARANCE_WEB_CORE_URL"),
+		ClientSecretFile: getenv("CLEARANCE_WEB_CLIENT_SECRET_FILE"), UpstreamAudience: getenv("CLEARANCE_WEB_UPSTREAM_AUDIENCE"),
+		APIURL: getenv("CLEARANCE_WEB_API_URL"), CoreURL: getenv("CLEARANCE_WEB_CORE_URL"),
 		GatewayURL:  getenv("CLEARANCE_WEB_GATEWAY_URL"),
 		TLSCertFile: getenv("CLEARANCE_WEB_TLS_CERT"), TLSKeyFile: getenv("CLEARANCE_WEB_TLS_KEY"),
 	}
