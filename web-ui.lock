@@ -1,0 +1,7 @@
+# The web UI bundle `clearance web` embeds (internal/web/static): which clearance-ui release, and the sha256 of its
+# tarball. `make web-ui` (tools/webui) downloads that release over https, refuses the tarball unless its sha256 is the
+# one below (this pin, never the .sha256 asset next to it), and extracts it. To bump: change both lines in one PR
+# (the sha256 is in the release's clearance-ui-web-<version>.tar.gz.sha256 asset; check it against a download).
+repo=jfillman/clearance-ui
+version=0.1.0
+sha256=6d71eb2286ee2535d48e24ead3eb54e61b0241c161d6a27681e3eb64556fa5fd

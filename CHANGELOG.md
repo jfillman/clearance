@@ -9,6 +9,14 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Added
+
+- web: the released `clearance-ui` bundle is built into `clearance web` ([docs/web.md](docs/web.md), "Building the bundle in").
+  `web-ui.lock` pins the UI version and its tarball's sha256; `make web-ui` (`tools/webui`) downloads it over https, refuses it
+  unless the sha256 is the pin's, extracts it safely (no traversal, links or devices) into `internal/web/static/`, and the
+  Dockerfile runs it before `go build`, so released images carry the UI. A plain `go build` still embeds the placeholder.
+  CI gains a `web-ui` job (pin resolves, checksum matches, release-style build embeds the UI) and `TestReleaseBundleIsTheUI`.
+
 ## [0.47.0] - 2026-11-13
 
 ### Added

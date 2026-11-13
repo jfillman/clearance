@@ -26,6 +26,12 @@ COPY internal/ internal/
 COPY client/ client/
 COPY schemas/ schemas/
 COPY tools/installtest/ tools/installtest/
+COPY tools/webui/ tools/webui/
+COPY web-ui.lock ./
+# The pinned clearance-ui bundle replaces the placeholder `clearance web` would embed: downloaded over https, refused
+# unless its sha256 is the pin in web-ui.lock, then proven to be the UI and not the placeholder.
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    go run ./tools/webui && CLEARANCE_REQUIRE_UI_BUNDLE=1 go test -count=1 -run TestReleaseBundleIsTheUI ./internal/web
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -buildvcs=false \
       -ldflags "-s -w -buildid= -X main.version=${VERSION}" -o /out/clearance ./cmd/clearance && \
