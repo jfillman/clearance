@@ -661,7 +661,7 @@ func TestWeb(t *testing.T) {
 	if e["CLEARANCE_WEB_CLIENT_SECRET_FILE"] != "/etc/clearance/web/client-secret" ||
 		e["CLEARANCE_WEB_API_URL"] != "http://t-clearance-api.clearance.svc:8080" ||
 		e["CLEARANCE_WEB_CORE_URL"] != "http://t-clearance-core.clearance.svc:8080" ||
-		e["CLEARANCE_WEB_MAX_BODY_BYTES"] != "1048576" || e["CLEARANCE_WEB_MAX_RESPONSE_BYTES"] != "33554432" {
+		e["CLEARANCE_WEB_UPSTREAM_AUDIENCE"] != "clearance" || e["CLEARANCE_WEB_MAX_BODY_BYTES"] != "1048576" || e["CLEARANCE_WEB_MAX_RESPONSE_BYTES"] != "33554432" {
 		t.Errorf("web env %v", e)
 	}
 	for k, v := range e {

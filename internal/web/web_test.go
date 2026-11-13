@@ -125,6 +125,53 @@ func TestSignInRefusals(t *testing.T) {
 	}
 }
 
+// Dex cross-client trust: with upstreamAudience set the login asks for the audience:server scope and accepts only the
+// shape Dex issues (aud=[upstream, client], azp=client); the bearer it forwards then carries the upstream audience.
+func TestUpstreamAudience(t *testing.T) {
+	up := func(c *Config, o *Options) { c.UpstreamAudience = "clearance" }
+	e := newEnv(t, up)
+	e.idp.crossClient = true
+	cb, _ := e.startLogin("")
+	if got := e.idp.lastAuthRequest.Get("scope"); got != "openid email profile audience:server:client_id:clearance" {
+		t.Errorf("scope %q", got)
+	}
+	if w := e.callback(cb); e.jar[sessionCookie] == "" {
+		t.Fatalf("Dex-shaped token refused: %d", w.Code)
+	}
+	// Off (the default): no extra scope, and a plain aud=client token is what it takes.
+	e = newEnv(t, nil)
+	e.startLogin("")
+	if got := e.idp.lastAuthRequest.Get("scope"); got != "openid email profile" {
+		t.Errorf("default scope %q", got)
+	}
+	refusals := map[string]func(*fakeIdP){
+		"plain token, no upstream audience": func(f *fakeIdP) { f.crossClient = false },
+		"upstream aud but no azp":           func(f *fakeIdP) { f.crossClient = false; f.audList = []string{"clearance", testClientID} },
+		"azp is another client":             func(f *fakeIdP) { f.crossClient = true; f.azp = "other-client" },
+		"issued to another client": func(f *fakeIdP) {
+			f.crossClient = false
+			f.audList = []string{"clearance", "other-client"}
+			f.azp = "other-client"
+		},
+		"upstream audience only": func(f *fakeIdP) { f.crossClient = false; f.audList = []string{"clearance"}; f.azp = testClientID },
+		"wrong upstream audience": func(f *fakeIdP) {
+			f.crossClient = false
+			f.audList = []string{"someone", testClientID}
+			f.azp = testClientID
+		},
+	}
+	for name, mut := range refusals {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t, up)
+			cb, _ := e.startLogin("")
+			mut(e.idp)
+			if w := e.callback(cb); w.Code == 200 || e.jar[sessionCookie] != "" {
+				t.Fatalf("accepted: %d", w.Code)
+			}
+		})
+	}
+}
+
 func stateOf(cb string) string { u, _ := url.Parse(cb); return url.QueryEscape(u.Query().Get("state")) }
 
 func TestStateIsSingleUse(t *testing.T) {

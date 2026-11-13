@@ -11,6 +11,10 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ### Added
 
+- web: `CLEARANCE_WEB_UPSTREAM_AUDIENCE` / `--upstream-audience` / chart `web.upstreamAudience`: Dex cross-client trust, so the ID token
+  the web forwards carries the audience the core and clearance-api require. The login asks for `audience:server:client_id:<aud>`;
+  the check requires the upstream audience in `aud` and `azp` equal to the web's own client id. Default empty (unchanged).
+
 - web: `clearance web`, the backend-for-frontend of the standalone web UI (WEB-4, [docs/web.md](docs/web.md)). Serves the
   UI bundle from `embed.FS` (a placeholder until WEB-3's build lands in `internal/web/static/`); signs people in with
   OIDC authorization code + PKCE (S256) as a confidential client (secret from a file), `state` and `nonce` checked, the

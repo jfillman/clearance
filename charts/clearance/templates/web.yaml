@@ -70,7 +70,7 @@ spec:
               value: {{ default (printf "http://%s.%s.svc:%v" (include "clearance.apiName" .) .Release.Namespace .Values.service.port) $w.apiURL | quote }}
             - name: CLEARANCE_WEB_CORE_URL
               value: {{ default (printf "http://%s.%s.svc:%v" (include "clearance.coreName" .) .Release.Namespace .Values.service.port) $w.coreURL | quote }}
-            {{- range $k, $env := dict "gatewayURL" "CLEARANCE_WEB_GATEWAY_URL" "sessionTTL" "CLEARANCE_WEB_SESSION_TTL" "idleTimeout" "CLEARANCE_WEB_IDLE_TIMEOUT" "freshMaxAge" "CLEARANCE_WEB_FRESH_MAX_AGE" "requestTimeout" "CLEARANCE_WEB_REQUEST_TIMEOUT" "maxSessions" "CLEARANCE_WEB_MAX_SESSIONS" "maxBodyBytes" "CLEARANCE_WEB_MAX_BODY_BYTES" "maxResponseBytes" "CLEARANCE_WEB_MAX_RESPONSE_BYTES" }}
+            {{- range $k, $env := dict "gatewayURL" "CLEARANCE_WEB_GATEWAY_URL" "upstreamAudience" "CLEARANCE_WEB_UPSTREAM_AUDIENCE" "sessionTTL" "CLEARANCE_WEB_SESSION_TTL" "idleTimeout" "CLEARANCE_WEB_IDLE_TIMEOUT" "freshMaxAge" "CLEARANCE_WEB_FRESH_MAX_AGE" "requestTimeout" "CLEARANCE_WEB_REQUEST_TIMEOUT" "maxSessions" "CLEARANCE_WEB_MAX_SESSIONS" "maxBodyBytes" "CLEARANCE_WEB_MAX_BODY_BYTES" "maxResponseBytes" "CLEARANCE_WEB_MAX_RESPONSE_BYTES" }}
             {{- with index $w $k }}
             - name: {{ $env }}
               value: {{ (kindIs "float64" . | ternary (int64 .) .) | toString | quote }}

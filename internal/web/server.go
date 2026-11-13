@@ -327,7 +327,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	// The login cookie is Lax, not Strict: the IdP's redirect back is a cross-site navigation, which Strict cookies skip.
 	s.setCookie(w, loginCookie, binding, 600, http.SameSiteLaxMode)
 	w.Header().Set("Cache-Control", "no-store")
-	http.Redirect(w, r, authURL(p.d, s.cfg.ClientID, s.cfg.PublicURL+"/auth/callback", state, nonce, verifier, maxAge), http.StatusFound)
+	http.Redirect(w, r, authURL(p.d, s.cfg.ClientID, s.cfg.UpstreamAudience, s.cfg.PublicURL+"/auth/callback", state, nonce, verifier, maxAge), http.StatusFound)
 }
 
 func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
@@ -378,7 +378,7 @@ func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := s.now()
-	cl, err := p.checkIDToken(ctx, tok, s.cfg.ClientID, fl.Nonce, fl.MaxAge, now)
+	cl, err := p.checkIDToken(ctx, tok, s.cfg.ClientID, s.cfg.UpstreamAudience, fl.Nonce, fl.MaxAge, now)
 	if err != nil {
 		fail(http.StatusUnauthorized, "ID token: "+err.Error())
 		return

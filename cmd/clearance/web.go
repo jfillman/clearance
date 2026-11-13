@@ -30,6 +30,7 @@ func webCmd(ctx context.Context, args []string, _, stderr io.Writer) int {
 	fs.StringVar(&cfg.Issuer, "issuer", cfg.Issuer, "the people IdP (env CLEARANCE_WEB_ISSUER)")
 	fs.StringVar(&cfg.ClientID, "client-id", cfg.ClientID, "the confidential OIDC client id (env CLEARANCE_WEB_CLIENT_ID)")
 	fs.StringVar(&cfg.ClientSecretFile, "client-secret-file", cfg.ClientSecretFile, "file holding the client secret (env CLEARANCE_WEB_CLIENT_SECRET_FILE)")
+	fs.StringVar(&cfg.UpstreamAudience, "upstream-audience", cfg.UpstreamAudience, "the audience the core and clearance-api require, requested from Dex by cross-client trust; empty: this client's own (env CLEARANCE_WEB_UPSTREAM_AUDIENCE)")
 	fs.StringVar(&cfg.APIURL, "api-url", cfg.APIURL, "clearance-api, for reads (env CLEARANCE_WEB_API_URL)")
 	fs.StringVar(&cfg.CoreURL, "core-url", cfg.CoreURL, "the core, for writes (env CLEARANCE_WEB_CORE_URL)")
 	fs.StringVar(&cfg.GatewayURL, "gateway-url", cfg.GatewayURL, "the agent gateway's person controls, optional (env CLEARANCE_WEB_GATEWAY_URL)")

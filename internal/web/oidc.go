@@ -72,7 +72,7 @@ func pkceChallenge(verifier string) string {
 }
 
 // authURL is the authorization request. A fresh login adds prompt=login and max_age.
-func authURL(d Discovery, clientID, redirect, state, nonce, verifier string, maxAge time.Duration) string {
+func authURL(d Discovery, clientID, upstreamAud, redirect, state, nonce, verifier string, maxAge time.Duration) string {
 	q := url.Values{
 		"response_type":         {"code"},
 		"client_id":             {clientID},
@@ -82,6 +82,11 @@ func authURL(d Discovery, clientID, redirect, state, nonce, verifier string, max
 		"nonce":                 {nonce},
 		"code_challenge":        {pkceChallenge(verifier)},
 		"code_challenge_method": {"S256"},
+	}
+	if upstreamAud != "" {
+		// Dex cross-client trust: the token's audience becomes the upstream's (the peer client must list this client in
+		// trustedPeers, or Dex refuses the request).
+		q.Set("scope", "openid email profile audience:server:client_id:"+upstreamAud)
 	}
 	if maxAge > 0 {
 		q.Set("prompt", "login")
@@ -137,7 +142,7 @@ type idClaims struct {
 
 // checkIDToken verifies the token and the checks only the relying party makes: the nonce, that it is for this
 // client when it names several audiences (azp), and, for a fresh login, that auth_time is within maxAge.
-func (p *idp) checkIDToken(ctx context.Context, token, clientID, nonce string, maxAge time.Duration, now time.Time) (idClaims, error) {
+func (p *idp) checkIDToken(ctx context.Context, token, clientID, upstreamAud, nonce string, maxAge time.Duration, now time.Time) (idClaims, error) {
 	cl, err := authn.VerifyIDToken(ctx, token, p.d.Issuer, clientID, p.keys, authn.DefaultLeeway, func() time.Time { return now })
 	if err != nil {
 		return idClaims{}, err
@@ -146,6 +151,25 @@ func (p *idp) checkIDToken(ctx context.Context, token, clientID, nonce string, m
 		return idClaims{}, errors.New("nonce mismatch")
 	}
 	if aud, ok := cl["aud"].([]any); ok && len(aud) > 1 {
+		if azp, _ := cl["azp"].(string); azp != clientID {
+			return idClaims{}, errors.New("azp is not this client")
+		}
+	}
+	if upstreamAud != "" {
+		// Cross-client trust, strictly: Dex shapes the token aud=[<peer>, <this client>], azp=<this client>. The token
+		// verified above names this client in aud; it must also name the upstream's audience (so the core and the api
+		// accept it as they accept the CLI's), and azp is REQUIRED and must be this client: a token issued to another
+		// client that merely lists the upstream audience is refused.
+		aud, _ := cl["aud"].([]any)
+		hasUp := false
+		for _, a := range aud {
+			if s, _ := a.(string); s == upstreamAud {
+				hasUp = true
+			}
+		}
+		if !hasUp {
+			return idClaims{}, errors.New("the ID token does not name the upstream audience (is " + clientID + " in the peer client's trustedPeers?)")
+		}
 		if azp, _ := cl["azp"].(string); azp != clientID {
 			return idClaims{}, errors.New("azp is not this client")
 		}
