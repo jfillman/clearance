@@ -704,8 +704,14 @@ func TestHTTPRoles(t *testing.T) {
 			"/v1/policy/explain?agent=coding-agent&tool=metrics.query", "/v1/receipts?repo=jfillman/flight-api",
 			"/v1/provenance?repo=jfillman/flight-api", "/v1/clearances", "/v1/clearances/counts",
 			"/v1/clearance-policy", "/v1/definitions"}
+		// The gate's changes are also a notifier's (G5): the list and the counts, not the rest.
+		notifierReads := map[string]bool{"/v1/clearances": true, "/v1/clearances/counts": true}
 		for _, p := range person {
-			h.status(t, 403, "GET", p, "tower", "")         // a notifier reads none of Clearance's records
+			if notifierReads[p] {
+				h.status(t, 200, "GET", p, "tower", "")
+			} else {
+				h.status(t, 403, "GET", p, "tower", "") // a notifier reads none of Clearance's records
+			}
 			h.status(t, 403, "GET", p, "svc", "")           // a workload is no role
 			h.status(t, 403, "GET", p, "svc", "user:bob")   // nor a delegate
 			h.status(t, 400, "GET", p, "tower", "bob")      // a delegate names a person

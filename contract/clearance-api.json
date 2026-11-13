@@ -4586,7 +4586,8 @@
           "person",
           "delegate",
           "auditor",
-          "feed"
+          "feed",
+          "notifier"
         ]
       }
     },
@@ -4696,7 +4697,8 @@
         "x-clearance-roles": [
           "person",
           "delegate",
-          "auditor"
+          "auditor",
+          "notifier"
         ]
       }
     },
@@ -6885,7 +6887,8 @@
           "person",
           "delegate",
           "auditor",
-          "feed"
+          "feed",
+          "notifier"
         ],
         "x-clearance-stream": true
       }

@@ -1,0 +1,34 @@
+# clearance-slack on: the smallest values that enable it (render tests and kubeconform).
+database:
+  existingSecret: clearance-db
+oidc:
+  issuer: https://dex.example.com/dex
+  audience: clearance
+  allowedUsers: ["*@example.com"]
+delegates: ["tower/backstage"]
+api:
+  notifiers: ["tower/backstage"]
+slack:
+  enabled: true
+  existingSecret: clearance-slack
+  publicUrl: https://clearance-slack.example.com
+  webUrl: https://clearance.example.com/changes/{id}
+  slackClientId: "1234.5678"
+  idpClientId: clearance-slack
+  routes:
+    groups: {"group:default/payments": C0123456789}
+    security: C0SECURITY
+    ops: C0OPS
+networkPolicy:
+  slack:
+    from:
+      - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: gateway-system}}
+    extraEgress:
+      - to:
+          - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: dex}}
+        ports: [{protocol: TCP, port: 5556}]
+httpRoutes:
+  slack:
+    enabled: true
+    parentRefs: [{name: gateway, namespace: gateway-system}]
+    hostnames: [clearance-slack.example.com]

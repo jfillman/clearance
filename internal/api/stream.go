@@ -181,9 +181,9 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, v *Viewer) {
 			types[t] = true
 		}
 	}
-	if v.Role == RoleFeed {
+	if v.Role == RoleFeed || v.Role == RoleNotifier {
 		if types["records"] && q["types"] != "" {
-			writeError(w, 403, v.Person+" reads clearance events of its clusters only (types=clearances)")
+			writeError(w, 403, v.Person+" reads clearance events only (types=clearances)")
 			return
 		}
 		types = map[string]bool{"clearances": true}
@@ -365,7 +365,7 @@ func (s *Server) drain(r *http.Request, out *sseWriter, v *Viewer, f EvidenceFil
 // auditor every one, a person the changes they may read (changeVisible on the change as stored).
 func depVisible(d *DeployEvent, v *Viewer) bool {
 	switch {
-	case v.All():
+	case v.AllChanges():
 		return true
 	case v.Role == RoleFeed:
 		var c struct {

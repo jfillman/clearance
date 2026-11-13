@@ -423,7 +423,7 @@ per request, and holding changes are few), so it is the same on the in-memory an
 - **verify** also checks the `seq`, `hash` and `prev_hash` columns against the record (`pg.Reader.Verify`);
   `bad_seq` is the position where the chain broke.
 - **503 bodies** say `read failed` without the exception class.
-- **notifier**: the role resolves as at api.py, but no Clearance read is a notifier's (the inbox feed is the gateway's).
+- **notifier**: the gate's changes across everyone, for a notification service ([slack.md](slack.md)): `GET /v1/clearances` (the list), `GET /v1/clearances/counts` and the stream's `clearance` events, whole scope. Never a change by id (it carries its clearance token), never a token, never an evidence record (`types=records` on the stream is 403), never `awaiting=me` (a person's question).
 
 ### Environment (`internal/api` Config)
 
@@ -697,7 +697,7 @@ foreign workloads by public issuer (Tower). Roles are principal globs in config:
 |---|---|---|
 | person | any authenticated `user:*` | their own sessions and evidence; sessions and evidence of agents whose `owner` group they are in (the deployment's Directory, as the inbox uses); evidence records that target an app they own (below); the inbox as today |
 | `delegate` | `CLEARANCE_DELEGATES` (Tower) | everything a person may, for the person named in `X-Hangar-On-Behalf-Of` |
-| `notifier` | `CLEARANCE_API_NOTIFIERS` (Tower) | the inbox feed across everyone (for notifications), nothing else |
+| `notifier` | `CLEARANCE_API_NOTIFIERS` (clearance-slack) | every change of the gate as a list, the change counts and the stream's clearance events, whole scope; no change by id, no token, no evidence record |
 | `auditor` | `CLEARANCE_API_AUDITORS` | every read, including definitions' full instructions and the chain check |
 | `observer` | `CLEARANCE_API_OBSERVATION_READERS` (a machine poller) | `GET /v1/coverage`, `/v1/observations`, `/v1/observations/health`, `/v1/exceptions`, whole scope, redacted like a person; nothing else (O-5) |
 | `feed` | `CLEARANCE_API_FEED_READERS` (a grant-sync agent) | its clusters' grant feed and the changes on them, with their tokens; nothing else (C-1) |

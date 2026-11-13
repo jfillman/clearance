@@ -65,13 +65,15 @@ spec:
             - name: CLEARANCE_API_AUDITORS
               value: {{ include "clearance.csv" . | quote }}
             {{- end }}
-            {{- with .Values.api.notifiers }}
+            {{- $notifiers := include "clearance.withSlack" (dict "ctx" $ "list" .Values.api.notifiers) }}
+            {{- if $notifiers }}
             - name: CLEARANCE_API_NOTIFIERS
-              value: {{ include "clearance.csv" . | quote }}
+              value: {{ $notifiers | quote }}
             {{- end }}
-            {{- with .Values.api.observationReaders }}
+            {{- $readers := include "clearance.withSlack" (dict "ctx" $ "list" .Values.api.observationReaders) }}
+            {{- if $readers }}
             - name: CLEARANCE_API_OBSERVATION_READERS
-              value: {{ include "clearance.csv" . | quote }}
+              value: {{ $readers | quote }}
             {{- end }}
             {{- with .Values.api.feedReaders }}
             - name: CLEARANCE_API_FEED_READERS

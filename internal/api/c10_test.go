@@ -287,12 +287,13 @@ func TestTheStream(t *testing.T) {
 		// From the head: a feed reader (clearance events of its cluster only) and erin (team-gate: the gate-api change).
 		_, feed := openStream(t, srv.URL+"/v1/stream", "sync", "")
 		_, erin := openStream(t, srv.URL+"/v1/stream", "erin", "")
+		_, notifier := openStream(t, srv.URL+"/v1/stream", "tower", "") // G5: every change's clearance events
 		// Both streams are open at the head before the writes: each has sent its preamble (its cursor is set), and
 		// the hub has seen the store's head, so a later write moves it.
 		waitFor(t, "the streams to open at the head", func() bool {
 			head, err := h.srv.opt.Store.Head(bg)
 			hub, _ := h.srv.hub.state()
-			return err == nil && hub == head && streamsOpen(feed, erin)
+			return err == nil && hub == head && streamsOpen(feed, erin, notifier)
 		})
 		mine := onCluster(change("c-9", "gate-api", "cleared", "group:default/team-gate", 1, "2026-10-30T12:40:00Z", nil), "hangar-prod")
 		theirs := onCluster(change("c-8", "other-app", "cleared", "group:default/team-other", 1, "2026-10-30T12:40:00Z", nil), "other-cluster")
@@ -318,7 +319,17 @@ func TestTheStream(t *testing.T) {
 		if e := next(t, erin); e.event != "clearance" || e.id != "12" {
 			t.Fatalf("%+v", e)
 		}
+		// The notifier: both changes' clearance events, whatever their owner, and never a record.
+		for _, want := range []struct{ seq, id string }{{"11", "c-8"}, {"12", "c-9"}} {
+			e := next(t, notifier)
+			var sev StreamEvent
+			if err := json.Unmarshal([]byte(e.data), &sev); err != nil || e.event != "clearance" || e.id != want.seq || sev.Change["id"] != want.id {
+				t.Fatalf("notifier %+v %+v %v", e, sev, err)
+			}
+		}
 		select {
+		case e := <-notifier:
+			t.Fatalf("the notifier saw %+v", e)
 		case e := <-feed:
 			t.Fatalf("the feed reader saw %+v", e)
 		case e := <-erin:

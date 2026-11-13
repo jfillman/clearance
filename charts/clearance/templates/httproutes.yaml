@@ -1,6 +1,6 @@
-{{- range $component := list "core" "api" "web" }}
+{{- range $component := list "core" "api" "web" "slack" }}
 {{- $r := index $.Values.httpRoutes $component }}
-{{- if and $r.enabled (or (eq $component "core") (and (eq $component "api") $.Values.api.enabled) (and (eq $component "web") $.Values.web.enabled)) }}
+{{- if and $r.enabled (or (eq $component "core") (and (eq $component "api") $.Values.api.enabled) (and (eq $component "web") $.Values.web.enabled) (and (eq $component "slack") $.Values.slack.enabled)) }}
 {{- if not $r.parentRefs }}{{ fail (printf "httpRoutes.%s.parentRefs is required when it is enabled" $component) }}{{ end }}
 ---
 apiVersion: gateway.networking.k8s.io/v1

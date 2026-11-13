@@ -150,6 +150,8 @@ jobs:
           - {name: clearance-witness, dockerfile: cmd/clearance-witness/Dockerfile}
           # The Kubernetes audit collector (O-3).
           - {name: clearance-observe-k8s, dockerfile: providers/observe-k8s/Dockerfile}
+          # The Slack surface (docs/slack.md): its own image, so the websocket client is not in the core's.
+          - {name: clearance-slack, dockerfile: cmd/clearance-slack/Dockerfile}
     steps:
       - uses: actions/checkout@v4
       - id: ref
@@ -428,6 +430,7 @@ jobs:
           wait_digest=$(cat digests/clearance-wait)
           observe_k8s_digest=$(cat digests/clearance-observe-k8s)
           observe_aws_digest=$(cat digests/clearance-observe-aws)
+          slack_digest=$(cat digests/clearance-slack)
           cat >> notes.md <<EOF
 
           ### Artifacts
@@ -440,6 +443,7 @@ jobs:
           - Kubernetes audit collector image: \`ghcr.io/${owner}/clearance-observe-k8s:${GITHUB_REF_NAME}\`, index digest \`${observe_k8s_digest}\` (linux/amd64, linux/arm64; SPDX SBOM and keyless signature)
           - Kubernetes audit collector chart: \`helm install clearance-observe-k8s oci://ghcr.io/${owner}/charts/clearance-observe-k8s --version ${VERSION}\`, digest \`${OBSERVE_K8S_CHART_DIGEST}\`
           - AWS collector image: \`ghcr.io/${owner}/clearance-observe-aws:${GITHUB_REF_NAME}\`, index digest \`${observe_aws_digest}\` (linux/amd64, linux/arm64; SPDX SBOM and keyless signature)
+          - Slack surface image: \`ghcr.io/${owner}/clearance-slack:${GITHUB_REF_NAME}\`, index digest \`${slack_digest}\` (linux/amd64, linux/arm64; SPDX SBOM and keyless signature; deployed by the clearance chart's slack.enabled)
           - AWS collector chart: \`helm install clearance-observe-aws oci://ghcr.io/${owner}/charts/clearance-observe-aws --version ${VERSION}\`, digest \`${OBSERVE_AWS_CHART_DIGEST}\`
           EOF
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag \
