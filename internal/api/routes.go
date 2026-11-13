@@ -18,6 +18,8 @@ type Route struct {
 	Summary                   string
 	Response                  any   // a value of the 200 answer's Go type, for the contract's schema
 	Errors                    []int // the other statuses it answers
+	// AlsoResponse is a second Go type the 200 answer may be (a query switch): the contract then says oneOf Response, AlsoResponse.
+	AlsoResponse any
 	// Stream is a route that answers text/event-stream (Response is one event's data): no handler deadline, its own
 	// write deadlines, and a portal's buffered proxy does not forward it.
 	Stream bool
@@ -147,7 +149,7 @@ var routeTable = []Route{
 			"observations had their source verified (source_integrity). clean is true only when nothing was seen uncleared and every feed was healthy for the " +
 			"whole window: a window with no healthy health record, or whose last record has gone stale, is blind and " +
 			"never clean. Any signed-in person, a delegate for one, an auditor or a configured observation reader (O-5): the whole scope; secret-bearing keys in a record's state_change are redacted for all but an auditor",
-		Response: ScopeStatements{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).getCoverage},
+		Response: ScopeStatements{}, AlsoResponse: ScopeNames{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).getCoverage},
 	{OperationID: "getEvidence", Method: "GET", Path: "/v1/evidence/{seq}", Roles: PersonRoles, Params: []string{},
 		Summary:  "One evidence record with its hash",
 		Response: Record{}, Errors: []int{400, 401, 403, 404, 503}, serve: (*Server).getEvidence},

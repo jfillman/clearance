@@ -280,3 +280,20 @@ func TestNamesOnlyCoverageListsScopesAndBuildsNoStatement(t *testing.T) {
 		})
 	}
 }
+
+func TestNamesOnlyCoverageCapsAtMaxScopeNames(t *testing.T) {
+	for _, b := range backends {
+		t.Run(b.name, func(t *testing.T) {
+			c := &rawChain{}
+			for i := 0; i < MaxScopeNames+1; i++ {
+				c.health(t0.Add(time.Duration(i)*time.Second), fmt.Sprintf("aws:%04d", i), "cloudtrail", "fake-trail", "healthy", false)
+			}
+			now := t0.Add(72 * time.Hour)
+			h := newHarness(t, b, world{raw: c.rows}, func(o *Options) { o.Clock = func() time.Time { return now } })
+			out := h.ok("/v1/coverage?names=only&from="+evidence.ISO(t0.Add(48*time.Hour)), "audit")
+			if n := len(out["scopes"].([]any)); n != MaxScopeNames || out["truncated"] != true {
+				t.Fatalf("%d names, truncated %v", n, out["truncated"])
+			}
+		})
+	}
+}

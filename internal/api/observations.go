@@ -228,6 +228,9 @@ func (s *Server) getCoverage(w http.ResponseWriter, r *http.Request, v *Viewer) 
 		return
 	}
 	if q["names"] == "only" { // the scope list straight from the one distinct-names read: no statement is built
+		if len(scopes) > MaxScopeNames { // scopesIn read one past the cap only to learn it was cut
+			scopes = scopes[:MaxScopeNames]
+		}
 		names := ScopeNames{From: evidence.ISO(from), To: evidence.ISO(to), Scopes: []ScopeName{}, Truncated: cut, NamesOnly: true}
 		for _, sc := range scopes {
 			names.Scopes = append(names.Scopes, ScopeName{Scope: sc})

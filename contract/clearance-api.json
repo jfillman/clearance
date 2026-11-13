@@ -3351,6 +3351,47 @@
         ],
         "type": "object"
       },
+      "ScopeName": {
+        "properties": {
+          "scope": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope"
+        ],
+        "type": "object"
+      },
+      "ScopeNames": {
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "names_only": {
+            "type": "boolean"
+          },
+          "scopes": {
+            "items": {
+              "$ref": "#/components/schemas/ScopeName"
+            },
+            "type": "array"
+          },
+          "to": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "from",
+          "names_only",
+          "scopes",
+          "to",
+          "truncated"
+        ],
+        "type": "object"
+      },
       "ScopeStatements": {
         "properties": {
           "from": {
@@ -4288,7 +4329,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScopeStatements"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ScopeStatements"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ScopeNames"
+                    }
+                  ]
                 }
               }
             },
