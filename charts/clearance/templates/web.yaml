@@ -1,0 +1,127 @@
+{{- if .Values.web.enabled }}
+{{- $w := .Values.web }}
+{{- $_ := required "web.publicURL is required when web.enabled" $w.publicURL }}
+{{- $_ := required "web.issuer is required when web.enabled" $w.issuer }}
+{{- $_ := required "web.clientSecret.existingSecret is required when web.enabled (the client secret is never a value)" $w.clientSecret.existingSecret }}
+{{- if and (not $w.apiURL) (not .Values.api.enabled) }}{{ fail "web needs clearance-api: set api.enabled or web.apiURL" }}{{ end }}
+{{- if gt (int $w.replicas) 1 }}{{ fail "web.replicas must be 1: sessions are in memory (more would need sticky sessions)" }}{{ end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "clearance.webName" . }}
+  labels:
+    {{- include "clearance.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  # One replica: sessions live in memory. Recreate so two pods never overlap (a restart signs everyone out anyway).
+  replicas: {{ $w.replicas }}
+  revisionHistoryLimit: 5
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "clearance.selector" (dict "ctx" . "component" "web") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "clearance.selector" (dict "ctx" . "component" "web") | nindent 8 }}
+        {{- with $w.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
+      {{- with $w.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "clearance.webSA" . }}
+      # The web tier holds no Kubernetes credential: the person's ID token is the only identity it forwards.
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 30
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $w.hostAliases }}
+      hostAliases:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $w.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext:
+        {{- include "clearance.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: web
+          image: {{ include "clearance.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["web"]
+          ports:
+            - {name: http, containerPort: 8080, protocol: TCP}
+          env:
+            - name: CLEARANCE_WEB_LISTEN
+              value: ":8080"
+            - name: CLEARANCE_WEB_PUBLIC_URL
+              value: {{ $w.publicURL | quote }}
+            - name: CLEARANCE_WEB_ISSUER
+              value: {{ $w.issuer | quote }}
+            - name: CLEARANCE_WEB_CLIENT_ID
+              value: {{ $w.clientID | quote }}
+            - name: CLEARANCE_WEB_CLIENT_SECRET_FILE
+              value: /etc/clearance/web/client-secret
+            - name: CLEARANCE_WEB_API_URL
+              value: {{ default (printf "http://%s.%s.svc:%v" (include "clearance.apiName" .) .Release.Namespace .Values.service.port) $w.apiURL | quote }}
+            - name: CLEARANCE_WEB_CORE_URL
+              value: {{ default (printf "http://%s.%s.svc:%v" (include "clearance.coreName" .) .Release.Namespace .Values.service.port) $w.coreURL | quote }}
+            {{- range $k, $env := dict "gatewayURL" "CLEARANCE_WEB_GATEWAY_URL" "sessionTTL" "CLEARANCE_WEB_SESSION_TTL" "idleTimeout" "CLEARANCE_WEB_IDLE_TIMEOUT" "freshMaxAge" "CLEARANCE_WEB_FRESH_MAX_AGE" "requestTimeout" "CLEARANCE_WEB_REQUEST_TIMEOUT" "maxSessions" "CLEARANCE_WEB_MAX_SESSIONS" "maxBodyBytes" "CLEARANCE_WEB_MAX_BODY_BYTES" "maxResponseBytes" "CLEARANCE_WEB_MAX_RESPONSE_BYTES" }}
+            {{- with index $w $k }}
+            - name: {{ $env }}
+              value: {{ (kindIs "float64" . | ternary (int64 .) .) | toString | quote }}
+            {{- end }}
+            {{- end }}
+            {{- with $w.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- include "clearance.probes" (dict "startupSeconds" 30) | nindent 10 }}
+          resources:
+            {{- toYaml $w.resources | nindent 12 }}
+          securityContext:
+            {{- include "clearance.securityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: client-secret
+              mountPath: /etc/clearance/web
+              readOnly: true
+            {{- with $w.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: client-secret
+          secret:
+            secretName: {{ $w.clientSecret.existingSecret }}
+            defaultMode: 0400
+            items:
+              - {key: {{ $w.clientSecret.key | quote }}, path: client-secret}
+        {{- with $w.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with $w.nodeSelector }}
+      nodeSelector: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $w.tolerations }}
+      tolerations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $w.affinity }}
+      affinity: {{ toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "clearance.webName" . }}
+  labels:
+    {{- include "clearance.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "clearance.selector" (dict "ctx" . "component" "web") | nindent 4 }}
+  ports:
+    - {name: http, port: {{ .Values.service.port }}, targetPort: http, protocol: TCP}
+{{- end }}

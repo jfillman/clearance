@@ -171,6 +171,15 @@ unset, so the core's default applies. Lists are joined with commas.
 | `api.pool`, `api.definitionsInterval` | 5, 30 | `CLEARANCE_API_POOL`, `CLEARANCE_API_DEFINITIONS_INTERVAL`. |
 | `api.resources`, `api.serviceAccount.*`, `api.topologySpreadConstraints` and the same pod settings as the core | | |
 | `service.type`, `service.port` | ClusterIP, 8080 | |
+| `web.enabled` | false | The standalone web UI (`clearance web`, [web.md](web.md)): a Deployment of one replica (sessions are in memory; the chart refuses more), a Service, a ServiceAccount with no token. |
+| `web.publicURL`, `web.issuer`, `web.clientID` | none, none, `clearance-web` | `CLEARANCE_WEB_PUBLIC_URL`, `_ISSUER`, `_CLIENT_ID`. `publicURL` and `issuer` are required when enabled. |
+| `web.clientSecret.existingSecret`, `web.clientSecret.key` | none, `client-secret` | The Secret holding the confidential client's secret, mounted read-only at `/etc/clearance/web/client-secret` (`CLEARANCE_WEB_CLIENT_SECRET_FILE`). Required; never a value. |
+| `web.apiURL`, `web.coreURL`, `web.gatewayURL` | this release's api and core Services, none | `CLEARANCE_WEB_API_URL`, `_CORE_URL`, `_GATEWAY_URL` (the gateway's person controls; unset, `/api/gateway/*` does not exist). |
+| `web.sessionTTL`, `idleTimeout`, `freshMaxAge`, `requestTimeout`, `maxSessions`, `maxBodyBytes`, `maxResponseBytes` | server defaults | The matching `CLEARANCE_WEB_*` limits, set only when non-empty. |
+| `web.resources`, `web.serviceAccount.*`, `web.podLabels`, `web.nodeSelector`, ... | | The same pod settings as the api. |
+| `networkPolicy.web.from` | | NetworkPolicyPeers that may call the web UI on 8080 (your Gateway). |
+| `networkPolicy.web.idp.{to,ports}`, `.gateway.{to,ports}`, `.extraEgress` | none, `[443]`; none, `[8080]` | The web pod's egress to the people IdP and the gateway (peers, not host names), and extra rules. DNS, the api and the core are always allowed. |
+| `httpRoutes.web.{enabled,parentRefs,hostnames,matches}` | | An HTTPRoute to the web UI, every path. |
 | `rbac.authDelegator` | true | Binds `system:auth-delegator` (TokenReview) to the core's and the api's service accounts. |
 
 The api is also given `CLEARANCE_CORE_URL` (the core's Service, where writes go) and the shared identity, Backstage,

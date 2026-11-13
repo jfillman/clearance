@@ -146,6 +146,14 @@ networkPolicy:
   kubeAPIServer:
     cidrs: ["10.96.0.1/32", "172.18.0.2/32"]
     ciliumEntity: true
+  web:
+    from:
+      - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: traefik}}
+    idp:
+      to: [{ipBlock: {cidr: 203.0.113.0/24}}]
+    gateway:
+      to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: autopilot-system}}
   extraEgress:
     - to: [{ipBlock: {cidr: 0.0.0.0/0}}]
       ports: [{protocol: TCP, port: 443}]
@@ -159,6 +167,10 @@ httpRoutes:
     enabled: true
     parentRefs: [{name: traefik-gateway, namespace: traefik}]
     hostnames: [clearance-api.example.test]
+  web:
+    enabled: true
+    parentRefs: [{name: traefik-gateway, namespace: traefik}]
+    hostnames: [clearance.example.test]
 core:
   maxClockSkew: 2m
 
@@ -166,3 +178,16 @@ attestation:
   rekorUrl: https://rekor.example.com
   keyless:
     fulcioUrl: https://fulcio.example.com
+web:
+  enabled: true
+  publicURL: https://clearance.example.test
+  issuer: https://people-dex.example.test
+  clientSecret: {existingSecret: clearance-web-oidc}
+  gatewayURL: http://autopilot-gateway.autopilot-system.svc:8080
+  sessionTTL: 30m
+  idleTimeout: 10m
+  freshMaxAge: 5m
+  requestTimeout: 60s
+  maxSessions: 5000
+  maxBodyBytes: 1048576
+  maxResponseBytes: 33554432

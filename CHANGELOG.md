@@ -19,7 +19,13 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   `/api/read/*` to clearance-api, `/api/write/*` to the core and `/api/gateway/*` to the gateway with the person's own ID
   token as the bearer and `X-Clearance-Via: web` on writes, from an allowlist of headers; CSRF token and Origin check on
   every non-GET; strict CSP and the usual headers; passes the core's `401 DG-AUTH-NOT-FRESH` refusal on with a fresh-login
-  redirect (`prompt=login`, `max_age`). No policy, no answer caching. Config `CLEARANCE_WEB_*`. Not in the chart yet.
+  redirect (`prompt=login`, `max_age`). No policy, no answer caching. Config `CLEARANCE_WEB_*`.
+- chart: the web UI (WEB-5), off by default (`web.enabled`). One-replica Deployment running `clearance web` (sessions are in
+  memory; more is refused), Service, optional `httpRoutes.web`, client secret mounted as a file from an existing Secret
+  (`web.clientSecret.existingSecret`), the API and core URLs defaulting to the release's Services, probes, the chart's
+  hardened security context, no service-account token, and a NetworkPolicy (ingress `networkPolicy.web.from`; egress DNS, the
+  IdP, the api, the core, the optional gateway). The core's and the api's policies admit the web pod. Render tests cover off,
+  on, every `CLEARANCE_WEB_*` variable having a value, and the refusals. See [docs/web.md](docs/web.md).
 
 ## [0.46.0] - 2026-11-13
 
