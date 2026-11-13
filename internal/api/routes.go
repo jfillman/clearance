@@ -181,12 +181,14 @@ var routeTable = []Route{
 			"verdicts that GitHub App installation recorded",
 		Response: RecordList{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).listProvenance},
 	{OperationID: "listClearances", Method: "GET", Path: "/v1/clearances", Roles: FeedRoles,
-		Params: []string{"app", "env", "state", "repo", "pr", "tier", "since", "limit", "after", "cluster"},
+		Params: []string{"app", "env", "state", "repo", "pr", "tier", "since", "limit", "after", "cluster", "awaiting"},
 		Summary: "The deployment gate's changes, newest first: tier and why, state (holding, cleared, denied, " +
 			"expired, superseded, degraded, exception), the requirement and the approvals so far, what the grant binds to. A person sees " +
 			"their apps' changes and the ones their groups may clear; the cursor is updated_at. cluster=<c>&state=" +
 			"cleared is the grant feed: the cluster's cleared changes whose clearance token is live, each with its " +
-			"token; a feed reader (CLEARANCE_API_FEED_READERS) may read only that, for its own clusters",
+			"token; a feed reader (CLEARANCE_API_FEED_READERS) may read only that, for its own clusters. awaiting=me keeps the holding " +
+			"changes the caller may clear now (the gate's own rule: in the owner group or an unfilled outside group, not the proposer, " +
+			"not already an approver); a person's token or a delegate naming one",
 		Response: ChangePage{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).listClearances},
 	{OperationID: "countClearances", Method: "GET", Path: "/v1/clearances/counts", Roles: PersonRoles,
 		Params: []string{"app", "env", "state", "since", "by"},
@@ -241,6 +243,11 @@ var routeTable = []Route{
 			"the records and changes they may read; a feed reader only clearance events of its clusters. A comment " +
 			"every 15 s keeps it open; the server ends it after 10 minutes (reconnect with Last-Event-ID)",
 		Response: StreamEvent{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).stream},
+	{OperationID: "whoami", Method: "GET", Path: "/v1/whoami", Roles: AnyCaller, Params: []string{},
+		Summary: "Who the token is and what the api resolves it to: the principal and kind, every role it holds, the " +
+			"viewer's role, the person the reads are as (and the delegate, if one asked), whether that person is an admin " +
+			"(CLEARANCE_ADMINS), their groups, owned apps and owned agents, the token's issuer and expiry. No secret",
+		Response: WhoAmI{}, Errors: []int{401, 403}, serve: (*Server).whoami},
 	{OperationID: "getContract", Method: "GET", Path: "/v1/contract", Roles: []string{RoleAny}, Params: []string{},
 		Summary:  "This contract",
 		Response: map[string]any{}}, // served by getContract (New), which reads this table

@@ -109,9 +109,11 @@ type Access struct {
 	// ObservationReaders are principal globs that read the observation reads (coverage, observations, observation
 	// health, exceptions) and nothing else.
 	ObservationReaders []string
-	FeedReaders        []FeedReader
-	Directory          Directory
-	Ownership          Ownership
+	// Admins are principal globs (user:<login>, CLEARANCE_ADMINS, the core's own list): reported by whoami.
+	Admins      []string
+	FeedReaders []FeedReader
+	Directory   Directory
+	Ownership   Ownership
 	// Owners is each live agent definition's owner group, by agent name ("" when it names none).
 	Owners func() map[string]string
 }

@@ -154,6 +154,7 @@ func (s *Server) endpoint(rt Route) http.HandlerFunc {
 				return
 			}
 			notePrincipal(r, p.ID)
+			r = r.WithContext(authn.WithPrincipal(r.Context(), p))
 			var aerr *apiError
 			if v, aerr = s.opt.Access.ViewerFor(r.Context(), p, r.Header.Get(vocab.Get().OnBehalfOfHeader), rt.Roles); aerr != nil {
 				aerr.write(w)
