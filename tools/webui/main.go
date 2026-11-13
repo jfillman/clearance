@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -171,10 +172,16 @@ func Extract(tgz []byte, dest string) error {
 	backup := stage + ".old"
 	hadOld := true
 	if err := os.Rename(dest, backup); err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			hadOld = false
+		case errors.Is(err, syscall.EXDEV):
+			// A directory from a lower overlayfs layer (a Docker build's COPY'd tree) cannot be renamed: replace its
+			// contents in place instead. The archive is already validated; only a full disk can fail this.
+			return replaceContents(stage, dest)
+		default:
 			return err
 		}
-		hadOld = false
 	}
 	if err := os.Rename(stage, dest); err != nil {
 		if hadOld {
@@ -184,6 +191,28 @@ func Extract(tgz []byte, dest string) error {
 	}
 	if hadOld {
 		_ = os.RemoveAll(backup)
+	}
+	return nil
+}
+
+func replaceContents(stage, dest string) error {
+	old, err := os.ReadDir(dest)
+	if err != nil {
+		return err
+	}
+	for _, e := range old {
+		if err := os.RemoveAll(filepath.Join(dest, e.Name())); err != nil {
+			return err
+		}
+	}
+	news, err := os.ReadDir(stage)
+	if err != nil {
+		return err
+	}
+	for _, e := range news {
+		if err := os.Rename(filepath.Join(stage, e.Name()), filepath.Join(dest, e.Name())); err != nil {
+			return err
+		}
 	}
 	return nil
 }

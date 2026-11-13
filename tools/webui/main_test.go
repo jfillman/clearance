@@ -186,3 +186,26 @@ func TestCommittedLockParses(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// The EXDEV fallback (a Docker build's overlayfs directory cannot be renamed) replaces the contents in place.
+func TestReplaceContents(t *testing.T) {
+	root := t.TempDir()
+	d, s := filepath.Join(root, "static"), filepath.Join(root, "stage")
+	os.MkdirAll(filepath.Join(d, "old"), 0o755)
+	os.WriteFile(filepath.Join(d, "index.html"), []byte("placeholder"), 0o644)
+	os.MkdirAll(filepath.Join(s, "assets"), 0o755)
+	os.WriteFile(filepath.Join(s, "index.html"), []byte("ui"), 0o644)
+	os.WriteFile(filepath.Join(s, "assets", "a.js"), []byte("js"), 0o644)
+	if err := replaceContents(s, d); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(d, "index.html")); string(b) != "ui" {
+		t.Errorf("index: %q", b)
+	}
+	if _, err := os.Stat(filepath.Join(d, "old")); err == nil {
+		t.Error("old entry kept")
+	}
+	if _, err := os.Stat(filepath.Join(d, "assets", "a.js")); err != nil {
+		t.Error(err)
+	}
+}
