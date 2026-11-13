@@ -163,26 +163,27 @@ func Extract(tgz []byte, dest string) error {
 	if st, err := os.Stat(filepath.Join(stage, "index.html")); err != nil || !st.Mode().IsRegular() {
 		return errors.New("archive has no index.html at its root")
 	}
-	if err := os.MkdirAll(dest, 0o755); err != nil {
+	if err := os.Chmod(stage, 0o755); err != nil {
 		return err
 	}
-	old, err := os.ReadDir(dest)
-	if err != nil {
-		return err
-	}
-	for _, e := range old {
-		if err := os.RemoveAll(filepath.Join(dest, e.Name())); err != nil {
+	// Swap, not empty-then-fill: the old directory is renamed aside, the validated stage renamed into place, and the
+	// old one removed only after that; if the second rename fails the old bundle is put back.
+	backup := stage + ".old"
+	hadOld := true
+	if err := os.Rename(dest, backup); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
+		hadOld = false
 	}
-	news, err := os.ReadDir(stage)
-	if err != nil {
+	if err := os.Rename(stage, dest); err != nil {
+		if hadOld {
+			_ = os.Rename(backup, dest)
+		}
 		return err
 	}
-	for _, e := range news {
-		if err := os.Rename(filepath.Join(stage, e.Name()), filepath.Join(dest, e.Name())); err != nil {
-			return err
-		}
+	if hadOld {
+		_ = os.RemoveAll(backup)
 	}
 	return nil
 }
