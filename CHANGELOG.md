@@ -25,6 +25,10 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 - api: `GET /v1/whoami`, the caller's principal, kind, roles held, groups, owned apps, admin or not (`CLEARANCE_ADMINS`)
   and the token's issuer and expiry; and `awaiting=me` on `GET /v1/clearances`, the holding changes the caller may clear
   now, decided by the gate's own `gate.RoleFor` so the api re-implements no policy.
+- api: `GET /v1/coverage?names=only`, the scope list without statements: `{from, to, scopes: [{scope}...], truncated, names_only: true}`
+  from the one distinct-names read (`Store.Scopes`), up to 1000 names, no per-scope statement (a scope picker no longer waits
+  seconds for statements it discards). `names` with a `scope`, or any value but `only`, is 400. Tests on both stores prove no
+  statement read happens.
 - api: `GET /v1/clearances/{id}/records`, one change's `deploy.*` records in chain order (`seq`, `hash`, `tool`, `ts`,
   `principal`, the record), paged by `seq` and visible as the change is; and `request: {seq, hash}` (the change's first
   `deploy.request`) on `GET /v1/clearances/{id}`. Backed by the new partial index `clearance_evidence_change`

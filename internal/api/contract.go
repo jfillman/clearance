@@ -78,8 +78,12 @@ func ContractDoc(gateway, core string) (map[string]any, error) {
 		if rt.Stream {
 			ctype = "text/event-stream"
 		}
+		ok := g.schema(reflect.TypeOf(rt.Response))
+		if rt.AlsoResponse != nil {
+			ok = map[string]any{"oneOf": []any{ok, g.schema(reflect.TypeOf(rt.AlsoResponse))}}
+		}
 		resps := map[string]any{"200": map[string]any{"description": "OK", "content": map[string]any{
-			ctype: map[string]any{"schema": g.schema(reflect.TypeOf(rt.Response))}}}}
+			ctype: map[string]any{"schema": ok}}}}
 		for _, c := range rt.Errors {
 			resps[strconv.Itoa(c)] = map[string]any{"description": http.StatusText(c), "content": map[string]any{
 				"application/json": map[string]any{"schema": g.schema(reflect.TypeOf(ErrorBody{}))}}}
