@@ -402,6 +402,55 @@ type ProviderEvent struct {
 // String is a pointer to s, for ProviderEvent's optional fields.
 func String(s string) *string { return &s }
 
+// -- PUT /v1/targets/{source} --------------------------------------------------------------------------------------
+
+// TargetsRequest is every target one source declares (the Map's registry): it replaces the set the core holds for that
+// source. Targets nil is sent as [] (withdraw everything the source declared).
+type TargetsRequest struct {
+	Targets []Target `json:"targets"`
+}
+
+// Target is one declared target: what it is, where it belongs, the coverage scope its observations arrive under, the
+// gates that guard it and the observers that watch it.
+type Target struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Kind  string `json:"kind"` // k8s-namespace, k8s-cluster, aws-account, github-environment or other
+	Group string `json:"group"`
+	Env   string `json:"env,omitempty"`
+	App   string `json:"app,omitempty"`
+	Owner string `json:"owner,omitempty"`
+	// Registry is the target's registry tier, a lower-case name.
+	Registry  string           `json:"registry,omitempty"`
+	Scope     string           `json:"scope,omitempty"`
+	Gates     []TargetGate     `json:"gates"`
+	Observers []TargetObserver `json:"observers"`
+}
+
+// TargetGate is a gate that guards a target: its type, its instance (the name its records carry) and its mode
+// (enforce or flag).
+type TargetGate struct {
+	Type     string `json:"type"`
+	Instance string `json:"instance"`
+	Mode     string `json:"mode"`
+}
+
+// TargetObserver is an observer that watches a target: its provider and the source its health records carry.
+type TargetObserver struct {
+	Provider string `json:"provider"`
+	Source   string `json:"source"`
+}
+
+// TargetsResult is what a publish did: the set's digest, how many targets it declares, whether it differs from what the
+// core held (a change is one targets.load record, whose seq is Seq).
+type TargetsResult struct {
+	Source  string `json:"source"`
+	Digest  string `json:"digest"`
+	Targets int    `json:"targets"`
+	Changed bool   `json:"changed"`
+	Seq     *int64 `json:"seq"`
+}
+
 // -- PUT /v1/definitions -------------------------------------------------------------------------------------------
 
 // DefinitionsRequest is the provider's whole set of cluster-pinned agent definitions. Provider empty is

@@ -47,6 +47,8 @@ type Counts struct {
 	Items    []Count `json:"items"`
 	Total    int64   `json:"total"`
 	Outcomes string  `json:"outcomes,omitempty"`
+	// Bucket is the bucket width of a bucketed count; each item then carries its bucket's start.
+	Bucket string `json:"bucket,omitempty"`
 	// Per is what by=cost grouped by (task, session, agent or principal); Cost is the groups' cost summed.
 	Per  string   `json:"per,omitempty"`
 	Cost *CostSum `json:"cost,omitempty"`
@@ -154,13 +156,39 @@ var routeTable = []Route{
 		Response: Verified{}, Errors: []int{401, 403, 503}, serve: (*Server).verifyEvidence},
 	{OperationID: "countEvidence", Method: "GET", Path: "/v1/evidence/counts", Roles: PersonRoles,
 		Params: []string{"by", "per", "task", "session", "agent", "tool", "principal", "decision", "rule", "app", "since",
-			"until", "outcomes", "installation", "coverage"},
-		Summary: "Records you may see, counted by rule, tool, agent, app, decision or coverage (`by`), with the same filters as " +
-			"the list. outcomes=exclude (default) counts each decision once; include or only count the outcome records too. " +
+			"until", "outcomes", "installation", "coverage", "scope", "bucket"},
+		Summary: "Records you may see, counted by rule, tool, agent, app, decision, coverage, provider (the registered " +
+			"provider or gate that wrote it) or boundary (`by`), with the same filters as the list, and scope=<scope> " +
+			"for one observed scope's records. bucket=1m|5m|15m|1h|6h|1d cuts the window (since is required, until " +
+			"defaults to now, at most 1500 buckets) into epoch-aligned time buckets: each item is then a bucket (its start) " +
+			"and a key, in time order, at most 10000. outcomes=exclude (default) counts each decision once; include or only count the outcome records too. " +
 			"by=cost sums what runs cost instead, per task (default: the task tree), session (one run), agent or " +
 			"principal (`per`): the model-call outcomes' usage (charged_tokens is what the model proxy charged the " +
 			"session budgets) and the run.finish records' runs and wall seconds; each item's count is its model calls",
 		Response: Counts{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).countEvidence},
+	{OperationID: "listTargets", Method: "GET", Path: "/v1/targets", Roles: ObservationRoles,
+		Params: []string{"source", "group", "kind", "env", "app"},
+		Summary: "The declared target registry: what each publishing source (a cluster's gitops render, an account's " +
+			"bootstrap) declares should be protected, the union of every source's set (PUT /v1/targets/{source} on the " +
+			"core). A target has an id, name, kind (k8s-namespace, k8s-cluster, aws-account, github-environment, other), " +
+			"group (the cluster or account), env, app, owner, registry tier (a name), the coverage scope its " +
+			"observations arrive under, its gates (type, instance, mode enforce or flag) and its observers (provider, " +
+			"source); sources lists each set's digest (the one its targets.load record carries). A declaration, not " +
+			"evidence: GET /v1/map reconciles it with the records",
+		Response: TargetList{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).listTargets},
+	{OperationID: "getMap", Method: "GET", Path: "/v1/map", Roles: ObservationRoles,
+		Params: []string{"from", "to", "target", "group", "expand"},
+		Summary: "The coverage map in one read (from and to, RFC 3339; default the last 24 hours). The declared registry " +
+			"joined with the records, computed in a fixed number of aggregate queries: nodes (gate types with their " +
+			"instances, mode mix and what they decided; target groups and their targets with coverage mix, observer health " +
+			"and lanes; observers), edges (a gate type or observer to a group, or, with expand=<group>[,<group>], to each " +
+			"of its targets: volume is decisions, status the worst state), the needs-attention list (targets with no gate, " +
+			"blind or degraded observers, gates in flag mode, changes holding, declared gates that decided nothing and " +
+			"decisions from gates nobody declared) and `partial`: what the records cannot yet say. target=<id> is the " +
+			"one-target detail (also the changes moving through it, its exceptions and recent evidence); group=<g> narrows " +
+			"to one cluster or account. Observation facts are whole-scope for every reader (O-5); gate decisions, " +
+			"exceptions and evidence are the records the viewer may see",
+		Response: MapResponse{}, Errors: []int{400, 401, 403, 404, 503}, serve: (*Server).getMap},
 	{OperationID: "getPolicy", Method: "GET", Path: "/v1/policy", Roles: PersonRoles, Params: []string{},
 		Summary: "The policy in force: the deny rules in evaluation order (id, name, CEL expression, message, hint, " +
 			"bundle, `pack`), the tool registry with tiers, \"core\" and the loaded bundles (`packs`)",

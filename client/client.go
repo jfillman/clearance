@@ -189,6 +189,29 @@ func (c *Client) PublishDefinitions(ctx context.Context, req *DefinitionsRequest
 	return &out, nil
 }
 
+// PublishTargets replaces the core's declared targets for source (the provider is registered with targets naming it).
+// Publishing the same set again changes and records nothing, so it is retried as an evaluation is.
+func (c *Client) PublishTargets(ctx context.Context, source string, req *TargetsRequest) (*TargetsResult, error) {
+	body := *req
+	if body.Targets == nil {
+		body.Targets = []Target{}
+	}
+	for i := range body.Targets {
+		if body.Targets[i].Gates == nil {
+			body.Targets[i].Gates = []TargetGate{}
+		}
+		if body.Targets[i].Observers == nil {
+			body.Targets[i].Observers = []TargetObserver{}
+		}
+	}
+	var out TargetsResult
+	if err := c.call(ctx, call{op: "publishTargets", method: "PUT", path: "/v1/targets/" + url.PathEscape(source), body: &body,
+		retry: retryAny}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // RegisterChange registers (or re-evaluates) a change; the caller is a verifier. Registering is idempotent, so it
 // is retried as an evaluation is.
 func (c *Client) RegisterChange(ctx context.Context, req *ChangeRequest) (*Change, error) {

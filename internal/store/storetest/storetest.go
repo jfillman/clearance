@@ -48,6 +48,7 @@ func Run(t *testing.T, open Opener) {
 		{"LedgerCheckpoints", testLedgerCheckpoints},
 		{"Changes", testChanges},
 		{"Definitions", testDefinitions},
+		{"Targets", testTargets},
 		{"Tokens", testTokens},
 		{"SigningKeys", testSigningKeys},
 		{"Feeds", testFeeds},
@@ -544,6 +545,57 @@ func testDefinitions(t *testing.T, open Opener) {
 	}
 	if got, _ := s.Definitions(bg); len(got) != 1 || got[0].Name != "z" {
 		t.Fatalf("failed replace changed definitions: %v", got)
+	}
+}
+
+func testTargets(t *testing.T, open Opener) {
+	s := open(t, nil)
+	set := func(source, digest, doc string) store.TargetSet {
+		return store.TargetSet{Source: source, Digest: digest, Doc: json.RawMessage(doc)}
+	}
+	put := func(sets ...store.TargetSet) error {
+		return s.Atomic(bg, func(tx store.Tx) error {
+			for _, x := range sets {
+				if err := tx.PutTargets(bg, x); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
+	if got, err := s.Targets(bg); err != nil || len(got) != 0 {
+		t.Fatalf("empty store: %v %v", got, err)
+	}
+	if err := put(set("b", "d2", `[{"id":"y"}]`), set("a", "d1", `[{"id":"x"}]`)); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.Targets(bg)
+	if len(got) != 2 || got[0].Source != "a" || got[1].Source != "b" || got[0].Digest != "d1" || got[0].UpdatedAt.IsZero() {
+		t.Fatalf("by source: %+v", got)
+	}
+	if err := put(set("a", "d3", `[]`)); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.Targets(bg)
+	if len(got) != 2 || got[0].Digest != "d3" || string(got[0].Doc) != "[]" || got[1].Digest != "d2" {
+		t.Fatalf("replace is per source: %+v", got)
+	}
+	if err := s.Atomic(bg, func(tx store.Tx) error {
+		if err := tx.PutTargets(bg, set("c", "d4", `[]`)); err != nil {
+			return err
+		}
+		if in, _ := tx.Targets(bg); len(in) != 3 {
+			t.Errorf("a transaction reads its own write: %v", in)
+		}
+		return errors.New("roll back")
+	}); err == nil {
+		t.Fatal("want the rollback error")
+	}
+	if got, _ := s.Targets(bg); len(got) != 2 {
+		t.Fatalf("a rolled-back publish is not kept: %v", got)
+	}
+	if err := put(set("z", "d", `{`)); err == nil {
+		t.Fatal("a doc that is not JSON: want an error")
 	}
 }
 

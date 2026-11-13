@@ -145,6 +145,25 @@ def test_publish_definitions_with_the_providers_bundled_set(core):
     assert [r.name for r in c.publish_definitions([], bundled=[]).cleared] == ["parachute"]
 
 
+def test_publish_targets(core):
+    c = cc.CoreClient(core.url, token="hangar-prod/gitops/targets")
+    t = {"id": "gate-api-prod", "name": "gate-api", "kind": "k8s-namespace", "group": "hangar-prod", "env": "prod",
+         "app": "gate-api", "scope": "hangar-prod",
+         "gates": [{"type": "glidepath", "instance": "gate-api-cicd", "mode": "enforce"}],
+         "observers": [{"provider": "observe-k8s", "source": "observe-k8s"}]}
+    res = c.publish_targets("hangar-prod", [t])
+    assert isinstance(res, cc.TargetsResult) and res.changed and res.targets == 1 and len(res.digest) == 64
+    again = c.publish_targets("hangar-prod", [t])
+    assert not again.changed and again.digest == res.digest and again.seq is None
+    assert c.publish_targets("hangar-prod", []).targets == 0
+    with pytest.raises(cc.CoreRequestError) as e:
+        c.publish_targets("hangar-dev", [t])
+    assert e.value.status == 403
+    with pytest.raises(cc.CoreRequestError) as e:
+        c.publish_targets("hangar-prod", [{**t, "kind": "vm"}])
+    assert e.value.status == 400 and "kind" in e.value.message
+
+
 def test_the_gate(core):
     change = {"app": "gate-api", "env": "prod", "cluster": "hangar-prod", "repo": "jfillman/gitops-gate-api",
               "pr": 7, "head": HEAD, "base": "b" * 40, "proposer": "user:dana", "proposerKind": "person",

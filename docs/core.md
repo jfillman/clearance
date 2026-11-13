@@ -46,6 +46,7 @@ The contract is [`contract/clearance-core.json`](https://github.com/jfillman/cle
 | `POST /v1/breakglass`, `POST /v1/breakglass/{id}/close` | an admin (`CLEARANCE_ADMINS`), or a delegate naming one | Open (or close early) a break-glass window on one protected environment, recorded before the answer; reconciled at its TTL ([gate.md](gate.md#break-glass)). |
 | `GET /v1/breakglass` | a registered provider, or an admin | The break-glass windows open now (`?cluster=`). |
 | `GET /v1/keys` | anyone (no token) | The token verification keys, a JWKS: the key in use and keys retired in the last 24 hours. |
+| `PUT /v1/targets/{source}` | a provider registered with `targets` naming the source | The targets one source (a cluster's gitops render, an account's bootstrap) declares for the Map: the whole set replaces what the core holds for that source. Validated strictly; a changed set is one `targets.load` record with its digest. [Below](#publishing-declared-targets). |
 | `POST /v1/definitions/review` | a verifier, a person, or a delegate naming one | Would Clearance load this agent definition, and how much more may its agent do (the definition-change tier). Stateless, unrecorded. |
 | `POST /v1/provenance` | a verifier | The agent-identity and agent-scope verdicts for a pull request, recorded as `provenance.verify`. |
 | `POST /v1/github/webhook` | GitHub (HMAC signature, no bearer token) | The Clearance GitHub App ([provenance-app.md](provenance-app.md)). |
@@ -75,6 +76,9 @@ A JSON array (at most 64 KiB), strictly decoded. Without it no caller may evalua
 - `intent_capture` is `redacted` (the default) or `full`, for its records' intent text.
 - `definitions: true` lets the provider publish its cluster-pinned agent definitions (`PUT /v1/definitions`). At
   most one provider has it, because a publish replaces the whole set: two publishers would undo each other.
+- `targets` is a list of source names (fnmatch globs) whose declared targets the provider may publish
+  (`PUT /v1/targets/{source}`): `["hangar-prod"]`, or `["*"]`. A publish replaces only its own source's set, so several
+  providers may publish; a source belongs to the first provider that lists it.
 - `conformance` is the conformance suite the provider passed and when, as `<suite>/v<n>[@YYYY-MM-DD]`
   (`clearance-conformance/v1@2026-11-03`; `clearance conformance` prints the suite). The core stamps it on every
   record the provider writes as `provider.conformance`, the field the v1 schema reserved. Records written before
@@ -112,6 +116,15 @@ A JSON array (at most 64 KiB), strictly decoded. Without it no caller may evalua
   tool the core knows), its coverage is `coverage-unavailable`, and it carries no rule, effect or outcome. Its
   subject is the tool-call digest, claimed. It is never a decision. A run's records (`session.open`, `run.launch`,
   `run.finish`, `run.delete`) may carry `model_version` and `preflight`, and `run.finish` its `cost` (A-4).
+- **Publishing declared targets.** `PUT /v1/targets/{source}` takes the targets a source declares for the Map
+  (`{"targets": [...]}`; each target's `id`, `name`, `kind`, `group`, `env`, `app`, `owner`, `registry`, `scope`, `gates`
+  and `observers`: [clearance-api.md](clearance-api.md#the-coverage-map-and-the-target-registry)). The provider must be
+  registered with `targets` naming the source. The core validates strictly (names, kinds, modes, the sizes: at most 2000
+  targets per source, 32 gates and 16 observers per target, 4 MiB), sorts the set by id and addresses it by the sha256 of its
+  canonical JSON. A set with the digest the core already holds changes and records nothing; a different one replaces the
+  source's row in `clearance_targets` and is one `targets.load` record, in one transaction, whose `result` carries
+  `sha256:<digest>` (and the digest it replaced) and whose `target` is `targets:<source>`. An empty list withdraws the source.
+  The core records what was declared, never that it is true: the Map reconciles the declaration with the records.
 - **Published definitions.** `PUT /v1/definitions` takes the provider's Agent XR loader's pins (each with its
   document, source and XR owner) and rejections. The core decides every pin itself with its own schema
   (`definitions.FromPin`, `internal/profile`): the agent-definition schema, the name is the XR's, the owner is the
