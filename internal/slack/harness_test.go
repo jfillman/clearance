@@ -79,7 +79,8 @@ type fakeSlack struct {
 	calls    []slackCall
 	nextTS   int
 	wsURL    string
-	failNext map[string]int // method -> status to answer once
+	failNext map[string]int    // method -> status to answer once
+	errCode  map[string]string // method -> an ok:false error code, every time
 	// the OIDC side
 	codes   map[string]map[string]string // code -> {sub, team}
 	clientI string
@@ -87,7 +88,7 @@ type fakeSlack struct {
 }
 
 func newFakeSlack(t *testing.T) *fakeSlack {
-	f := &fakeSlack{t: t, signer: newSigner(t, "slack-k1"), failNext: map[string]int{}, codes: map[string]map[string]string{},
+	f := &fakeSlack{t: t, signer: newSigner(t, "slack-k1"), failNext: map[string]int{}, errCode: map[string]string{}, codes: map[string]map[string]string{},
 		clientI: "slack-client", nonces: map[string]string{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
@@ -130,6 +131,11 @@ func (f *fakeSlack) serve(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Retry-After", "1")
 		}
 		w.WriteHeader(st)
+		return
+	}
+	if code := f.errCode[method]; code != "" {
+		f.mu.Unlock()
+		json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": code})
 		return
 	}
 	f.nextTS++

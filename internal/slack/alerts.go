@@ -2,6 +2,7 @@ package slack
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"slices"
@@ -37,8 +38,11 @@ func (n *Notifier) RunAlerts(ctx context.Context) {
 	}
 }
 
-// tell posts one alert to each channel (a channel named twice gets one).
-func (n *Notifier) tell(ctx context.Context, channels []string, title string, lines []string, resolveSeq int64) {
+// tell posts one alert to each channel (a channel named twice gets one). It reports whether the alert should be tried
+// again: a post that failed for a reason that may pass (Slack unreachable, rate limited, HTTP 5xx). A refusal from
+// Slack itself (the bot is not in the channel, the channel is gone) is logged and is not retried: it would fail the
+// same way every time, and one bad route must not hold back every later alert.
+func (n *Notifier) tell(ctx context.Context, channels []string, title string, lines []string, resolveSeq int64) (retry bool) {
 	text, blocks := RenderAlert(title, lines, resolveSeq)
 	var done []string
 	for _, ch := range channels {
@@ -48,8 +52,13 @@ func (n *Notifier) tell(ctx context.Context, channels []string, title string, li
 		done = append(done, ch)
 		if _, err := n.Slack.Post(ctx, ch, text, blocks, ""); err != nil {
 			n.Log.Warn("posting an alert failed", "channel", ch, "error", err.Error())
+			var se *Error
+			if !errors.As(err, &se) {
+				retry = true
+			}
 		}
 	}
+	return retry
 }
 
 // -- exceptions and break-glass ----------------------------------------------------------------------------------
@@ -83,16 +92,23 @@ func (n *Notifier) alertExceptions(ctx context.Context) error {
 		n.Log.Warn("more than a page of exceptions since the last poll; the oldest may have been missed", "since_seq", mark)
 	}
 	slices.Reverse(fresh) // oldest first
+	// The watermark moves only past alerts that were posted (or refused by Slack for good): a Slack outage leaves the
+	// rest to the next poll instead of dropping them.
+	upTo := mark
 	for _, r := range fresh {
-		n.exceptionAlert(ctx, r)
+		if n.exceptionAlert(ctx, r) {
+			break
+		}
+		upTo = r.seq()
 	}
-	if top > mark {
-		return n.Store.SetKV(ctx, exceptionsKey, strconv.FormatInt(top, 10))
+	if upTo > mark {
+		return n.Store.SetKV(ctx, exceptionsKey, strconv.FormatInt(upTo, 10))
 	}
 	return nil
 }
 
-func (n *Notifier) exceptionAlert(ctx context.Context, r Record) {
+// exceptionAlert tells the channels an exception goes to; it reports whether to try it again.
+func (n *Notifier) exceptionAlert(ctx context.Context, r Record) (retry bool) {
 	tool, app, principal := r.str("tool"), r.str("app"), r.str("principal")
 	kind := ""
 	if ex, ok := r["exception"].(map[string]any); ok {
@@ -115,9 +131,9 @@ func (n *Notifier) exceptionAlert(ctx context.Context, r Record) {
 	switch {
 	case tool == "breakglass.open" || tool == "breakglass.close":
 		verb := map[string]string{"breakglass.open": "opened", "breakglass.close": "closed"}[tool]
-		n.tell(ctx, []string{n.Routes.Security, appCh}, "Break-glass "+verb, lines, 0)
+		return n.tell(ctx, []string{n.Routes.Security, appCh}, "Break-glass "+verb, lines, 0)
 	case tool == "deploy.exception" && (kind == "monitoring-protection" || kind == "attempted-refused"):
-		n.tell(ctx, []string{n.Routes.Security, appCh}, "Exception: "+kind, lines, 0)
+		return n.tell(ctx, []string{n.Routes.Security, appCh}, "Exception: "+kind, lines, 0)
 	case tool == "deploy.exception":
 		var seq int64
 		if slices.Contains(resolvable, kind) {
@@ -127,8 +143,9 @@ func (n *Notifier) exceptionAlert(ctx context.Context, r Record) {
 		if ch == "" {
 			ch = n.Routes.Security
 		}
-		n.tell(ctx, []string{ch}, "Exception: "+kind, lines, seq)
+		return n.tell(ctx, []string{ch}, "Exception: "+kind, lines, seq)
 	}
+	return false
 }
 
 // -- coverage ----------------------------------------------------------------------------------------------------
@@ -178,13 +195,11 @@ func (n *Notifier) alertCoverage(ctx context.Context) error {
 		if had && prev == state {
 			continue
 		}
-		if err := n.Store.SetKV(ctx, key, state); err != nil {
-			return err
-		}
 		channels := []string{n.Routes.Scopes[s.Scope], n.Routes.Security}
+		retry := false
 		switch {
 		case state == "healthy" && had && prev != "healthy":
-			n.tell(ctx, channels, "Coverage recovered: "+s.Scope, []string{"Every feed is healthy again (was " + prev + ")."}, 0)
+			retry = n.tell(ctx, channels, "Coverage recovered: "+s.Scope, []string{"Every feed is healthy again (was " + prev + ")."}, 0)
 		case state != "healthy":
 			var lines []string
 			if len(bad) == 0 {
@@ -197,7 +212,13 @@ func (n *Notifier) alertCoverage(ctx context.Context) error {
 				}
 				lines = append(lines, fmt.Sprintf("%s: %s%s", b.Source, b.Now, stale))
 			}
-			n.tell(ctx, channels, fmt.Sprintf("Coverage %s: %s", state, s.Scope), lines, 0)
+			retry = n.tell(ctx, channels, fmt.Sprintf("Coverage %s: %s", state, s.Scope), lines, 0)
+		}
+		if retry { // Slack could not be reached: the state is not recorded as said, so the next poll says it
+			continue
+		}
+		if err := n.Store.SetKV(ctx, key, state); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -242,20 +263,21 @@ func (n *Notifier) alertAttestations(ctx context.Context) error {
 	if stuck == prev {
 		return nil
 	}
-	if err := n.Store.SetKV(ctx, attestKey, strconv.FormatInt(stuck, 10)); err != nil {
-		return err
-	}
 	ch := []string{n.Routes.Ops}
 	if n.Routes.Ops == "" {
 		ch = []string{n.Routes.Security}
 	}
+	retry := false
 	switch {
 	case stuck == 0:
-		n.tell(ctx, ch, "Attestations caught up", []string{"No applied change has been waiting for its attestation longer than " + n.Cfg.StuckAttestAfter.String() + "."}, 0)
+		retry = n.tell(ctx, ch, "Attestations caught up", []string{"No applied change has been waiting for its attestation longer than " + n.Cfg.StuckAttestAfter.String() + "."}, 0)
 	case stuck > prev:
-		n.tell(ctx, ch, "Attestation signing is stuck", []string{fmt.Sprintf("%d applied change(s) have waited longer than %s for a signed attestation (the signer is waiting or retrying).", stuck, n.Cfg.StuckAttestAfter)}, 0)
+		retry = n.tell(ctx, ch, "Attestation signing is stuck", []string{fmt.Sprintf("%d applied change(s) have waited longer than %s for a signed attestation (the signer is waiting or retrying).", stuck, n.Cfg.StuckAttestAfter)}, 0)
 	}
-	return nil
+	if retry {
+		return nil // not recorded as said: the next poll says it
+	}
+	return n.Store.SetKV(ctx, attestKey, strconv.FormatInt(stuck, 10))
 }
 
 // -- an expiring hold --------------------------------------------------------------------------------------------

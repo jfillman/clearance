@@ -3,6 +3,7 @@ package slack
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -71,5 +72,28 @@ func TestTheWholeServiceOverSocketMode(t *testing.T) {
 	waitFor(t, "the Clear form", func() bool { return len(r.slack.called("views.open")) == 1 })
 	if r.clr.writeCount() != 0 {
 		t.Error("a click wrote")
+	}
+}
+
+// A listener that cannot bind ends Run with its error and stops every goroutine; it does not hang waiting for a
+// context nobody cancels.
+func TestRunReturnsWhenTheListenerCannotBind(t *testing.T) {
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer taken.Close()
+	r := newRig(t, testRoutes, func(c *Config) { c.Listen = taken.Addr().String() })
+	ws, _ := wsServer(t, func(c *websocket.Conn, n int) { <-context.Background().Done() })
+	r.slack.wsURL = "ws" + strings.TrimPrefix(ws.URL, "http")
+	done := make(chan error, 1)
+	go func() { done <- r.svc.Run(bg) }() // bg is never cancelled
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("Run returned no error for a port that is taken")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run hung")
 	}
 }

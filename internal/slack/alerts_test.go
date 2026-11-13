@@ -233,3 +233,67 @@ func TestTheStreamCursorIsNotSavedUntilThePassSucceeds(t *testing.T) {
 		t.Errorf("the cursor moved to %q though no pass succeeded: an event would be lost", v)
 	}
 }
+
+func TestAnAlertIsNotRecordedAsSaidUntilSlackTookIt(t *testing.T) {
+	r := newRig(t, testRoutes)
+	n := r.svc.Notifier
+	r.clr.coverage = []map[string]any{scope("acct-1", [2]string{"cloudtrail", "degraded"})}
+	r.slack.failNext["chat.postMessage"] = 503 // Slack is briefly unavailable
+	n.alertCoverage(bg)
+	if v, ok, _ := r.store.KV(bg, "coverage.acct-1"); ok {
+		t.Fatalf("recorded as said (%q) though the post failed: the alert would never be sent", v)
+	}
+	r.slack.reset()
+	n.alertCoverage(bg) // the next poll says it
+	if got := texts(r.slack, "C_SEC"); len(got) != 1 || got[0] != "Coverage degraded: acct-1" {
+		t.Fatalf("the retry: %v", got)
+	}
+	if v, _, _ := r.store.KV(bg, "coverage.acct-1"); v != "degraded" {
+		t.Errorf("recorded after it was said: %q", v)
+	}
+
+	// attestations and exceptions hold back the same way
+	r.clr.countFn = func(since string) map[string]int64 {
+		if at, _ := time.Parse("2006-01-02T15:04:05Z", since); r.now.Sub(at) > 24*time.Hour {
+			return map[string]int64{"pending": 4}
+		}
+		return map[string]int64{}
+	}
+	r.slack.failNext["chat.postMessage"] = 503
+	n.alertAttestations(bg)
+	if _, ok, _ := r.store.KV(bg, attestKey); ok {
+		t.Error("stuck attestations recorded as said after a failed post")
+	}
+	n.alertAttestations(bg)
+	if v, _, _ := r.store.KV(bg, attestKey); v != "4" {
+		t.Errorf("after the retry: %q", v)
+	}
+
+	r.clr.excs = []map[string]any{exc(10, "deploy.exception", "drift", "web")}
+	n.alertExceptions(bg) // the watermark: 10
+	r.clr.excs = []map[string]any{exc(12, "breakglass.open", "", "web"), exc(11, "deploy.exception", "drift", "web"), exc(10, "deploy.exception", "drift", "web")}
+	r.slack.reset()
+	r.slack.failNext["chat.postMessage"] = 503 // the first alert (11) cannot be sent
+	n.alertExceptions(bg)
+	if v, _, _ := r.store.KV(bg, exceptionsKey); v != "10" {
+		t.Fatalf("the watermark moved to %q past an alert that was not sent", v)
+	}
+	r.slack.reset()
+	n.alertExceptions(bg)
+	if v, _, _ := r.store.KV(bg, exceptionsKey); v != "12" || len(texts(r.slack, "C_WEB")) != 2 {
+		t.Errorf("the next poll sends both: watermark %q, %v", v, texts(r.slack, "C_WEB"))
+	}
+}
+
+func TestARouteSlackRefusesDoesNotBlockLaterAlerts(t *testing.T) {
+	r := newRig(t, testRoutes)
+	n := r.svc.Notifier
+	r.slack.errCode["chat.postMessage"] = "not_in_channel" // the bot was never invited: it will say so every time
+	r.clr.excs = []map[string]any{exc(10, "deploy.exception", "drift", "web")}
+	n.alertExceptions(bg)
+	r.clr.excs = []map[string]any{exc(11, "breakglass.open", "", "web"), exc(10, "deploy.exception", "drift", "web")}
+	n.alertExceptions(bg)
+	if v, _, _ := r.store.KV(bg, exceptionsKey); v != "11" {
+		t.Errorf("a permanent refusal held the watermark at %q: every later alert would be lost", v)
+	}
+}

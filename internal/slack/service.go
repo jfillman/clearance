@@ -75,6 +75,9 @@ func (s *Service) Run(ctx context.Context) error {
 	if err := s.Store.Migrate(ctx); err != nil {
 		return errors.New("migrating the store failed: " + err.Error())
 	}
+	// Whichever way Run ends (the caller's context, a listener that cannot bind), every goroutine below is told to stop.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	srv := &http.Server{Addr: s.Cfg.Listen, Handler: s.Mux(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
 		WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	var wg sync.WaitGroup
@@ -114,8 +117,9 @@ func (s *Service) Run(ctx context.Context) error {
 	case <-ctx.Done():
 	case err = <-errc:
 	}
-	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	cancel()
+	shutdown, stop := context.WithTimeout(context.Background(), 10*time.Second)
+	defer stop()
 	_ = srv.Shutdown(shutdown)
 	wg.Wait()
 	return err
