@@ -659,7 +659,7 @@ func TestReadyzWhenIdPDown(t *testing.T) {
 	}
 }
 
-func TestStaticFallbackAndEmbeddedPlaceholder(t *testing.T) {
+func TestStaticFallbackAndEmbeddedBundle(t *testing.T) {
 	e := newEnv(t, func(_ *Config, o *Options) {
 		o.Static = fstest.MapFS{"index.html": {Data: []byte("idx")}, "assets/x.js": {Data: []byte("x")}}
 	})
@@ -675,8 +675,10 @@ func TestStaticFallbackAndEmbeddedPlaceholder(t *testing.T) {
 	}
 	p := newEnv(t, func(_ *Config, o *Options) { o.Static = nil })
 	p.signIn()
-	if w := p.do("GET", "/", nil, ""); w.Code != 200 || !strings.Contains(w.Body.String(), "not built") {
-		t.Errorf("placeholder: %d %s", w.Code, w.Body)
+	// The embedded bundle is the placeholder in a plain build and the pinned UI in a release-style one (make web-ui):
+	// either way the entry page is served as HTML.
+	if w := p.do("GET", "/", nil, ""); w.Code != 200 || !strings.Contains(w.Body.String(), "<title>Clearance</title>") {
+		t.Errorf("embedded entry page: %d %s", w.Code, w.Body)
 	}
 }
 

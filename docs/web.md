@@ -87,13 +87,33 @@ one without `azp`, is refused. Unset (the default), nothing changes.
 
 ## Building the bundle in
 
-The UI is embedded from `internal/web/static/` (`embed.FS`, `static.go`). The committed `index.html` there is a
-placeholder. WEB-3's build output replaces the directory's contents before `go build`:
+The UI is the standalone [clearance-ui](https://github.com/jfillman/clearance-ui) shell, embedded from
+`internal/web/static/` (`embed.FS`, `static.go`). The committed `index.html` there is a placeholder, so a plain
+`go build ./cmd/clearance` and `go test ./...` work with no network. Released images carry the real UI.
 
-```
-rm -rf internal/web/static && mkdir internal/web/static && cp -r <ui>/dist/* internal/web/static/
-go build ./cmd/clearance
-```
+**The pin** is `web-ui.lock`: the clearance-ui repo, a version, and the sha256 of that release's
+`clearance-ui-web-<version>.tar.gz`. To bump the UI, change `version` and `sha256` in one PR (the release's
+`.sha256` asset has the value; confirm it against your own download).
+
+**The step** is `make web-ui` (`go run ./tools/webui`):
+
+1. Download the tarball from the release over https (a redirect off https is refused; downloads are cached by the pinned
+   sha256 under the user cache dir, `$WEBUI_CACHE` overrides).
+2. Refuse unless its sha256 equals the one in `web-ui.lock`. The `.sha256` asset beside the tarball is never read: whoever
+   could swap the tarball could swap that too.
+3. Extract into a staging directory: only regular files and directories, no absolute or `..` paths, no symlinks, hard
+   links or devices, no duplicates, size and entry caps, and an `index.html` at the root. Only then does it replace the
+   contents of `internal/web/static/` (a refused archive changes nothing).
+
+The extracted files are not committed: `assets/` is gitignored, and `index.html` shows as modified until
+`make web-ui-clean` restores the placeholder. `make web-ui-verify` checks the pin without extracting;
+`make build-release` is the step, the embed test and `go build`.
+
+**Where it runs.** The `Dockerfile`'s build stage runs `go run ./tools/webui` before `go build`, then
+`TestReleaseBundleIsTheUI` with `CLEARANCE_REQUIRE_UI_BUNDLE=1`, which fails the build if the embedded `index.html` is
+still the placeholder or the bundle has no `assets/`. The release workflow builds the image from that Dockerfile, so every
+released `clearance` image carries the pinned UI. CI's `web-ui` job does the same on every push (verify the pin, extract,
+run that test, `go build`), so a bad pin or a broken bundle fails the PR and not the release.
 
 The contract with the bundle: `index.html` is the entry; files under `assets/` have content-hashed names (cached for a
 year, immutable); everything else is revalidated; an unknown path without an extension serves `index.html` for the

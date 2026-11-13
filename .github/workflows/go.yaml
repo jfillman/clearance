@@ -139,3 +139,26 @@ jobs:
           args: --check ci=pass --dry-run
       - run: |
           test -n "${{ steps.hold.outputs.result }}" && command -v clearance
+  # The pinned web UI bundle (web-ui.lock): the release resolves over https and its sha256 is the pin's, then a
+  # release-style build embeds it (the same steps the Dockerfile runs before `go build`, so a bad pin fails here
+  # and not at release). The download is cached by the pinned sha256, so a rerun costs nothing.
+  web-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.11"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/clearance-web-ui
+          key: web-ui-${{ hashFiles('web-ui.lock') }}
+      - run: go run ./tools/webui -verify
+      - run: go run ./tools/webui
+      - run: CLEARANCE_REQUIRE_UI_BUNDLE=1 go test -count=1 -run 'TestReleaseBundleIsTheUI|TestStaticFallbackAndEmbeddedBundle' -v ./internal/web
+      - run: go build -trimpath -o "$RUNNER_TEMP/clearance" ./cmd/clearance
+      # The binary serves the UI's entry page, not the placeholder.
+      - run: |
+          set -euo pipefail
+          grep -q 'assets/index-' internal/web/static/index.html
+          ! grep -q 'is not built into this binary' internal/web/static/index.html
