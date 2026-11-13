@@ -415,6 +415,70 @@ api:
   extraVolumes: []
   extraVolumeMounts: []
 
+# -- clearance-slack (optional; docs/slack.md) ------------------------------------------------------------------
+# The Slack surface: notifications about changes waiting on people, exceptions, break-glass, coverage and stuck
+# attestations; and, for a person whose Slack account is linked to their sign-in, Clear (tier 2 by default) and Deny.
+# A separate Deployment and image (one replica: it holds one Socket Mode connection), a delegate and a notifier and
+# observation reader of this release's core and api: the chart adds its service account to delegates,
+# api.notifiers and api.observationReaders. It holds no signing key and no evidence; its own tables are in the database
+# its own DSN names. Off by default.
+slack:
+  enabled: false
+  image:
+    repository: ghcr.io/jfillman/clearance-slack
+    # Default: "v" + the chart's appVersion.
+    tag: ""
+    digest: ""
+  # A Secret you manage (Infisical via ExternalSecrets, as for the rest), with these keys: bot-token (xoxb-),
+  # app-token (xapp-, Socket Mode), signing-secret (Events API only), client-secret (Sign in with Slack),
+  # idp-client-secret (only when the IdP client is confidential), dsn. Mounted as files; nothing is put in env.
+  existingSecret: ""
+  idpClientSecret: false
+  # socket (default: no inbound Slack traffic) or events (Slack POSTs to publicUrl/slack/*; needs a route and the signing secret).
+  transport: socket
+  # The public https URL of this service's link pages (httpRoutes.slack, an ingress): Sign in with Slack and the IdP
+  # redirect the browser to <publicUrl>/link/slack and <publicUrl>/link/idp.
+  publicUrl: ""
+  # Where a person steps up for a tier 3 clear: "https://host/changes/{id}" ({id} is the change). Empty: the CLI.
+  webUrl: ""
+  # Sign in with Slack's client id, and the IdP client the link page uses (the issuer, claim and allowlist are oidc.*).
+  slackClientId: ""
+  idpClientId: ""
+  # The highest tier cleared from Slack (0-3). 2 keeps tier 3 and break-glass a step-up elsewhere.
+  clearMaxTier: 2
+  forwardAuthTime: true
+  # Go durations ("": the defaults: 30 days, 120s, 60s, 30m, 15m).
+  relinkAfter: ""
+  alertInterval: ""
+  reconcileInterval: ""
+  stuckAttestationAfter: ""
+  tier3OutsideAfter: ""
+  # Where messages go (channel ids, C...). groups: owner or outside group -> channel; apps: an app -> channel (for
+  # exceptions); scopes: a coverage scope -> channel; default: a group with no route; security: break-glass,
+  # monitoring-protection and blind or degraded coverage; ops: stuck attestations.
+  routes:
+    groups: {}
+    apps: {}
+    scopes: {}
+    default: ""
+    security: ""
+    ops: ""
+  resources:
+    requests: {cpu: 25m, memory: 32Mi}
+    limits: {memory: 128Mi}
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  priorityClassName: ""
+  hostAliases: []
+  extraEnv: []
+
 service:
   type: ClusterIP
   port: 8080
@@ -455,6 +519,15 @@ networkPolicy:
   # Further egress rules (NetworkPolicyEgressRule) for the core and the api: the OIDC JWKS, Backstage, the GitHub
   # API, a foreign cluster's JWKS.
   extraEgress: []
+  slack:
+    # NetworkPolicyPeers allowed to reach the link pages (and /slack/* on the events transport): the Gateway's namespace.
+    from: []
+    # Slack's API and the websocket are on the internet: 443 to anywhere outside the private ranges. Narrow it where
+    # the cluster has an egress proxy or FQDN policy (Cilium), by setting this to [] and using slackEgress.
+    internet: true
+    # Further egress for the service (NetworkPolicyEgressRule): an egress gateway for Slack, the IdP (an in-cluster
+    # Dex: a podSelector; an external one: its CIDR), the portal.
+    extraEgress: []
 
 # -- Gateway API routes (optional) -------------------------------------------------------------------------------
 httpRoutes:
@@ -466,6 +539,12 @@ httpRoutes:
     # [{path: {type: Exact, value: /v1/github/webhook}}]
     matches: []
   api:
+    enabled: false
+    parentRefs: []
+    hostnames: []
+    matches: []
+  # clearance-slack's link pages (and /slack/* on the events transport).
+  slack:
     enabled: false
     parentRefs: []
     hostnames: []

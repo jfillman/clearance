@@ -29,7 +29,8 @@ import (
 //
 //	CLEARANCE_API_DSN                   the read-only role's DSN (required)
 //	CLEARANCE_API_AUDITORS              principal globs, comma-separated: every read, the chain check, full=1
-//	CLEARANCE_API_NOTIFIERS             principal globs: the notifier role (no Clearance read is a notifier's)
+//	CLEARANCE_API_NOTIFIERS             principal globs: the notifier role (every change of the gate: the list, the counts and
+//	                                    the stream's clearance events; no token, no evidence)
 //	CLEARANCE_API_OBSERVATION_READERS   principal globs: machine pollers that read coverage, observations, observation
 //	                                    health and exceptions (whole scope, redacted like a person) and nothing else
 //	CLEARANCE_DELEGATES                 principal globs that may name a person in the on-behalf-of header (a portal)

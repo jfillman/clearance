@@ -55,9 +55,15 @@ spec:
       {{- include "clearance.selector" (dict "ctx" $ "component" $component) | nindent 6 }}
   policyTypes: [Ingress, Egress]
   ingress:
-    {{- if $from }}
+    {{- if or $from $.Values.slack.enabled }}
     - from:
-        {{- toYaml $from | nindent 8 }}
+        {{- with $from }}{{ toYaml . | nindent 8 }}{{ end }}
+        {{- if $.Values.slack.enabled }}
+        # clearance-slack, this release's own pod
+        - podSelector:
+            matchLabels:
+              {{- include "clearance.selector" (dict "ctx" $ "component" "slack") | nindent 14 }}
+        {{- end }}
       ports:
         - {protocol: TCP, port: 8080}
     {{- end }}
@@ -86,6 +92,56 @@ spec:
     {{- toYaml . | nindent 4 }}
     {{- end }}
 {{- end }}
+{{- end }}
+{{- if .Values.slack.enabled }}
+---
+# clearance-slack: ingress only from networkPolicy.slack.from (the link pages), egress to DNS, Postgres, the core and the
+# api of this release, Slack (443 outside the private ranges), and what networkPolicy.slack.extraEgress adds (the IdP).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "clearance.fullname" . }}-slack
+  labels:
+    {{- include "clearance.labels" . | nindent 4 }}
+    app.kubernetes.io/component: slack
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "clearance.selector" (dict "ctx" . "component" "slack") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    {{- if $np.slack.from }}
+    - from:
+        {{- toYaml $np.slack.from | nindent 8 }}
+      ports:
+        - {protocol: TCP, port: 8080}
+    {{- end }}
+  egress:
+    {{- include "clearance.npEgress" . | nindent 4 }}
+    # The core (writes) and the api (reads)
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "clearance.selector" (dict "ctx" . "component" "core") | nindent 14 }}
+        {{- if .Values.api.enabled }}
+        - podSelector:
+            matchLabels:
+              {{- include "clearance.selector" (dict "ctx" . "component" "api") | nindent 14 }}
+        {{- end }}
+      ports:
+        - {protocol: TCP, port: 8080}
+    {{- if $np.slack.internet }}
+    # Slack: the Web API and the Socket Mode websocket, on the internet
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10]
+      ports:
+        - {protocol: TCP, port: 443}
+    {{- end }}
+    {{- with $np.slack.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 {{- end }}
 {{- if $np.kubeAPIServer.ciliumEntity }}
 ---
@@ -145,7 +201,7 @@ spec:
         - podSelector:
             matchExpressions:
               - {key: app.kubernetes.io/instance, operator: In, values: [{{ .Release.Name | quote }}]}
-              - {key: app.kubernetes.io/component, operator: In, values: [core, api, test]}
+              - {key: app.kubernetes.io/component, operator: In, values: [core, api, test{{ if .Values.slack.enabled }}, slack{{ end }}]}
         - podSelector:
             matchLabels: {cnpg.io/cluster: {{ include "clearance.pgName" . }}}
       ports:

@@ -18,6 +18,7 @@
 
 {{- define "clearance.coreName" -}}{{ include "clearance.fullname" . }}-core{{- end -}}
 {{- define "clearance.apiName" -}}{{ include "clearance.fullname" . }}-api{{- end -}}
+{{- define "clearance.slackName" -}}{{ include "clearance.fullname" . }}-slack{{- end -}}
 {{- define "clearance.pgName" -}}{{ include "clearance.fullname" . }}-pg{{- end -}}
 
 {{- define "clearance.labels" -}}
@@ -44,6 +45,28 @@ app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 {{- define "clearance.apiSA" -}}
 {{- if .Values.api.serviceAccount.create -}}{{ default (include "clearance.apiName" .) .Values.api.serviceAccount.name }}{{- else -}}{{ required "api.serviceAccount.name is required when api.serviceAccount.create is false" .Values.api.serviceAccount.name }}{{- end -}}
+{{- end -}}
+
+{{- define "clearance.slackSA" -}}
+{{- if .Values.slack.serviceAccount.create -}}{{ default (include "clearance.slackName" .) .Values.slack.serviceAccount.name }}{{- else -}}{{ required "slack.serviceAccount.name is required when slack.serviceAccount.create is false" .Values.slack.serviceAccount.name }}{{- end -}}
+{{- end -}}
+{{/* The service's principal at the core and the api: <namespace>/<service account>. */}}
+{{- define "clearance.slackPrincipal" -}}{{ .Release.Namespace }}/{{ include "clearance.slackSA" . }}{{- end -}}
+{{/* A principal list with clearance-slack added when it is on: (dict "ctx" $ "list" .Values.delegates) */}}
+{{- define "clearance.withSlack" -}}
+{{- $l := .list | default list -}}
+{{- if .ctx.Values.slack.enabled }}{{ $l = append $l (include "clearance.slackPrincipal" .ctx) }}{{ end -}}
+{{- join "," $l -}}
+{{- end -}}
+
+{{- define "clearance.slackImage" -}}
+{{- $repo := required "slack.image.repository is required" .Values.slack.image.repository -}}
+{{- if .Values.slack.image.digest -}}
+{{- if not (regexMatch "^sha256:[0-9a-f]{64}$" .Values.slack.image.digest) -}}{{- fail "slack.image.digest is sha256:<64 hex>" -}}{{- end -}}
+{{- printf "%s@%s" $repo .Values.slack.image.digest -}}
+{{- else -}}
+{{- printf "%s:%s" $repo (default (printf "v%s" .Chart.AppVersion) .Values.slack.image.tag) -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "clearance.image" -}}
@@ -106,9 +129,10 @@ app.kubernetes.io/component: {{ .component }}
   value: ":8080"
 - name: CLEARANCE_AUDIENCE
   value: {{ .Values.audience | quote }}
-{{- with .Values.delegates }}
+{{- $delegates := include "clearance.withSlack" (dict "ctx" $ "list" .Values.delegates) }}
+{{- if $delegates }}
 - name: CLEARANCE_DELEGATES
-  value: {{ include "clearance.csv" . | quote }}
+  value: {{ $delegates | quote }}
 {{- end }}
 {{- with .Values.admins }}
 - name: CLEARANCE_ADMINS

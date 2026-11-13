@@ -170,6 +170,10 @@ unset, so the core's default applies. Lists are joined with commas.
 | `api.feedReaders` | | `CLEARANCE_API_FEED_READERS`: `[{principal, cluster}]`, who reads a cluster's grant feed (a grant-sync agent). |
 | `api.pool`, `api.definitionsInterval` | 5, 30 | `CLEARANCE_API_POOL`, `CLEARANCE_API_DEFINITIONS_INTERVAL`. |
 | `api.resources`, `api.serviceAccount.*`, `api.topologySpreadConstraints` and the same pod settings as the core | | |
+| `slack.enabled` | false | clearance-slack ([slack.md](slack.md)): a separate Deployment and image; adds its service account to `delegates`, `api.notifiers` and `api.observationReaders` and opens the core's and api's ingress to it. |
+| `slack.existingSecret`, `slack.publicUrl`, `slack.slackClientId`, `slack.idpClientId` | | Required with it on: the Secret (keys `bot-token`, `app-token`, `signing-secret`, `client-secret`, `idp-client-secret`, `dsn`), the https URL of the link pages, Sign in with Slack's client id, the IdP client id. The issuer, claim and allowlist are `oidc.*`. |
+| `slack.transport`, `slack.webUrl`, `slack.clearMaxTier`, `slack.forwardAuthTime`, `slack.routes.*` | socket, "", 2, true | See slack.md. |
+| `networkPolicy.slack.{from,internet,extraEgress}`, `httpRoutes.slack.*` | | Who reaches the link pages; whether Slack's 443 is open to the internet; the IdP's egress. |
 | `service.type`, `service.port` | ClusterIP, 8080 | |
 | `rbac.authDelegator` | true | Binds `system:auth-delegator` (TokenReview) to the core's and the api's service accounts. |
 

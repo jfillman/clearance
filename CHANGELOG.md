@@ -9,10 +9,27 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
-## [0.46.0] - 2026-11-13
-
 ### Added
 
+- slack: **clearance-slack**, phases 3 and 4 of using Clearance without Backstage ([docs/slack.md](docs/slack.md)). A standalone Go
+  service (`cmd/clearance-slack`, its own image `ghcr.io/jfillman/clearance-slack`, built in the release workflow like the
+  other images) that is a delegate, notifier and observer of the core and clearance-api. Notifications: one thread per change in the owner
+  group's channel and a DM to each linked person the gate would let clear it (the gate's own `RoleFor`), a tier 3 change on the outside
+  group once the owner requirement is filled, exceptions and break-glass, coverage that turned degraded or blind (each source's `now`,
+  not the window's worst), stuck attestations, an expiring-hold reminder; rate limited, de-duplicated, resumed from the SSE cursor.
+  Actions: Block Kit **Clear**, **Deny** (reason required) and **Resolve**; tier 2 and below cleared in place, tier 3 and break-glass a link-out
+  (`CLEARANCE_SLACK_CLEAR_MAX_TIER`), the tier policy applied again on submit; the person named to the core is always the identity
+  link's (Sign in with Slack and the people IdP's login, per workspace, re-verified every 30 days, removed on deactivation);
+  writes carry `X-Clearance-Via: slack`, the message permalink and, only when the IdP said it, the sign-in time. Socket Mode
+  first, the Events API second (HMAC v0, 5-minute replay window, de-duplication). Secrets are mounted files. Not run against a
+  live Slack workspace.
+- chart: `slack.enabled` (off by default): a Deployment, service account, Service, routes ConfigMap and NetworkPolicy for
+  clearance-slack; adds its service account to `delegates`, `api.notifiers` and `api.observationReaders` and opens the core's and api's
+  ingress to it; `httpRoutes.slack`, `networkPolicy.slack.*`. `ci/slack-values.yaml` renders it.
+- api: **the notifier role reads every change of the gate (G5).** `GET /v1/clearances` (the list), `GET /v1/clearances/counts` and the
+  `clearance` events of `GET /v1/stream`, whole scope. Still no change by id, no clearance token (a `cluster=&state=cleared` filter is
+  only a filter for it), no evidence record. This widens what a principal already in `CLEARANCE_API_NOTIFIERS` (Tower's backend)
+  may read when it calls without naming a person.
 - cli: the person write commands, phase 2 of using Clearance without Backstage ([docs/cli.md](docs/cli.md#writes)). They
   go to the core (`CLEARANCE_URL`) with the person's own token and `X-Clearance-Via: cli`, show what they will act on
   first (to stderr), ask for confirmation, and send once. `changes clear <id> [--reason]`, `changes deny <id> --reason`,
@@ -1402,8 +1419,7 @@ What the Autopilot gateway needs of the core before the hangar-dev cutover (R-3e
   scope, narrow-only limits, CEL policy, sessions, the hash-chained audit log and the gateway; the Hangar pack's
   `glidepath.*` and `airframe.*` tools over glidepath-api and a GET-only Kubernetes adapter.
 
-[Unreleased]: https://github.com/jfillman/clearance/compare/v0.46.0...HEAD
-[0.46.0]: https://github.com/jfillman/clearance/compare/v0.45.0...v0.46.0
+[Unreleased]: https://github.com/jfillman/clearance/compare/v0.45.0...HEAD
 [0.45.0]: https://github.com/jfillman/clearance/compare/v0.44.1...v0.45.0
 [0.44.1]: https://github.com/jfillman/clearance/compare/v0.44.0...v0.44.1
 [0.44.0]: https://github.com/jfillman/clearance/compare/v0.43.0...v0.44.0
