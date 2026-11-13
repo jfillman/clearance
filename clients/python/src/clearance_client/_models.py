@@ -18,7 +18,7 @@ CONTRACT_VERSION = "1.0.0"
 
 RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "run.finish", "human.answer", "session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome", "deploy.exception", "deploy.degraded", "federated.decision", "observation", "assessment", "resolution", "observation.health", "observation.verification")
 
-__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateBulkResolutionFailed", "GateBulkResolutionRecorded", "GateBulkResolutionRequest", "GateBulkResolutionResult", "GateBulkResolutionSkipped", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateReason", "GateRequirement", "GateResolutionRecorded", "GateResolutionRequest", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProvidedDefinition", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
+__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateBulkResolutionFailed", "GateBulkResolutionRecorded", "GateBulkResolutionRequest", "GateBulkResolutionResult", "GateBulkResolutionSkipped", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateReason", "GateRequirement", "GateResolutionRecorded", "GateResolutionRequest", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProvidedDefinition", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "TargetsGate", "TargetsObserver", "TargetsRequest", "TargetsResult", "TargetsTarget", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -2032,6 +2032,100 @@ class SubjectProperties(Model):
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
+class TargetsGate(Model):
+    """Contract schema TargetsGate (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("instance", "instance", ("str",), True),
+        Field("mode", "mode", ("str",), True),
+        Field("type", "type", ("str",), True),
+    )
+
+    instance: str
+    mode: str
+    type: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class TargetsObserver(Model):
+    """Contract schema TargetsObserver (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("provider", "provider", ("str",), True),
+        Field("source", "source", ("str",), True),
+    )
+
+    provider: str
+    source: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class TargetsRequest(Model):
+    """Contract schema TargetsRequest (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("targets", "targets", ("list", ("ref", "TargetsTarget")), True),
+    )
+
+    targets: list[TargetsTarget]
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class TargetsResult(Model):
+    """Contract schema TargetsResult."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("changed", "changed", ("bool",), True),
+        Field("digest", "digest", ("str",), True),
+        Field("seq", "seq", ("nullable", ("int",)), True),
+        Field("source", "source", ("str",), True),
+        Field("targets", "targets", ("int",), True),
+    )
+
+    changed: bool
+    digest: str
+    seq: int | None
+    source: str
+    targets: int
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class TargetsTarget(Model):
+    """Contract schema TargetsTarget (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("app", "app", ("str",), False),
+        Field("env", "env", ("str",), False),
+        Field("gates", "gates", ("list", ("ref", "TargetsGate")), True),
+        Field("group", "group", ("str",), True),
+        Field("id", "id", ("str",), True),
+        Field("kind", "kind", ("str",), True),
+        Field("name", "name", ("str",), True),
+        Field("observers", "observers", ("list", ("ref", "TargetsObserver")), True),
+        Field("owner", "owner", ("str",), False),
+        Field("registry", "registry", ("str",), False),
+        Field("scope", "scope", ("str",), False),
+    )
+
+    app: str | None = None
+    env: str | None = None
+    gates: list[TargetsGate]
+    group: str
+    id: str
+    kind: str
+    name: str
+    observers: list[TargetsObserver]
+    owner: str | None = None
+    registry: str | None = None
+    scope: str | None = None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
 class TokenEnvelope(Model):
     """Contract schema TokenEnvelope."""
 
@@ -2258,6 +2352,11 @@ MODELS: dict[str, type[Model]] = {
     "Spend": Spend,
     "Subject": Subject,
     "SubjectProperties": SubjectProperties,
+    "TargetsGate": TargetsGate,
+    "TargetsObserver": TargetsObserver,
+    "TargetsRequest": TargetsRequest,
+    "TargetsResult": TargetsResult,
+    "TargetsTarget": TargetsTarget,
     "TokenEnvelope": TokenEnvelope,
     "TokenJWK": TokenJWK,
     "TokenJWKS": TokenJWKS,
@@ -2289,5 +2388,6 @@ OPERATIONS: dict[str, Operation] = {
     "setObservationResolution": Operation("POST", "/v1/observations/{seq}/resolution", "bearer", 16384, GateResolutionRequest, GateResolutionRecorded),
     "verifyProvenance": Operation("POST", "/v1/provenance", "bearer", 4194304, None, ProvenanceVerdict),
     "appendRecord": Operation("POST", "/v1/records", "provider", 262144, RecordRequest, RecordRef),
+    "publishTargets": Operation("PUT", "/v1/targets/{source}", "provider", 4194304, TargetsRequest, TargetsResult),
     "hcpRunTask": Operation("POST", "/v1/terraform/run-task", "hcp-signature", 65536, None, HcprunAnswer),
 }

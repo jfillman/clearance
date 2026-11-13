@@ -232,6 +232,17 @@ func (s *PG) counts(ctx context.Context, sql string, args []any) ([]Count, error
 	return out, rows.Err()
 }
 
+// countColumn is the SQL expression of a counts `by` (provider is the record's provider.name).
+func countColumn(by string) (string, bool) {
+	if !in(CountBy, by) {
+		return "", false
+	}
+	if by == "provider" {
+		return "e.record->'provider'->>'name'", true
+	}
+	return "e.record->>'" + by + "'", true
+}
+
 func (s *PG) Counts(ctx context.Context, f EvidenceFilter, v *Viewer, by string) ([]Count, error) {
 	if !in(CountBy, by) {
 		return nil, fmt.Errorf("api: count by %q", by)
@@ -239,7 +250,7 @@ func (s *PG) Counts(ctx context.Context, f EvidenceFilter, v *Viewer, by string)
 	b := &q{}
 	with := b.evidenceScope(v)
 	b.evidenceFilter(f)
-	col := "e.record->>'" + by + "'"
+	col, _ := countColumn(by)
 	return s.counts(ctx, with+"SELECT "+col+", count(*) FROM clearance_evidence e WHERE "+b.sql()+
 		" GROUP BY "+col+" ORDER BY count(*) DESC, 1 LIMIT "+b.arg(MaxLimit), b.args)
 }

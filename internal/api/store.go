@@ -54,6 +54,8 @@ type ChangeFilter struct {
 type Count struct {
 	Key   *string `json:"key"`
 	Count int64   `json:"count"`
+	// Bucket is the start of the time bucket (RFC 3339) the group is of (a counts with `bucket` only).
+	Bucket *string `json:"bucket,omitempty"`
 	// Cost is the group's cost (counts by=cost only); count is then its model calls.
 	Cost *CostSum `json:"cost,omitempty"`
 }
@@ -110,6 +112,9 @@ type Store interface {
 	// Counts is the records the viewer may see matching f, grouped by the record field by (one of CountBy), the
 	// largest first, at most MaxLimit groups.
 	Counts(ctx context.Context, f EvidenceFilter, v *Viewer, by string) ([]Count, error)
+	// CountBuckets is Counts with the records cut into time buckets of the given width (aligned to the epoch): a group
+	// per bucket and key, in bucket order, at most MaxBucketItems.
+	CountBuckets(ctx context.Context, f EvidenceFilter, v *Viewer, by string, bucket time.Duration) ([]Count, error)
 	// Costs is the cost of the records the viewer may see matching f (f.Outcomes is ignored: the model.call outcome
 	// records that carry usage and the run.finish records that carry cost), grouped by the record field of per (one
 	// of CostPer), the most charged first, at most MaxLimit groups, and the sums over every matching group (not the
@@ -136,6 +141,17 @@ type Store interface {
 	Attestation(ctx context.Context, changeID string) (*store.Attestation, error)
 	// SigningKeys are the token verification keys in use or retired after since (clearance_signing_keys).
 	SigningKeys(ctx context.Context, since time.Time) ([]store.SigningKey, error)
+	// Targets are the declared target sets, one per source (clearance_targets).
+	Targets(ctx context.Context) ([]store.TargetSet, error)
+	// GateActivity groups the gate records (deploy.* and the core's runtime decisions) of [from, to) the viewer may
+	// see (the Map); cut says there were more than MaxGateRows groups.
+	GateActivity(ctx context.Context, v *Viewer, from, to string) (rows []GateRow, cut bool, err error)
+	// ScopeCoverage groups the observations and assessments of the scopes in [from, to).
+	ScopeCoverage(ctx context.Context, v *Viewer, scopes []string, from, to string) ([]ScopeRow, error)
+	// HealthBeforeScopes is HealthBefore for many scopes at once.
+	HealthBeforeScopes(ctx context.Context, v *Viewer, scopes []string, before string) ([]Record, error)
+	// Holding groups the changes holding now that the viewer may see.
+	Holding(ctx context.Context, v *Viewer) ([]HoldRow, error)
 	// Ping answers when the database does.
 	Ping(ctx context.Context) error
 

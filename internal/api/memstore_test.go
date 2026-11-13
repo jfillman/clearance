@@ -21,6 +21,7 @@ type memStore struct {
 	recs    []Record // in seq order, each with "assurance"
 	changes []store.Change
 	defs    []store.Definition
+	targets []store.TargetSet
 	tokens  []store.Token
 	keys    []store.SigningKey
 	feeds   []store.Feed
@@ -302,10 +303,74 @@ func (m *memStore) Counts(_ context.Context, f EvidenceFilter, v *Viewer, by str
 	var keys []*string
 	for _, r := range m.recs {
 		if m.sees(r, v, owners) && m.matches(r, f) {
-			keys = append(keys, keyOf(r[by]))
+			keys = append(keys, countKey(r, by))
 		}
 	}
 	return group(keys), m.fail
+}
+
+// countKey is the value of a counts `by` in a record (provider is its provider.name).
+func countKey(r Record, by string) *string {
+	if by == "provider" {
+		p, _ := r["provider"].(map[string]any)
+		return keyOf(p["name"])
+	}
+	return keyOf(r[by])
+}
+
+func (m *memStore) CountBuckets(_ context.Context, f EvidenceFilter, v *Viewer, by string, bucket time.Duration) ([]Count, error) {
+	owners := m.owners()
+	type k struct {
+		key    string
+		null   bool
+		bucket int64
+	}
+	n := map[k]int64{}
+	for _, r := range m.recs {
+		if !m.sees(r, v, owners) || !m.matches(r, f) {
+			continue
+		}
+		ts, _ := str(r["ts"])
+		t, err := time.Parse(time.RFC3339Nano, ts)
+		if err != nil {
+			continue
+		}
+		key := countKey(r, by)
+		kk := k{bucket: t.Unix() / int64(bucket/time.Second)}
+		if key == nil {
+			kk.null = true
+		} else {
+			kk.key = *key
+		}
+		n[kk]++
+	}
+	out := []Count{}
+	for kk, c := range n {
+		key := kk.key
+		at := time.Unix(kk.bucket*int64(bucket/time.Second), 0).UTC().Format(time.RFC3339)
+		cnt := Count{Count: c, Bucket: &at}
+		if !kk.null {
+			cnt.Key = &key
+		}
+		out = append(out, cnt)
+	}
+	// bucket asc, count desc, key asc (nulls last), as the SQL orders
+	sort.Slice(out, func(i, j int) bool {
+		if *out[i].Bucket != *out[j].Bucket {
+			return *out[i].Bucket < *out[j].Bucket
+		}
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		if out[i].Key == nil || out[j].Key == nil {
+			return out[j].Key == nil && out[i].Key != nil
+		}
+		return *out[i].Key < *out[j].Key
+	})
+	if len(out) > MaxBucketItems {
+		out = out[:MaxBucketItems]
+	}
+	return out, m.fail
 }
 
 // intField is an integer field of a record's object (0 when absent or not a number), as PG's sumOf reads it.

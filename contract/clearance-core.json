@@ -3101,6 +3101,140 @@
         ],
         "type": "object"
       },
+      "TargetsGate": {
+        "additionalProperties": false,
+        "properties": {
+          "instance": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "instance",
+          "mode",
+          "type"
+        ],
+        "type": "object"
+      },
+      "TargetsObserver": {
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "source"
+        ],
+        "type": "object"
+      },
+      "TargetsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/TargetsTarget"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "targets"
+        ],
+        "type": "object"
+      },
+      "TargetsResult": {
+        "properties": {
+          "changed": {
+            "type": "boolean"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "seq": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "targets": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "changed",
+          "digest",
+          "seq",
+          "source",
+          "targets"
+        ],
+        "type": "object"
+      },
+      "TargetsTarget": {
+        "additionalProperties": false,
+        "properties": {
+          "app": {
+            "type": "string"
+          },
+          "env": {
+            "type": "string"
+          },
+          "gates": {
+            "items": {
+              "$ref": "#/components/schemas/TargetsGate"
+            },
+            "type": "array"
+          },
+          "group": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "observers": {
+            "items": {
+              "$ref": "#/components/schemas/TargetsObserver"
+            },
+            "type": "array"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "registry": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "gates",
+          "group",
+          "id",
+          "kind",
+          "name",
+          "observers"
+        ],
+        "type": "object"
+      },
       "TokenEnvelope": {
         "properties": {
           "payload": {
@@ -5061,6 +5195,101 @@
         "summary": "A registered provider's own record (one of RecordKinds), sealed with that provider's name and version; only provider and ts are verified.",
         "x-clearance-auth": "provider",
         "x-clearance-max-body": 262144
+      }
+    },
+    "/v1/targets/{source}": {
+      "put": {
+        "operationId": "publishTargets",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TargetsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TargetsResult"
+                }
+              }
+            },
+            "description": "what was held, and whether it changed"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is not valid (strict decoding, or a field the route refuses)"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no bearer token, or one the authenticator refused"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the caller may not do this"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is over the route's cap"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the store could not record it: treat as unreachable (fail closed)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The targets one source (a cluster's gitops render, an account's bootstrap) declares: the Map's registry of what should be protected. Each target has an id, name, kind, group, environment, app, owner, registry tier, the coverage scope its observations arrive under, the gates that guard it (type, instance, mode enforce or flag) and the observers that watch it. The list replaces the set the core holds for that source (an empty list withdraws it); other sources' are untouched. Validated strictly; a changed set is one targets.load record carrying the set's digest, an unchanged one records nothing. Only a provider registered with targets naming the source. clearance-api serves the union (GET /v1/targets).",
+        "x-clearance-auth": "provider",
+        "x-clearance-max-body": 4194304
       }
     },
     "/v1/terraform/run-task": {

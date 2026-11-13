@@ -27,6 +27,26 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   `GET /v1/attestation-config` serves the non-secret config a portal needs (`CLEARANCE_API_ATTEST_REKOR_URL`, identity,
   issuer, key ids, the offline verify command). Chart values `api.attest.*` (an existing ConfigMap of public material).
 
+- The Map's API (Clearance core and clearance-api; the Backstage plugin's Map reads it).
+  - core: `PUT /v1/targets/{source}`, the declared target registry. A source (a cluster's gitops render, an account's
+    bootstrap) publishes the targets it declares (id, name, kind, group, env, app, owner, registry tier, the coverage `scope`
+    they map to, gates `{type, instance, mode: enforce|flag}` and observers `{provider, source}`); the core validates strictly
+    (caps: 2000 targets per source, 32 gates and 16 observers per target), replaces that source's set only, and records a
+    changed set once as `targets.load` with the set's sha256 digest (an unchanged one records nothing). A provider publishes
+    for the sources its new `targets` registration names (`CLEARANCE_PROVIDERS`). New table `clearance_targets`. Python
+    client `publish_targets` (regenerated models), Go client `PublishTargets`.
+  - api: `GET /v1/targets`, the union of every source's set. `GET /v1/map?from&to[&group][&expand][&target]`, the coverage
+    map in one read: gate types with instance counts, mode mix, decisions, refusals and holds; target groups and targets with
+    the six-state coverage mix, observer health and the Requested to Verified lanes; edges (width is decisions, status the
+    worst state); the needs-attention list (no gate, blind or degraded observers, flag-mode gates, changes holding, declared
+    gates that decided nothing, decisions from gates nobody declared); `partial`, what the records cannot yet say
+    (Observed and Verified are not joined to each change until G-ARGO-3). `target=` adds the C10 detail: the changes moving
+    through the target, its exceptions and recent evidence. Computed in four aggregate statements; `GET /v1/map` is about
+    50 ms on 25 000 records and 0.5 s on 250 000. New index `clearance_evidence_written`.
+  - api: `GET /v1/evidence/counts` groups by `provider` and `boundary`, takes `scope=` and `bucket=1m|5m|15m|1h|6h|1d`
+    (time buckets, at most 1500).
+
+
 ## [0.44.1] - 2026-11-13
 
 ### Fixed

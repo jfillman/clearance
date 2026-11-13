@@ -52,6 +52,14 @@ type Definition struct {
 	Record      json.RawMessage
 }
 
+// TargetSet is one row of clearance_targets: the declared targets one source published (PUT /v1/targets/{source}),
+// as the sorted JSON array the digest is of. Digest is the sha256 hex of Doc.
+type TargetSet struct {
+	Source, Digest string
+	Doc            json.RawMessage
+	UpdatedAt      time.Time
+}
+
 // Token is one row of clearance_tokens: the clearance token issued for a cleared change (C-1), in both its
 // encodings. One per change: a refresh replaces the row and keeps its nonce; a new clearance of the change replaces
 // the nonce. A revoked token (a new head superseded it, or it lapsed) keeps its row with RevokedAt set.
@@ -122,6 +130,8 @@ type Tx interface {
 	Append(ctx context.Context, event Event, w evidence.Writer) (Record, error)
 	PutChange(ctx context.Context, c Change) error
 	ReplaceDefinitions(ctx context.Context, defs []Definition) error
+	// PutTargets replaces the source's declared targets (an upsert by source).
+	PutTargets(ctx context.Context, t TargetSet) error
 	// PutToken writes the change's token (an upsert by change id).
 	PutToken(ctx context.Context, t Token) error
 	// PutFeed writes the cluster's signed grant feed (an upsert by cluster).
@@ -162,6 +172,8 @@ type Reader interface {
 	// ChangesUndelivered are the changes with a deployment whose delivered is false (github_app.py retries them).
 	ChangesUndelivered(ctx context.Context) ([]Change, error)
 	Definitions(ctx context.Context) ([]Definition, error)
+	// Targets are the declared target sets, one per source, by source.
+	Targets(ctx context.Context) ([]TargetSet, error)
 	// Token is the change's token (ErrNotFound when it has none).
 	Token(ctx context.Context, changeID string) (Token, error)
 	// TokensDue are the tokens not revoked that expire before due or are signed by a key other than keyID: the
