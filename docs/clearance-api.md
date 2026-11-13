@@ -98,7 +98,7 @@ record). The providers also keep secrets out at the source (observe-k8s records 
 credentials), so the redaction is a second line, not the only one. It is by key name: a secret held under an innocuous
 key in a non-Secret object is not recognised.
 
-**No scope:** `GET /v1/coverage` (no `scope`) answers `{from, to, scopes: [statement, ...], truncated}`: the statement below for every scope with an observation, audit gap or health record, sorted by scope (each statement names its `scope`; at most 100 scopes, then `truncated`). With a `scope` the answer is the single statement, unchanged.
+**No scope:** `GET /v1/coverage` (no `scope`) answers `{from, to, scopes: [statement, ...], truncated}`: the statement below for every scope with an observation, audit gap or health record, sorted by scope (each statement names its `scope`; at most 100 scopes, then `truncated`). The scope list is read as distinct names, not as records (`Store.Scopes`: observations and audit gaps in the window, or a health record before its end; at most 1000 names, then `truncated`), and a statement reads health bounded: the records in the window plus, per source, the records before it from the last one the collector wrote as healthy (`Store.HealthBefore`, the most that can still decide a state the window starts in, for instance a flip the core held), not the scope's whole health history; the statement is identical to one built from all of it. With a `scope` the answer is the single statement, unchanged.
 
 `GET /v1/coverage?scope=&from=&to=` (RFC 3339; `to` defaults to now and is never in the future, `from` to 24 hours
 before it; at most 92 days) answers:
