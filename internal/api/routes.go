@@ -137,9 +137,10 @@ var routeTable = []Route{
 			"records written when a feed dropped. scope is required. Any signed-in person, a delegate for one, an auditor or a configured observation reader (O-5): the whole scope; secret-bearing keys in a record's state_change are redacted for all but an auditor",
 		Response: EvidencePage{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).listObservationHealth},
 	{OperationID: "getCoverage", Method: "GET", Path: "/v1/coverage", Roles: ObservationRoles,
-		Params: []string{"scope", "from", "to"},
+		Params: []string{"scope", "from", "to", "names"},
 		Summary: "With no scope, the statements of every scope observed in the window ({from, to, scopes: [statement...], truncated}; " +
-			"at most 100 scopes). The coverage statement for a scope and window (from and to, RFC 3339; default the last 24 hours): " +
+			"at most 100 scopes). With no scope and names=only, just the scope list ({from, to, scopes: [{scope}...], truncated, " +
+			"names_only: true}; at most 1000 names, no statements built: one cheap read); names is only, and takes no scope (400). The coverage statement for a scope and window (from and to, RFC 3339; default the last 24 hours): " +
 			"what was cleared and verified, what was seen and not cleared (by coverage state, with how each ended), " +
 			"what could not be seen (the stretches a feed was blind or degraded, and the audit gaps), and the health " +
 			"of each feed, with each item's newest resolution (state, cause, who set it and when) and how many of the window's " +

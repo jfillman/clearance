@@ -140,6 +140,20 @@ type ScopeStatements struct {
 	Truncated bool `json:"truncated"`
 }
 
+// ScopeNames is GET /v1/coverage?names=only: the scope list alone, {scope} objects with no statements.
+type ScopeNames struct {
+	From      string      `json:"from"`
+	To        string      `json:"to"`
+	Scopes    []ScopeName `json:"scopes"`
+	Truncated bool        `json:"truncated"`
+	NamesOnly bool        `json:"names_only"`
+}
+
+// ScopeName is one scope in a names-only coverage answer.
+type ScopeName struct {
+	Scope string `json:"scope"`
+}
+
 // MaxCoverageScopes caps the scopes one unscoped coverage answer carries.
 const MaxCoverageScopes = 100
 
@@ -148,6 +162,16 @@ const MaxCoverageScopes = 100
 func (s *Server) getCoverage(w http.ResponseWriter, r *http.Request, v *Viewer) {
 	q := query(r)
 	scope := ""
+	if _, ok := r.URL.Query()["names"]; ok {
+		switch {
+		case q["names"] != "only":
+			writeError(w, 400, "names is only")
+			return
+		case q["scope"] != "":
+			writeError(w, 400, "names=only lists scopes: it takes no scope")
+			return
+		}
+	}
 	if q["scope"] != "" {
 		var aerr *apiError
 		if scope, aerr = scopeOf(q); aerr != nil {
@@ -201,6 +225,14 @@ func (s *Server) getCoverage(w http.ResponseWriter, r *http.Request, v *Viewer) 
 	scopes, cut, err := s.scopesIn(ctx, v, from, to)
 	if err != nil {
 		s.readFailed(w, r, err)
+		return
+	}
+	if q["names"] == "only" { // the scope list straight from the one distinct-names read: no statement is built
+		names := ScopeNames{From: evidence.ISO(from), To: evidence.ISO(to), Scopes: []ScopeName{}, Truncated: cut, NamesOnly: true}
+		for _, sc := range scopes {
+			names.Scopes = append(names.Scopes, ScopeName{Scope: sc})
+		}
+		writeJSON(w, 200, names)
 		return
 	}
 	out := ScopeStatements{From: evidence.ISO(from), To: evidence.ISO(to), Scopes: []observe.Statement{}, Truncated: cut}

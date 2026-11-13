@@ -11,6 +11,10 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ### Added
 
+- api: `GET /v1/coverage?names=only`, the scope list without statements: `{from, to, scopes: [{scope}...], truncated, names_only: true}`
+  from the one distinct-names read (`Store.Scopes`), up to 1000 names, no per-scope statement (a scope picker no longer waits
+  seconds for statements it discards). `names` with a `scope`, or any value but `only`, is 400. Tests on both stores prove no
+  statement read happens.
 - The Map's API (Clearance core and clearance-api; the Backstage plugin's Map reads it).
   - core: `PUT /v1/targets/{source}`, the declared target registry. A source (a cluster's gitops render, an account's
     bootstrap) publishes the targets it declares (id, name, kind, group, env, app, owner, registry tier, the coverage `scope`
