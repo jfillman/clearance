@@ -60,6 +60,7 @@ type Config struct {
 	Listen                         string
 	Auditors, Notifiers, Delegates []string
 	ObservationReaders             []string
+	Admins                         []string // CLEARANCE_ADMINS, for whoami
 	FeedReaders                    []FeedReader
 	AgentsDir                      string
 	DefinitionsEvery               time.Duration
@@ -93,7 +94,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	}
 	cfg := Config{DSN: get("CLEARANCE_API_DSN", ""), AgentsDir: get("CLEARANCE_AGENTS_DIR", ""),
 		Auditors: list(get("CLEARANCE_API_AUDITORS", "")), Notifiers: list(get("CLEARANCE_API_NOTIFIERS", "")),
-		Delegates: list(get("CLEARANCE_DELEGATES", "")), ObservationReaders: list(get("CLEARANCE_API_OBSERVATION_READERS", "")),
+		Delegates: list(get("CLEARANCE_DELEGATES", "")), Admins: list(get("CLEARANCE_ADMINS", "")), ObservationReaders: list(get("CLEARANCE_API_OBSERVATION_READERS", "")),
 		GatewayURL: get("CLEARANCE_GATEWAY_URL", ""), CoreURL: get("CLEARANCE_CORE_URL", ""),
 		BackstageURL: get("BACKSTAGE_URL", ""), BackstageTokenFile: get("BACKSTAGE_TOKEN_FILE", backstage.DefaultTokenFile)}
 	if cfg.DSN == "" {
@@ -270,7 +271,7 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 		log.Warn("api: the stored definitions are not readable yet; retrying", "error", err.Error())
 	}
 	access := &Access{Delegates: cfg.Delegates, Notifiers: cfg.Notifiers, Auditors: cfg.Auditors,
-		ObservationReaders: cfg.ObservationReaders, FeedReaders: cfg.FeedReaders, Owners: defs.Owners}
+		ObservationReaders: cfg.ObservationReaders, Admins: cfg.Admins, FeedReaders: cfg.FeedReaders, Owners: defs.Owners}
 	if cfg.BackstageURL != "" {
 		cat := backstage.NewCatalog(cfg.BackstageURL, cfg.BackstageTokenFile, 0, log)
 		dir := backstage.NewDirectory(cat, 0, nil)

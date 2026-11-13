@@ -11,6 +11,20 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ### Added
 
+- cli: the person commands in the `clearance` binary (and `clr`, the same binary under another name), phase 1 of using
+  Clearance without Backstage ([docs/cli.md](docs/cli.md)). `login` / `logout` / `whoami`: the OIDC device-code flow
+  against the people IdP (a public client, no secret; issuer and client id from `CLEARANCE_OIDC_ISSUER` /
+  `CLEARANCE_OIDC_CLIENT_ID` or `~/.config/clearance/config.yaml`, which holds URLs and the issuer only). Only the ID
+  token is kept, in the OS keychain (`github.com/zalando/go-keyring`, MIT), never a refresh token and never a file; use
+  stops at the token's `exp` or an hour, whichever is first; `--token-stdin` keeps a token in memory for one invocation.
+  Reads, each with the person's own bearer token, `-o table|json|jsonl|yaml`: `inbox`, `changes list|show|history`,
+  `attest get|download|verify <change>` (server-side verify, or offline with `--trust-root`/`--key` through the code of
+  `attest verify --file`), `exceptions list`, `coverage` (exit 0 covered, 2 degraded, 3 blind or unavailable),
+  `evidence`, `watch` (SSE, reconnecting with `Last-Event-ID`). HTTP errors map to messages and exit codes
+  (401: `run clearance login`).
+- api: `GET /v1/whoami`, the caller's principal, kind, roles held, groups, owned apps, admin or not (`CLEARANCE_ADMINS`)
+  and the token's issuer and expiry; and `awaiting=me` on `GET /v1/clearances`, the holding changes the caller may clear
+  now, decided by the gate's own `gate.RoleFor` so the api re-implements no policy.
 - api: `GET /v1/coverage?names=only`, the scope list without statements: `{from, to, scopes: [{scope}...], truncated, names_only: true}`
   from the one distinct-names read (`Store.Scopes`), up to 1000 names, no per-scope statement (a scope picker no longer waits
   seconds for statements it discards). `names` with a `scope`, or any value but `only`, is 400. Tests on both stores prove no

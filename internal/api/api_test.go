@@ -539,7 +539,7 @@ func TestTheCommittedContractIsCurrent(t *testing.T) {
 	}
 	for _, id := range []string{"listEvidence", "getEvidence", "verifyEvidence", "countEvidence", "getPolicy",
 		"explainPolicy", "listReceipts", "listProvenance", "listClearances", "countClearances", "getClearance",
-		"getClearanceAttestation", "getClearancePolicy", "listDefinitions", "getKeys", "getGrantFeed", "listInstallations", "streamEvents",
+		"getClearanceAttestation", "getClearancePolicy", "whoami", "listDefinitions", "getKeys", "getGrantFeed", "listInstallations", "streamEvents",
 		"getContract"} {
 		if ops[id] == nil {
 			t.Errorf("the contract has no %s", id)

@@ -14,7 +14,7 @@ import (
 )
 
 func init() {
-	cli.Register(cli.Command{Name: "attest verify", Summary: "verify a change attestation bundle offline (--file, --subject, --key or --trust-root)", Run: attestVerify})
+	cli.Register(cli.Command{Name: "attest verify", Summary: "verify a change attestation: <change-id> (by the api, or offline with --trust-root/--key), or --file <bundle> offline", Run: attestVerify})
 }
 
 // repeated is a flag that may be given more than once.
@@ -23,7 +23,17 @@ type repeated []string
 func (r *repeated) String() string     { return strings.Join(*r, ",") }
 func (r *repeated) Set(v string) error { *r = append(*r, v); return nil }
 
-func attestVerify(_ context.Context, args []string, stdout, stderr io.Writer) int {
+func attestVerify(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	// `attest verify <change-id> ...` (a leading id, or --change <id>) is the person command: the api's bundle, verified
+	// by the api or, with --trust-root/--key, offline (docs/cli.md). Without one this is the offline file verifier.
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		return personEnvFor(stdout, stderr).AttestVerify(ctx, args)
+	}
+	for i, a := range args {
+		if a == "--change" && i+1 < len(args) {
+			return personEnvFor(stdout, stderr).AttestVerify(ctx, append([]string{args[i+1]}, append(append([]string{}, args[:i]...), args[i+2:]...)...))
+		}
+	}
 	fs := flag.NewFlagSet("attest verify", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	file := fs.String("file", "-", "the bundle (GET /v1/clearances/{id}/attestation) or a bare DSSE envelope; - for stdin")

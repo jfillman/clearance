@@ -4097,6 +4097,82 @@
           "verified"
         ],
         "type": "object"
+      },
+      "WhoAmI": {
+        "properties": {
+          "admin": {
+            "type": "boolean"
+          },
+          "agents": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "apps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "auditor": {
+            "type": "boolean"
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "issuer": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "person": {
+            "type": "string"
+          },
+          "principal": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "via": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "admin",
+          "agents",
+          "apps",
+          "auditor",
+          "expires_at",
+          "groups",
+          "kind",
+          "person",
+          "principal",
+          "role",
+          "roles",
+          "via"
+        ],
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -4420,6 +4496,14 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "awaiting",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -4497,7 +4581,7 @@
             "bearer": []
           }
         ],
-        "summary": "The deployment gate's changes, newest first: tier and why, state (holding, cleared, denied, expired, superseded, degraded, exception), the requirement and the approvals so far, what the grant binds to. A person sees their apps' changes and the ones their groups may clear; the cursor is updated_at. cluster=<c>&state=cleared is the grant feed: the cluster's cleared changes whose clearance token is live, each with its token; a feed reader (CLEARANCE_API_FEED_READERS) may read only that, for its own clusters",
+        "summary": "The deployment gate's changes, newest first: tier and why, state (holding, cleared, denied, expired, superseded, degraded, exception), the requirement and the approvals so far, what the grant binds to. A person sees their apps' changes and the ones their groups may clear; the cursor is updated_at. cluster=<c>&state=cleared is the grant feed: the cluster's cleared changes whose clearance token is live, each with its token; a feed reader (CLEARANCE_API_FEED_READERS) may read only that, for its own clusters. awaiting=me keeps the holding changes the caller may clear now (the gate's own rule: in the owner group or an unfilled outside group, not the proposer, not already an approver); a person's token or a delegate naming one",
         "x-clearance-roles": [
           "person",
           "delegate",
@@ -6913,6 +6997,57 @@
           "person",
           "delegate",
           "auditor",
+          "observer"
+        ]
+      }
+    },
+    "/v1/whoami": {
+      "get": {
+        "operationId": "whoami",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WhoAmI"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Who the token is and what the api resolves it to: the principal and kind, every role it holds, the viewer's role, the person the reads are as (and the delegate, if one asked), whether that person is an admin (CLEARANCE_ADMINS), their groups, owned apps and owned agents, the token's issuer and expiry. No secret",
+        "x-clearance-roles": [
+          "person",
+          "delegate",
+          "auditor",
+          "notifier",
+          "feed",
           "observer"
         ]
       }

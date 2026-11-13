@@ -53,10 +53,11 @@ the inbox, trigger history, results), so the Go API serves only Clearance's own 
 | explainPolicy | `GET /v1/policy/explain` | **ported** (`decide.(*Engine).Trace`) |
 | listReceipts | `GET /v1/receipts` | **ported**; adds `installation` (C-10) |
 | listProvenance | `GET /v1/provenance` | **ported**; adds `installation` (C-10) |
-| listClearances | `GET /v1/clearances` | **ported**; adds `cluster`, and `cluster=<c>&state=cleared` is the grant feed (C-1, below) |
+| listClearances | `GET /v1/clearances` | **ported**; adds `cluster`, and `cluster=<c>&state=cleared` is the grant feed (C-1, below); adds `awaiting=me` ([below](#reads-for-the-person-cli)) |
 | countClearances | `GET /v1/clearances/counts` | **ported** |
 | getClearance | `GET /v1/clearances/{id}` | **ported**; adds `token` (C-1) and `attestation` (C-2: the digest, backend and Rekor index of the signed change attestation, or `null`) |
 | (new) getClearanceAttestation | `GET /v1/clearances/{id}/attestation` | **new** (C-2): the change's attestation as a Sigstore bundle, for `clearance attest verify`; 404 until a deploy reports an applied outcome ([core.md](core.md#change-attestations)) |
+| (new) whoami | `GET /v1/whoami` | **new**: who the token is and what the api resolves it to ([below](#reads-for-the-person-cli)) |
 | (new) verifyClearanceAttestation | `GET /v1/clearances/{id}/attestation/verify` | **new**: the stored bundle verified server-side ([below](#change-history-and-attestations)) |
 | (new) listChangeRecords | `GET /v1/clearances/{id}/records` | **new**: one change's `deploy.*` records in chain order ([below](#change-history-and-attestations)) |
 | (new) listAttestations | `GET /v1/attestations` | **new**: the signed attestations, newest first ([below](#change-history-and-attestations)) |
@@ -352,6 +353,54 @@ gateway, never by the App), the receipts of pull requests that installation chec
 - The Backstage proxy does not forward it (the contract marks it `x-clearance-stream`; the proxy buffers answers);
   Tower moving from polling to the stream is a follow-up.
 
+### Reads for the person CLI
+
+Built for `clearance` / `clr` ([cli.md](cli.md)); the Tower and Slack surfaces can use them too. Both are reads, as visible as
+the caller's own view; neither returns a secret.
+
+**`GET /v1/whoami`** (any authenticated caller): who the token is and what the api resolves it to, from the same
+viewer resolution every read uses.
+
+```json
+{
+  "principal": "user:erin",
+  "kind": "person",
+  "roles": ["person"],
+  "role": "person",
+  "person": "user:erin",
+  "via": null,
+  "admin": false,
+  "auditor": false,
+  "groups": ["group:default/team-gate"],
+  "apps": ["gate-api"],
+  "agents": [],
+  "issuer": "https://dex.example/dex",
+  "expires_at": "2026-11-13T13:00:00+00:00"
+}
+```
+
+`roles` is every role the principal holds; `role` is the one this read resolved to. For a delegate that names a person,
+`principal` is the delegate, `person` is who the reads are as and `via` names the delegate. `admin` is whether `person`
+matches `CLEARANCE_ADMINS`. `groups`, `apps` and `agents` come from the Directory and catalog (empty without
+`BACKSTAGE_URL`). `issuer` and `expires_at` are the token's `iss` and `exp` when it carried them; no subject claim, no
+token, no key.
+
+**`GET /v1/clearances?awaiting=me`**: the holding changes the caller may clear now, newest first, with the list's other
+filters (`app`, `env`, `tier`, `since`, `limit`, `after`; `state`, if given, must be `holding`). The question is the gate's
+own: each change the viewer can see is put through `gate.RoleFor`, the function `POST /v1/clearances/{id}/clear` uses to
+say which requirement a person satisfies, so a change is listed exactly when that call would not refuse the person for
+`DG-PROPOSER` (they proposed it), `DG-TWICE` (they already cleared it), `DG-FILLED` (their side of the requirement is met)
+or `DG-FORBIDDEN` (in neither the owner group nor an outside group). The api re-implements none of it. The check is by the
+principal and their groups; the gate's session and subject checks (`DG-APPROVER-SAME`) need the approval request itself
+and still apply when they act. An admin is listed only if they also qualify as a group member: admins may deny any held
+change, but clearing is the groups'. A person's token, or a delegate naming one, is needed (an auditor or a machine is
+400). `next` pages as the list does; the filter reads the holding changes the viewer sees a page at a time (at most 2000
+per request, and holding changes are few), so it is the same on the in-memory and Postgres stores.
+
+```json
+{"items": [{"id": "c-7f3a", "app": "gate-api", "env": "prod", "tier": 3, "state": "holding", "proposer": "user:alice", "...": "..."}], "next": null}
+```
+
 ### Differences from api.py on the ported routes
 
 - **A person's own records** are found from the chain, not the gateway's `clearance_sessions` (which moves to the
@@ -385,6 +434,7 @@ gateway, never by the App), the receipts of pull requests that installation chec
 | `CLEARANCE_API_NOTIFIERS` | none | principal globs: the notifier role |
 | `CLEARANCE_API_OBSERVATION_READERS` | none | principal globs: the `observer` role, machine pollers that read `GET /v1/coverage`, `/v1/observations`, `/v1/observations/health` and `/v1/exceptions` (whole scope, redacted like a person) and nothing else (O-5) |
 | `CLEARANCE_API_FEED_READERS` | none | `<principal glob>=<cluster>` pairs, comma-separated: the grant feed's readers (C-1) |
+| `CLEARANCE_ADMINS` | none | principal globs (`user:<login>`), the core's own list: `GET /v1/whoami` reports `admin` from it (the chart sets it for both) |
 | `CLEARANCE_DELEGATES` | none | principal globs that may name a person in the on-behalf-of header (`CLEARANCE_ON_BEHALF_OF_HEADER`; Hangar sets `X-Hangar-On-Behalf-Of`) |
 | `CLEARANCE_AGENTS_DIR` | none | the bundled definitions; cluster pins come from `clearance_definitions` |
 | `CLEARANCE_API_DEFINITIONS_INTERVAL` | 30 | seconds between re-reads of the stored definitions |

@@ -443,6 +443,14 @@ func (s *Server) listClearances(w http.ResponseWriter, r *http.Request, v *Viewe
 		writeError(w, 400, "since is an ISO time")
 		return
 	}
+	if aw := q["awaiting"]; aw != "" {
+		if aw != "me" {
+			writeError(w, 400, "awaiting is me")
+			return
+		}
+		s.listAwaiting(w, r, v, f, limit, q["after"])
+		return
+	}
 	items, err := s.opt.Store.Changes(r.Context(), f, v, limit, q["after"])
 	if err != nil {
 		s.readFailed(w, r, err)
