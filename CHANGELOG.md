@@ -9,6 +9,8 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-11-13
+
 ### Added
 
 - cli: the person write commands, phase 2 of using Clearance without Backstage ([docs/cli.md](docs/cli.md#writes)). They
@@ -1400,7 +1402,8 @@ What the Autopilot gateway needs of the core before the hangar-dev cutover (R-3e
   scope, narrow-only limits, CEL policy, sessions, the hash-chained audit log and the gateway; the Hangar pack's
   `glidepath.*` and `airframe.*` tools over glidepath-api and a GET-only Kubernetes adapter.
 
-[Unreleased]: https://github.com/jfillman/clearance/compare/v0.45.0...HEAD
+[Unreleased]: https://github.com/jfillman/clearance/compare/v0.46.0...HEAD
+[0.46.0]: https://github.com/jfillman/clearance/compare/v0.45.0...v0.46.0
 [0.45.0]: https://github.com/jfillman/clearance/compare/v0.44.1...v0.45.0
 [0.44.1]: https://github.com/jfillman/clearance/compare/v0.44.0...v0.44.1
 [0.44.0]: https://github.com/jfillman/clearance/compare/v0.43.0...v0.44.0
