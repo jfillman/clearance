@@ -53,6 +53,9 @@ type fakeIdP struct {
 	// knobs
 	nonceOverride   *string
 	aud, iss        string
+	audList         []string // aud as a list (overrides aud)
+	azp             string   // azp claim (overrides what the scope implies)
+	crossClient     bool     // behave like Dex: scope audience:server:client_id:<peer> gives aud=[peer, client], azp=client
 	expIn           time.Duration
 	noAuthTime      bool
 	authTimeAgo     time.Duration
@@ -66,6 +69,7 @@ type fakeIdP struct {
 type codeEntry struct {
 	challenge, nonce, redirect string
 	maxAge                     string
+	scope                      string
 }
 
 func newIdP(t *testing.T, clk *clock) *fakeIdP {
@@ -101,7 +105,7 @@ func (f *fakeIdP) authorize(authLocation string) string {
 	f.lastAuthRequest = q
 	code := "code-" + q.Get("state")[:8]
 	f.mu.Lock()
-	f.codes[code] = codeEntry{challenge: q.Get("code_challenge"), nonce: q.Get("nonce"), redirect: q.Get("redirect_uri"), maxAge: q.Get("max_age")}
+	f.codes[code] = codeEntry{challenge: q.Get("code_challenge"), nonce: q.Get("nonce"), redirect: q.Get("redirect_uri"), maxAge: q.Get("max_age"), scope: q.Get("scope")}
 	f.mu.Unlock()
 	return q.Get("redirect_uri") + "?code=" + code + "&state=" + url.QueryEscape(q.Get("state"))
 }
@@ -135,6 +139,19 @@ func (f *fakeIdP) token(w http.ResponseWriter, r *http.Request) {
 	now := f.clk.now()
 	claims := map[string]any{"iss": f.iss, "aud": f.aud, "sub": "u-1", "email": "ada@example.com", "email_verified": true,
 		"preferred_username": "ada", "iat": now.Unix(), "exp": now.Add(f.expIn).Unix()}
+	if f.crossClient {
+		for _, sc := range strings.Fields(ce.scope) {
+			if peer, ok := strings.CutPrefix(sc, "audience:server:client_id:"); ok {
+				claims["aud"], claims["azp"] = []string{peer, testClientID}, testClientID
+			}
+		}
+	}
+	if f.audList != nil {
+		claims["aud"] = f.audList
+	}
+	if f.azp != "" {
+		claims["azp"] = f.azp
+	}
 	if nonce != "" {
 		claims["nonce"] = nonce
 	}

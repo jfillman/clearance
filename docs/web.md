@@ -54,6 +54,7 @@ Flags override the environment.
 | `CLEARANCE_WEB_ISSUER` | `--issuer` | the people IdP (discovery is `<issuer>/.well-known/openid-configuration`) |
 | `CLEARANCE_WEB_CLIENT_ID` | `--client-id` | the confidential OIDC client |
 | `CLEARANCE_WEB_CLIENT_SECRET_FILE` | `--client-secret-file` | file with the client secret |
+| `CLEARANCE_WEB_UPSTREAM_AUDIENCE` | `--upstream-audience` | optional: the audience the core and clearance-api require (e.g. `clearance`); see below |
 | `CLEARANCE_WEB_API_URL` | `--api-url` | clearance-api |
 | `CLEARANCE_WEB_CORE_URL` | `--core-url` | the core |
 | `CLEARANCE_WEB_GATEWAY_URL` | `--gateway-url` | optional: the Autopilot gateway; `/api/gateway/*` exists only when set |
@@ -71,6 +72,18 @@ token), `POST /auth/logout`, `/api/read/*`, `/api/write/*`, `/api/gateway/*`, an
 The IdP client: confidential, authorization-code grant, PKCE, redirect URI `<public-url>/auth/callback`, scopes
 `openid email profile`, `client_secret_basic`, `auth_time` in the ID token. The access and refresh tokens the IdP
 returns are dropped unread.
+
+## The token the core accepts (Dex cross-client trust)
+
+The web's OIDC client has its own id (`clearance-web`), so by default its ID token has `aud: clearance-web`, which the core and
+clearance-api (they require `oidc.audience`, `clearance`) refuse: sign-in would work and every forwarded call would be a 401. With
+`CLEARANCE_WEB_UPSTREAM_AUDIENCE=clearance` the login adds the scope `audience:server:client_id:clearance` and Dex issues the
+token with `aud: ["clearance", "clearance-web"]` and `azp: "clearance-web"` (Dex `getAudience`: the peers asked for, then the
+requester). Dex does this only if the peer client lists the requester under `trustedPeers`: the `clearance` static client needs
+`trustedPeers: [clearance-web]`. This does not change the CLI's device flow (trustedPeers is consulted only for that scope).
+The server's check is strict: it still verifies the token for its own client (its id is in `aud`) and then requires the upstream
+audience in `aud` AND `azp` equal to its own client id; a token issued to another client that merely lists the audience, or
+one without `azp`, is refused. Unset (the default), nothing changes.
 
 ## Building the bundle in
 
@@ -109,6 +122,10 @@ page reads `/auth/session` for the CSRF token and sends it as `X-CSRF-Token` on 
   NetworkPolicy has no host names), the gateway (`networkPolicy.web.gateway`, when `web.gatewayURL` is set) and
   `networkPolicy.web.extraEgress`. No Postgres, no Kubernetes API server. The core's and the api's policies admit the web pod
   on 8080 automatically.
+
+**https only.** The server refuses an `http` public URL or issuer (except `http://localhost` for development) and its cookies are
+`__Host-`/Secure, so the web UI is for clusters whose Gateway serves https (such as eks-dev); a lab Gateway that serves http
+cannot run it.
 
 The owner creates the confidential client in the people IdP (redirect URI `<publicURL>/auth/callback`) and the Secret.
 

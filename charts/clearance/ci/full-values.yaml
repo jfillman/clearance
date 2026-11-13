@@ -184,6 +184,7 @@ web:
   issuer: https://people-dex.example.test
   clientSecret: {existingSecret: clearance-web-oidc}
   gatewayURL: http://autopilot-gateway.autopilot-system.svc:8080
+  upstreamAudience: clearance
   sessionTTL: 30m
   idleTimeout: 10m
   freshMaxAge: 5m
