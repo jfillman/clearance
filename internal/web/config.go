@@ -1,6 +1,6 @@
 // Package web is `clearance web`: the backend-for-frontend of the standalone web UI (docs/web.md). It serves the UI
 // bundle, signs a person in at the people IdP (OIDC authorization code with PKCE), keeps the session in memory, and
-// forwards the page's calls to clearance-api, the core and the Autopilot gateway with the person's own ID token as
+// forwards the page's calls to clearance-api, the core and the agent gateway with the person's own ID token as
 // the bearer. It decides nothing: every 401, 403 and refusal is Clearance's, passed through.
 package web
 
@@ -23,7 +23,7 @@ type Config struct {
 	ClientSecretFile string        // CLEARANCE_WEB_CLIENT_SECRET_FILE: a file holding the confidential client's secret
 	APIURL           string        // CLEARANCE_WEB_API_URL: clearance-api (reads)
 	CoreURL          string        // CLEARANCE_WEB_CORE_URL: the core (writes)
-	GatewayURL       string        // CLEARANCE_WEB_GATEWAY_URL: the Autopilot gateway's person controls (optional)
+	GatewayURL       string        // CLEARANCE_WEB_GATEWAY_URL: the agent gateway's person controls (optional)
 	SessionTTL       time.Duration // CLEARANCE_WEB_SESSION_TTL: at most MaxSessionTTL
 	IdleTimeout      time.Duration // CLEARANCE_WEB_IDLE_TIMEOUT
 	MaxSessions      int           // CLEARANCE_WEB_MAX_SESSIONS

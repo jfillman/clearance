@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-// The forwarding: /api/read/* to clearance-api, /api/write/* to the core, /api/gateway/* to the Autopilot gateway,
+// The forwarding: /api/read/* to clearance-api, /api/write/* to the core, /api/gateway/* to the agent gateway,
 // each with the person's own ID token as the bearer. Nothing a browser sends is trusted to carry identity: the
 // outbound request is built fresh from an allowlist of headers, so the inbound Authorization, Cookie and every other
 // header are dropped.

@@ -32,7 +32,7 @@ func webCmd(ctx context.Context, args []string, _, stderr io.Writer) int {
 	fs.StringVar(&cfg.ClientSecretFile, "client-secret-file", cfg.ClientSecretFile, "file holding the client secret (env CLEARANCE_WEB_CLIENT_SECRET_FILE)")
 	fs.StringVar(&cfg.APIURL, "api-url", cfg.APIURL, "clearance-api, for reads (env CLEARANCE_WEB_API_URL)")
 	fs.StringVar(&cfg.CoreURL, "core-url", cfg.CoreURL, "the core, for writes (env CLEARANCE_WEB_CORE_URL)")
-	fs.StringVar(&cfg.GatewayURL, "gateway-url", cfg.GatewayURL, "the Autopilot gateway's person controls, optional (env CLEARANCE_WEB_GATEWAY_URL)")
+	fs.StringVar(&cfg.GatewayURL, "gateway-url", cfg.GatewayURL, "the agent gateway's person controls, optional (env CLEARANCE_WEB_GATEWAY_URL)")
 	fs.DurationVar(&cfg.SessionTTL, "session-ttl", cfg.SessionTTL, "longest session, at most 1h (env CLEARANCE_WEB_SESSION_TTL)")
 	fs.DurationVar(&cfg.IdleTimeout, "idle-timeout", cfg.IdleTimeout, "idle timeout (env CLEARANCE_WEB_IDLE_TIMEOUT, default 15m)")
 	fs.DurationVar(&cfg.FreshMaxAge, "fresh-max-age", cfg.FreshMaxAge, "max_age asked of the IdP when the core wants a fresh login (default 5m)")
