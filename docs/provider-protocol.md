@@ -61,6 +61,7 @@ The core knows its providers from `CLEARANCE_PROVIDERS` (`server.Provider`):
   observed role below).
 - `definitions: true` lets it publish its cluster-pinned agent definitions (`PUT /v1/definitions`, below). At most
   one provider has it.
+- `targets: ["<source>", ...]` lets it publish the declared targets of those sources (`PUT /v1/targets/{source}`, below).
 - A deployment provider registers changes, so its principal must also match `CLEARANCE_VERIFIERS`.
 
 Every call carries `Authorization: Bearer <token>`: in a cluster an audience-bound projected service-account token,
@@ -136,6 +137,28 @@ A `session.open` evaluation with `"properties": {"run": true, "via": "<delegate>
 to run a task agent (Autopilot's `Gateway.run_agent`: Tower's Run, or the person's own token). It asks for no limits
 and is not triggered; `via` is optional and needs `run`. The decision record is the Python gateway's: `args_sha256`
 of `{"via": <delegate or null>}` and result `opened to run[ via <delegate>]`.
+
+### Publishing declared targets
+
+The Map's registry says what should be protected. A source (a cluster's gitops render, an account's bootstrap) sends
+every target it declares, after each render that changed it; the core replaces that source's set and leaves the others:
+
+```json
+PUT /v1/targets/hangar-prod
+{"targets": [{"id": "gate-api-prod", "name": "gate-api", "kind": "k8s-namespace", "group": "hangar-prod",
+              "env": "prod", "app": "gate-api", "owner": "group:default/team-gate", "registry": "flight",
+              "scope": "hangar-prod",
+              "gates": [{"type": "glidepath", "instance": "gate-api-cicd", "mode": "enforce"},
+                        {"type": "g-argo", "instance": "argo-gate", "mode": "flag"}],
+              "observers": [{"provider": "observe-k8s", "source": "observe-k8s"}]}]}
+```
+
+`kind` is `k8s-namespace`, `k8s-cluster`, `aws-account`, `github-environment` or `other`; `group` is the cluster or account;
+`registry` is the registry tier, a lower-case name (`ground`, `flight`); `scope` is the coverage scope the target's observations arrive under; a gate's `mode` is
+`enforce` or `flag` (refusals recorded, not enforced) and its `instance` is the name its records carry (a provider's name, or
+the verifier principal that registers its changes). The answer is `{source, digest, targets, changed, seq}`: publishing the
+same set again is `changed: false` and records nothing, so it is safe to retry and to send on a timer. The Python and Go
+clients have `publish_targets` and `PublishTargets`.
 
 ### Publishing pinned definitions
 

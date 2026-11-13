@@ -26,11 +26,13 @@ core.record("session.open", {"session": "s-1", "task_id": "t-1", "principal": "u
 ```
 
 `AsyncCoreClient(...)` has the same methods as coroutines (each runs in a worker thread, so the event loop never
-blocks on the core). Methods: `evaluate`, `outcome`, `record`, `publish_definitions`, `register_change`,
+blocks on the core). Methods: `evaluate`, `outcome`, `record`, `publish_definitions`, `publish_targets`, `register_change`,
 `clear_change`, `deny_change`, `verify_provenance`, `healthz`, `readyz`; property `breaker_state` (`closed`, `open`,
 `half-open`). `publish_definitions(pins, rejected)` replaces the core's cluster-pinned agent definitions with the
 provider's whole set (`PUT /v1/definitions`, a provider registered with `definitions: true`); a whole set can be
 large, so a caller may give it a client with a longer `timeout` than the decision path's.
+`publish_targets(source, targets)` replaces the declared targets of one source (the Map's registry,
+`PUT /v1/targets/{source}`, a provider registered with `targets` naming it); `[]` withdraws them.
 
 ## Errors
 
@@ -56,7 +58,7 @@ The defaults are the policy decided on 2026-11-02 (spec R-3); every one is a `Co
 | `max_response_bytes` | 4 MiB | answer body cap |
 | `allow_unknown_fields` | `False` | accept an answer with fields this client does not know (a rolling upgrade only) |
 
-What is retried depends on whether the call is safe to repeat. `evaluate`, `publish_definitions` (the same set
+What is retried depends on whether the call is safe to repeat. `evaluate`, `publish_definitions` and `publish_targets` (the same set
 again records nothing), `register_change`, `verify_provenance` and the probes: any connection failure, timeout, 502, 503 or 504. `outcome`, `record`,
 `clear_change`, `deny_change`: only a failed connect (nothing was sent) or a 503 (the core did not record), so a
 record is never written twice and an outcome that did land is not turned into a 409. A 500 is never retried.

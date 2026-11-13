@@ -168,6 +168,20 @@ var routeTable = []Route{
 		serve:     func(s *Server) http.HandlerFunc { return s.definitions },
 	},
 	{
+		Method: "PUT", Path: "/v1/targets/{source}", OperationID: "publishTargets", Auth: AuthProvider,
+		MaxBody: MaxTargetsBody,
+		Summary: "The targets one source (a cluster's gitops render, an account's bootstrap) declares: the Map's registry " +
+			"of what should be protected. Each target has an id, name, kind, group, environment, app, owner, registry " +
+			"tier, the coverage scope its observations arrive under, the gates that guard it (type, instance, mode " +
+			"enforce or flag) and the observers that watch it. The list replaces the set the core holds for that " +
+			"source (an empty list withdraws it); other sources' are untouched. Validated strictly; a changed set is " +
+			"one targets.load record carrying the set's digest, an unchanged one records nothing. Only a provider " +
+			"registered with targets naming the source. clearance-api serves the union (GET /v1/targets).",
+		Request:   TargetsRequest{},
+		Responses: append([]Response{{200, "what was held, and whether it changed", TargetsResult{}}}, errs(400, 401, 403, 413, 503)...),
+		serve:     func(s *Server) http.HandlerFunc { return s.publishTargets },
+	},
+	{
 		Method: "POST", Path: "/v1/clearances", OperationID: "registerChange", Auth: AuthBearer,
 		MaxBody: gate.MaxRegisterBody,
 		Summary: "The clearance-gate check registers (or re-evaluates) a change to a protected environment; the caller " +

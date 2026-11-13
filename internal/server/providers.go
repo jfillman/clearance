@@ -39,6 +39,10 @@ type Provider struct {
 	Kinds         []string `json:"kinds,omitempty"`
 	IntentCapture string   `json:"intent_capture,omitempty"`
 	Definitions   bool     `json:"definitions,omitempty"`
+	// Targets are the source names (globs) whose declared targets the provider may publish (PUT /v1/targets/{source},
+	// the Map's registry): ["hangar-prod"], or ["*"]. A publish replaces only its own source's set, so several
+	// providers may publish (each its own sources); a source belongs to the first provider that lists it.
+	Targets []string `json:"targets,omitempty"`
 }
 
 var providerName = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,62}$`)
@@ -97,6 +101,11 @@ func ParseProviders(v string) ([]Provider, error) {
 			}
 			publisher = p.Name
 		}
+		for _, g := range p.Targets {
+			if g == "" || len(g) > 64 {
+				return nil, fmt.Errorf("CLEARANCE_PROVIDERS[%d]: targets names source globs of 1 to 64 characters", i)
+			}
+		}
 		seen[p.Name] = true
 	}
 	return ps, nil
@@ -110,6 +119,9 @@ func (p *Provider) Writer() evidence.Writer {
 func (p *Provider) provider() evidence.Provider {
 	return evidence.Provider{Name: p.Name, Version: p.Version, Conformance: p.Conformance}
 }
+
+// mayPublishTargets says whether the provider may publish the source's declared targets.
+func (p *Provider) mayPublishTargets(source string) bool { return pycompat.MatchAny(source, p.Targets) }
 
 func (p *Provider) matches(principal string) bool { return pycompat.MatchAny(principal, p.Principals) }
 

@@ -134,6 +134,11 @@ func Stored(r map[string]any) map[string]any
   `args_sha256`, `result` and so the subject, because the core decided the pin but did not fetch the file. The
   Python gateway's loader, which fetched it, wrote the same fields verified; the Go core's are tagged for what it
   knows.
+- Targets a provider publishes (PUT /v1/targets/{source}): `targets.load`, one per changed set, sealed by the core with
+  `caller`. `principal` is `provider:<name>`, `target` is `targets:<source>`, `args_sha256` is the set's digest (sha256
+  of its canonical JSON, sorted by id) and `result` says how many targets and the digest it replaced. Verified: `provider`,
+  `ts`, `caller`, `tool`, `decision`, `target`, `args_sha256` and `result`, because the core validated and addressed the
+  body itself. It records that a source declared these targets, never that the declaration is true.
 - Errors: `ErrEnvelopeField` (an event set a reserved field), `ErrInvalid` (a value outside the schema),
   `ErrNotStorable` (a value Postgres jsonb would change).
 

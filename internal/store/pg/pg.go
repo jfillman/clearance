@@ -74,6 +74,12 @@ CREATE TABLE IF NOT EXISTS clearance_definitions (
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (name, state)
 );
+CREATE TABLE IF NOT EXISTS clearance_targets (
+  source     text        PRIMARY KEY,
+  digest     text        NOT NULL,
+  doc        jsonb       NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS clearance_tokens (
   change_id  text        PRIMARY KEY,
   cluster    text        NOT NULL,
@@ -136,6 +142,7 @@ CREATE INDEX IF NOT EXISTS clearance_evidence_observed ON clearance_evidence ((r
   WHERE record->>'tool' IN ('observation', 'assessment', 'resolution', 'observation.health', 'observation.audit-gap');
 CREATE INDEX IF NOT EXISTS clearance_evidence_verification ON clearance_evidence ((record->>'scope'), seq)
   WHERE record->>'tool' = 'observation.verification';
+CREATE INDEX IF NOT EXISTS clearance_evidence_written ON clearance_evidence (written_at);
 CREATE TABLE IF NOT EXISTS clearance_ledger_checkpoints (
   size   bigint      PRIMARY KEY,
   origin text        NOT NULL,
@@ -586,6 +593,22 @@ func (t *tx) ReplaceDefinitions(ctx context.Context, defs []store.Definition) er
 	return nil
 }
 
+func (t *tx) PutTargets(ctx context.Context, ts store.TargetSet) error {
+	ctx = t.ctx // detached and bounded: see Store.Atomic
+	if err := t.lock(); err != nil {
+		return err
+	}
+	defer t.mu.Unlock()
+	ctx, cancel := deadline(ctx, t.s.opt)
+	defer cancel()
+	if _, err := t.tx.Exec(ctx, "INSERT INTO clearance_targets (source, digest, doc) VALUES ($1, $2, $3) "+
+		"ON CONFLICT (source) DO UPDATE SET digest = EXCLUDED.digest, doc = EXCLUDED.doc, updated_at = now()",
+		ts.Source, ts.Digest, string(ts.Doc)); err != nil {
+		return fmt.Errorf("pg: put targets: %w", err)
+	}
+	return nil
+}
+
 func (t *tx) PutToken(ctx context.Context, tk store.Token) error {
 	ctx = t.ctx // detached and bounded: see Store.Atomic
 	if err := t.lock(); err != nil {
@@ -810,6 +833,16 @@ func (t *tx) ChangesUndelivered(ctx context.Context) ([]store.Change, error) {
 	return changes(ctx, q, t.s.opt, undeliveredWhere, store.Undelivered)
 }
 
+func (t *tx) Targets(ctx context.Context) ([]store.TargetSet, error) {
+	ctx = t.ctx // detached and bounded: see Store.Atomic
+	q, done, err := t.q()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	return targetSets(ctx, q, t.s.opt)
+}
+
 func (t *tx) Definitions(ctx context.Context) ([]store.Definition, error) {
 	ctx = t.ctx // detached and bounded: see Store.Atomic
 	q, done, err := t.q()
@@ -886,6 +919,10 @@ func (r *Reader) ChangesHolding(ctx context.Context) ([]store.Change, error) {
 
 func (r *Reader) ChangesUndelivered(ctx context.Context) ([]store.Change, error) {
 	return changes(ctx, r.pool, r.opt, undeliveredWhere, store.Undelivered)
+}
+
+func (r *Reader) Targets(ctx context.Context) ([]store.TargetSet, error) {
+	return targetSets(ctx, r.pool, r.opt)
 }
 
 func (r *Reader) Definitions(ctx context.Context) ([]store.Definition, error) {
@@ -1296,6 +1333,27 @@ func changes(ctx context.Context, q querier, opt Options, where string, keep fun
 		if keep == nil || keep(c) {
 			out = append(out, c)
 		}
+	}
+	return out, rows.Err()
+}
+
+func targetSets(ctx context.Context, q querier, opt Options) ([]store.TargetSet, error) {
+	ctx, cancel := deadline(ctx, opt)
+	defer cancel()
+	rows, err := q.Query(ctx, `SELECT source, digest, doc::text, updated_at FROM clearance_targets ORDER BY source COLLATE "C"`)
+	if err != nil {
+		return nil, fmt.Errorf("pg: %w", err)
+	}
+	defer rows.Close()
+	out := []store.TargetSet{}
+	for rows.Next() {
+		var t store.TargetSet
+		var doc string
+		if err := rows.Scan(&t.Source, &t.Digest, &doc, &t.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("pg: %w", err)
+		}
+		t.Doc = []byte(doc)
+		out = append(out, t)
 	}
 	return out, rows.Err()
 }

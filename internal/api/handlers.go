@@ -22,7 +22,7 @@ import (
 // CountBy are the record fields evidence counts group by; ChangeCountBy the change fields (api.py COUNT_BY,
 // CHANGE_COUNT_BY). ChangeStates are a change's states.
 var (
-	CountBy       = []string{"rule", "tool", "agent", "app", "decision", "coverage"}
+	CountBy       = []string{"rule", "tool", "agent", "app", "decision", "coverage", "provider", "boundary"}
 	ChangeCountBy = []string{"state", "tier", "app", "env", "cleared_by"}
 	ChangeStates  = gate.States
 	outcomeModes  = []string{OutcomesInclude, OutcomesExclude, OutcomesOnly}
@@ -30,6 +30,27 @@ var (
 	CostPer   = []string{"task", "session", "agent", "principal"}
 	costField = map[string]string{"task": "task_id", "session": "session", "agent": "agent", "principal": "principal"}
 )
+
+// Buckets are the widths of counts' `bucket`; a window is at most MaxBuckets of them.
+var (
+	Buckets     = map[string]time.Duration{"1m": time.Minute, "5m": 5 * time.Minute, "15m": 15 * time.Minute, "1h": time.Hour, "6h": 6 * time.Hour, "1d": 24 * time.Hour}
+	BucketNames = []string{"1m", "5m", "15m", "1h", "6h", "1d"}
+)
+
+// MaxBuckets bounds the buckets of one bucketed count.
+const MaxBuckets = 1500
+
+// parseISO reads a time isoTime accepted (a date, a time, an offset), as UTC.
+func parseISO(v string) (time.Time, bool) {
+	s := strings.Replace(strings.TrimSpace(v), " ", "T", 1)
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.999999999", "2006-01-02T15:04", "2006-01-02T15", "2006-01-02",
+		"2006-01-02T15:04:05.999999999-0700", "2006-01-02T15:04:05-0700", "2006-01-02T15:04-07:00", "2006-01-02T15:04Z07:00"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t.UTC(), true
+		}
+	}
+	return time.Time{}, false
+}
 
 // ByCost is the counts' `by` that sums cost instead of counting records.
 const ByCost = "cost"
@@ -261,12 +282,46 @@ func (s *Server) countEvidence(w http.ResponseWriter, r *http.Request, v *Viewer
 		aerr.write(w)
 		return
 	}
-	items, err := s.opt.Store.Counts(r.Context(), f, v, by)
+	if q["scope"] != "" {
+		if f.Scope, aerr = scopeOf(q); aerr != nil {
+			aerr.write(w)
+			return
+		}
+	}
+	if f.Scope != "" {
+		v = readerOf(v) // an observed scope is read whole by every reader (O-5), as the observation reads are
+	}
+	var items []Count
+	var err error
+	bucket := q["bucket"]
+	if bucket == "" {
+		items, err = s.opt.Store.Counts(r.Context(), f, v, by)
+	} else {
+		width, ok := Buckets[bucket]
+		if !ok {
+			writeError(w, 400, "bucket is one of "+strings.Join(BucketNames, ", "))
+			return
+		}
+		if f.Since == "" || !isoTime.MatchString(f.Since) {
+			writeError(w, 400, "bucket needs since: the window the buckets cover")
+			return
+		}
+		from, _ := parseISO(f.Since)
+		to := s.opt.Clock().UTC()
+		if f.Until != "" {
+			to, _ = parseISO(f.Until)
+		}
+		if n := to.Sub(from) / width; to.Before(from) || n > MaxBuckets {
+			writeError(w, 400, fmt.Sprintf("the window is at most %d buckets of %s", MaxBuckets, bucket))
+			return
+		}
+		items, err = s.opt.Store.CountBuckets(r.Context(), f, v, by, width)
+	}
 	if err != nil {
 		s.readFailed(w, r, err)
 		return
 	}
-	writeJSON(w, 200, Counts{By: by, Items: items, Total: total(items), Outcomes: f.Outcomes})
+	writeJSON(w, 200, Counts{By: by, Items: items, Total: total(items), Outcomes: f.Outcomes, Bucket: bucket})
 }
 
 // countCost is counts by=cost (AP-C2): the cost of the records the viewer may see, per task, session, agent or
@@ -279,6 +334,10 @@ func (s *Server) countCost(w http.ResponseWriter, r *http.Request, v *Viewer, q 
 	}
 	if !in(CostPer, per) {
 		writeError(w, 400, "per is one of "+strings.Join(CostPer, ", "))
+		return
+	}
+	if q["bucket"] != "" || q["scope"] != "" {
+		writeError(w, 400, "by=cost sums runs' cost per task, session, agent or principal: bucket and scope do not apply")
 		return
 	}
 	if q["outcomes"] != "" {

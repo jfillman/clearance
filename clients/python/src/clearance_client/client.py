@@ -232,6 +232,18 @@ class CoreClient:
             body["bundled"] = [_as_dict(b) for b in bundled]
         return self._call("publishDefinitions", body, retry=_RETRY_ANY)
 
+    def publish_targets(
+        self, source: str, targets: list[m.TargetsTarget | Mapping[str, Any]]
+    ) -> m.TargetsResult:
+        """Replace the core's declared targets for source (a cluster's gitops render, an account's bootstrap) with
+        this set (PUT /v1/targets/{source}; the provider is registered with targets naming the source): each target's
+        id, name, kind, group, env, app, owner, registry tier, coverage scope, gates (type, instance, mode enforce or
+        flag) and observers (provider, source). [] withdraws everything the source declared. The core validates
+        strictly and records a changed set once (targets.load, with its digest); publishing the same set again
+        records nothing, so it is retried like an evaluation."""
+        return self._call("publishTargets", {"targets": [_as_dict(t) for t in targets]}, params={"source": source},
+                          retry=_RETRY_ANY)
+
     def register_change(self, change: Mapping[str, Any]) -> m.GateChange:
         """Register (or re-evaluate) a change to a protected environment; the caller is a verifier."""
         return self._call("registerChange", change, retry=_RETRY_ANY)
