@@ -105,6 +105,11 @@ unset, so the core's default applies. Lists are joined with commas.
 | `gate.runtimeImagesExtra` | `RUNTIME_IMAGES_EXTRA` | Globs a definition's `runtime.image` may match. |
 | `gate.protectedEnvironments` | `CLEARANCE_PROTECTED_ENVIRONMENTS` | `<cluster glob>/<env glob>` entries the gate protects. **Empty: every environment is protected** (fail closed); a change anywhere else is cleared at tier 0 (`unprotected`) and recorded ([gate.md](gate.md#protected-environments)). |
 | `gate.breakglassMaxTTL` | `CLEARANCE_BREAKGLASS_MAX_TTL` | The longest break-glass window (empty: `4h`, the ceiling; at least `1m`). |
+| `gate.freshAuthTier2` | `CLEARANCE_FRESH_AUTH_TIER2` | The longest sign-in age that may clear a tier 2 change (Go duration, `1m` to `24h`; empty: no requirement). |
+| `gate.freshAuthTier3Breakglass` | `CLEARANCE_FRESH_AUTH_TIER3_BREAKGLASS` | The same for clearing tier 3 and opening or closing break-glass (empty: tier 3 uses the tier 2 limit, break-glass none). [Freshness](core.md#fresh-sign-in-and-the-surface-g3-g4). |
+| `gate.freshAuthDelegates` | `CLEARANCE_FRESH_AUTH_DELEGATES` | `exempt` (default) or `require`: a delegate-named person's write must forward the sign-in time. |
+| `gate.viasExtra` | `CLEARANCE_VIAS_EXTRA` | Surface names a write may claim beside `cli`, `web`, `slack`, `api` (the deployment's portal). |
+| `gate.delegatePersonAllowed` | `CLEARANCE_DELEGATE_PERSON_ALLOWED` | Globs (`user:<login>`) a person named by a delegate must match (empty: any). |
 | `gate.trustedRegistries` | `CLEARANCE_TRUSTED_REGISTRIES` | Image prefixes, each ending in `/`, a tier-1 image bump may come from; others are tier 2. Empty: any registry (the product default; Hangar sets its own in Apron). |
 | `gate.unboundTree` | `CLEARANCE_GATE_UNBOUND_TREE` | `flag` or `refuse`: a manifest-tree registration whose `treeDigest` is a placeholder (64 copies of one digit, or sha256 of nothing) is flagged `tree:unbound` and binds to its commit only, or refused `DG-UNBOUND`. Empty: `flag` (the default for one release, then `refuse` is planned; [gate.md](gate.md#the-manifest-tree-digest-built)). |
 | `agents.configMap` | `CLEARANCE_AGENTS_DIR` | A ConfigMap of bundled agent definitions, mounted at `/etc/clearance/agents`. |

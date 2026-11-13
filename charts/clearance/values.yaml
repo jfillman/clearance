@@ -123,6 +123,19 @@ gate:
   # CLEARANCE_BREAKGLASS_MAX_TTL: the longest break-glass window an admin may open, a Go duration (1m to 4h; empty:
   # 4h, the product's ceiling).
   breakglassMaxTTL: ""
+  # CLEARANCE_FRESH_AUTH_TIER2 / CLEARANCE_FRESH_AUTH_TIER3_BREAKGLASS: the longest sign-in age (the ID token's
+  # auth_time, else iat) that may clear a tier 2 change / clear a tier 3 change and open or close break-glass; Go
+  # durations from 1m to 24h. Empty: no requirement (the product default); 15m is the recommendation for tier 3.
+  freshAuthTier2: ""
+  freshAuthTier3Breakglass: ""
+  # CLEARANCE_FRESH_AUTH_DELEGATES: exempt (default) | require. require makes a delegate-named person's write carry the
+  # person's sign-in time (X-Clearance-Auth-Time) and checks it against the same limits.
+  freshAuthDelegates: ""
+  # CLEARANCE_DELEGATE_PERSON_ALLOWED: globs (user:<login>) a person named by a delegate must match. Empty: any.
+  delegatePersonAllowed: []
+  # CLEARANCE_VIAS_EXTRA: surface names a person's write may claim (X-Clearance-Via) beside cli, web, slack and api:
+  # the deployment's portal. Empty: none.
+  viasExtra: []
   # CLEARANCE_GATE_UNBOUND_TREE: flag | refuse. A manifest-tree registration whose treeDigest is a placeholder (64
   # copies of one digit, or sha256 of nothing) is flagged tree:unbound and binds to its commit only, or refused
   # (DG-UNBOUND). Empty: flag (the core's default for one release; refuse is planned to become it).

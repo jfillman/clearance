@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -269,8 +270,9 @@ func (e *Env) ChangesShow(ctx context.Context, args []string) int {
 	}())
 }
 
-func showChange(e *Env, m map[string]any) {
-	w := e.Stdout
+func showChange(e *Env, m map[string]any) { showChangeTo(e.Stdout, e, m) }
+
+func showChangeTo(w io.Writer, e *Env, m map[string]any) {
 	rows := [][2]string{
 		{"change", str(m, "id")},
 		{"app", fmt.Sprintf("%s / %s  (cluster %s)", str(m, "app"), str(m, "env"), str(m, "cluster"))},

@@ -174,6 +174,9 @@ func (s *Service) OpenBreakglass(ctx context.Context, p authn.Principal, req Bre
 	if err != nil {
 		return nil, err
 	}
+	if err := s.checkFresh(ctx, p, onBehalfOf, actBreakglass); err != nil {
+		return nil, err
+	}
 	reason, err := CheckReason(req.Reason)
 	if err != nil {
 		return nil, err
@@ -213,7 +216,7 @@ func (s *Service) OpenBreakglass(ctx context.Context, p authn.Principal, req Bre
 			result += " via " + *via
 		}
 		target := b.Cluster + "/" + b.Env
-		rec := w.appendWith(store.Event{
+		ev := store.Event{
 			"ts": evidence.ISO(w.now), "task_id": nil, "session": nil, "parent": nil, "principal": person,
 			"agent": nil, "tool": ToolBreakglassOpen, "tier": nil, "decision": "allow", "rule": nil, "target": target,
 			"args_sha256": pycompat.ArgsDigest(map[string]any{"reason": reason, "ttl": req.TTL, "cluster": req.Cluster,
@@ -223,7 +226,9 @@ func (s *Service) OpenBreakglass(ctx context.Context, p authn.Principal, req Bre
 			"breakglass": map[string]any{"id": b.ID, "cluster": b.Cluster, "env": b.Env, "app": strOrNil(b.App),
 				"ttl_seconds": json.Number(fmt.Sprint(b.TTLSeconds)), "expires_at": evidence.ISO(b.ExpiresAt)},
 			"destination": map[string]any{"cluster": b.Cluster, "environment": b.Env},
-		}, w.glassWriter(via))
+		}
+		withSurface(ctx, ev)
+		rec := w.appendWith(ev, w.glassWriter(via))
 		if w.err != nil {
 			return w.err
 		}
@@ -268,6 +273,9 @@ func (s *Service) CloseBreakglass(ctx context.Context, p authn.Principal, id, on
 	}
 	person, via, _, err := s.admin(ctx, p, onBehalfOf, "DG-BREAKGLASS", "Only an admin, or a delegate naming one, may break glass.")
 	if err != nil {
+		return nil, err
+	}
+	if err := s.checkFresh(ctx, p, onBehalfOf, actBreakglass); err != nil {
 		return nil, err
 	}
 	var out *Breakglass
@@ -428,7 +436,7 @@ func (s *Service) reconcile(w *writer, b *Breakglass, by, principal string, via 
 		closedAt = b.ExpiresAt // the window ended at its TTL; reconciliation may run a little later
 	}
 	result := fmt.Sprintf("break-glass %s closed (%s): %d records in the window, %d of them exceptions", b.ID, by, count, exceptions)
-	rec := w.appendWith(store.Event{
+	ev := store.Event{
 		"ts": evidence.ISO(w.now), "task_id": nil, "session": nil, "parent": nil, "principal": principal,
 		"agent": nil, "tool": ToolBreakglassClose, "tier": nil, "decision": "allow", "rule": nil,
 		"target": b.Cluster + "/" + b.Env, "args_sha256": pycompat.ArgsDigest(map[string]any{"id": b.ID, "by": by}),
@@ -439,7 +447,9 @@ func (s *Service) reconcile(w *writer, b *Breakglass, by, principal string, via 
 		"changes": listed, "reported": json.Number(fmt.Sprint(count)), "truncated": truncated,
 		"limitations": BreakglassLimitation,
 		"destination": map[string]any{"cluster": b.Cluster, "environment": b.Env},
-	}, w.glassWriter(via))
+	}
+	withSurface(w.ctx, ev)
+	rec := w.appendWith(ev, w.glassWriter(via))
 	if w.err != nil {
 		return
 	}

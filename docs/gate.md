@@ -76,7 +76,9 @@ agent's but has no receipt (`unknown → agent`) is **denied** outright, as the 
 - **By people**: the delegate model, as every person write in Clearance (decision 2026-10-31): the person clears
   from Tower, Backstage's backend calls the gateway as itself naming them, Clearance checks the person against the
   requirement (owner group, the outside group, not the proposer, not the same person twice) and records
-  `deploy.clear` naming person and delegate. `Deny` is `deploy.deny` with a reason. The proposer of a change (the PR's
+  `deploy.clear` naming person and delegate. `Deny` is `deploy.deny` with a reason. A person may also sign in themselves
+  and call the core directly (the [CLI](cli.md#writes)); either way the core checks the same rules, and a deployment can
+  require a recent sign-in for tier 2 and tier 3 clears and for break-glass ([core.md](core.md#fresh-sign-in-and-the-surface-g3-g4)). The proposer of a change (the PR's
   author, or the person whose session an agent acted in) **cannot clear it**; the UI hides Clear from them rather than
   letting the gate refuse it.
 - A grant **expires**: a change holding for people expires after its TTL (proposed: 7 days, with the PR; Tower
@@ -924,6 +926,9 @@ partial index `clearance_evidence_exceptions`. Filters: `tool`, `kind` (an excep
 | `DG-BREAKGLASS-TTL` | `POST /v1/breakglass`, 400 | the TTL is not a Go duration from 1m to the deployment's maximum (at most 4h) |
 | `DG-BREAKGLASS-SCOPE` | `POST /v1/breakglass`, 400 | cluster, env or app are not names, or the environment is not protected |
 | `DG-BREAKGLASS-OPEN` | `POST /v1/breakglass`, 409 | a window is already open on that environment |
+| `DG-AUTH-NOT-FRESH` | clear (by the change's tier), `POST /v1/breakglass`, `/close`, 401, with `max_age` and `age` | the person's sign-in is older than `CLEARANCE_FRESH_AUTH_*` allows for the action ([core.md](core.md#fresh-sign-in-and-the-surface-g3-g4)); the CLI says "sign in again" (exit 4) |
+| `DG-VIA`, `DG-SURFACE-REF`, `DG-AUTH-TIME` | any person write, 400 | a malformed `X-Clearance-Via`, `X-Clearance-Surface-Ref` or `X-Clearance-Auth-Time` header |
+| `DG-PERSON-ALLOWED` | any delegate-named write, 403 | the person a delegate names is outside `CLEARANCE_DELEGATE_PERSON_ALLOWED` |
 
 ### Not yet
 

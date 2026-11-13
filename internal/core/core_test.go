@@ -169,3 +169,33 @@ func TestTheUnboundTreeSetting(t *testing.T) {
 		}
 	}
 }
+
+func TestFreshAuthConfig(t *testing.T) {
+	f, err := ParseFreshAuth("", "", "")
+	if err != nil || f.Tier2 != 0 || f.Tier3Breakglass != 0 || f.Delegates != "exempt" {
+		t.Fatalf("default is no requirement: %+v %v", f, err)
+	}
+	if f, err = ParseFreshAuth("30m", "15m", "require"); err != nil || f.Tier2 != 30*time.Minute || f.Tier3Breakglass != 15*time.Minute || f.Delegates != "require" {
+		t.Fatalf("%+v %v", f, err)
+	}
+	if f, err = ParseFreshAuth("0", "", ""); err != nil || f.Tier2 != 0 {
+		t.Fatalf("0 is off: %+v %v", f, err)
+	}
+	for _, bad := range [][3]string{{"10s", "", ""}, {"25h", "", ""}, {"", "soon", ""}, {"-5m", "", ""}, {"", "", "maybe"}} {
+		if _, err := ParseFreshAuth(bad[0], bad[1], bad[2]); err == nil {
+			t.Errorf("%v accepted", bad)
+		}
+	}
+	cfg, err := FromEnv(func(k string) string {
+		return map[string]string{"CLEARANCE_FRESH_AUTH_TIER3_BREAKGLASS": "15m", "CLEARANCE_DELEGATE_PERSON_ALLOWED": "user:*@x.example, user:y",
+			"CLEARANCE_VIAS_EXTRA": "portal"}[k]
+	})
+	if err != nil || cfg.Gate.Fresh.Tier3Breakglass != 15*time.Minute || len(cfg.Gate.DelegatePersons) != 2 || len(cfg.Gate.ExtraVias) != 1 {
+		t.Fatalf("%+v %v", cfg.Gate, err)
+	}
+	for _, bad := range []string{"Portal", "cli", "a b", "-x"} {
+		if _, err := FromEnv(func(k string) string { return map[string]string{"CLEARANCE_VIAS_EXTRA": bad}[k] }); err == nil {
+			t.Errorf("CLEARANCE_VIAS_EXTRA=%q accepted", bad)
+		}
+	}
+}
