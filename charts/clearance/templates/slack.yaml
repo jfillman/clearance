@@ -1,0 +1,175 @@
+{{- if .Values.slack.enabled }}
+{{- $s := .Values.slack }}
+{{- $_ := required "slack.existingSecret is required (a Secret with bot-token, app-token, client-secret and dsn: docs/slack.md)" $s.existingSecret }}
+{{- $_ := required "slack.publicUrl is required (the https URL of the link pages)" $s.publicUrl }}
+{{- $_ := required "slack.slackClientId is required (Sign in with Slack)" $s.slackClientId }}
+{{- $_ := required "slack.idpClientId is required (the IdP client of the link page)" $s.idpClientId }}
+{{- $_ := required "oidc.issuer is required with slack.enabled: the link page signs people in at the same IdP the core trusts" .Values.oidc.issuer }}
+{{- if not .Values.oidc.allowedUsers }}{{ fail "oidc.allowedUsers is required with slack.enabled: a link only names a person the core allows" }}{{ end }}
+{{- if not (has $s.transport (list "socket" "events")) }}{{ fail "slack.transport is socket or events" }}{{ end }}
+{{- if not (and (ge (int $s.clearMaxTier) 0) (le (int $s.clearMaxTier) 3)) }}{{ fail "slack.clearMaxTier is 0 to 3" }}{{ end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "clearance.slackName" . }}
+  labels:
+    {{- include "clearance.labels" . | nindent 4 }}
+    app.kubernetes.io/component: slack
+spec:
+  # One replica: one Socket Mode connection, one stream cursor. A second would post every message twice.
+  replicas: 1
+  strategy:
+    type: Recreate
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      {{- include "clearance.selector" (dict "ctx" . "component" "slack") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "clearance.selector" (dict "ctx" . "component" "slack") | nindent 8 }}
+        {{- with $s.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
+      annotations:
+        {{- with $s.podAnnotations }}{{ toYaml . | nindent 8 }}{{ end }}
+        checksum/routes: {{ toJson $s.routes | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "clearance.slackSA" . }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 30
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $s.hostAliases }}
+      hostAliases:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $s.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext:
+        {{- include "clearance.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: slack
+          image: {{ include "clearance.slackImage" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - {name: http, containerPort: 8080, protocol: TCP}
+          env:
+            - {name: CLEARANCE_SLACK_LISTEN, value: ":8080"}
+            - {name: CLEARANCE_SLACK_TRANSPORT, value: {{ $s.transport | quote }}}
+            - {name: CLEARANCE_SLACK_PUBLIC_URL, value: {{ $s.publicUrl | quote }}}
+            - {name: CLEARANCE_SLACK_CLIENT_ID, value: {{ $s.slackClientId | quote }}}
+            - {name: CLEARANCE_SLACK_IDP_CLIENT_ID, value: {{ $s.idpClientId | quote }}}
+            - {name: CLEARANCE_SLACK_BOT_TOKEN_FILE, value: /etc/clearance-slack/secrets/bot-token}
+            {{- if eq $s.transport "socket" }}
+            - {name: CLEARANCE_SLACK_APP_TOKEN_FILE, value: /etc/clearance-slack/secrets/app-token}
+            {{- else }}
+            - {name: CLEARANCE_SLACK_SIGNING_SECRET_FILE, value: /etc/clearance-slack/secrets/signing-secret}
+            {{- end }}
+            - {name: CLEARANCE_SLACK_CLIENT_SECRET_FILE, value: /etc/clearance-slack/secrets/client-secret}
+            {{- if $s.idpClientSecret }}
+            - {name: CLEARANCE_SLACK_IDP_CLIENT_SECRET_FILE, value: /etc/clearance-slack/secrets/idp-client-secret}
+            {{- end }}
+            - {name: CLEARANCE_SLACK_DSN_FILE, value: /etc/clearance-slack/secrets/dsn}
+            - {name: CLEARANCE_API_URL, value: {{ printf "http://%s.%s.svc:%v" (include "clearance.apiName" .) .Release.Namespace .Values.service.port | quote }}}
+            - {name: CLEARANCE_URL, value: {{ printf "http://%s.%s.svc:%v" (include "clearance.coreName" .) .Release.Namespace .Values.service.port | quote }}}
+            - {name: CLEARANCE_SLACK_SA_TOKEN_FILE, value: /var/run/secrets/tokens/clearance}
+            - {name: CLEARANCE_OIDC_ISSUER, value: {{ .Values.oidc.issuer | quote }}}
+            - {name: CLEARANCE_OIDC_ALLOWED_USERS, value: {{ include "clearance.csv" .Values.oidc.allowedUsers | quote }}}
+            {{- with .Values.oidc.userClaim }}
+            - {name: CLEARANCE_OIDC_USER_CLAIM, value: {{ . | quote }}}
+            {{- end }}
+            {{- with .Values.oidc.jwksURL }}
+            - {name: CLEARANCE_OIDC_JWKS_URL, value: {{ . | quote }}}
+            {{- end }}
+            {{- with .Values.vocabulary.onBehalfOfHeader }}
+            - {name: CLEARANCE_ON_BEHALF_OF_HEADER, value: {{ . | quote }}}
+            {{- end }}
+            {{- with $s.webUrl }}
+            - {name: CLEARANCE_SLACK_WEB_URL, value: {{ . | quote }}}
+            {{- end }}
+            - {name: CLEARANCE_SLACK_CLEAR_MAX_TIER, value: {{ $s.clearMaxTier | quote }}}
+            - {name: CLEARANCE_SLACK_FORWARD_AUTH_TIME, value: {{ $s.forwardAuthTime | quote }}}
+            {{- range $k, $env := dict "relinkAfter" "CLEARANCE_SLACK_RELINK_AFTER" "alertInterval" "CLEARANCE_SLACK_ALERT_INTERVAL" "reconcileInterval" "CLEARANCE_SLACK_RECONCILE_INTERVAL" "stuckAttestationAfter" "CLEARANCE_SLACK_STUCK_ATTESTATION_AFTER" "tier3OutsideAfter" "CLEARANCE_SLACK_TIER3_OUTSIDE_AFTER" }}
+            {{- with index $s $k }}
+            - {name: {{ $env }}, value: {{ . | quote }}}
+            {{- end }}
+            {{- end }}
+            - {name: CLEARANCE_SLACK_ROUTES_FILE, value: /etc/clearance-slack/routes/routes.yaml}
+            {{- with $s.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+            timeoutSeconds: 3
+          resources:
+            {{- toYaml $s.resources | nindent 12 }}
+          securityContext:
+            {{- include "clearance.securityContext" . | nindent 12 }}
+          volumeMounts:
+            - {name: secrets, mountPath: /etc/clearance-slack/secrets, readOnly: true}
+            - {name: routes, mountPath: /etc/clearance-slack/routes, readOnly: true}
+            - {name: clearance-token, mountPath: /var/run/secrets/tokens, readOnly: true}
+      volumes:
+        - name: secrets
+          secret:
+            secretName: {{ $s.existingSecret }}
+            defaultMode: 0440
+        - name: routes
+          configMap:
+            name: {{ include "clearance.slackName" . }}-routes
+        # The service's own credential at the core and the api: a projected service-account token of the audience
+        # they check (audience), read on every call and never held.
+        - name: clearance-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: clearance
+                  audience: {{ .Values.audience | quote }}
+                  expirationSeconds: 3600
+      {{- with $s.nodeSelector }}
+      nodeSelector: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $s.tolerations }}
+      tolerations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $s.affinity }}
+      affinity: {{ toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "clearance.slackName" . }}-routes
+  labels:
+    {{- include "clearance.labels" . | nindent 4 }}
+    app.kubernetes.io/component: slack
+data:
+  routes.yaml: |
+    {{- toYaml $s.routes | nindent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "clearance.slackName" . }}
+  labels:
+    {{- include "clearance.labels" . | nindent 4 }}
+    app.kubernetes.io/component: slack
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "clearance.selector" (dict "ctx" . "component" "slack") | nindent 4 }}
+  ports:
+    - {name: http, port: {{ .Values.service.port }}, targetPort: http, protocol: TCP}
+{{- end }}

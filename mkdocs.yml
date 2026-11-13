@@ -7,6 +7,7 @@ nav:
   - The Go core (clearance): core.md
   - The read API and the write path (clearance-api): clearance-api.md
   - The person CLI (clearance, clr): cli.md
+  - Slack (clearance-slack): slack.md
   - The deployment gate (Clearances): gate.md
   - The Terraform gate in plain CI: terraform-gate.md
   - The evidence record (clearance.evidence/v1): evidence.md

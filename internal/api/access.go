@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/jfillman/clearance/internal/vocab"
+	"slices"
 	"sort"
 	"strings"
 
@@ -51,6 +52,13 @@ func ParseFeedReaders(v string) ([]FeedReader, error) {
 // PersonRoles are the roles of every person read (api.py PERSON_ROLES). An auditor may call any route a person may.
 var PersonRoles = []string{RolePerson, RoleDelegate, RoleAuditor}
 
+// NotifierChangeRoles are the roles of the reads of the gate's changes a notifier also makes (the list, the counts, the
+// stream): not the change by id, which carries its clearance token.
+var NotifierChangeRoles = append(slices.Clone(FeedRoles), RoleNotifier)
+
+// NotifierCountRoles are PersonRoles and the notifier (the change counts).
+var NotifierCountRoles = append(slices.Clone(PersonRoles), RoleNotifier)
+
 // ObservationRoles are the roles of the observation reads (O-5): every person, a delegate for one, an auditor, and a
 // configured machine poller.
 var ObservationRoles = []string{RolePerson, RoleDelegate, RoleAuditor, RoleObserver}
@@ -62,8 +70,9 @@ var ObservationRoles = []string{RolePerson, RoleDelegate, RoleAuditor, RoleObser
 //	          records of agents whose definition owner group they are in, records that act on an app they own;
 //	          changes on apps they own and changes their groups may clear
 //	delegate  everything the person named in the on-behalf-of header may (CLEARANCE_DELEGATES, e.g. a portal)
-//	notifier  CLEARANCE_API_NOTIFIERS: kept so the role resolves as at api.py, but no Clearance read is a
-//	          notifier's since the inbox feed moved to the gateway (R-3)
+//	notifier  CLEARANCE_API_NOTIFIERS: every change of the gate, as a list, the counts and the stream (clearance events
+//	          only), redacted like a person's view but whole-scope, and no token (G5: a notification service reads who
+//	          waits on whom without naming each person); no evidence record, no change by id, no clearance token
 //	observer  CLEARANCE_API_OBSERVATION_READERS: coverage, observations, observation health and exceptions, whole scope; nothing else
 //	feed      CLEARANCE_API_FEED_READERS: the changes on its clusters, with their tokens (the grant feed); nothing else
 type Viewer struct {
@@ -84,6 +93,10 @@ func (v *Viewer) FeedOf(cluster string) bool {
 
 // All is whether the viewer sees every record (an auditor).
 func (v *Viewer) All() bool { return v.Role == RoleAuditor }
+
+// AllChanges is whether the viewer sees every change of the gate: an auditor, and a notifier (G5), which reads the
+// changes and their stream and nothing else.
+func (v *Viewer) AllChanges() bool { return v.All() || v.Role == RoleNotifier }
 
 // role is the role the route table is checked against: a delegate's viewer is a person, but it called as a delegate.
 func (v *Viewer) role() string {
@@ -155,7 +168,7 @@ func (a *Access) ViewerFor(ctx context.Context, p authn.Principal, onBehalfOf st
 		held = append(held, &Viewer{Role: RoleFeed, Person: p.ID, Clusters: clusters})
 	}
 	if pycompat.MatchAny(p.ID, a.Notifiers) {
-		held = append(held, &Viewer{Role: RoleNotifier})
+		held = append(held, &Viewer{Role: RoleNotifier, Person: p.ID})
 	}
 	if len(held) == 0 && p.IsPerson() {
 		return a.person(ctx, p.ID, ""), nil
