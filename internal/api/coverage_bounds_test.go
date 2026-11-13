@@ -4,6 +4,7 @@ package api
 // the whole history. The statement built from the bounded input must equal the one built from every health record.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math/rand"
@@ -211,6 +212,87 @@ func TestUnscopedCoverageListsTheScopesWithoutReadingTheirHistory(t *testing.T) 
 			}
 			if want := []string{"aws:111", "aws:222", "aws:555"}; !reflect.DeepEqual(names, want) || out["truncated"] != false {
 				t.Fatalf("%v %v", names, out["truncated"])
+			}
+		})
+	}
+}
+
+// spyStore counts the reads that build a statement; names-only coverage must make none.
+type spyStore struct {
+	Store
+	scopes, statementReads int
+}
+
+func (s *spyStore) Scopes(ctx context.Context, v *Viewer, since, until string, limit int) ([]string, error) {
+	s.scopes++
+	return s.Store.Scopes(ctx, v, since, until, limit)
+}
+func (s *spyStore) Evidence(ctx context.Context, f EvidenceFilter, v *Viewer, limit int, after *int64) ([]Record, error) {
+	s.statementReads++
+	return s.Store.Evidence(ctx, f, v, limit, after)
+}
+func (s *spyStore) HealthBefore(ctx context.Context, v *Viewer, scope, before string) ([]Record, error) {
+	s.statementReads++
+	return s.Store.HealthBefore(ctx, v, scope, before)
+}
+func (s *spyStore) HealthBeforeScopes(ctx context.Context, v *Viewer, scopes []string, before string) ([]Record, error) {
+	s.statementReads++
+	return s.Store.HealthBeforeScopes(ctx, v, scopes, before)
+}
+func (s *spyStore) ScopeCoverage(ctx context.Context, v *Viewer, scopes []string, from, to string) ([]ScopeRow, error) {
+	s.statementReads++
+	return s.Store.ScopeCoverage(ctx, v, scopes, from, to)
+}
+
+func TestNamesOnlyCoverageListsScopesAndBuildsNoStatement(t *testing.T) {
+	for _, b := range backends {
+		t.Run(b.name, func(t *testing.T) {
+			now := t0.Add(72 * time.Hour)
+			h := newHarness(t, b, world{raw: history().rows}, func(o *Options) { o.Clock = func() time.Time { return now } })
+			spy := &spyStore{Store: h.srv.opt.Store}
+			h.srv.opt.Store = spy
+			out := h.ok("/v1/coverage?names=only&from="+evidence.ISO(t0.Add(48*time.Hour)), "audit")
+			var names []string
+			for _, sc := range out["scopes"].([]any) {
+				m := sc.(map[string]any)
+				if len(m) != 1 {
+					t.Fatalf("a name carries only its scope: %v", m)
+				}
+				names = append(names, m["scope"].(string))
+			}
+			if want := []string{"aws:111", "aws:222", "aws:555"}; !reflect.DeepEqual(names, want) ||
+				out["truncated"] != false || out["names_only"] != true || out["from"] == nil || out["to"] == nil {
+				t.Fatalf("%v %v", names, out)
+			}
+			if spy.scopes != 1 || spy.statementReads != 0 {
+				t.Fatalf("names-only read the scope list %d times and made %d statement reads", spy.scopes, spy.statementReads)
+			}
+			// the full answer still builds statements (the spy sees them)
+			h.ok("/v1/coverage?from="+evidence.ISO(t0.Add(48*time.Hour)), "audit")
+			if spy.statementReads == 0 {
+				t.Fatal("the spy never saw a statement read: it proves nothing")
+			}
+			for _, bad := range []string{"/v1/coverage?names=only&scope=aws:111", "/v1/coverage?names=all", "/v1/coverage?names="} {
+				if r := h.get(bad, "audit"); r.status != 400 {
+					t.Fatalf("%s: %d %s", bad, r.status, r.body)
+				}
+			}
+		})
+	}
+}
+
+func TestNamesOnlyCoverageCapsAtMaxScopeNames(t *testing.T) {
+	for _, b := range backends {
+		t.Run(b.name, func(t *testing.T) {
+			c := &rawChain{}
+			for i := 0; i < MaxScopeNames+1; i++ {
+				c.health(t0.Add(time.Duration(i)*time.Second), fmt.Sprintf("aws:%04d", i), "cloudtrail", "fake-trail", "healthy", false)
+			}
+			now := t0.Add(72 * time.Hour)
+			h := newHarness(t, b, world{raw: c.rows}, func(o *Options) { o.Clock = func() time.Time { return now } })
+			out := h.ok("/v1/coverage?names=only&from="+evidence.ISO(t0.Add(48*time.Hour)), "audit")
+			if n := len(out["scopes"].([]any)); n != MaxScopeNames || out["truncated"] != true {
+				t.Fatalf("%d names, truncated %v", n, out["truncated"])
 			}
 		})
 	}

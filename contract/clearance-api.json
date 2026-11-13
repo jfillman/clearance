@@ -3629,6 +3629,47 @@
         ],
         "type": "object"
       },
+      "ScopeName": {
+        "properties": {
+          "scope": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope"
+        ],
+        "type": "object"
+      },
+      "ScopeNames": {
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "names_only": {
+            "type": "boolean"
+          },
+          "scopes": {
+            "items": {
+              "$ref": "#/components/schemas/ScopeName"
+            },
+            "type": "array"
+          },
+          "to": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "from",
+          "names_only",
+          "scopes",
+          "to",
+          "truncated"
+        ],
+        "type": "object"
+      },
       "ScopeStatements": {
         "properties": {
           "from": {
@@ -4966,6 +5007,14 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "names",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -4973,7 +5022,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScopeStatements"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ScopeStatements"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ScopeNames"
+                    }
+                  ]
                 }
               }
             },
@@ -5025,7 +5081,7 @@
             "bearer": []
           }
         ],
-        "summary": "With no scope, the statements of every scope observed in the window ({from, to, scopes: [statement...], truncated}; at most 100 scopes). The coverage statement for a scope and window (from and to, RFC 3339; default the last 24 hours): what was cleared and verified, what was seen and not cleared (by coverage state, with how each ended), what could not be seen (the stretches a feed was blind or degraded, and the audit gaps), and the health of each feed, with each item's newest resolution (state, cause, who set it and when) and how many of the window's observations had their source verified (source_integrity). clean is true only when nothing was seen uncleared and every feed was healthy for the whole window: a window with no healthy health record, or whose last record has gone stale, is blind and never clean. Any signed-in person, a delegate for one, an auditor or a configured observation reader (O-5): the whole scope; secret-bearing keys in a record's state_change are redacted for all but an auditor",
+        "summary": "With no scope, the statements of every scope observed in the window ({from, to, scopes: [statement...], truncated}; at most 100 scopes). With no scope and names=only, just the scope list ({from, to, scopes: [{scope}...], truncated, names_only: true}; at most 1000 names, no statements built: one cheap read); names is only, and takes no scope (400). The coverage statement for a scope and window (from and to, RFC 3339; default the last 24 hours): what was cleared and verified, what was seen and not cleared (by coverage state, with how each ended), what could not be seen (the stretches a feed was blind or degraded, and the audit gaps), and the health of each feed, with each item's newest resolution (state, cause, who set it and when) and how many of the window's observations had their source verified (source_integrity). clean is true only when nothing was seen uncleared and every feed was healthy for the whole window: a window with no healthy health record, or whose last record has gone stale, is blind and never clean. Any signed-in person, a delegate for one, an auditor or a configured observation reader (O-5): the whole scope; secret-bearing keys in a record's state_change are redacted for all but an auditor",
         "x-clearance-roles": [
           "person",
           "delegate",
