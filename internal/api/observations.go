@@ -218,36 +218,30 @@ func (s *Server) getCoverage(w http.ResponseWriter, r *http.Request, v *Viewer) 
 	writeJSON(w, 200, out)
 }
 
-// scopesIn is the scopes with an observation, audit gap or health record in the window, or a health record before it
-// (a scope whose feed went quiet is still a scope), sorted. cut says a read hit MaxCoverageRecords.
+// MaxScopeNames caps the scope names one unscoped coverage answer reads; past it the answer says truncated.
+const MaxScopeNames = 1000
+
+// scopesIn is the scopes with an observation or audit gap in the window, or a health record before its end (a scope
+// whose feed went quiet is still a scope), sorted. The store reads the distinct names, never the records; cut says
+// there were more than MaxScopeNames.
 func (s *Server) scopesIn(ctx context.Context, v *Viewer, from, to time.Time) ([]string, bool, error) {
-	seen := map[string]bool{}
-	cut := false
-	f, t := evidence.ISO(from), evidence.ISO(to)
-	for _, rd := range []struct {
-		tools        []string
-		since, until string
-	}{{[]string{evidence.KindObservation, evidence.KindAuditGap}, f, t}, {[]string{evidence.KindHealth}, "", t}} {
-		rs, c, err := s.collect(ctx, EvidenceFilter{Tools: rd.tools, Since: rd.since, Until: rd.until, Outcomes: OutcomesInclude}, v, MaxCoverageRecords)
-		if err != nil {
-			return nil, false, err
-		}
-		cut = cut || c
-		for _, r := range rs {
-			if sc, _ := r["scope"].(string); sc != "" && scopeParam.MatchString(sc) {
-				seen[sc] = true
-			}
-		}
+	names, err := s.opt.Store.Scopes(ctx, readerOf(v), evidence.ISO(from), evidence.ISO(to), MaxScopeNames+1)
+	if err != nil {
+		return nil, false, err
 	}
-	out := make([]string, 0, len(seen))
-	for sc := range seen {
-		out = append(out, sc)
+	cut := len(names) > MaxScopeNames
+	out := make([]string, 0, len(names))
+	for _, sc := range names {
+		if scopeParam.MatchString(sc) {
+			out = append(out, sc)
+		}
 	}
 	sort.Strings(out)
 	return out, cut, nil
 }
 
-// statement is the coverage statement of one scope and window.
+// statement is the coverage statement of one scope and window. Health is read bounded: the records in the window, and
+// (Store.HealthBefore) what observe.Build needs of the time before it, not the scope's whole history.
 func (s *Server) statement(ctx context.Context, v *Viewer, scope string, from, to, now time.Time) (observe.Statement, error) {
 	var err error
 	base := EvidenceFilter{Scope: scope, Outcomes: OutcomesInclude}
@@ -270,8 +264,14 @@ func (s *Server) statement(ctx context.Context, v *Viewer, scope string, from, t
 	input.Assessments = read([]string{evidence.KindAssessment}, f, "")
 	input.Resolutions = read([]string{evidence.KindResolution}, f, "")
 	input.Verifications = read([]string{evidence.KindVerification}, f, "")
-	input.Health = read([]string{evidence.KindHealth}, "", t)
+	input.Health = read([]string{evidence.KindHealth}, f, t)
 	input.Gaps = read([]string{evidence.KindAuditGap}, f, t)
+	if err == nil {
+		var before []Record
+		if before, err = s.opt.Store.HealthBefore(ctx, readerOf(v), scope, f); err == nil {
+			input.Health = append(before, input.Health...)
+		}
+	}
 	if err != nil {
 		return observe.Statement{}, err
 	}

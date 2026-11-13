@@ -9,6 +9,15 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Fixed
+
+- api: `GET /v1/coverage` with no `scope` no longer slows down and times out as health history grows. The scope list was
+  gathered by paging every `observation.health` record ever written; it is now one query for the distinct scope names
+  (`Store.Scopes`) on the `clearance_evidence_observed` index's own predicate. A scope's statement no longer reads its
+  whole health history either: it reads the window's health records plus, per source, those before it from the last
+  collector-written healthy one (`Store.HealthBefore`), which is all `observe.Build` can use, so the statement is
+  unchanged (a test builds both and compares). Tower's Exceptions tab listed no scopes while the read timed out.
+
 ## [0.44.0] - 2026-11-12
 
 ### Added

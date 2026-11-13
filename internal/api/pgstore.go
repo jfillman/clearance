@@ -149,6 +149,58 @@ func (s *PG) Evidence(ctx context.Context, f EvidenceFilter, v *Viewer, limit in
 		" ORDER BY e.seq DESC LIMIT "+b.arg(limit), b.args)
 }
 
+// observedTools is the predicate of the clearance_evidence_observed partial index, spelled as the index spells it: the
+// planner proves a query against a partial index only from a literal predicate (tool = ANY($n) never matches it).
+const observedTools = "e.record->>'tool' IN ('observation', 'assessment', 'resolution', 'observation.health', 'observation.audit-gap')"
+
+// Scopes reads the distinct scope names on the index's predicate; no record leaves the database.
+func (s *PG) Scopes(ctx context.Context, v *Viewer, since, until string, limit int) ([]string, error) {
+	b := &q{}
+	with := b.evidenceScope(v)
+	b.add(observedTools)
+	b.add("e.record->>'scope' IS NOT NULL")
+	b.add("((e.record->>'tool' IN ('observation', 'observation.audit-gap') AND e.record->>'ts' >= " + b.arg(since) +
+		" AND e.record->>'ts' < " + b.arg(until) + ") OR (e.record->>'tool' = 'observation.health' AND e.record->>'ts' < " + b.arg(until) + "))")
+	rows, done, err := s.R.Query(ctx, with+`SELECT DISTINCT (e.record->>'scope') COLLATE "C" AS scope FROM clearance_evidence e WHERE `+b.sql()+
+		` ORDER BY scope LIMIT `+b.arg(limit), b.args...)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var sc string
+		if err := rows.Scan(&sc); err != nil {
+			return nil, fmt.Errorf("pg: %w", err)
+		}
+		out = append(out, sc)
+	}
+	return out, rows.Err()
+}
+
+// HealthBefore is one pass over the scope's health records before `before`, on the partial index (scope, seq): the
+// per-source anchor (a window function) is the newest record the collector wrote as healthy, and only the records from it on are returned.
+func (s *PG) HealthBefore(ctx context.Context, v *Viewer, scope, before string) ([]Record, error) {
+	b := &q{}
+	with := b.evidenceScope(v)
+	b.add(observedTools)
+	b.add("e.record->>'tool' = 'observation.health'")
+	b.add("e.record->>'scope' = " + b.arg(scope))
+	b.add("e.record->>'ts' < " + b.arg(before))
+	core := b.arg(evidence.CoreProviderName)
+	pre := "h AS (SELECT e.seq, e.record, e.assurance, " +
+		"max(CASE WHEN COALESCE(e.record->'provider'->>'name', '') <> " + core + " AND e.record->'health'->>'state' = 'healthy' " +
+		"THEN e.seq END) OVER (PARTITION BY COALESCE(e.record->'source'->>'name', '')) AS aseq " +
+		"FROM clearance_evidence e WHERE " + b.sql() + ") "
+	if with == "" {
+		with = "WITH "
+	} else {
+		with = strings.TrimRight(with, " ") + ", "
+	}
+	return s.records(ctx, with+pre+"SELECT h.record::text, h.assurance FROM h WHERE h.seq >= COALESCE(h.aseq, -1) ORDER BY h.seq", b.args)
+}
+
 func (s *PG) EvidenceOne(ctx context.Context, seq int64, v *Viewer) (Record, error) {
 	b := &q{}
 	b.add("e.seq = " + b.arg(seq))

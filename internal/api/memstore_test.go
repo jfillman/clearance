@@ -180,6 +180,63 @@ func (m *memStore) Evidence(_ context.Context, f EvidenceFilter, v *Viewer, limi
 	return out, m.fail
 }
 
+func (m *memStore) Scopes(_ context.Context, v *Viewer, since, until string, limit int) ([]string, error) {
+	owners := m.owners()
+	seen := map[string]bool{}
+	for _, r := range m.recs {
+		tool, _ := str(r["tool"])
+		sc, ok := str(r["scope"])
+		ts, _ := str(r["ts"])
+		if !ok || !m.sees(r, v, owners) {
+			continue
+		}
+		if (tool == "observation" || tool == "observation.audit-gap") && ts >= since && ts < until || tool == "observation.health" && ts < until {
+			seen[sc] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for sc := range seen {
+		out = append(out, sc)
+	}
+	sort.Strings(out)
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, m.fail
+}
+
+func (m *memStore) HealthBefore(_ context.Context, v *Viewer, scope, before string) ([]Record, error) {
+	owners := m.owners()
+	bySrc := map[string][]Record{}
+	for _, r := range m.recs { // m.recs is in seq order
+		if tool, _ := str(r["tool"]); tool != "observation.health" {
+			continue
+		}
+		if sc, _ := str(r["scope"]); sc != scope {
+			continue
+		}
+		if ts, _ := str(r["ts"]); ts >= before || !m.sees(r, v, owners) {
+			continue
+		}
+		src, _ := r["source"].(map[string]any)
+		name, _ := src["name"].(string)
+		bySrc[name] = append(bySrc[name], r)
+	}
+	out := []Record{}
+	for _, l := range bySrc {
+		from := 0
+		for i, r := range l {
+			prov, _ := r["provider"].(map[string]any)
+			h, _ := r["health"].(map[string]any)
+			if pn, _ := prov["name"].(string); pn != evidence.CoreProviderName && h["state"] == "healthy" {
+				from = i
+			}
+		}
+		out = append(out, l[from:]...)
+	}
+	return out, m.fail
+}
+
 func (m *memStore) EvidenceOne(_ context.Context, seq int64, v *Viewer) (Record, error) {
 	for _, r := range m.recs {
 		if s, _ := seqOf(r); s == seq && m.sees(r, v, m.owners()) {

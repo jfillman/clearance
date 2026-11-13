@@ -96,6 +96,15 @@ type Verified struct {
 type Store interface {
 	// Evidence is up to limit records the viewer may see matching f, newest first, below seq after (when not nil).
 	Evidence(ctx context.Context, f EvidenceFilter, v *Viewer, limit int, after *int64) ([]Record, error)
+	// Scopes is the distinct scopes (at most limit, sorted bytewise) of the observation and observation.audit-gap
+	// records with since <= ts < until that the viewer may see, and of the observation.health records with ts < until:
+	// the unscoped coverage answer's scope list, read without paging the records themselves.
+	Scopes(ctx context.Context, v *Viewer, since, until string, limit int) ([]string, error)
+	// HealthBefore is the observation.health records of scope with ts < before that the viewer may see and that
+	// observe.Build needs of the time before a window starting at before: per source, every record from the last one the
+	// collector itself wrote as healthy (it ends any flip the core held) through the newest, or all of them when the
+	// collector has none. Any order.
+	HealthBefore(ctx context.Context, v *Viewer, scope, before string) ([]Record, error)
 	// EvidenceOne is one record the viewer may see, or nil.
 	EvidenceOne(ctx context.Context, seq int64, v *Viewer) (Record, error)
 	// Counts is the records the viewer may see matching f, grouped by the record field by (one of CountBy), the
