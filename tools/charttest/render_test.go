@@ -419,6 +419,10 @@ func TestRefused(t *testing.T) {
 		"bad digest":                       {[]string{"--set", "database.existingSecret=x", "--set", "image.digest=latest"}, "image.digest is sha256"},
 		"route without parent":             {[]string{"--set", "database.existingSecret=x", "--set", "httpRoutes.core.enabled=true"}, "parentRefs is required"},
 		"attestation both backends":        {[]string{"--set", "database.existingSecret=x", "--set", "attestation.existingSecret=k", "--set", "attestation.keyless.fulcioUrl=https://f"}, "not both"},
+		"web without secret":               {[]string{"--set", "database.existingSecret=x", "--set", "web.enabled=true", "--set", "web.publicURL=https://c", "--set", "web.issuer=https://i"}, "web.clientSecret.existingSecret is required"},
+		"web without issuer":               {[]string{"--set", "database.existingSecret=x", "--set", "web.enabled=true", "--set", "web.publicURL=https://c", "--set", "web.clientSecret.existingSecret=s"}, "web.issuer is required"},
+		"web replicas":                     {[]string{"--set", "database.existingSecret=x", "--set", "web.enabled=true", "--set", "web.publicURL=https://c", "--set", "web.issuer=https://i", "--set", "web.clientSecret.existingSecret=s", "--set", "web.replicas=2"}, "web.replicas must be 1"},
+		"web route without parent":         {[]string{"--set", "database.existingSecret=x", "--set", "web.enabled=true", "--set", "web.publicURL=https://c", "--set", "web.issuer=https://i", "--set", "web.clientSecret.existingSecret=s", "--set", "httpRoutes.web.enabled=true"}, "httpRoutes.web.parentRefs is required"},
 		"eso without store":                {[]string{"--set", "database.existingSecret=x", "--set", "externalSecrets.enabled=true"}, "secretStoreRef.name is required"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -609,5 +613,69 @@ func TestTheLedgerNeedsItsKeyAndAWitness(t *testing.T) {
 				t.Fatalf("%v: %s", err, out)
 			}
 		})
+	}
+}
+
+// The web UI (WEB-5) is off by default: the minimal and install renders have none of it. On, it is one hardened pod
+// with the client secret as a file, every CLEARANCE_WEB_* variable the server reads is a chart value, and its
+// NetworkPolicy is DNS, the IdP, the api and the core only.
+func TestWeb(t *testing.T) {
+	for _, f := range []string{"minimal-values.yaml", "install-values.yaml"} {
+		for _, o := range render(t, "-f", valuesFile(f)) {
+			if strings.Contains(get(o, "metadata", "name").(string), "-web") {
+				t.Errorf("%s: web is off but %v renders", f, get(o, "metadata", "name"))
+			}
+		}
+	}
+	objs := render(t, "-f", valuesFile("full-values.yaml"))
+	assertHardened(t, objs)
+	dep := find(objs, "Deployment", "t-clearance-web")
+	if dep == nil || find(objs, "Service", "t-clearance-web") == nil || find(objs, "HTTPRoute", "t-clearance-web") == nil ||
+		find(objs, "NetworkPolicy", "t-clearance-web") == nil || find(objs, "ServiceAccount", "t-clearance-web") == nil {
+		t.Fatalf("web objects missing: %v", kinds(objs))
+	}
+	if get(dep, "spec", "replicas") != 1 || get(dep, "spec", "template", "spec", "automountServiceAccountToken") != false {
+		t.Errorf("replicas %v automount %v", get(dep, "spec", "replicas"), get(dep, "spec", "template", "spec", "automountServiceAccountToken"))
+	}
+	src, err := os.ReadFile("../../internal/web/config.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, n := range regexp.MustCompile(`\bCLEARANCE_WEB_[A-Z0-9_]*[A-Z0-9]\b`).FindAllString(string(src), -1) {
+		names[n] = true
+	}
+	if len(names) < 15 {
+		t.Fatalf("found only %d CLEARANCE_WEB_ names in internal/web/config.go: the extraction is broken", len(names))
+	}
+	e := env(container(t, dep))
+	for n := range names {
+		switch n {
+		case "CLEARANCE_WEB_TLS_CERT", "CLEARANCE_WEB_TLS_KEY": // a Gateway terminates TLS; the chart does not serve it
+			continue
+		}
+		if _, ok := e[n]; !ok {
+			t.Errorf("clearance web variable %s has no chart value (not set by ci/full-values.yaml)", n)
+		}
+	}
+	if e["CLEARANCE_WEB_CLIENT_SECRET_FILE"] != "/etc/clearance/web/client-secret" ||
+		e["CLEARANCE_WEB_API_URL"] != "http://t-clearance-api.clearance.svc:8080" ||
+		e["CLEARANCE_WEB_CORE_URL"] != "http://t-clearance-core.clearance.svc:8080" ||
+		e["CLEARANCE_WEB_MAX_BODY_BYTES"] != "1048576" || e["CLEARANCE_WEB_MAX_RESPONSE_BYTES"] != "33554432" {
+		t.Errorf("web env %v", e)
+	}
+	for k, v := range e {
+		if strings.Contains(strings.ToLower(k), "secret") && !strings.HasSuffix(k, "_FILE") {
+			t.Errorf("web env %s=%q: a secret is a file", k, v)
+		}
+	}
+	for _, o := range []string{"t-clearance-core", "t-clearance-api"} {
+		if !strings.Contains(fmt.Sprint(get(find(objs, "NetworkPolicy", o), "spec", "ingress")), "component:web") {
+			t.Errorf("%s admits no web pod: %v", o, get(find(objs, "NetworkPolicy", o), "spec", "ingress"))
+		}
+	}
+	if got := fmt.Sprint(get(find(objs, "NetworkPolicy", "t-clearance-web"), "spec", "egress")); !strings.Contains(got, "203.0.113.0/24") ||
+		strings.Contains(got, "0.0.0.0/0") || strings.Contains(got, "5432") {
+		t.Errorf("web egress %v", got)
 	}
 }

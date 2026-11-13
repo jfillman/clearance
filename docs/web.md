@@ -6,7 +6,7 @@ in at the people IdP, keeps the session in memory, and forwards the page's calls
 It is a subcommand of the one binary. It adds no authority: it decides nothing, holds no Clearance credential for
 people, and caches no answer. Whatever Clearance answers (401, 403, a refusal) the page shows.
 
-Status: WEB-4. The bundle itself (WEB-2/WEB-3) and the Helm chart (WEB-5) are separate packages; until the bundle is
+Status: WEB-4, with the Helm chart (WEB-5, below). The bundle itself (WEB-2/WEB-3) is a separate package; until the bundle is
 built in, the binary serves a placeholder page and sign-in works.
 
 ## What it guards
@@ -87,14 +87,30 @@ year, immutable); everything else is revalidated; an unknown path without an ext
 client router. The entry page needs a session (a person without one is redirected to sign in); assets are public. The
 page reads `/auth/session` for the CSRF token and sends it as `X-CSRF-Token` on every non-GET.
 
-## Deploy notes (for WEB-5, the chart)
+## Deploy (the chart, WEB-5)
 
-Not in the chart yet. It will need: a Deployment of one replica (sessions are in memory; more replicas need sticky
-sessions), a Service, an HTTPRoute for `clearance.<domain>/` (the UI) with the API paths unchanged, the env above, the
-client secret mounted as a file from a Secret (Infisical), a NetworkPolicy allowing egress only to the IdP, clearance-api,
-the core and the gateway (plus DNS), `web.enabled: false` by default, a non-root read-only-root-filesystem container,
-and probes on `/healthz` and `/readyz`. A restart signs everyone out. The owner creates the confidential client in
-people-dex.
+`charts/clearance` runs it behind `web.enabled: false` (default off; [install.md](install.md) has the values table):
+
+- **A Deployment of ONE replica** (`web.replicas`, the chart refuses more): sessions are in memory, so more replicas would
+  need sticky sessions, and a restart (or a rollout, which is `Recreate`) signs everyone out. Non-root (65532), read-only
+  root filesystem, all capabilities dropped, RuntimeDefault seccomp, no service-account token mounted (the web tier holds no
+  Kubernetes credential), probes `/healthz` (startup, liveness) and `/readyz` (readiness; the IdP must be reachable).
+- **A Service** (`<release>-web`, port 8080) and an optional **HTTPRoute** (`httpRoutes.web`: `parentRefs`, `hostnames`,
+  every path to the pod, since it serves the UI, `/auth/*` and `/api/*`).
+- **The client secret is a file**: `web.clientSecret.existingSecret` (and `key`, default `client-secret`) names a Secret you
+  manage or an ExternalSecret creates; it is mounted read-only (0400) at `/etc/clearance/web/client-secret` and
+  `CLEARANCE_WEB_CLIENT_SECRET_FILE` points there. The chart never takes the value.
+- **Environment**: `web.publicURL`, `web.issuer`, `web.clientID` (default `clearance-web`); the API and core URLs default to this
+  release's `<release>-api` and `<release>-core` Services (`web.apiURL`, `web.coreURL` override); `web.gatewayURL` turns on
+  `/api/gateway/*`; `web.sessionTTL`, `idleTimeout`, `freshMaxAge`, `requestTimeout`, `maxSessions`, `maxBodyBytes`,
+  `maxResponseBytes` are optional. TLS is the Gateway's: the chart sets no `CLEARANCE_WEB_TLS_*`.
+- **NetworkPolicy** (`networkPolicy.enabled`): ingress only from `networkPolicy.web.from` (your Gateway); egress only DNS, the
+  api and the core pods, the IdP (`networkPolicy.web.idp.to` and `.ports`, an `ipBlock` or the in-cluster IdP's pods;
+  NetworkPolicy has no host names), the gateway (`networkPolicy.web.gateway`, when `web.gatewayURL` is set) and
+  `networkPolicy.web.extraEgress`. No Postgres, no Kubernetes API server. The core's and the api's policies admit the web pod
+  on 8080 automatically.
+
+The owner creates the confidential client in the people IdP (redirect URI `<publicURL>/auth/callback`) and the Secret.
 
 ## `via` and freshness
 

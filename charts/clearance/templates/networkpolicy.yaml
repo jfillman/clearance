@@ -61,6 +61,15 @@ spec:
       ports:
         - {protocol: TCP, port: 8080}
     {{- end }}
+    {{- if $.Values.web.enabled }}
+    # The web UI forwards the page's calls here (reads to the api, writes to the core).
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "clearance.selector" (dict "ctx" $ "component" "web") | nindent 14 }}
+      ports:
+        - {protocol: TCP, port: 8080}
+    {{- end }}
   egress:
     {{- include "clearance.npEgress" $ | nindent 4 }}
     # The Kubernetes API server: TokenReview of callers' tokens
@@ -86,6 +95,77 @@ spec:
     {{- toYaml . | nindent 4 }}
     {{- end }}
 {{- end }}
+{{- end }}
+{{- if .Values.web.enabled }}
+---
+# The web UI: callers are the Gateway only; egress is DNS, the people IdP, clearance-api, the core and (if set) the
+# gateway. No Postgres, no Kubernetes API server.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "clearance.fullname" . }}-web
+  labels:
+    {{- include "clearance.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "clearance.selector" (dict "ctx" . "component" "web") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    {{- with $np.web.from }}
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - {protocol: TCP, port: 8080}
+    {{- end }}
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: {{ $np.dns.namespace }}}
+          podSelector:
+            matchLabels: {{ toYaml $np.dns.podSelector | nindent 14 }}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    {{- if or (not .Values.web.apiURL) (not .Values.web.coreURL) }}
+    # clearance-api and the core (this release's pods)
+    - to:
+        {{- if not .Values.web.apiURL }}
+        - podSelector:
+            matchLabels:
+              {{- include "clearance.selector" (dict "ctx" . "component" "api") | nindent 14 }}
+        {{- end }}
+        {{- if not .Values.web.coreURL }}
+        - podSelector:
+            matchLabels:
+              {{- include "clearance.selector" (dict "ctx" . "component" "core") | nindent 14 }}
+        {{- end }}
+      ports:
+        - {protocol: TCP, port: 8080}
+    {{- end }}
+    {{- with $np.web.idp.to }}
+    # The people IdP (networkPolicy.web.idp)
+    - to:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        {{- range $np.web.idp.ports }}
+        - {protocol: TCP, port: {{ . }}}
+        {{- end }}
+    {{- end }}
+    {{- if and .Values.web.gatewayURL $np.web.gateway.to }}
+    # The gateway's person controls (web.gatewayURL)
+    - to:
+        {{- toYaml $np.web.gateway.to | nindent 8 }}
+      ports:
+        {{- range $np.web.gateway.ports }}
+        - {protocol: TCP, port: {{ . }}}
+        {{- end }}
+    {{- end }}
+    {{- with $np.web.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 {{- end }}
 {{- if $np.kubeAPIServer.ciliumEntity }}
 ---
