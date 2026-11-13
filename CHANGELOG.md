@@ -9,6 +9,13 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Added
+
+- providers: `"kinds": []` in a `CLEARANCE_PROVIDERS` entry grants no record kind, so a provider that only publishes `targets` (or
+  `definitions`) needs no write it never uses (Apron's target publisher had to register `federated.decision`). An entry
+  with `"kinds": []` and neither `targets` nor `definitions` is refused at startup. Absent `kinds` still means every
+  non-observation kind, also beside `targets`, so no existing registration changes.
+
 ## [0.45.0] - 2026-11-13
 
 ### Added

@@ -61,6 +61,22 @@ func TestProvidersConfig(t *testing.T) {
 	if ps, err := ParseProviders(two); err != nil || !ps[0].Definitions || ps[1].Definitions || !ps[0].mayWrite("tool.call") {
 		t.Fatal(ps, err)
 	}
+	// kinds absent is every non-observation kind; kinds [] is none (and survives a re-marshal); [] needs a grant.
+	none := `[{"name":"x","version":"1","principals":["a/b"],"kinds":[],"targets":["s"]},` +
+		`{"name":"y","version":"1","principals":["c/d"],"targets":["s"]},` +
+		`{"name":"z","version":"1","principals":["e/f"],"kinds":[],"definitions":true}]`
+	ps, err = ParseProviders(none)
+	if err != nil || ps[0].mayWrite("tool.call") || ps[0].mayWrite("observation") ||
+		!ps[1].mayWrite("tool.call") || ps[1].mayWrite("observation") || ps[2].mayWrite("tool.call") {
+		t.Fatal(ps, err)
+	}
+	if raw, _ := json.Marshal(ps[0]); !strings.Contains(string(raw), `"kinds":[]`) {
+		t.Fatal(string(raw))
+	}
+	if _, err := ParseProviders(`[{"name":"x","version":"1","principals":["a/b"],"kinds":[]}]`); err == nil ||
+		!strings.Contains(err.Error(), "could do nothing") {
+		t.Fatal(err)
+	}
 	if ps, err := ParseProviders(""); err != nil || ps != nil {
 		t.Fatal(ps, err)
 	}

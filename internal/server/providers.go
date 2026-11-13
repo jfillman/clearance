@@ -24,19 +24,24 @@ import (
 //
 // name is the record's provider.name (the schema's pattern; never "clearance", the core's own); version is
 // provider.version. principals are fnmatch globs on the authenticated principal id; a caller is the first provider
-// whose globs match it. kinds narrows which POST /v1/records kinds the provider may write (default: every kind of
-// RecordKinds but the observation kinds, which a provider writes only when its kinds name them: a registered
-// observed provider, O-1). intent_capture is "redacted" (default) or "full" for its records' intent text. definitions lets the
+// whose globs match it. kinds narrows which POST /v1/records kinds the provider may write. Absent (the default)
+// is every kind of RecordKinds but the observation kinds, which a provider writes only when its kinds name them (a
+// registered observed provider, O-1); an explicit empty list, "kinds": [], is NO record kind, for a provider that
+// only publishes targets or definitions (least privilege). An entry with "kinds": [] must grant something else
+// (targets or definitions). An entry with targets and no kinds is still every kind: the absence is never read as
+// "none", so a provider registered before the empty list existed keeps what it had. intent_capture is "redacted" (default) or "full" for its records' intent text. definitions lets the
 // provider publish its cluster-pinned agent definitions (PUT /v1/definitions; default false). At most one provider
 // has it: a publish replaces the whole pinned set, so two publishers would undo each other. conformance is the
 // conformance suite the provider passed, as `clearance conformance` reports it, with the date
 // ("clearance-conformance/v1@2026-11-03"): stamped on every record it writes as provider.conformance.
 type Provider struct {
-	Name          string   `json:"name"`
-	Version       string   `json:"version"`
-	Conformance   string   `json:"conformance,omitempty"`
-	Principals    []string `json:"principals"`
-	Kinds         []string `json:"kinds,omitempty"`
+	Name        string   `json:"name"`
+	Version     string   `json:"version"`
+	Conformance string   `json:"conformance,omitempty"`
+	Principals  []string `json:"principals"`
+	// Kinds: nil (absent) is every non-observation kind; non-nil and empty ("kinds": []) is none. omitempty would
+	// drop the empty list on a re-marshal and turn "none" into "all", so it is not set.
+	Kinds         []string `json:"kinds"`
 	IntentCapture string   `json:"intent_capture,omitempty"`
 	Definitions   bool     `json:"definitions,omitempty"`
 	// Targets are the source names (globs) whose declared targets the provider may publish (PUT /v1/targets/{source},
@@ -89,6 +94,10 @@ func ParseProviders(v string) ([]Provider, error) {
 				return nil, fmt.Errorf("CLEARANCE_PROVIDERS[%d]: an empty principal glob", i)
 			}
 		}
+		if p.Kinds != nil && len(p.Kinds) == 0 && !p.Definitions && len(p.Targets) == 0 {
+			return nil, fmt.Errorf("CLEARANCE_PROVIDERS[%d]: kinds is [] (no record kind) and the entry has no targets or "+
+				"definitions: it could do nothing", i)
+		}
 		for _, k := range p.Kinds {
 			if _, ok := recordKinds[k]; !ok {
 				return nil, fmt.Errorf("CLEARANCE_PROVIDERS[%d]: kind %q is not one of %v", i, k, RecordKinds)
@@ -126,7 +135,7 @@ func (p *Provider) mayPublishTargets(source string) bool { return pycompat.Match
 func (p *Provider) matches(principal string) bool { return pycompat.MatchAny(principal, p.Principals) }
 
 func (p *Provider) mayWrite(kind string) bool {
-	if len(p.Kinds) == 0 {
+	if p.Kinds == nil {
 		return !observe.Is(kind)
 	}
 	return slices.Contains(p.Kinds, kind)

@@ -45,7 +45,7 @@ var providersJSON = `[{"name": "autopilot-gateway", "version": "0.3.27", "princi
   "definitions": true},
  {"name": "argo-gate", "version": "0.1.0", "principals": ["hangar-prod/argocd/*"],
   "kinds": ["deploy.outcome", "deploy.exception", "deploy.degraded"]},
- {"name": "targets-prod", "version": "0.1.0", "principals": ["hangar-prod/gitops/targets"], "targets": ["hangar-prod", "hangar-shared"]},
+ {"name": "targets-prod", "version": "0.1.0", "principals": ["hangar-prod/gitops/targets"], "kinds": [], "targets": ["hangar-prod", "hangar-shared"]},
  {"name": "targets-dev", "version": "0.1.0", "principals": ["hangar-dev/gitops/targets"], "targets": ["hangar-dev", "hangar-shared"]}]`
 
 var quiet = slog.New(slog.NewTextHandler(io.Discard, nil))
