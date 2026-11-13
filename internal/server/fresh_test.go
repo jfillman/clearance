@@ -125,7 +125,9 @@ func TestFreshAuthOnAClearByTheChangesTier(t *testing.T) {
 			t.Fatal(r.body)
 		}
 		// a token with no sign-in time at all is not fresh either
-		f.do("POST", path, "user:erin#none", nil).want(t, 401, "")
+		if r := f.do("POST", path, "user:erin#none", nil).want(t, 401, "no sign-in time"); r.body["age"] != nil || r.body["rule"] != gate.RuleAuthNotFresh {
+			t.Fatal("a token with no sign-in time is reported as having one:", r.body)
+		}
 		// a sign-in time in the future is not fresh
 		f.do("POST", path, "user:erin#-2h", nil).want(t, 401, "")
 		if n := countTool(f, "deploy.clear"); n != 0 {

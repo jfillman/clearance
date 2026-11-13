@@ -87,13 +87,17 @@ func clearAction(tier int) int {
 // FreshAuthError is the refusal for a sign-in that is too old.
 type FreshAuthError struct {
 	MaxAge, Age time.Duration
-	// Missing is a delegate-named write that carried no sign-in time while the deployment requires one.
-	Missing bool
+	// Missing is a write that carried no sign-in time while the deployment requires one: a delegate-named write with no
+	// X-Clearance-Auth-Time (Delegate), or a person token with neither auth_time nor iat.
+	Missing, Delegate bool
 }
 
 func (e *FreshAuthError) Error() string {
-	if e.Missing {
+	if e.Missing && e.Delegate {
 		return "this action needs the person's sign-in time (X-Clearance-Auth-Time) and none was sent"
+	}
+	if e.Missing {
+		return "this action needs a recent sign-in and the token carries no sign-in time (auth_time or iat)"
 	}
 	return fmt.Sprintf("your sign-in is %s old; this action needs one at most %s old", e.Age.Round(time.Second), e.MaxAge)
 }
@@ -116,13 +120,13 @@ func (s *Service) checkFresh(ctx context.Context, p authn.Principal, onBehalfOf 
 		}
 		m := metaFrom(ctx)
 		if m.AuthTime == nil {
-			return &FreshAuthError{MaxAge: max, Missing: true}
+			return &FreshAuthError{MaxAge: max, Missing: true, Delegate: true}
 		}
 		at = *m.AuthTime
 	default:
 		sec, ok := p.Claims[authn.ClaimAuthTime].(int64)
 		if !ok {
-			return &FreshAuthError{MaxAge: max, Age: max + time.Second}
+			return &FreshAuthError{MaxAge: max, Missing: true}
 		}
 		at = time.Unix(sec, 0)
 	}
@@ -137,7 +141,7 @@ func (s *Service) checkFresh(ctx context.Context, p authn.Principal, onBehalfOf 
 // CallMeta is what a person's write says about itself beside the body: the surface it came from (claimed, never
 // verified) and, from a delegate, the person's sign-in time.
 type CallMeta struct {
-	// Via is cli, web, slack, tower or api; SurfaceRef is a bounded reference to where it came from (a Slack
+	// Via is cli, web, slack, api or a name from CLEARANCE_VIAS_EXTRA; SurfaceRef is a bounded reference to where it came from (a Slack
 	// permalink). Both are claimed: the caller says them and the core records them as said.
 	Via, SurfaceRef string
 	// Reason is the person's optional note on a clear (the body's reason), recorded on deploy.clear as they said it.

@@ -321,21 +321,17 @@ func TestResolveStopsAtTheFirstFailedChunkAndSaysWhatWasRecorded(t *testing.T) {
 func TestResolveValidatesBeforeAnyCall(t *testing.T) {
 	h, core := resolveHarness(t)
 	for name, args := range map[string][]string{
-		"no state":        {"5", "--yes"},
-		"bad state":       {"5", "--as", "fixed", "--yes"},
-		"reverted/cause":  {"5", "--as", "reverted", "--yes"},
-		"bad cause":       {"5", "--as", "reverted", "--cause", "luck", "--yes"},
-		"cause alone":     {"5", "--as", "ratified", "--cause", "human-initiated", "--yes"},
-		"no selection":    {"--as", "ratified", "--yes"},
-		"two selections":  {"5", "--all-matching", "--as", "ratified", "--yes"},
-		"not a seq":       {"abc", "--as", "ratified", "--yes"},
-		"negative":        {"--from-file", "/nonexistent", "--as", "ratified", "--yes"},
-		"note too long":   {"5", "--as", "ratified", "--note", strings.Repeat("x", 4097), "--yes"},
-		"no core and yes": nil,
+		"no state":       {"5", "--yes"},
+		"bad state":      {"5", "--as", "fixed", "--yes"},
+		"reverted/cause": {"5", "--as", "reverted", "--yes"},
+		"bad cause":      {"5", "--as", "reverted", "--cause", "luck", "--yes"},
+		"cause alone":    {"5", "--as", "ratified", "--cause", "human-initiated", "--yes"},
+		"no selection":   {"--as", "ratified", "--yes"},
+		"two selections": {"5", "--all-matching", "--as", "ratified", "--yes"},
+		"not a seq":      {"abc", "--as", "ratified", "--yes"},
+		"negative":       {"--from-file", "/nonexistent", "--as", "ratified", "--yes"},
+		"note too long":  {"5", "--as", "ratified", "--note", strings.Repeat("x", 4097), "--yes"},
 	} {
-		if args == nil {
-			continue
-		}
 		if code, _, _ := h.run((*Env).ExceptionsResolve, args...); code != ExitUsage || core.n() != 0 {
 			t.Errorf("%s: exit %d, %d sent", name, code, core.n())
 		}
