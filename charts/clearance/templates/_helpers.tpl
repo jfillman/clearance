@@ -18,6 +18,7 @@
 
 {{- define "clearance.coreName" -}}{{ include "clearance.fullname" . }}-core{{- end -}}
 {{- define "clearance.apiName" -}}{{ include "clearance.fullname" . }}-api{{- end -}}
+{{- define "clearance.webName" -}}{{ include "clearance.fullname" . }}-web{{- end -}}
 {{- define "clearance.slackName" -}}{{ include "clearance.fullname" . }}-slack{{- end -}}
 {{- define "clearance.pgName" -}}{{ include "clearance.fullname" . }}-pg{{- end -}}
 
@@ -45,6 +46,10 @@ app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 {{- define "clearance.apiSA" -}}
 {{- if .Values.api.serviceAccount.create -}}{{ default (include "clearance.apiName" .) .Values.api.serviceAccount.name }}{{- else -}}{{ required "api.serviceAccount.name is required when api.serviceAccount.create is false" .Values.api.serviceAccount.name }}{{- end -}}
+{{- end -}}
+
+{{- define "clearance.webSA" -}}
+{{- if .Values.web.serviceAccount.create -}}{{ default (include "clearance.webName" .) .Values.web.serviceAccount.name }}{{- else -}}{{ required "web.serviceAccount.name is required when web.serviceAccount.create is false" .Values.web.serviceAccount.name }}{{- end -}}
 {{- end -}}
 
 {{- define "clearance.slackSA" -}}

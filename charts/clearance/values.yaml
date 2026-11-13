@@ -415,6 +415,55 @@ api:
   extraVolumes: []
   extraVolumeMounts: []
 
+# The standalone web UI (`clearance web`, docs/web.md): a backend-for-frontend that signs people in at the people IdP
+# and forwards the page's calls to clearance-api and the core with the person's own ID token. Off by default.
+web:
+  enabled: false
+  # ONE replica, deliberately: sessions are in memory (nothing is written to disk or a database). More replicas
+  # would need sticky sessions, and a restart signs everyone out.
+  replicas: 1
+  # CLEARANCE_WEB_PUBLIC_URL: the origin people use (https; the redirect URI is <publicURL>/auth/callback). Required.
+  publicURL: ""
+  # CLEARANCE_WEB_ISSUER: the people IdP; discovery is <issuer>/.well-known/openid-configuration. Required.
+  issuer: ""
+  # CLEARANCE_WEB_CLIENT_ID: the confidential OIDC client registered at the IdP.
+  clientID: clearance-web
+  # CLEARANCE_WEB_CLIENT_SECRET_FILE: the client secret, from an existing Secret you manage (or an ExternalSecret
+  # creates), mounted read-only at /etc/clearance/web/client-secret. Never a value here. Required.
+  clientSecret:
+    existingSecret: ""
+    key: client-secret
+  # CLEARANCE_WEB_API_URL and _CORE_URL: "" is this release's api and core Services (needs api.enabled).
+  apiURL: ""
+  coreURL: ""
+  # CLEARANCE_WEB_GATEWAY_URL: the Autopilot gateway's person controls. Empty: /api/gateway/* does not exist.
+  gatewayURL: ""
+  # Optional limits (Go durations / numbers); "" keeps the server's default (docs/web.md).
+  sessionTTL: ""      # CLEARANCE_WEB_SESSION_TTL, at most 1h
+  idleTimeout: ""     # CLEARANCE_WEB_IDLE_TIMEOUT
+  freshMaxAge: ""     # CLEARANCE_WEB_FRESH_MAX_AGE
+  requestTimeout: ""  # CLEARANCE_WEB_REQUEST_TIMEOUT
+  maxSessions: ""     # CLEARANCE_WEB_MAX_SESSIONS
+  maxBodyBytes: ""    # CLEARANCE_WEB_MAX_BODY_BYTES
+  maxResponseBytes: ""  # CLEARANCE_WEB_MAX_RESPONSE_BYTES
+  resources:
+    requests: {cpu: 25m, memory: 64Mi}
+    limits: {memory: 256Mi}
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  priorityClassName: ""
+  hostAliases: []
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
+
 # -- clearance-slack (optional; docs/slack.md) ------------------------------------------------------------------
 # The Slack surface: notifications about changes waiting on people, exceptions, break-glass, coverage and stuck
 # attestations; and, for a person whose Slack account is linked to their sign-in, Clear (tier 2 by default) and Deny.
@@ -499,6 +548,21 @@ networkPolicy:
   api:
     # NetworkPolicyPeers allowed to call clearance-api (a portal, auditors, the Gateway's namespace).
     from: []
+  web:
+    # NetworkPolicyPeers allowed to call the web UI on 8080: your Gateway's pods or namespace. Empty: unreachable.
+    from: []
+    # Where the web pod reaches the people IdP (it needs discovery, the JWKS and the token endpoint): NetworkPolicyPeers
+    # (an ipBlock cidr, or the in-cluster IdP's pods) and the ports. NetworkPolicy has no host names: give the
+    # IdP's address range, or leave it to extraEgress.
+    idp:
+      to: []
+      ports: [443]
+    # Where it reaches the gateway when web.gatewayURL is set: NetworkPolicyPeers and the ports.
+    gateway:
+      to: []
+      ports: [8080]
+    # Further egress rules (NetworkPolicyEgressRule) for the web pod, e.g. a web.apiURL outside this release.
+    extraEgress: []
   dns:
     namespace: kube-system
     podSelector: {k8s-app: kube-dns}
@@ -539,6 +603,12 @@ httpRoutes:
     # [{path: {type: Exact, value: /v1/github/webhook}}]
     matches: []
   api:
+    enabled: false
+    parentRefs: []
+    hostnames: []
+    matches: []
+  # The web UI (web.enabled): every path to the pod, which serves the UI and its /auth and /api/* paths.
+  web:
     enabled: false
     parentRefs: []
     hostnames: []
