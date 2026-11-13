@@ -409,7 +409,8 @@ func (s *Server) listClearances(w http.ResponseWriter, r *http.Request, v *Viewe
 		return
 	}
 	// The grant feed: one cluster's cleared changes whose token is live, each with its token.
-	feed := f.Cluster != "" && f.State == "cleared"
+	// A notifier (G5) never gets a token: the cluster filter is then only a filter.
+	feed := f.Cluster != "" && f.State == "cleared" && v.Role != RoleNotifier
 	if v.Role == RoleFeed && (!feed || !v.FeedOf(f.Cluster)) {
 		writeError(w, 403, fmt.Sprintf("%s reads the grant feed of %s only (cluster=<cluster>&state=cleared)",
 			v.Person, strings.Join(v.Clusters, ", ")))
@@ -479,7 +480,7 @@ func (s *Server) listClearances(w http.ResponseWriter, r *http.Request, v *Viewe
 
 // changeVisible is api.py change_visible, on the stored record.
 func changeVisible(raw json.RawMessage, v *Viewer) bool {
-	if v.All() {
+	if v.AllChanges() {
 		return true
 	}
 	var c struct {

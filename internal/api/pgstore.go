@@ -383,7 +383,7 @@ func (s *PG) Verify(ctx context.Context) (Verified, error) {
 // groups include one of theirs (the people who may clear them). An outsideGroups that is not an array (JSON null:
 // a change with no outside requirement) is none; api.py's COALESCE let a null fail the whole query.
 func (b *q) changeScope(v *Viewer) {
-	if v.All() {
+	if v.AllChanges() {
 		return
 	}
 	if v.Role == RoleFeed {

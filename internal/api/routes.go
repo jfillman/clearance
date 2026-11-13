@@ -220,7 +220,7 @@ var routeTable = []Route{
 		Summary: "The agent-gate verdicts recorded for a PR (provenance.verify). installation=<id> keeps the " +
 			"verdicts that GitHub App installation recorded",
 		Response: RecordList{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).listProvenance},
-	{OperationID: "listClearances", Method: "GET", Path: "/v1/clearances", Roles: FeedRoles,
+	{OperationID: "listClearances", Method: "GET", Path: "/v1/clearances", Roles: NotifierChangeRoles,
 		Params: []string{"app", "env", "state", "repo", "pr", "tier", "since", "limit", "after", "cluster", "awaiting"},
 		Summary: "The deployment gate's changes, newest first: tier and why, state (holding, cleared, denied, " +
 			"expired, superseded, degraded, exception), the requirement and the approvals so far, what the grant binds to. A person sees " +
@@ -230,7 +230,7 @@ var routeTable = []Route{
 			"changes the caller may clear now (the gate's own rule: in the owner group or an unfilled outside group, not the proposer, " +
 			"not already an approver); a person's token or a delegate naming one",
 		Response: ChangePage{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).listClearances},
-	{OperationID: "countClearances", Method: "GET", Path: "/v1/clearances/counts", Roles: PersonRoles,
+	{OperationID: "countClearances", Method: "GET", Path: "/v1/clearances/counts", Roles: NotifierCountRoles,
 		Params: []string{"app", "env", "state", "since", "by"},
 		Summary: "Changes counted by state, tier, app, env, cleared_by or attestation (the C1 stats: holding, cleared by policy " +
 			"and by people, denied). by=attestation: attested (a signed attestation is stored), pending (the deploy " +
@@ -305,7 +305,7 @@ var routeTable = []Route{
 			"action of the last app.installation record, the status it leaves, the records by tool, their seq and ts " +
 			"bounds, and the repositories its checks ran on",
 		Response: InstallationList{}, Errors: []int{401, 403, 503}, serve: (*Server).listInstallations},
-	{OperationID: "streamEvents", Method: "GET", Path: "/v1/stream", Roles: FeedRoles,
+	{OperationID: "streamEvents", Method: "GET", Path: "/v1/stream", Roles: NotifierChangeRoles,
 		Params: []string{"types", "after"}, Stream: true,
 		Summary: "Server-sent events of new evidence records (event: record, the record as getEvidence serves it) and " +
 			"gate state changes (event: clearance: the deploy.* record's seq, tool and ts and the change summary it " +
