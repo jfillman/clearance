@@ -18,12 +18,50 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   HttpOnly, Secure, SameSite=Strict, capped by the token's `exp` and one hour, idle timeout, bounded map); forwards
   `/api/read/*` to clearance-api, `/api/write/*` to the core and `/api/gateway/*` to the gateway with the person's own ID
   token as the bearer and `X-Clearance-Via: web` on writes, from an allowlist of headers; CSRF token and Origin check on
-  every non-GET; strict CSP and the usual headers; passes the core's `auth-not-fresh` refusal on with a fresh-login
+  every non-GET; strict CSP and the usual headers; passes the core's `401 DG-AUTH-NOT-FRESH` refusal on with a fresh-login
   redirect (`prompt=login`, `max_age`). No policy, no answer caching. Config `CLEARANCE_WEB_*`. Not in the chart yet.
+
+## [0.46.0] - 2026-11-13
+
+### Added
+
+- cli: the person write commands, phase 2 of using Clearance without Backstage ([docs/cli.md](docs/cli.md#writes)). They
+  go to the core (`CLEARANCE_URL`) with the person's own token and `X-Clearance-Via: cli`, show what they will act on
+  first (to stderr), ask for confirmation, and send once. `changes clear <id> [--reason]`, `changes deny <id> --reason`,
+  `exceptions resolve <seq>... | --from-file F | --all-matching <filters> --as still-live|reverted|ratified|declared-break-glass
+  [--cause] [--note] [--plan] [--yes]` (one seq uses the single route; more use the bulk endpoint in calls of at most
+  200, `--plan` prints the requests and sends nothing), `breakglass open|close|list`. `--yes` is not honored for a tier 3
+  clear without a terminal, and break-glass open is always interactive (the `cluster/env` is typed back). A stale sign-in
+  is exit 4 with "sign in again (`clearance login`)".
+- core: **fresh sign-in (G3).** `CLEARANCE_FRESH_AUTH_TIER2` and `CLEARANCE_FRESH_AUTH_TIER3_BREAKGLASS` (Go durations,
+  1m to 24h, unset: no requirement, the default) bound the age of the ID token's `auth_time` (else `iat`) for clearing a
+  tier 2 change, and for clearing a tier 3 change and opening or closing break-glass (tier 3 falls back to the tier 2 limit
+  when it has none). A stale token is `401` with rule `DG-AUTH-NOT-FRESH`, `max_age` and `age`; nothing is recorded.
+  `CLEARANCE_FRESH_AUTH_DELEGATES` is `exempt` (default: a delegate-named write is not checked, as before) or `require`
+  (the delegate forwards the person's sign-in time in `X-Clearance-Auth-Time`). The OIDC authenticator now carries the
+  sign-in time in the principal's claims. Helm values `gate.freshAuthTier2`, `gate.freshAuthTier3Breakglass`,
+  `gate.freshAuthDelegates`.
+- core: **the surface of a person's write (G4).** `X-Clearance-Via` (`cli`, `web`, `slack`, `api`, plus names from `CLEARANCE_VIAS_EXTRA`, the deployment's portal) and
+  `X-Clearance-Surface-Ref` (at most 512 bytes of printable text) on clear, deny, resolution (single and bulk),
+  break-glass open and close are recorded as a **claimed** `surface` {`via`, `ref`}. Evidence schema revision 7 (additive;
+  the `schema` string is unchanged). A clear may carry `{"reason"}`, recorded as the claimed `reason` of `deploy.clear`;
+  other body fields are still ignored.
+- core: `CLEARANCE_DELEGATE_PERSON_ALLOWED` (Helm `gate.delegatePersonAllowed`): globs (`user:<login>`) a person a delegate
+  names must match, else `403 DG-PERSON-ALLOWED`. G8 finding: the admin and approver checks already applied to a
+  delegate-named person; the OIDC allowlist did not (it runs on a token a delegate does not carry). Unset by default, so
+  nothing changes until a deployment sets it.
 - providers: `"kinds": []` in a `CLEARANCE_PROVIDERS` entry grants no record kind, so a provider that only publishes `targets` (or
   `definitions`) needs no write it never uses (Apron's target publisher had to register `federated.decision`). An entry
   with `"kinds": []` and neither `targets` nor `definitions` is refused at startup. Absent `kinds` still means every
   non-observation kind, also beside `targets`, so no existing registration changes.
+
+### Changed
+
+- cli: docs correction. The macOS keychain (go-keyring v0.2.8) writes the token to `security -i` on stdin, not to its
+  command line; phase 1's note that it was briefly on `ps` was wrong (checked by polling `ps` through repeated saves). No
+  cgo keychain binding is adopted (it would break the static `CGO_ENABLED=0` release). A token too large for a macOS
+  keychain entry now says so and points at `--token-stdin`.
+- `--insecure-dev-auth` person tokens carry a sign-in time of now, so a freshness limit never refuses them.
 
 ## [0.45.0] - 2026-11-13
 
@@ -1376,7 +1414,8 @@ What the Autopilot gateway needs of the core before the hangar-dev cutover (R-3e
   scope, narrow-only limits, CEL policy, sessions, the hash-chained audit log and the gateway; the Hangar pack's
   `glidepath.*` and `airframe.*` tools over glidepath-api and a GET-only Kubernetes adapter.
 
-[Unreleased]: https://github.com/jfillman/clearance/compare/v0.45.0...HEAD
+[Unreleased]: https://github.com/jfillman/clearance/compare/v0.46.0...HEAD
+[0.46.0]: https://github.com/jfillman/clearance/compare/v0.45.0...v0.46.0
 [0.45.0]: https://github.com/jfillman/clearance/compare/v0.44.1...v0.45.0
 [0.44.1]: https://github.com/jfillman/clearance/compare/v0.44.0...v0.44.1
 [0.44.0]: https://github.com/jfillman/clearance/compare/v0.43.0...v0.44.0

@@ -917,13 +917,17 @@ class GateErrorBody(Model):
 
     _STRICT: ClassVar[bool] = False
     _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("age", "age", ("str",), False),
         Field("error", "error", ("str",), True),
         Field("hint", "hint", ("str",), True),
+        Field("max_age", "max_age", ("str",), False),
         Field("rule", "rule", ("str",), True),
     )
 
+    age: str | None = None
     error: str
     hint: str
+    max_age: str | None = None
     rule: str
 
 

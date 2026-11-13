@@ -57,7 +57,7 @@ func (e *Env) Login(ctx context.Context, args []string) int {
 			return fail(ExitError, "the IdP issued an already expired token")
 		}
 		if err := e.Store.Set(Stored{IDToken: tok, Issuer: s.cfg.Issuer, SavedAt: e.Now().Unix()}); err != nil {
-			if errors.Is(err, ErrNoKeychain) {
+			if errors.Is(err, ErrNoKeychain) || errors.Is(err, ErrTokenTooBig) {
 				return fail(ExitError, "%v: the token was not saved (it is never written to a file). Use --token-stdin per command instead", err)
 			}
 			return fail(ExitError, "%v", err)

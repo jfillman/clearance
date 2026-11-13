@@ -45,6 +45,15 @@ type Config struct {
 	// "flag" (the default for one release, then planned to be refuse: registered, flagged tree:unbound, bound to its commit only) or "refuse"
 	// (DG-UNBOUND, 400).
 	UnboundTree string `json:"unboundTree"`
+	// DelegatePersons are principal globs ("user:<login>") a person named by a delegate must match
+	// (CLEARANCE_DELEGATE_PERSON_ALLOWED). A person who signs in themselves passes the OIDC allowlist
+	// (CLEARANCE_OIDC_ALLOWED_USERS) in the authenticator; a delegate's named person never meets it, so this is the same
+	// door for them. Empty: any user:<name> the delegate says (the behaviour before this existed).
+	DelegatePersons []string `json:"delegatePersons"`
+	// ExtraVias are surface names a write may claim beside gate.Vias (CLEARANCE_VIAS_EXTRA): the deployment's portal.
+	ExtraVias []string `json:"extraVias"`
+	// Fresh is how recent a person's sign-in must be per action (CLEARANCE_FRESH_AUTH_*; zero values: no requirement).
+	Fresh Freshness `json:"fresh"`
 }
 
 // Unbound-tree modes (Config.UnboundTree).
@@ -467,6 +476,10 @@ func (s *Service) person(ctx context.Context, p authn.Principal, onBehalfOf stri
 		if len(onBehalfOf) < 5 || onBehalfOf[:5] != "user:" || pycompat.Len(onBehalfOf) > 200 {
 			return "", nil, nil, who, gerr("DG-PERSON", "on-behalf-of must name a person (user:<name>)", "", 400)
 		}
+		if len(s.Config.DelegatePersons) > 0 && !pycompat.MatchAny(onBehalfOf, s.Config.DelegatePersons) {
+			return "", nil, nil, who, gerr("DG-PERSON-ALLOWED", onBehalfOf+" is not allowed to act through a delegate on this Clearance",
+				"The person is outside CLEARANCE_DELEGATE_PERSON_ALLOWED.", 403)
+		}
 		person, via = onBehalfOf, strp(p.ID)
 		who = identity{sub: onBehalfOf, iss: "delegate:" + p.ID}
 	} else if !p.IsPerson() {
@@ -533,6 +546,9 @@ func (s *Service) Clear(ctx context.Context, p authn.Principal, changeID, onBeha
 		if err != nil {
 			return err
 		}
+		if err := s.checkFresh(ctx, p, onBehalfOf, clearAction(c.Tier)); err != nil {
+			return err
+		}
 		if c.State == StateHolding && !w.now.Before(c.ExpiresAt.Time) {
 			s.expire(w, c)
 			return gerr("DG-STATE", "this change has expired; a new push registers it again", "", 409)
@@ -582,6 +598,10 @@ func (s *Service) Clear(ctx context.Context, p authn.Principal, changeID, onBeha
 			result += fmt.Sprintf(" (%d of the people needed)", len(c.Approvals))
 		}
 		extra := clearedFields(c, nonce)
+		withSurface(ctx, extra)
+		if r := metaFrom(ctx).Reason; r != "" {
+			extra["reason"] = r
+		}
 		if waiting != "" {
 			extra["evidence"] = map[string]any{"assurance": AssuranceWaiting, "detail": waiting}
 		}
@@ -633,7 +653,9 @@ func (s *Service) Deny(ctx context.Context, p authn.Principal, changeID string, 
 		c.DenyReason, c.DeniedBy, c.DecidedAt, c.UpdatedAt = &text, &person, &now, now
 		w.settle(c)
 		w.put(c)
-		rec := w.record(person, via, "deploy.deny", c, "deny", strp("DG-DENIED"), text, map[string]any{"reason": text})
+		extra := map[string]any{}
+		withSurface(ctx, extra)
+		rec := w.record(person, via, "deploy.deny", c, "deny", strp("DG-DENIED"), text, map[string]any{"reason": text}, extra)
 		out = Decided{c.View(), recordSeq(rec)}
 		return nil
 	})

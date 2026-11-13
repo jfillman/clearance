@@ -34,12 +34,14 @@ The CSP allows inline *styles* (the UI's CSS-in-JS injects style elements) and n
 
 ## Step-up (a fresh login)
 
-When the core refuses a write with the freshness refusal (`rule: "auth-not-fresh"`, at the top level of the JSON body or
-under `detail`/`error`/`context`, optionally with `max_age` in seconds), the server passes the answer through unchanged
-and adds `X-Clearance-Reauth: /auth/login?reauth=1&max_age=<n>&return=<page>`. The UI navigates there; the server then
-asks the IdP with `prompt=login&max_age=<n>`, checks the returned token's `auth_time` is within `max_age` (an IdP that
+When the core refuses a write because the sign-in is too old, it answers **401** with
+`{"error", "rule": "DG-AUTH-NOT-FRESH", "hint", "max_age": "<Go duration>", "age": "<Go duration>"}` (CLEARANCE_FRESH_AUTH_*,
+[core.md](core.md)). The server matches exactly that (status 401, top-level `rule`), passes the answer through unchanged
+and adds `X-Clearance-Reauth: /auth/login?reauth=1&max_age=<seconds>&return=<page>`. The UI navigates there; the server
+then asks the IdP with `prompt=login&max_age=<n>`, checks the returned token's `auth_time` is within `max_age` (an IdP that
 ignores the request does not satisfy it), replaces the session under a new id, and returns the person to the page. The
-refused write is not replayed: the person repeats it. The web tier never decides what needs freshness; the core does.
+refused write is not replayed: the person repeats it. The web tier never decides what needs freshness; the core does. Any
+other 401 (a bad token) carries no such header, and the page treats it as "sign in".
 
 ## Configuration
 
@@ -94,8 +96,8 @@ the core and the gateway (plus DNS), `web.enabled: false` by default, a non-root
 and probes on `/healthz` and `/readyz`. A restart signs everyone out. The owner creates the confidential client in
 people-dex.
 
-## `via` and the CLI phase 2 dependency
+## `via` and freshness
 
-The server sends `X-Clearance-Via: web` on every write. The core records it once the CLI phase 2 change (the `via`
-field) has landed; before that the core ignores the header. The freshness refusal likewise comes from that change; until
-then the step-up path is dormant.
+The server sends `X-Clearance-Via: web` on every write; `web` is one of the core's built-in surfaces (`cli`, `web`,
+`slack`, `api`), so the core accepts it and records the claimed `surface`. Both this and the freshness refusal are in the
+core since v0.46.0 (CLI phase 2). The server's tests run the step-up against the real core handler.

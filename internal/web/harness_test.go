@@ -209,7 +209,11 @@ type env struct {
 	cfg           Config
 }
 
-func newEnv(t *testing.T, mut func(*Config, *Options)) *env {
+func newEnv(t *testing.T, mut func(*Config, *Options)) *env { return newEnvHook(t, nil, mut) }
+
+// newEnvHook is newEnv with a hook that runs once the IdP exists and may return a URL to use as the core instead of
+// the fake one (a real core, whose authenticator trusts the fake IdP).
+func newEnvHook(t *testing.T, coreFor func(e *env) string, mut func(*Config, *Options)) *env {
 	t.Helper()
 	clk := &clock{t: time.Now().Truncate(time.Second)}
 	e := &env{t: t, clk: clk, jar: map[string]string{}, logs: &strings.Builder{}}
@@ -221,6 +225,9 @@ func newEnv(t *testing.T, mut func(*Config, *Options)) *env {
 		"index.html":        {Data: []byte("<!doctype html><title>ui</title>")},
 		"assets/app-abc.js": {Data: []byte("console.log(1)")},
 	}}
+	if coreFor != nil {
+		cfg.CoreURL = coreFor(e)
+	}
 	if mut != nil {
 		mut(&cfg, &o)
 	}

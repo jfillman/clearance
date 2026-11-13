@@ -27,7 +27,7 @@ var forwardHeaders = []string{"Accept", "Accept-Language", "Content-Type", "Last
 const reauthHeader = "X-Clearance-Reauth"
 
 // freshRule is the rule the core answers with when a write needs a fresher login than the token shows.
-const freshRule = "auth-not-fresh"
+const freshRule = "DG-AUTH-NOT-FRESH"
 
 type ctxKey struct{}
 
@@ -216,7 +216,7 @@ func (s *Server) modifyResponse(resp *http.Response) error {
 		return errors.New("upstream answer too large")
 	}
 	resp.Body = &limitedBody{r: resp.Body, left: s.cfg.MaxResponseBytes}
-	if resp.StatusCode >= 400 && resp.StatusCode < 500 && strings.Contains(h.Get("Content-Type"), "json") {
+	if resp.StatusCode == http.StatusUnauthorized && strings.Contains(h.Get("Content-Type"), "json") {
 		c, _ := resp.Request.Context().Value(ctxKey{}).(*call)
 		const peek = 64 << 10
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, peek+1))
@@ -226,7 +226,7 @@ func (s *Server) modifyResponse(resp *http.Response) error {
 		}{io.MultiReader(bytes.NewReader(b), resp.Body), resp.Body}
 		if len(b) <= peek && c != nil {
 			if ma, ok := freshRefusal(b); ok {
-				if ma <= 0 || ma > time.Hour {
+				if ma <= 0 || ma > maxFreshAge {
 					ma = c.freshMA
 				}
 				h.Set(reauthHeader, fmt.Sprintf("/auth/login?reauth=1&max_age=%d&return=%s", int(ma.Seconds()), url.QueryEscape(c.ret)))
@@ -236,35 +236,25 @@ func (s *Server) modifyResponse(resp *http.Response) error {
 	return nil
 }
 
-// freshRefusal reports whether body is the core's "the login is not fresh enough" refusal: rule "auth-not-fresh",
-// at the top level or one object down (detail, error, context), with an optional max_age in seconds beside it.
+// maxFreshAge is the longest max_age the core can ask for (its configuration allows up to 24 h).
+const maxFreshAge = 24 * time.Hour
+
+// freshRefusal reports whether body is the core's freshness refusal: HTTP 401 (the caller checks) with
+// {"error", "rule": "DG-AUTH-NOT-FRESH", "hint", "max_age": "<Go duration>", "age": "<Go duration>"} at the top level
+// (internal/gate ErrorBody). It returns max_age, or 0 when absent or unreadable.
 func freshRefusal(body []byte) (time.Duration, bool) {
-	var top map[string]any
-	if json.Unmarshal(body, &top) != nil {
+	var b struct {
+		Rule   string `json:"rule"`
+		MaxAge string `json:"max_age"`
+	}
+	if json.Unmarshal(body, &b) != nil || b.Rule != freshRule {
 		return 0, false
 	}
-	var look func(m map[string]any, depth int) (time.Duration, bool)
-	look = func(m map[string]any, depth int) (time.Duration, bool) {
-		if r, _ := m["rule"].(string); r == freshRule {
-			var d time.Duration
-			if n, ok := m["max_age"].(float64); ok && n > 0 && n <= 3600 {
-				d = time.Duration(n) * time.Second
-			}
-			return d, true
-		}
-		if depth == 0 {
-			return 0, false
-		}
-		for _, k := range []string{"detail", "error", "context"} {
-			if sub, ok := m[k].(map[string]any); ok {
-				if d, ok := look(sub, depth-1); ok {
-					return d, true
-				}
-			}
-		}
-		return 0, false
+	d, err := time.ParseDuration(b.MaxAge)
+	if err != nil || d < time.Second || d > maxFreshAge {
+		return 0, true
 	}
-	return look(top, 1)
+	return d, true
 }
 
 // limitedBody errors once the answer is longer than the limit, so the connection is cut rather than truncated quietly.

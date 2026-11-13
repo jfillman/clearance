@@ -3,7 +3,7 @@
   "$id": "https://clearance.hangarplatform.dev/schemas/evidence/v1.json",
   "title": "clearance.evidence/v1",
   "description": "One Clearance evidence record (docs/evidence.md). Flat: every field is a top-level key, grouped by x-clearance-group into Identities, Source, Target, Provenance, Decision, Outcome, Coverage, Assurance, Intent and Integrity, and tagged verified or claimed by the record's own lists. Fields not listed here are allowed and are claimed unless the writer verified them. The chain rule is the same for every version. Revision 4 (O-1) is clearance.evidence/v1.1: additive, so the same file describes v1 and v1.1. Revision 5 (I-1) adds operational_class and class_mapping to the Decision group, also additive. Revision 6 (O-5) adds the observation.verification kind and its verification field, also additive. A record says v1.1 only when it is an observation kind (observation, assessment, resolution, observation.health, observation.audit-gap, observation.verification) or its coverage is break-glass or attempted-refused; every other record is still written as v1.",
-  "x-clearance-revision": 6,
+  "x-clearance-revision": 7,
   "x-clearance-groups": [
     "identities",
     "source",
@@ -224,6 +224,25 @@
       ],
       "x-clearance-group": "identities",
       "description": "The initiating human, by IdP subject and issuer. Optional."
+    },
+    "surface": {
+      "type": "object",
+      "properties": {
+        "via": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,31}$",
+          "description": "cli, web, slack or api, or a name the deployment configured (CLEARANCE_VIAS_EXTRA), such as its portal."
+        },
+        "ref": {
+          "type": "string",
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "via"
+      ],
+      "x-clearance-group": "identities",
+      "description": "Optional (revision 7, G4): where a person's write came from, as the caller said it (X-Clearance-Via, X-Clearance-Surface-Ref): the surface, and a reference such as a Slack permalink. On deploy.clear, deploy.deny, resolution, breakglass.open and an early breakglass.close. Claimed, never verified: it tells an auditor which tool was used, not who."
     },
     "model_version": {
       "type": "string",

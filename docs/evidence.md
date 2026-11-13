@@ -46,7 +46,7 @@ schema are allowed and are claimed unless the writer verified them.
 
 | Group | Fields | Notes |
 | --- | --- | --- |
-| Identities | `provider`, `principal`, `agent`, `session`, `parent`, `task_id`, `initiator`, `model_version` | `provider` {name, version[, conformance]} is required (`conformance` from the provider's registration, C-1); `initiator` {sub, iss} optional; `model_version` optional (revision 3, AP-C1): a run's pinned model version on its records, the answering model on a `model.call` outcome |
+| Identities | `provider`, `principal`, `agent`, `session`, `parent`, `task_id`, `initiator`, `surface`, `model_version` | `provider` {name, version[, conformance]} is required (`conformance` from the provider's registration, C-1); `initiator` {sub, iss} optional; `surface` {via, ref} optional (revision 7, G4, claimed: [the surface of a person's write](#the-surface-of-a-persons-write-revision-7-g4)); `model_version` optional (revision 3, AP-C1): a run's pinned model version on its records, the answering model on a `model.call` outcome |
 | Source | `subject`, `tool`, `args_sha256`, `change`, `source` | `subject` required (null when there is none); `tool` is the operation or event type; arguments are never stored, only their digest |
 | Target | `boundary`, `target`, `app`, `destination` | `boundary` is `runtime` or `deployment`; `destination` {cluster, environment, application} optional |
 | Provenance | `provenance` | optional {level, signals[{name, tag}]} |
@@ -262,6 +262,20 @@ exactly `["none"]`) and `class_mapping` (the mapping version, `opclass/1`). They
 verified, and are on every `deploy.*` record about a registered change. The tier is the customer's policy; the class is
 the only axis a cross-tenant comparison may use. The mapping, the `none` result and what is not classified are in
 [gate.md](gate.md#the-operational-class-i-1-built).
+
+## The surface of a person's write (revision 7: G4)
+
+One optional Identities-group field, additive (`x-clearance-revision` is 7; the `schema` string is unchanged):
+`surface` {`via`, `ref`?}. A person's write may say where it came from in two headers, `X-Clearance-Via` (`cli`, `web`,
+`slack`, `api`, or a surface name the deployment configured in `CLEARANCE_VIAS_EXTRA`, such as its portal; anything else
+is 400 `DG-VIA`) and `X-Clearance-Surface-Ref` (printable text of at most 512
+bytes, such as a Slack permalink; it needs a `via`, else 400 `DG-SURFACE-REF`). The core records them on
+`deploy.clear`, `deploy.deny`, `resolution` (single and bulk: every record of the call), `breakglass.open` and the
+`breakglass.close` of an early close, exactly as said. It is **claimed**: `surface` is not in `verified`, so it is
+listed in `claimed`, and nothing is checked about it. It tells an auditor which tool a person used, never who they are: the
+person is the verified `principal`, `initiator` and approval `sub`/`iss`. A write that sends no `via` records none.
+A delegate (a portal's backend) sends its own configured name for the person it names. A clear's optional `reason` is
+recorded on `deploy.clear`, also claimed.
 
 ## Versioning rule
 

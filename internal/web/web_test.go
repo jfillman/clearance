@@ -2,7 +2,10 @@ package web
 
 import (
 	"bufio"
+	"context"
+	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,6 +13,10 @@ import (
 	"testing"
 	"testing/fstest"
 	"time"
+
+	"github.com/jfillman/clearance/internal/authn"
+	"github.com/jfillman/clearance/internal/core"
+	"github.com/jfillman/clearance/internal/gate"
 )
 
 func TestSignInFlowAndCookie(t *testing.T) {
@@ -443,41 +450,58 @@ func TestSSEPassthrough(t *testing.T) {
 	}
 }
 
-func TestFreshLoginStepUp(t *testing.T) {
-	e := newEnv(t, nil)
+// realCore is the actual core (internal/core, memory store) trusting the fake IdP's ID tokens, with a 15 minute
+// freshness limit on break-glass, so the refusal the step-up reacts to is the real handler's, not a hand-written one.
+func realCore(t *testing.T, e *env) string {
+	t.Helper()
+	keys := authn.NewJWKS(e.idp.ts.URL + "/jwks")
+	oidc := authn.NewOIDCAuthenticator(e.idp.ts.URL, testClientID, keys, []string{"*"})
+	cfg := core.Config{Memory: true, Version: "test", Auth: oidc, MaxClockSkew: -1}
+	cfg.Gate.Admins = []string{"user:ada@example.com"}
+	cfg.Gate.Fresh = gate.Freshness{Tier3Breakglass: 15 * time.Minute}
+	c, err := core.Build(context.Background(), cfg, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.Close)
+	srv := httptest.NewServer(c.Server.Handler())
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+func TestFreshLoginStepUpAgainstTheRealCore(t *testing.T) {
+	e := newEnvHook(t, func(e *env) string { return realCore(t, e) }, nil)
+	e.idp.authTimeAgo = time.Hour // the sign-in is an hour old: fine to sign in, too old for break-glass
 	si := e.signIn()
 	old := e.jar[sessionCookie]
-	e.core.h = func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(403)
-		io.WriteString(w, `{"detail":{"rule":"auth-not-fresh","max_age":120}}`)
+	glass := `{"reason":"prod is down","ttl":"45m","cluster":"hangar-prod","env":"prod"}`
+	w := e.do("POST", "/api/write/v1/breakglass", map[string]string{"Origin": testPublic, "X-CSRF-Token": si.CSRF,
+		"Content-Type": "application/json", "Referer": testPublic + "/breakglass"}, glass)
+	if w.Code != 401 {
+		t.Fatalf("the core's freshness refusal is a 401, got %d %s", w.Code, w.Body)
 	}
-	w := e.do("POST", "/api/write/v1/changes/c1/clear", map[string]string{"Origin": testPublic, "X-CSRF-Token": si.CSRF,
-		"Referer": testPublic + "/changes/c1"}, `{}`)
-	if w.Code != 403 {
-		t.Fatalf("status changed: %d", w.Code)
+	var body map[string]string
+	json.Unmarshal(w.Body.Bytes(), &body)
+	if body["rule"] != "DG-AUTH-NOT-FRESH" || body["max_age"] != "15m0s" || body["age"] == "" {
+		t.Fatalf("the refusal is not the shape the step-up expects: %s", w.Body)
 	}
 	loc := w.Header().Get(reauthHeader)
-	if !strings.HasPrefix(loc, "/auth/login?reauth=1&max_age=120&return=") || !strings.Contains(loc, url.QueryEscape("/changes/c1")) {
+	if !strings.HasPrefix(loc, "/auth/login?reauth=1&max_age=900&return=") || !strings.Contains(loc, url.QueryEscape("/breakglass")) {
 		t.Fatalf("reauth header %q", loc)
 	}
-	// The login asks the IdP to reauthenticate.
+	// The login asks the IdP to reauthenticate, and an IdP that ignores it does not satisfy it.
 	cb, _ := e.startLogin(strings.TrimPrefix(loc, "/auth/login"))
-	q := e.idp.lastAuthRequest
-	if q.Get("prompt") != "login" || q.Get("max_age") != "120" {
+	if q := e.idp.lastAuthRequest; q.Get("prompt") != "login" || q.Get("max_age") != "900" {
 		t.Fatalf("auth request: %v", q)
 	}
-	// An IdP that ignores prompt=login (an old auth_time) does not satisfy it; the old session stays.
-	e.idp.authTimeAgo = time.Hour
 	if w := e.callback(cb); w.Code == 200 {
 		t.Fatal("a stale auth_time was accepted for a fresh login")
 	}
 	e.jar[sessionCookie] = old
-	// A genuinely fresh one replaces the session with a new id.
 	e.idp.authTimeAgo = 5 * time.Second
 	cb, _ = e.startLogin(strings.TrimPrefix(loc, "/auth/login"))
 	w = e.callback(cb)
-	if w.Code != 200 || !strings.Contains(w.Body.String(), `url=/changes/c1"`) {
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `url=/breakglass"`) {
 		t.Fatalf("fresh callback: %d %s", w.Code, w.Body)
 	}
 	if e.jar[sessionCookie] == old {
@@ -486,7 +510,12 @@ func TestFreshLoginStepUp(t *testing.T) {
 	if _, ok := e.srv.store.Get(old); ok {
 		t.Error("the old session survives the fresh login")
 	}
-	// No auth_time at all: refused.
+	// The repeated write now clears the core's check, and the core accepts X-Clearance-Via: web (a built-in via).
+	si = e.info()
+	if w := e.write(si, "/api/write/v1/breakglass", glass); w.Code != 200 {
+		t.Fatalf("the write after a fresh login: %d %s", w.Code, w.Body)
+	}
+	// No auth_time at all: a fresh login is refused.
 	e.idp.noAuthTime = true
 	cb, _ = e.startLogin("?reauth=1")
 	if w := e.callback(cb); w.Code == 200 {
@@ -494,18 +523,46 @@ func TestFreshLoginStepUp(t *testing.T) {
 	}
 }
 
-func TestFreshRefusalParsing(t *testing.T) {
-	for body, want := range map[string]bool{
-		`{"rule":"auth-not-fresh"}`:                       true,
-		`{"detail":{"rule":"auth-not-fresh"}}`:            true,
-		`{"error":{"rule":"auth-not-fresh"}}`:             true,
-		`{"rule":"R014"}`:                                 false,
-		`{"detail":{"detail":{"rule":"auth-not-fresh"}}}`: false,
-		`not json`: false,
-		`[]`:       false,
+func TestStepUpOnlyOnTheFreshnessRefusal(t *testing.T) {
+	e := newEnv(t, nil)
+	si := e.signIn()
+	for name, c := range map[string]struct {
+		status int
+		body   string
+	}{
+		"other 401":            {401, `{"error":"no bearer token","rule":"DG-AUTH","hint":""}`},
+		"other rule":           {401, `{"error":"x","rule":"DG-OTHER","max_age":"5m0s"}`},
+		"fresh rule but a 403": {403, `{"error":"x","rule":"DG-AUTH-NOT-FRESH","max_age":"5m0s"}`},
+		"nested rule":          {401, `{"detail":{"rule":"DG-AUTH-NOT-FRESH"}}`},
 	} {
-		if _, got := freshRefusal([]byte(body)); got != want {
-			t.Errorf("%s: %v", body, got)
+		e.core.h = func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(c.status)
+			io.WriteString(w, c.body)
+		}
+		w := e.write(si, "/api/write/v1/x", `{}`)
+		if w.Header().Get(reauthHeader) != "" || w.Code != c.status || w.Body.String() != c.body {
+			t.Errorf("%s: %d %q %q", name, w.Code, w.Header().Get(reauthHeader), w.Body)
+		}
+	}
+}
+
+func TestFreshRefusalParsing(t *testing.T) {
+	for body, want := range map[string]struct {
+		d  time.Duration
+		ok bool
+	}{
+		`{"error":"e","rule":"DG-AUTH-NOT-FRESH","hint":"h","max_age":"10m0s","age":"20m0s"}`: {10 * time.Minute, true},
+		`{"rule":"DG-AUTH-NOT-FRESH"}`:                    {0, true},
+		`{"rule":"DG-AUTH-NOT-FRESH","max_age":"banana"}`: {0, true},
+		`{"rule":"DG-AUTH-NOT-FRESH","max_age":"999h"}`:   {0, true},
+		`{"rule":"auth-not-fresh"}`:                       {0, false},
+		`{"detail":{"rule":"DG-AUTH-NOT-FRESH"}}`:         {0, false},
+		`not json`: {0, false},
+		`[]`:       {0, false},
+	} {
+		if d, ok := freshRefusal([]byte(body)); d != want.d || ok != want.ok {
+			t.Errorf("%s: %v %v", body, d, ok)
 		}
 	}
 }

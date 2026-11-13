@@ -308,7 +308,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	var maxAge time.Duration
 	if q.Get("reauth") == "1" {
 		maxAge = s.cfg.FreshMaxAge
-		if n, err := strconv.Atoi(q.Get("max_age")); err == nil && n >= 1 && n <= 3600 {
+		if n, err := strconv.Atoi(q.Get("max_age")); err == nil && n >= 1 && n <= int(maxFreshAge.Seconds()) {
 			maxAge = time.Duration(n) * time.Second
 		}
 	} else if _, _, ok := s.sessionFrom(r); ok {

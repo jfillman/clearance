@@ -718,3 +718,23 @@ func TestSeveralServiceAccountsOfOneForeignCluster(t *testing.T) {
 	_, err := a.Authenticate(bg, tok("system:serviceaccount:argocd-apps:argocd-application-controller"))
 	mustRefuse(t, err, "may not call")
 }
+
+// G3: the person's sign-in time is the token's auth_time, else its iat.
+func TestAPersonsSignInTimeIsAuthTimeElseIat(t *testing.T) {
+	a, _ := oidcFixture(t)
+	k, _ := keys(t)
+	now := time.Now().Unix()
+	p, err := a.Authenticate(bg, idToken(t, k, "k1", map[string]any{"iat": now - 100}))
+	if err != nil || p.Claims[ClaimAuthTime] != now-100 || p.Claims[ClaimAuthTimeSource] != "iat" {
+		t.Fatalf("iat fallback: %+v, %v", p.Claims, err)
+	}
+	p, err = a.Authenticate(bg, idToken(t, k, "k1", map[string]any{"iat": now, "auth_time": now - 600}))
+	if err != nil || p.Claims[ClaimAuthTime] != now-600 || p.Claims[ClaimAuthTimeSource] != "auth_time" {
+		t.Fatalf("auth_time: %+v, %v", p.Claims, err)
+	}
+	// a nonsense auth_time is not trusted: the iat stands
+	p, err = a.Authenticate(bg, idToken(t, k, "k1", map[string]any{"iat": now, "auth_time": "yesterday"}))
+	if err != nil || p.Claims[ClaimAuthTime] != now || p.Claims[ClaimAuthTimeSource] != "iat" {
+		t.Fatalf("bad auth_time: %+v, %v", p.Claims, err)
+	}
+}

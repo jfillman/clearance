@@ -109,6 +109,12 @@ type OIDCAuthenticator struct {
 	Now              func() time.Time
 }
 
+// The claims of a person's Principal that say when they signed in (G3).
+const (
+	ClaimAuthTime       = "auth_time"        // int64 unix seconds
+	ClaimAuthTimeSource = "auth_time_source" // "auth_time" (the IdP said when) or "iat" (the token's issue time)
+)
+
 // OIDCAlgorithms are the algorithms a person's ID token may be signed with.
 var OIDCAlgorithms = []string{"RS256", "ES256"}
 
@@ -144,6 +150,13 @@ func (a *OIDCAuthenticator) Authenticate(ctx context.Context, token string) (Pri
 	}
 	if sid, ok := claims["sid"].(string); ok && sid != "" {
 		id["sid"] = sid
+	}
+	// When the person signed in (G3): the token's auth_time, else its iat (verified present, an integer). The gate's
+	// freshness rule reads it; ClaimAuthTime is unix seconds and ClaimAuthTimeSource says which claim it came from.
+	if at, ok := claimInt(claims["auth_time"]); ok && at > 0 {
+		id[ClaimAuthTime], id[ClaimAuthTimeSource] = int64(at), "auth_time"
+	} else if iat, ok := claimInt(claims["iat"]); ok {
+		id[ClaimAuthTime], id[ClaimAuthTimeSource] = int64(iat), "iat"
 	}
 	return Principal{ID: "user:" + who, Kind: KindPerson, Claims: id}, nil
 }
