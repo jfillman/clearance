@@ -244,6 +244,151 @@
         ],
         "type": "object"
       },
+      "AttestationConfig": {
+        "properties": {
+          "identity": {
+            "type": "string"
+          },
+          "issuer": {
+            "type": "string"
+          },
+          "key_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "modes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "rekor_entry_url": {
+            "type": "string"
+          },
+          "rekor_url": {
+            "type": "string"
+          },
+          "verifiable": {
+            "type": "boolean"
+          },
+          "verify_commands": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "key_ids",
+          "modes",
+          "rekor_entry_url",
+          "rekor_url",
+          "verifiable",
+          "verify_commands"
+        ],
+        "type": "object"
+      },
+      "AttestationItem": {
+        "properties": {
+          "app": {
+            "type": "string"
+          },
+          "backend": {
+            "type": "string"
+          },
+          "change_id": {
+            "type": "string"
+          },
+          "cluster": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "env": {
+            "type": "string"
+          },
+          "key_id": {
+            "type": "string"
+          },
+          "outcome_seq": {
+            "type": "integer"
+          },
+          "record_seq": {
+            "type": "integer"
+          },
+          "rekor_log_index": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "rekor_uuid": {
+            "type": "string"
+          },
+          "release_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "signed_at": {
+            "type": "string"
+          },
+          "tree_digest": {
+            "type": "string"
+          },
+          "verification": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/VerificationBrief"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "app",
+          "backend",
+          "change_id",
+          "cluster",
+          "digest",
+          "env",
+          "outcome_seq",
+          "record_seq",
+          "rekor_log_index",
+          "release_id",
+          "signed_at",
+          "tree_digest",
+          "verification"
+        ],
+        "type": "object"
+      },
+      "AttestationPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AttestationItem"
+            },
+            "type": "array"
+          },
+          "next": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next"
+        ],
+        "type": "object"
+      },
       "AttestationView": {
         "properties": {
           "backend": {
@@ -272,6 +417,16 @@
           },
           "rekor_uuid": {
             "type": "string"
+          },
+          "verification": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/VerificationBrief"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -280,7 +435,63 @@
           "digest",
           "outcome_seq",
           "record_seq",
-          "rekor_log_index"
+          "rekor_log_index",
+          "verification"
+        ],
+        "type": "object"
+      },
+      "ChangeRecord": {
+        "properties": {
+          "hash": {
+            "type": "string"
+          },
+          "principal": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "record": {
+            "$ref": "#/components/schemas/EvidenceRecord"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "ts": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "hash",
+          "principal",
+          "record",
+          "seq",
+          "tool",
+          "ts"
+        ],
+        "type": "object"
+      },
+      "ChangeRecordPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ChangeRecord"
+            },
+            "type": "array"
+          },
+          "next": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next"
         ],
         "type": "object"
       },
@@ -487,6 +698,16 @@
               "null"
             ]
           },
+          "request": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RecordRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "requirement": {
             "oneOf": [
               {
@@ -579,6 +800,7 @@
           "registered_by",
           "repo",
           "repo_policy_digest",
+          "request",
           "requirement",
           "state",
           "subject",
@@ -2287,6 +2509,22 @@
             },
             "type": "array"
           },
+          "attestation": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AttestationView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "attested": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "base": {
             "type": "string"
           },
@@ -3351,6 +3589,46 @@
         ],
         "type": "object"
       },
+      "RecordRef": {
+        "properties": {
+          "hash": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "hash",
+          "seq"
+        ],
+        "type": "object"
+      },
+      "RekorVerdict": {
+        "properties": {
+          "integrated_time": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "log_index": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "verified": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "integrated_time",
+          "log_index",
+          "verified"
+        ],
+        "type": "object"
+      },
       "ScopeStatements": {
         "properties": {
           "from": {
@@ -3688,6 +3966,21 @@
         ],
         "type": "object"
       },
+      "VerificationBrief": {
+        "properties": {
+          "checked_at": {
+            "type": "string"
+          },
+          "verified": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "checked_at",
+          "verified"
+        ],
+        "type": "object"
+      },
       "Verified": {
         "properties": {
           "bad_seq": {
@@ -3713,6 +4006,56 @@
           "ok"
         ],
         "type": "object"
+      },
+      "VerifyAnswer": {
+        "properties": {
+          "cached": {
+            "type": "boolean"
+          },
+          "checked_at": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "identity": {
+            "type": "string"
+          },
+          "issuer": {
+            "type": "string"
+          },
+          "key_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "rekor": {
+            "$ref": "#/components/schemas/RekorVerdict"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "verified": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "cached",
+          "checked_at",
+          "digest",
+          "errors",
+          "rekor",
+          "subject",
+          "verified"
+        ],
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -3729,6 +4072,172 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/v1/attestation-config": {
+      "get": {
+        "operationId": "getAttestationConfig",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttestationConfig"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The non-secret attestation configuration a portal needs: whether this api can verify (verifiable), the backends, Rekor's public URL and the link to an entry, the keyless identity and issuer, the static key ids and the offline verify command. Public keys only",
+        "x-clearance-roles": [
+          "person",
+          "delegate",
+          "auditor"
+        ]
+      }
+    },
+    "/v1/attestations": {
+      "get": {
+        "operationId": "listAttestations",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "app",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "env",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttestationPage"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The signed change attestations, newest first (the cursor is record_seq, the deploy.attestation record's seq): each with its change (app, env, release, tree digest), when it was signed, the envelope digest, backend, key id, Rekor log index and uuid, the deploy.outcome it attests and this replica's last verification. since and until bound the time signed. A person sees the attestations of the changes they may see. For the changes applied and not yet attested, GET /v1/clearances/counts?by=attestation (pending)",
+        "x-clearance-roles": [
+          "person",
+          "delegate",
+          "auditor"
+        ]
+      }
+    },
     "/v1/clearance-policy": {
       "get": {
         "operationId": "getClearancePolicy",
@@ -4058,7 +4567,7 @@
             "bearer": []
           }
         ],
-        "summary": "Changes counted by state, tier, app, env or cleared_by (the C1 stats: holding, cleared by policy and by people, denied)",
+        "summary": "Changes counted by state, tier, app, env, cleared_by or attestation (the C1 stats: holding, cleared by policy and by people, denied). by=attestation: attested (a signed attestation is stored), pending (the deploy reported an applied outcome and none is stored yet: the signer is waiting or retrying) and none (no applied outcome)",
         "x-clearance-roles": [
           "person",
           "delegate",
@@ -4216,6 +4725,190 @@
           }
         ],
         "summary": "The change's signed attestation (C-2) as a Sigstore bundle: the DSSE envelope of an in-toto statement (predicate https://clearance.hangarplatform.dev/change-attestation/v1) and the certificate and Rekor entry that verify it. `clearance attest verify` checks it offline. 404 until a deploy reports an applied outcome",
+        "x-clearance-roles": [
+          "person",
+          "delegate",
+          "auditor",
+          "feed"
+        ]
+      }
+    },
+    "/v1/clearances/{id}/attestation/verify": {
+      "get": {
+        "operationId": "verifyClearanceAttestation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyAnswer"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The stored attestation verified server-side exactly as `clearance attest verify` does: its signature against the configured trust (a static key, or a keyless trust root with the core's identity and issuer), the Rekor entry, and that the statement names the change's cleared digest (tree, or terraform plan) and this change. {verified, checked_at, subject, key_id, rekor{log_index, integrated_time, verified}, errors}. Answers 200 with verified false and the reasons for a bundle that fails; 404 when the change has no attestation or this deployment has no trust configured. The answer is remembered per attestation digest until the replica restarts (`cached`); the lists show it as `verification`",
+        "x-clearance-roles": [
+          "person",
+          "delegate",
+          "auditor",
+          "feed"
+        ]
+      }
+    },
+    "/v1/clearances/{id}/records": {
+      "get": {
+        "operationId": "listChangeRecords",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeRecordPage"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "One change's history: its deploy.* records (request, clear, answer, outcome, attestation, exception, ...) in chain order, each with its seq, hash, tool, ts, principal and the record. The cursor is seq. Seen by whoever may see the change; secret-bearing keys in a record's state_change are redacted for all but an auditor",
         "x-clearance-roles": [
           "person",
           "delegate",
