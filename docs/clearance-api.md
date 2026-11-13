@@ -58,6 +58,10 @@ the inbox, trigger history, results), so the Go API serves only Clearance's own 
 | getClearance | `GET /v1/clearances/{id}` | **ported**; adds `token` (C-1) and `attestation` (C-2: the digest, backend and Rekor index of the signed change attestation, or `null`) |
 | (new) getClearanceAttestation | `GET /v1/clearances/{id}/attestation` | **new** (C-2): the change's attestation as a Sigstore bundle, for `clearance attest verify`; 404 until a deploy reports an applied outcome ([core.md](core.md#change-attestations)) |
 | (new) whoami | `GET /v1/whoami` | **new**: who the token is and what the api resolves it to ([below](#reads-for-the-person-cli)) |
+| (new) verifyClearanceAttestation | `GET /v1/clearances/{id}/attestation/verify` | **new**: the stored bundle verified server-side ([below](#change-history-and-attestations)) |
+| (new) listChangeRecords | `GET /v1/clearances/{id}/records` | **new**: one change's `deploy.*` records in chain order ([below](#change-history-and-attestations)) |
+| (new) listAttestations | `GET /v1/attestations` | **new**: the signed attestations, newest first ([below](#change-history-and-attestations)) |
+| (new) getAttestationConfig | `GET /v1/attestation-config` | **new**: Rekor's public URL, the keyless identity and issuer, the static key ids, the offline verify command |
 | getClearancePolicy | `GET /v1/clearance-policy` | **ported** |
 | getContract | `GET /v1/contract` | **ported**; an OpenAPI 3.1 document since C-10, naming `x-clearance-core` (`CLEARANCE_CORE_URL`) and `x-clearance-gateway` |
 | (healthz, readyz) | `GET /healthz`, `/readyz` | **ported**; readyz checks the database |
@@ -66,6 +70,8 @@ the inbox, trigger history, results), so the Go API serves only Clearance's own 
 | (new) listObservations | `GET /v1/observations` | **new** (O-1), any signed-in person, a delegate for one, or an auditor (O-5): a scope's `observation` records (`kind=assessment`, `resolution` (every edit of one is a record of its own: the history) or `observation.verification` for those); `scope` required, `source`, `since`, `until`, `limit`, `after`; newest first, cursor `seq` |
 | (new) listObservationHealth | `GET /v1/observations/health` | **new** (O-1), any signed-in person, a delegate for one, or an auditor (O-5): a scope's `observation.health` and `observation.audit-gap` records, same parameters |
 | (new) getCoverage | `GET /v1/coverage` | **new** (O-1), any signed-in person, a delegate for one, or an auditor (O-5): the three-part coverage statement of a scope and window ([below](#observations-and-the-coverage-statement-o-1)) |
+| (new) listTargets | `GET /v1/targets` | **new** (the Map), any signed-in person, a delegate for one, or an auditor: the declared target registry, the union of every source's published set ([below](#the-coverage-map-and-the-target-registry)) |
+| (new) getMap | `GET /v1/map` | **new** (the Map), same readers: the coverage map in one read, the registry joined with the records ([below](#the-coverage-map-and-the-target-registry)) |
 | (new) getKeys | `GET /v1/keys` | **new** (C-1): the clearance token verification keys, a JWKS, from `clearance_signing_keys`; public |
 | (new) getGrantFeed | `GET /v1/grant-feeds/{cluster}` | **new** (C-10): the cluster's **signed** grant feed, for grant-sync (below) |
 | (new) listInstallations | `GET /v1/github/installations` | **new** (C-10): the GitHub App's installations as the records name them |
@@ -133,7 +139,114 @@ statement reads the newest resolution record about an observation. The same rout
 lists those too, under the exception's cluster or workspace scope.
 
 Indexes (the core's schema): `clearance_evidence_observed` on `((record->>'scope'), seq)` for the five kinds (and `clearance_evidence_verification` for `observation.verification`), and
-`clearance_evidence_event` on provider, kind and `source.event_id` behind the core's de-duplication.
+`clearance_evidence_event` on provider, kind and `source.event_id` behind the core's de-duplication; `clearance_evidence_written` on `written_at` (the Map's lower bound: a record's `ts` is never before the time it was written).
+
+### The coverage Map and the target registry
+
+The Map answers "what should be protected, who guards and watches it, and does the evidence agree": the **declared**
+registry joined with the **observed** records, so Tower makes one call however many gates and targets there are.
+
+**The registry** is declared, never inferred from records. Each source that publishes (a cluster's gitops render, an
+account's bootstrap) sends the whole set of targets it declares with `PUT /v1/targets/{source}` on the core
+([core.md](core.md#publishing-declared-targets), [provider-protocol.md](provider-protocol.md#publishing-declared-targets));
+the core validates it strictly, stores it per source (`clearance_targets`) and records a changed set once as
+`targets.load` with the set's digest. `GET /v1/targets` serves the union (`source`, `group`, `kind`, `env`, `app`
+filter; a target id two sources declare is a `conflicts` entry and the first source's by name is kept):
+
+```json
+{"items": [{"source": "hangar-prod", "id": "gate-api-prod", "name": "gate-api", "kind": "k8s-namespace",
+            "group": "hangar-prod", "env": "prod", "app": "gate-api", "owner": "group:default/team-gate",
+            "registry": "flight", "scope": "hangar-prod",
+            "gates": [{"type": "glidepath", "instance": "gate-api-cicd", "mode": "enforce"},
+                      {"type": "g-argo", "instance": "argo-gate", "mode": "flag"}],
+            "observers": [{"provider": "observe-k8s", "source": "observe-k8s"}]}],
+ "sources": [{"source": "hangar-prod", "digest": "9f2c...", "targets": 25, "updated_at": "2026-11-13T09:00:00Z"}],
+ "conflicts": [], "invalid": []}
+```
+
+A gate's `instance` is the name its records carry: the registered provider's name (`provider.name`), or, for a gate that
+registers changes (the clearance-gate check, Glidepath), the verifier principal that registered them. A target's `scope`
+is the coverage scope its observations arrive under (what `GET /v1/coverage?scope=` and `GET /v1/observations/health?scope=`
+take), and its `app` and `env` attribute the deployment gate's records to it.
+
+**`GET /v1/map?from&to`** (RFC 3339, default the last 24 hours, at most 92 days; `group=<g>` narrows to one cluster or
+account, `expand=<g>[,<g>]` adds an edge to each target of those groups, `target=<id>` is the one-target detail):
+
+```json
+{"from": "2026-11-12T12:00:00Z", "to": "2026-11-13T12:00:00Z",
+ "registry": {"sources": [...], "conflicts": [], "targets": 25},
+ "nodes": {
+  "gate_types": [{"id": "gate:g-argo", "type": "g-argo", "instances": 8, "targets": 20,
+                  "mix": {"enforce": 5, "flag": 3, "silent": 0}, "status": "attention",
+                  "decisions": 412, "refused": 9, "exceptions": 2, "holding": 3,
+                  "coverage": {"authorized-and-verified": 380, "out-of-band-detected": 2, "...": 0},
+                  "lanes": {"requested": 120, "tiered": 120, "decided": 118, "applied": 110, "applied_matched": 109,
+                            "observed": 530, "verified": 498}}],
+  "groups": [{"id": "group:hangar-prod", "group": "hangar-prod", "targets": 12, "kinds": {"k8s-namespace": 12},
+              "status": "down", "mix": {"enforce": 20, "flag": 3, "silent": 0}, "no_gate": 0, "holding": 3,
+              "coverage": {"authorized-and-verified": 380, "observed-not-attributed": 4, "unassessed": 0, "...": 0},
+              "verified_pct": 97.1, "observers": {"healthy": 12}}],
+  "targets": [{"id": "gate-api-prod", "source": "hangar-prod", "name": "gate-api", "...": "the declared fields",
+               "status": "attention", "coverage": {"...": 0}, "verified_pct": 97.1,
+               "lanes": {"...": 0}, "holding": 1,
+               "gates": [{"type": "g-argo", "instance": "argo-gate", "mode": "flag", "attributed": true, "silent": false,
+                          "decisions": 31, "refused": 2, "exceptions": 1, "holding": 0, "coverage": {"...": 0}, "lanes": {"...": 0}}],
+               "observers": [{"provider": "observe-k8s", "source": "observe-k8s", "state": "healthy",
+                              "last_ts": "2026-11-13T11:59:30Z", "stale": false, "failed_checks": []}]}],
+  "observers": [{"id": "observer:observe-k8s/observe-k8s", "provider": "observe-k8s", "source": "observe-k8s",
+                 "targets": 12, "states": {"healthy": 12}, "status": "ok"}]},
+ "edges": [{"from": "gate:g-argo", "to": "group:hangar-prod", "kind": "guards", "targets": 12, "volume": 412,
+            "refused": 9, "holding": 3, "status": "attention"},
+           {"from": "observer:observe-k8s/observe-k8s", "to": "group:hangar-prod", "kind": "watches", "targets": 12,
+            "volume": 0, "refused": 0, "holding": 0, "status": "ok"}],
+ "attention": [{"kind": "blind-observer", "severity": "down", "title": "...", "detail": "...", "count": 1,
+                "targets": ["acct-prod"]}],
+ "partial": [{"field": "lanes.observed,lanes.verified", "reason": "..."}],
+ "truncated": false}
+```
+
+`status` is `ok`, `attention` or `down` everywhere (a node, an edge, an attention item; attention items also say `info`).
+An edge's `volume` is its decisions (the line's width), its `status` the worst state on it (the line's colour). The detail
+(`target=`) adds `"target": {"changes": [...], "exceptions": [...], "evidence": [...]}`: the changes moving through the target
+(tier, state, age), its exceptions and its recent deployment records.
+
+How each number is derived (all from existing evidence, in a fixed number of aggregate statements; nothing pages a history into Go):
+
+| Metric | From |
+|---|---|
+| `coverage` mix of a target | the target's `scope`: its `assessment` records in the window by `coverage` (an observation re-assessed counts under each coverage it got), plus `unassessed` (observations no assessment is about). A group counts each of its scopes once. `verified_pct` is authorized-and-verified over the assessed |
+| observer `state` | `observe.Build` over the scope's `observation.health` records at the window's end (the newest record per source, blind once a record is stale, the core's monitoring flip held): the `/v1/observations/health` logic. A declared observer with no record is `blind` (never seen); a target with no `scope` is `unknown` |
+| `decisions`, `refused` | the deployment gate's `deploy.clear`, `deploy.deny` and `deploy.expire`, and each runtime decision (a core record with a `policy` that is not an outcome); refused is `decision: deny` or coverage `attempted-refused` |
+| `exceptions` | `deploy.exception` and `deploy.degraded` |
+| `holding` | `clearance_changes` in state `holding` now (not windowed), by the registrant, app and env |
+| attribution to a gate | a record belongs to a gate instance when its `provider.name` is the instance, or the change it names was registered by it (`registered_by`); to a target when the record's `app` is the target's `app` and its change `env` is the target's `env` |
+| `lanes.requested/tiered/decided/applied` | distinct changes with `deploy.request` (tiered equals requested: the tier is decided at registration), `deploy.clear`/`deny`/`expire`, and `deploy.outcome` (`applied_matched`: its `matched`) |
+| `lanes.observed/verified` | observations of the target's scope, and the ones assessed authorized-and-verified (a gate type sums its targets' scopes, each once) |
+
+Declared and observed are reconciled, never an error: `no-gate` (a target no gate is declared for), `blind-observer` and
+`degraded-observer`, `flag-mode` (a gate type with instances in flag mode), `holding` (changes waiting on a person, by tier),
+`gate-silent` (a declared instance no record of the window names; `mix.silent`) and `undeclared-gate` (a registrant or
+provider whose records no target declares). The last two are whole-registry facts and are left out of a `group=` or `target=` view.
+
+`partial` says what the records cannot yet say, instead of faking it: `lanes.observed,lanes.verified` are counted from the
+target's scope, not joined to each change (a `deploy.outcome` does not yet name the observation that matched it, G-ARGO-3);
+targets that declare no `app` have no decisions, holds or lanes (`targets.attribution`); targets that declare no `scope` have
+no coverage mix or observer health (`targets.coverage`).
+
+Who sees what: observations and health are whole-scope for every reader (O-5, as `/v1/coverage`); gate decisions, holds
+and the detail's changes and evidence are the records the viewer may see (the evidence and change scoping of every other
+read), and the detail's exceptions are every exception (as `/v1/exceptions`, redacted below an auditor).
+
+**Counts for the Map.** `GET /v1/evidence/counts` also groups by `provider` (the registered provider or gate that wrote the
+record) and `boundary`, takes `scope=<scope>` (one observed scope's records, read whole as the observation reads are) and
+`bucket=1m|5m|15m|1h|6h|1d` (needs `since`; `until` defaults to now; at most 1500 buckets): each item is then a bucket
+(`bucket`, its epoch-aligned start) and a key, in time order, at most 10000 items.
+
+**Budget.** The Map is one `GateActivity` statement over the window's gate records (bounded below by the first record
+written at or after `from`, `clearance_evidence_written`), one over the declared scopes' observations (on
+`clearance_evidence_observed`, its predicate repeated word for word), one for their health, and one for the holding changes.
+`TestMapStaysUnderABudgetOnALargeChain` holds `GET /v1/map` under a second on 25 000 records (about 50 ms) and, with
+`CLEARANCE_MAP_PERF=1`, on 250 000 (about 0.5 s).
 
 ### The grant feed and the token (C-1)
 
@@ -326,6 +439,9 @@ per request, and holding changes are few), so it is the same on the in-memory an
 | `CLEARANCE_API_POOL` | 5 | Postgres connections per replica (1 to 50) |
 | `CLEARANCE_BUNDLES`, `CLEARANCE_BUNDLE_SOURCES`, `CLEARANCE_BUNDLE_SOURCE_WAIT`, `CLEARANCE_ENV_*` | none | the policy bundles the core runs ([core.md](core.md#policy-bundles)), for `/v1/policy` and the explainer; loaded as the core loads them: a source that does not answer leaves the bundle degraded (named in `/readyz` `degraded`, still 200) until it answers |
 | `CLEARANCE_ON_BEHALF_OF_HEADER`, `CLEARANCE_V0_PROVIDER` and the rest of the vocabulary | core.md | the header a delegate names a person in, the provider v0-draft rows are projected with ([core.md](core.md#configuration)) |
+| `CLEARANCE_API_ATTEST_KEY` | none | the attestation signing key's **public** half (PEM) or the core's JWKS: verifies static-key attestations |
+| `CLEARANCE_API_ATTEST_TRUST_ROOT`, `CLEARANCE_API_ATTEST_IDENTITY`, `CLEARANCE_API_ATTEST_ISSUER` | none | keyless: a Sigstore `trusted-root.json` (or Fulcio's root and intermediates as PEM, with `CLEARANCE_API_ATTEST_REKOR_KEY`) and the identity and OIDC issuer the certificate must name; the same inputs as `clearance attest verify` |
+| `CLEARANCE_API_ATTEST_REKOR_URL` | none | Rekor's public URL, for "open in Rekor" links (`/v1/attestation-config`). The chart: `api.attest.*`, files in an existing ConfigMap mounted at `/etc/clearance/attest-trust` |
 | `CLEARANCE_CORE_URL` | none | where Clearance's writes go, named in `/v1/contract` as `core` |
 | `CLEARANCE_GATEWAY_URL` | none | where the runtime's writes go, named in `/v1/contract` as `gateway` |
 | `BACKSTAGE_URL`, `BACKSTAGE_TOKEN_FILE` | none, `/var/run/clearance/backstage-token` | a person's groups (memberOf) and the apps they own (Components by `spec.owner`, `backstage.Ownership`) |
@@ -340,8 +456,11 @@ The schema has the primary key on `seq`, `clearance_evidence_receipt`, `clearanc
 installations' records, `((record->>'principal'), seq) WHERE principal LIKE 'app:%'`, behind
 `/v1/github/installations` and the installation filter) and the `clearance_changes` indexes and (C-6)
 `clearance_evidence_exceptions`, a partial index on `seq` whose predicate `GET /v1/exceptions` repeats word for word
-(`TestExceptionsUseTheIndex`); this package adds none
-(the core owns the schema). The stream reads the primary key's range above its cursor; the signed feed is one row
+(`TestExceptionsUseTheIndex`), and, for the change history, `clearance_evidence_change`
+(`((record->'change'->>'id'), seq) WHERE record->>'tool' LIKE 'deploy.%'`, behind `GET /v1/clearances/{id}/records` and
+the `request` reference) and `clearance_attestations_seq` (`record_seq DESC`, behind `GET /v1/attestations`); both are
+in the core's schema (`CREATE INDEX IF NOT EXISTS`), and this package's queries repeat the predicate as written; this
+package adds none of its own (the core owns the schema). The stream reads the primary key's range above its cursor; the signed feed is one row
 of `clearance_feeds` by its primary key. The list is paged by `seq DESC` on the primary key and every filter is
 applied on the way; at the lab's size that is well inside the statement timeout. Before the chain is large, the
 core's schema should gain (a migration, not done here):
@@ -354,6 +473,48 @@ core's schema should gain (a migration, not done here):
 - `clearance_evidence ((record->>'target')) WHERE record->>'tool' = 'provenance.verify'`: verdicts by PR.
 - `clearance_changes ((record->>'updated_at'))`: the changes list's order and cursor (api.py orders by the record's
   `updated_at`, not the indexed column).
+
+### Change history and attestations
+
+Built for the Tower change detail and Attestations boards. All reads; every one is as visible as the change.
+
+- `GET /v1/clearances/{id}/records[?limit&after]`: the change's `deploy.*` records (request, clear, answer, revoke,
+  outcome, attestation, exception, ...) in chain order, found by the record's `change.id`. Each item is `{seq, hash,
+  tool, ts, principal, record}` (the record as `GET /v1/evidence/{seq}` serves it); `next` is the last `seq` when the page
+  is full, pass it as `after`. A person reads them redacted like an exception (secret-bearing `state_change` keys); an
+  auditor as stored.
+- `GET /v1/clearances/{id}` gains `request: {seq, hash}`, the change's first `deploy.request` (the record
+  `POST /v1/clearances` wrote when it registered the change; the `request` the release log carries, [gate.md](gate.md#the-release-record-join-g-argo-6-built)),
+  or `null`.
+- `GET /v1/attestations[?app&env&since&until&limit&after]`: the attestations of the changes you may see, newest first,
+  `since`/`until` bounding when they were signed, cursor `record_seq`. An item: `change_id, app, env, cluster, release_id`
+  (the change's `outcome.release`), `tree_digest, signed_at, digest, backend, key_id, rekor_log_index, rekor_uuid,
+  outcome_seq, record_seq` (the `deploy.attestation` record's seq) and `verification`.
+- `GET /v1/clearances` rows gain `attested` and `attestation` (the reference `GET /v1/clearances/{id}` shows, null for
+  none) on every list but the grant feed.
+- `GET /v1/clearances/counts?by=attestation`: `attested` (a signed attestation is stored), `pending` (the deploy
+  reported an applied outcome and none is stored: the signer is waiting or retrying, or attestation is off) and `none`
+  (no applied outcome). The stat tile "applied, not attested" is `pending`. Same `app`, `env`, `state`, `since` filters.
+- `GET /v1/attestation-config`: `{verifiable, modes, rekor_url, rekor_entry_url, identity, issuer, key_ids,
+  verify_commands}`. Public values only (the keyless identity and issuer, the static keys' ids, Rekor's URL, a
+  `rekor_entry_url` with `{log_index}` to fill); no key material. `verifiable` is false when no trust is configured.
+
+**Server-side verification**, `GET /v1/clearances/{id}/attestation/verify`: a pure read (clearance-api has no write
+path). It runs `attest.Verify`, the code `clearance attest verify` runs, on the stored bundle, with the trust the api
+was started with (`CLEARANCE_API_ATTEST_*`) and the change's cleared digest as the required subject (the tree digest,
+or the plan digest for a terraform change). It then holds the bundle to the change: the envelope's digest is the stored
+one, and the statement is about this change id. The answer is `{verified, cached, checked_at, digest, subject, mode,
+key_id, identity, issuer, rekor: {log_index, integrated_time, verified}, errors}`. A bundle that fails is a 200 with
+`verified: false` and the reason in `errors`; 404 is no such change, no attestation, or no trust configured. What it
+trusts: only the configured keys, trust root, identity and issuer; the database is not trusted (a stored bundle that
+does not verify, or whose digest is not the recorded one, fails). What it does not do is what the CLI does not: it
+checks Rekor's signed entry timestamp, not an inclusion proof. A portal says "verified" **only** when this answers
+`verified: true`; the lists' `verification` is the last such answer (`{verified, checked_at}`, null if never checked).
+
+The answer is remembered per replica, in memory, by change id and envelope digest (at most 5000, the oldest half
+dropped when full), until the replica restarts; `cached: true` says it was not re-run. Verification is offline
+cryptography (no Rekor call), so re-running it is cheap, but the list never re-verifies rows. A replica that has not
+been asked shows `verification: null`.
 
 ### Verifying against api.py
 

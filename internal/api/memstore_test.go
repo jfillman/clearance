@@ -21,6 +21,7 @@ type memStore struct {
 	recs    []Record // in seq order, each with "assurance"
 	changes []store.Change
 	defs    []store.Definition
+	targets []store.TargetSet
 	tokens  []store.Token
 	keys    []store.SigningKey
 	feeds   []store.Feed
@@ -302,10 +303,74 @@ func (m *memStore) Counts(_ context.Context, f EvidenceFilter, v *Viewer, by str
 	var keys []*string
 	for _, r := range m.recs {
 		if m.sees(r, v, owners) && m.matches(r, f) {
-			keys = append(keys, keyOf(r[by]))
+			keys = append(keys, countKey(r, by))
 		}
 	}
 	return group(keys), m.fail
+}
+
+// countKey is the value of a counts `by` in a record (provider is its provider.name).
+func countKey(r Record, by string) *string {
+	if by == "provider" {
+		p, _ := r["provider"].(map[string]any)
+		return keyOf(p["name"])
+	}
+	return keyOf(r[by])
+}
+
+func (m *memStore) CountBuckets(_ context.Context, f EvidenceFilter, v *Viewer, by string, bucket time.Duration) ([]Count, error) {
+	owners := m.owners()
+	type k struct {
+		key    string
+		null   bool
+		bucket int64
+	}
+	n := map[k]int64{}
+	for _, r := range m.recs {
+		if !m.sees(r, v, owners) || !m.matches(r, f) {
+			continue
+		}
+		ts, _ := str(r["ts"])
+		t, err := time.Parse(time.RFC3339Nano, ts)
+		if err != nil {
+			continue
+		}
+		key := countKey(r, by)
+		kk := k{bucket: t.Unix() / int64(bucket/time.Second)}
+		if key == nil {
+			kk.null = true
+		} else {
+			kk.key = *key
+		}
+		n[kk]++
+	}
+	out := []Count{}
+	for kk, c := range n {
+		key := kk.key
+		at := time.Unix(kk.bucket*int64(bucket/time.Second), 0).UTC().Format(time.RFC3339)
+		cnt := Count{Count: c, Bucket: &at}
+		if !kk.null {
+			cnt.Key = &key
+		}
+		out = append(out, cnt)
+	}
+	// bucket asc, count desc, key asc (nulls last), as the SQL orders
+	sort.Slice(out, func(i, j int) bool {
+		if *out[i].Bucket != *out[j].Bucket {
+			return *out[i].Bucket < *out[j].Bucket
+		}
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		if out[i].Key == nil || out[j].Key == nil {
+			return out[j].Key == nil && out[i].Key != nil
+		}
+		return *out[i].Key < *out[j].Key
+	})
+	if len(out) > MaxBucketItems {
+		out = out[:MaxBucketItems]
+	}
+	return out, m.fail
 }
 
 // intField is an integer field of a record's object (0 when absent or not a number), as PG's sumOf reads it.
@@ -561,6 +626,23 @@ func (m *memStore) ChangeCounts(_ context.Context, f ChangeFilter, v *Viewer, by
 			keys = append(keys, keyOf(json.Number(strconv.FormatInt(cv.Tier, 10))))
 		case "cleared_by":
 			keys = append(keys, cv.ClearedBy)
+		case "attestation":
+			state := "none"
+			var oc struct {
+				Outcome *struct {
+					Applied bool `json:"applied"`
+				} `json:"outcome"`
+			}
+			_ = json.Unmarshal(c.Record, &oc)
+			for _, a := range m.atts {
+				if a.ChangeID == c.ID {
+					state = "attested"
+				}
+			}
+			if state == "none" && oc.Outcome != nil && oc.Outcome.Applied {
+				state = "pending"
+			}
+			keys = append(keys, &state)
 		}
 	}
 	out := group(keys)
@@ -712,6 +794,62 @@ func (m *memStore) Installations(context.Context) ([]Installation, error) {
 		inst := byID[p]
 		sort.Strings(inst.Repos)
 		out = append(out, *inst)
+	}
+	return out, m.fail
+}
+
+func (m *memStore) ChangeRecords(_ context.Context, id, tool string, limit int, after *int64) ([]Record, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := []Record{}
+	for _, r := range m.recs {
+		seq, _ := seqOf(r)
+		t, _ := str(r["tool"])
+		ch, _ := r["change"].(map[string]any)
+		if cid, _ := str(ch["id"]); cid != id || !strings.HasPrefix(t, "deploy.") || (tool != "" && t != tool) ||
+			(after != nil && seq <= *after) || len(out) >= limit {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out, m.fail
+}
+
+func (m *memStore) Attestations(_ context.Context, f AttestationFilter, v *Viewer, limit int, after *int64) ([]AttestationRow, error) {
+	var out []AttestationRow
+	for _, a := range m.atts {
+		for _, c := range m.changes {
+			if c.ID != a.ChangeID || !changeVisible(c.Record, v) || (f.App != "" && c.App != f.App) || (f.Env != "" && c.Env != f.Env) {
+				continue
+			}
+			if (!f.Since.IsZero() && a.CreatedAt.Before(f.Since)) || (!f.Until.IsZero() && !a.CreatedAt.Before(f.Until)) ||
+				(after != nil && a.RecordSeq >= *after) {
+				continue
+			}
+			a := a
+			a.Bundle = nil
+			out = append(out, AttestationRow{Attestation: a, Change: c.Record})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Attestation.RecordSeq > out[j].Attestation.RecordSeq })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	if out == nil {
+		out = []AttestationRow{}
+	}
+	return out, m.fail
+}
+
+func (m *memStore) AttestationsOf(_ context.Context, ids []string) (map[string]store.Attestation, error) {
+	out := map[string]store.Attestation{}
+	for _, a := range m.atts {
+		for _, id := range ids {
+			if a.ChangeID == id {
+				a.Bundle = nil
+				out[id] = a
+			}
+		}
 	}
 	return out, m.fail
 }

@@ -32,6 +32,7 @@ type Store struct {
 	head    evidence.Checkpoint
 	changes map[string]store.Change
 	defs    []store.Definition
+	targets map[string]store.TargetSet
 	tokens  map[string]store.Token
 	keys    map[string]store.SigningKey
 	feeds   map[string]store.Feed
@@ -51,7 +52,7 @@ var ErrTxDone = errors.New("memory: transaction is finished")
 
 // New returns an empty store.
 func New() *Store {
-	return &Store{head: evidence.Start, changes: map[string]store.Change{}, tokens: map[string]store.Token{},
+	return &Store{head: evidence.Start, changes: map[string]store.Change{}, targets: map[string]store.TargetSet{}, tokens: map[string]store.Token{},
 		keys: map[string]store.SigningKey{}, feeds: map[string]store.Feed{}, atts: map[string]store.Attestation{}, glass: map[string]store.Breakglass{}}
 }
 
@@ -114,6 +115,9 @@ func (s *Store) Atomic(ctx context.Context, fn func(tx store.Tx) error) (err err
 	if t.defs != nil {
 		s.defs = *t.defs
 	}
+	for src, ts := range t.targets {
+		s.targets[src] = ts
+	}
 	for id, tk := range t.tokens {
 		s.tokens[id] = tk
 	}
@@ -141,6 +145,7 @@ type tx struct {
 	records [][]byte
 	changes map[string]store.Change
 	defs    *[]store.Definition
+	targets map[string]store.TargetSet
 	tokens  map[string]store.Token
 	feeds   map[string]store.Feed
 	atts    map[string]store.Attestation
@@ -209,6 +214,23 @@ func (t *tx) ReplaceDefinitions(ctx context.Context, defs []store.Definition) er
 		out = append(out, d)
 	}
 	t.defs = &out
+	return nil
+}
+
+func (t *tx) PutTargets(ctx context.Context, ts store.TargetSet) error {
+	if err := t.lock(); err != nil {
+		return err
+	}
+	defer t.mu.Unlock()
+	if !json.Valid(ts.Doc) {
+		return errors.New("memory: targets doc is not JSON")
+	}
+	ts.Doc = bytes.Clone(ts.Doc)
+	ts.UpdatedAt = time.Now().UTC()
+	if t.targets == nil {
+		t.targets = map[string]store.TargetSet{}
+	}
+	t.targets[ts.Source] = ts
 	return nil
 }
 
@@ -314,6 +336,7 @@ type view struct {
 	records [][]byte
 	changes map[string]store.Change
 	defs    []store.Definition
+	targets map[string]store.TargetSet
 	tokens  map[string]store.Token
 	keys    map[string]store.SigningKey
 	feeds   map[string]store.Feed
@@ -344,7 +367,11 @@ func (s *Store) view() (view, error) {
 	for k, v := range s.atts {
 		atts[k] = v
 	}
-	return view{ledger: s.ledger, head: s.head, records: s.records[:len(s.records):len(s.records)], changes: maps(s.changes), defs: s.defs,
+	targets := make(map[string]store.TargetSet, len(s.targets))
+	for k, v := range s.targets {
+		targets[k] = v
+	}
+	return view{ledger: s.ledger, targets: targets, head: s.head, records: s.records[:len(s.records):len(s.records)], changes: maps(s.changes), defs: s.defs,
 		tokens: tokens, keys: s.keys, feeds: feeds, atts: atts, glass: glass}, nil
 }
 
@@ -372,6 +399,9 @@ func (t *tx) view() (view, error) {
 	}
 	if t.defs != nil {
 		v.defs = *t.defs
+	}
+	for src, ts := range t.targets {
+		v.targets[src] = ts
 	}
 	for id, tk := range t.tokens {
 		v.tokens[id] = tk
@@ -695,6 +725,33 @@ func (v view) changesWhere(keep func(store.Change) bool) []store.Change {
 		}
 		return out[i].ID < out[j].ID
 	})
+	return out
+}
+
+func (s *Store) Targets(ctx context.Context) ([]store.TargetSet, error) {
+	v, err := s.view()
+	if err != nil {
+		return nil, err
+	}
+	return v.targetSets(), nil
+}
+
+func (t *tx) Targets(ctx context.Context) ([]store.TargetSet, error) {
+	v, err := t.view()
+	if err != nil {
+		return nil, err
+	}
+	return v.targetSets(), nil
+}
+
+// targetSets orders by source, bytewise.
+func (v view) targetSets() []store.TargetSet {
+	out := make([]store.TargetSet, 0, len(v.targets))
+	for _, ts := range v.targets {
+		ts.Doc = bytes.Clone(ts.Doc)
+		out = append(out, ts)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Source < out[j].Source })
 	return out
 }
 

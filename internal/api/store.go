@@ -54,6 +54,8 @@ type ChangeFilter struct {
 type Count struct {
 	Key   *string `json:"key"`
 	Count int64   `json:"count"`
+	// Bucket is the start of the time bucket (RFC 3339) the group is of (a counts with `bucket` only).
+	Bucket *string `json:"bucket,omitempty"`
 	// Cost is the group's cost (counts by=cost only); count is then its model calls.
 	Cost *CostSum `json:"cost,omitempty"`
 }
@@ -110,6 +112,9 @@ type Store interface {
 	// Counts is the records the viewer may see matching f, grouped by the record field by (one of CountBy), the
 	// largest first, at most MaxLimit groups.
 	Counts(ctx context.Context, f EvidenceFilter, v *Viewer, by string) ([]Count, error)
+	// CountBuckets is Counts with the records cut into time buckets of the given width (aligned to the epoch): a group
+	// per bucket and key, in bucket order, at most MaxBucketItems.
+	CountBuckets(ctx context.Context, f EvidenceFilter, v *Viewer, by string, bucket time.Duration) ([]Count, error)
 	// Costs is the cost of the records the viewer may see matching f (f.Outcomes is ignored: the model.call outcome
 	// records that carry usage and the run.finish records that carry cost), grouped by the record field of per (one
 	// of CostPer), the most charged first, at most MaxLimit groups, and the sums over every matching group (not the
@@ -136,6 +141,17 @@ type Store interface {
 	Attestation(ctx context.Context, changeID string) (*store.Attestation, error)
 	// SigningKeys are the token verification keys in use or retired after since (clearance_signing_keys).
 	SigningKeys(ctx context.Context, since time.Time) ([]store.SigningKey, error)
+	// Targets are the declared target sets, one per source (clearance_targets).
+	Targets(ctx context.Context) ([]store.TargetSet, error)
+	// GateActivity groups the gate records (deploy.* and the core's runtime decisions) of [from, to) the viewer may
+	// see (the Map); cut says there were more than MaxGateRows groups.
+	GateActivity(ctx context.Context, v *Viewer, from, to string) (rows []GateRow, cut bool, err error)
+	// ScopeCoverage groups the observations and assessments of the scopes in [from, to).
+	ScopeCoverage(ctx context.Context, v *Viewer, scopes []string, from, to string) ([]ScopeRow, error)
+	// HealthBeforeScopes is HealthBefore for many scopes at once.
+	HealthBeforeScopes(ctx context.Context, v *Viewer, scopes []string, before string) ([]Record, error)
+	// Holding groups the changes holding now that the viewer may see.
+	Holding(ctx context.Context, v *Viewer) ([]HoldRow, error)
 	// Ping answers when the database does.
 	Ping(ctx context.Context) error
 
@@ -150,6 +166,29 @@ type Store interface {
 	Feed(ctx context.Context, cluster string) (*store.Feed, error)
 	// Installations are the GitHub App installations the records name (principal app:<id>), at most MaxLimit.
 	Installations(ctx context.Context) ([]Installation, error)
+
+	// ChangeRecords is the gate's deploy.* records that name change id (record.change.id), in chain order (seq
+	// ascending), with seq above after (when not nil), at most limit. tool, when not "", keeps one tool. Unscoped: the
+	// caller checks the change's visibility.
+	ChangeRecords(ctx context.Context, id, tool string, limit int, after *int64) ([]Record, error)
+	// Attestations is up to limit attestations of the changes the viewer may see matching f, newest first (by the
+	// deploy.attestation record's seq), below seq after (when not nil), each with its change as stored.
+	Attestations(ctx context.Context, f AttestationFilter, v *Viewer, limit int, after *int64) ([]AttestationRow, error)
+	// AttestationsOf is the attestations (without their bundles) of the changes ids, by change id.
+	AttestationsOf(ctx context.Context, ids []string) (map[string]store.Attestation, error)
+}
+
+// AttestationFilter is the attestation list's filters; "" and the zero time are unset. Since and Until bound the
+// time the attestation was signed (since <= signed < until).
+type AttestationFilter struct {
+	App, Env     string
+	Since, Until time.Time
+}
+
+// AttestationRow is one attestation (its Bundle left empty) with the change it attests as stored.
+type AttestationRow struct {
+	Attestation store.Attestation
+	Change      json.RawMessage
 }
 
 // PRFilter is the receipts' and verdicts' filters.

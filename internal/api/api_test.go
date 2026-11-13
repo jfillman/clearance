@@ -15,6 +15,7 @@ import (
 	"github.com/jfillman/clearance/internal/vocab/vocabtest"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -142,7 +143,13 @@ func seed(t *testing.T, st store.Store, events []store.Event) {
 	t.Helper()
 	err := st.Atomic(bg, func(tx store.Tx) error {
 		for _, e := range events {
-			if _, err := tx.Append(bg, e, evidence.Core("test")); err != nil {
+			w := evidence.Core("test")
+			if name, ok := e["_provider"].(string); ok { // a registered provider's own record
+				e = store.Event(maps.Clone(e))
+				delete(e, "_provider")
+				w = evidence.Writer{Provider: evidence.Provider{Name: name, Version: "1"}, Verified: evidence.ProviderVerified}
+			}
+			if _, err := tx.Append(bg, e, w); err != nil {
 				return err
 			}
 		}
@@ -214,6 +221,7 @@ type world struct {
 	events  []store.Event
 	changes []store.Change
 	defs    []store.Definition
+	targets []store.TargetSet
 	tokens  []store.Token
 	keys    []store.SigningKey
 	feeds   []store.Feed
@@ -243,6 +251,7 @@ var backends = []backend{
 			m.recs = append(m.recs, c)
 		}
 		m.changes, m.defs, m.tokens, m.keys, m.feeds, m.atts = w.changes, w.defs, w.tokens, w.keys, w.feeds, w.atts
+		m.targets = w.targets
 		appenders.Store(Store(m), appender(func(t *testing.T, evs []store.Event, cs []store.Change) {
 			seed(t, st, evs)
 			n := int64(len(m.recs))
@@ -298,6 +307,11 @@ var backends = []backend{
 			}
 			for _, a := range w.atts {
 				if err := tx.PutAttestation(bg, a); err != nil {
+					return err
+				}
+			}
+			for _, ts := range w.targets {
+				if err := tx.PutTargets(bg, ts); err != nil {
 					return err
 				}
 			}

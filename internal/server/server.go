@@ -112,6 +112,9 @@ type Server struct {
 	// eventMu serializes the records that name the provider's own event (source.event_id), so the has-it-already
 	// check and the write it guards are one step (O-1: POST /v1/records de-duplicates).
 	eventMu sync.Mutex
+
+	// targetsMu serializes target publishes: the held-digest check and the write it guards are one step.
+	targetsMu sync.Mutex
 }
 
 // New builds the server and its outcome index (one pass over the chain).

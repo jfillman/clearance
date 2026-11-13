@@ -1,6 +1,46 @@
 {
   "components": {
     "schemas": {
+      "Attention": {
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "gate_type": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "targets": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "count",
+          "detail",
+          "kind",
+          "severity",
+          "targets",
+          "title"
+        ],
+        "type": "object"
+      },
       "AttestBundle": {
         "properties": {
           "dsseEnvelope": {
@@ -204,6 +244,151 @@
         ],
         "type": "object"
       },
+      "AttestationConfig": {
+        "properties": {
+          "identity": {
+            "type": "string"
+          },
+          "issuer": {
+            "type": "string"
+          },
+          "key_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "modes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "rekor_entry_url": {
+            "type": "string"
+          },
+          "rekor_url": {
+            "type": "string"
+          },
+          "verifiable": {
+            "type": "boolean"
+          },
+          "verify_commands": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "key_ids",
+          "modes",
+          "rekor_entry_url",
+          "rekor_url",
+          "verifiable",
+          "verify_commands"
+        ],
+        "type": "object"
+      },
+      "AttestationItem": {
+        "properties": {
+          "app": {
+            "type": "string"
+          },
+          "backend": {
+            "type": "string"
+          },
+          "change_id": {
+            "type": "string"
+          },
+          "cluster": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "env": {
+            "type": "string"
+          },
+          "key_id": {
+            "type": "string"
+          },
+          "outcome_seq": {
+            "type": "integer"
+          },
+          "record_seq": {
+            "type": "integer"
+          },
+          "rekor_log_index": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "rekor_uuid": {
+            "type": "string"
+          },
+          "release_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "signed_at": {
+            "type": "string"
+          },
+          "tree_digest": {
+            "type": "string"
+          },
+          "verification": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/VerificationBrief"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "app",
+          "backend",
+          "change_id",
+          "cluster",
+          "digest",
+          "env",
+          "outcome_seq",
+          "record_seq",
+          "rekor_log_index",
+          "release_id",
+          "signed_at",
+          "tree_digest",
+          "verification"
+        ],
+        "type": "object"
+      },
+      "AttestationPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AttestationItem"
+            },
+            "type": "array"
+          },
+          "next": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next"
+        ],
+        "type": "object"
+      },
       "AttestationView": {
         "properties": {
           "backend": {
@@ -232,6 +417,16 @@
           },
           "rekor_uuid": {
             "type": "string"
+          },
+          "verification": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/VerificationBrief"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -240,7 +435,63 @@
           "digest",
           "outcome_seq",
           "record_seq",
-          "rekor_log_index"
+          "rekor_log_index",
+          "verification"
+        ],
+        "type": "object"
+      },
+      "ChangeRecord": {
+        "properties": {
+          "hash": {
+            "type": "string"
+          },
+          "principal": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "record": {
+            "$ref": "#/components/schemas/EvidenceRecord"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "ts": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "hash",
+          "principal",
+          "record",
+          "seq",
+          "tool",
+          "ts"
+        ],
+        "type": "object"
+      },
+      "ChangeRecordPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ChangeRecord"
+            },
+            "type": "array"
+          },
+          "next": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next"
         ],
         "type": "object"
       },
@@ -447,6 +698,16 @@
               "null"
             ]
           },
+          "request": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RecordRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "requirement": {
             "oneOf": [
               {
@@ -539,6 +800,7 @@
           "registered_by",
           "repo",
           "repo_policy_digest",
+          "request",
           "requirement",
           "state",
           "subject",
@@ -593,6 +855,12 @@
       },
       "Count": {
         "properties": {
+          "bucket": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "cost": {
             "oneOf": [
               {
@@ -621,6 +889,9 @@
       },
       "Counts": {
         "properties": {
+          "bucket": {
+            "type": "string"
+          },
           "by": {
             "type": "string"
           },
@@ -707,6 +978,62 @@
           "matched",
           "name",
           "order"
+        ],
+        "type": "object"
+      },
+      "DeclaredTarget": {
+        "properties": {
+          "app": {
+            "type": "string"
+          },
+          "env": {
+            "type": "string"
+          },
+          "gates": {
+            "items": {
+              "$ref": "#/components/schemas/TargetsGate"
+            },
+            "type": "array"
+          },
+          "group": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "observers": {
+            "items": {
+              "$ref": "#/components/schemas/TargetsObserver"
+            },
+            "type": "array"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "registry": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "gates",
+          "group",
+          "id",
+          "kind",
+          "name",
+          "observers",
+          "source"
         ],
         "type": "object"
       },
@@ -1627,6 +1954,60 @@
         ],
         "type": "object"
       },
+      "GateRef": {
+        "properties": {
+          "attributed": {
+            "type": "boolean"
+          },
+          "coverage": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object"
+          },
+          "decisions": {
+            "type": "integer"
+          },
+          "exceptions": {
+            "type": "integer"
+          },
+          "holding": {
+            "type": "integer"
+          },
+          "instance": {
+            "type": "string"
+          },
+          "lanes": {
+            "$ref": "#/components/schemas/Lanes"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "refused": {
+            "type": "integer"
+          },
+          "silent": {
+            "type": "boolean"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "attributed",
+          "coverage",
+          "decisions",
+          "exceptions",
+          "holding",
+          "instance",
+          "lanes",
+          "mode",
+          "refused",
+          "silent",
+          "type"
+        ],
+        "type": "object"
+      },
       "GateRequirement": {
         "properties": {
           "outside": {
@@ -1793,6 +2174,64 @@
         ],
         "type": "object"
       },
+      "GateTypeNode": {
+        "properties": {
+          "coverage": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object"
+          },
+          "decisions": {
+            "type": "integer"
+          },
+          "exceptions": {
+            "type": "integer"
+          },
+          "holding": {
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "instances": {
+            "type": "integer"
+          },
+          "lanes": {
+            "$ref": "#/components/schemas/Lanes"
+          },
+          "mix": {
+            "$ref": "#/components/schemas/Mix"
+          },
+          "refused": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "targets": {
+            "type": "integer"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "coverage",
+          "decisions",
+          "exceptions",
+          "holding",
+          "id",
+          "instances",
+          "lanes",
+          "mix",
+          "refused",
+          "status",
+          "targets",
+          "type"
+        ],
+        "type": "object"
+      },
       "GateVersions": {
         "properties": {
           "providers": {
@@ -1865,6 +2304,69 @@
           "key_id",
           "seq",
           "tokens"
+        ],
+        "type": "object"
+      },
+      "GroupNode": {
+        "properties": {
+          "coverage": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object"
+          },
+          "group": {
+            "type": "string"
+          },
+          "holding": {
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kinds": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object"
+          },
+          "mix": {
+            "$ref": "#/components/schemas/Mix"
+          },
+          "no_gate": {
+            "type": "integer"
+          },
+          "observers": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object"
+          },
+          "status": {
+            "type": "string"
+          },
+          "targets": {
+            "type": "integer"
+          },
+          "verified_pct": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "coverage",
+          "group",
+          "holding",
+          "id",
+          "kinds",
+          "mix",
+          "no_gate",
+          "observers",
+          "status",
+          "targets",
+          "verified_pct"
         ],
         "type": "object"
       },
@@ -1945,6 +2447,41 @@
         ],
         "type": "object"
       },
+      "Lanes": {
+        "properties": {
+          "applied": {
+            "type": "integer"
+          },
+          "applied_matched": {
+            "type": "integer"
+          },
+          "decided": {
+            "type": "integer"
+          },
+          "observed": {
+            "type": "integer"
+          },
+          "requested": {
+            "type": "integer"
+          },
+          "tiered": {
+            "type": "integer"
+          },
+          "verified": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "applied",
+          "applied_matched",
+          "decided",
+          "observed",
+          "requested",
+          "tiered",
+          "verified"
+        ],
+        "type": "object"
+      },
       "ListedChange": {
         "properties": {
           "admission": {
@@ -1971,6 +2508,22 @@
               "$ref": "#/components/schemas/GateApproval"
             },
             "type": "array"
+          },
+          "attestation": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AttestationView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "attested": {
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "base": {
             "type": "string"
@@ -2238,6 +2791,223 @@
           "tier",
           "tree_digest",
           "updated_at"
+        ],
+        "type": "object"
+      },
+      "MapChange": {
+        "properties": {
+          "age_seconds": {
+            "type": "integer"
+          },
+          "cleared_by": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "pr": {
+            "type": "integer"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "tier": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "age_seconds",
+          "id",
+          "pr",
+          "repo",
+          "state",
+          "tier",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "MapEdge": {
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "holding": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "refused": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "targets": {
+            "type": "integer"
+          },
+          "to": {
+            "type": "string"
+          },
+          "volume": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "from",
+          "holding",
+          "kind",
+          "refused",
+          "status",
+          "targets",
+          "to",
+          "volume"
+        ],
+        "type": "object"
+      },
+      "MapNodes": {
+        "properties": {
+          "gate_types": {
+            "items": {
+              "$ref": "#/components/schemas/GateTypeNode"
+            },
+            "type": "array"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/GroupNode"
+            },
+            "type": "array"
+          },
+          "observers": {
+            "items": {
+              "$ref": "#/components/schemas/ObserverNode"
+            },
+            "type": "array"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/TargetNode"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "gate_types",
+          "groups",
+          "observers",
+          "targets"
+        ],
+        "type": "object"
+      },
+      "MapRegistry": {
+        "properties": {
+          "conflicts": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/TargetSource"
+            },
+            "type": "array"
+          },
+          "targets": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "conflicts",
+          "sources",
+          "targets"
+        ],
+        "type": "object"
+      },
+      "MapResponse": {
+        "properties": {
+          "attention": {
+            "items": {
+              "$ref": "#/components/schemas/Attention"
+            },
+            "type": "array"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/MapEdge"
+            },
+            "type": "array"
+          },
+          "from": {
+            "type": "string"
+          },
+          "nodes": {
+            "$ref": "#/components/schemas/MapNodes"
+          },
+          "partial": {
+            "items": {
+              "$ref": "#/components/schemas/Partial"
+            },
+            "type": "array"
+          },
+          "registry": {
+            "$ref": "#/components/schemas/MapRegistry"
+          },
+          "target": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TargetDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "to": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "attention",
+          "edges",
+          "from",
+          "nodes",
+          "partial",
+          "registry",
+          "to",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "Mix": {
+        "properties": {
+          "enforce": {
+            "type": "integer"
+          },
+          "flag": {
+            "type": "integer"
+          },
+          "silent": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "enforce",
+          "flag",
+          "silent"
         ],
         "type": "object"
       },
@@ -2614,6 +3384,92 @@
         ],
         "type": "object"
       },
+      "ObserverNode": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "states": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object"
+          },
+          "status": {
+            "type": "string"
+          },
+          "targets": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "provider",
+          "source",
+          "states",
+          "status",
+          "targets"
+        ],
+        "type": "object"
+      },
+      "ObserverRef": {
+        "properties": {
+          "failed_checks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "last_ts": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "failed_checks",
+          "last_ts",
+          "provider",
+          "source",
+          "stale",
+          "state"
+        ],
+        "type": "object"
+      },
+      "Partial": {
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "field",
+          "reason"
+        ],
+        "type": "object"
+      },
       "PolicyDoc": {
         "properties": {
           "packs": {
@@ -2733,6 +3589,46 @@
         ],
         "type": "object"
       },
+      "RecordRef": {
+        "properties": {
+          "hash": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "hash",
+          "seq"
+        ],
+        "type": "object"
+      },
+      "RekorVerdict": {
+        "properties": {
+          "integrated_time": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "log_index": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "verified": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "integrated_time",
+          "log_index",
+          "verified"
+        ],
+        "type": "object"
+      },
       "ScopeStatements": {
         "properties": {
           "from": {
@@ -2779,6 +3675,208 @@
           "seq",
           "tool",
           "ts"
+        ],
+        "type": "object"
+      },
+      "TargetDetail": {
+        "properties": {
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/MapChange"
+            },
+            "type": "array"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceRecord"
+            },
+            "type": "array"
+          },
+          "exceptions": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceRecord"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "changes",
+          "evidence",
+          "exceptions"
+        ],
+        "type": "object"
+      },
+      "TargetList": {
+        "properties": {
+          "conflicts": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "invalid": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DeclaredTarget"
+            },
+            "type": "array"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/TargetSource"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "conflicts",
+          "invalid",
+          "items",
+          "sources"
+        ],
+        "type": "object"
+      },
+      "TargetNode": {
+        "properties": {
+          "app": {
+            "type": "string"
+          },
+          "coverage": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object"
+          },
+          "env": {
+            "type": "string"
+          },
+          "gates": {
+            "items": {
+              "$ref": "#/components/schemas/GateRef"
+            },
+            "type": "array"
+          },
+          "group": {
+            "type": "string"
+          },
+          "holding": {
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "lanes": {
+            "$ref": "#/components/schemas/Lanes"
+          },
+          "name": {
+            "type": "string"
+          },
+          "observers": {
+            "items": {
+              "$ref": "#/components/schemas/ObserverRef"
+            },
+            "type": "array"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "registry": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "verified_pct": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "coverage",
+          "gates",
+          "group",
+          "holding",
+          "id",
+          "kind",
+          "lanes",
+          "name",
+          "observers",
+          "source",
+          "status",
+          "verified_pct"
+        ],
+        "type": "object"
+      },
+      "TargetSource": {
+        "properties": {
+          "digest": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "targets": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "digest",
+          "source",
+          "targets",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "TargetsGate": {
+        "properties": {
+          "instance": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "instance",
+          "mode",
+          "type"
+        ],
+        "type": "object"
+      },
+      "TargetsObserver": {
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "source"
         ],
         "type": "object"
       },
@@ -2868,6 +3966,21 @@
         ],
         "type": "object"
       },
+      "VerificationBrief": {
+        "properties": {
+          "checked_at": {
+            "type": "string"
+          },
+          "verified": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "checked_at",
+          "verified"
+        ],
+        "type": "object"
+      },
       "Verified": {
         "properties": {
           "bad_seq": {
@@ -2891,6 +4004,56 @@
           "count",
           "head",
           "ok"
+        ],
+        "type": "object"
+      },
+      "VerifyAnswer": {
+        "properties": {
+          "cached": {
+            "type": "boolean"
+          },
+          "checked_at": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "identity": {
+            "type": "string"
+          },
+          "issuer": {
+            "type": "string"
+          },
+          "key_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "rekor": {
+            "$ref": "#/components/schemas/RekorVerdict"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "verified": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "cached",
+          "checked_at",
+          "digest",
+          "errors",
+          "rekor",
+          "subject",
+          "verified"
         ],
         "type": "object"
       },
@@ -2985,6 +4148,172 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/v1/attestation-config": {
+      "get": {
+        "operationId": "getAttestationConfig",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttestationConfig"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The non-secret attestation configuration a portal needs: whether this api can verify (verifiable), the backends, Rekor's public URL and the link to an entry, the keyless identity and issuer, the static key ids and the offline verify command. Public keys only",
+        "x-clearance-roles": [
+          "person",
+          "delegate",
+          "auditor"
+        ]
+      }
+    },
+    "/v1/attestations": {
+      "get": {
+        "operationId": "listAttestations",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "app",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "env",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttestationPage"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The signed change attestations, newest first (the cursor is record_seq, the deploy.attestation record's seq): each with its change (app, env, release, tree digest), when it was signed, the envelope digest, backend, key id, Rekor log index and uuid, the deploy.outcome it attests and this replica's last verification. since and until bound the time signed. A person sees the attestations of the changes they may see. For the changes applied and not yet attested, GET /v1/clearances/counts?by=attestation (pending)",
+        "x-clearance-roles": [
+          "person",
+          "delegate",
+          "auditor"
+        ]
+      }
+    },
     "/v1/clearance-policy": {
       "get": {
         "operationId": "getClearancePolicy",
@@ -3322,7 +4651,7 @@
             "bearer": []
           }
         ],
-        "summary": "Changes counted by state, tier, app, env or cleared_by (the C1 stats: holding, cleared by policy and by people, denied)",
+        "summary": "Changes counted by state, tier, app, env, cleared_by or attestation (the C1 stats: holding, cleared by policy and by people, denied). by=attestation: attested (a signed attestation is stored), pending (the deploy reported an applied outcome and none is stored yet: the signer is waiting or retrying) and none (no applied outcome)",
         "x-clearance-roles": [
           "person",
           "delegate",
@@ -3480,6 +4809,190 @@
           }
         ],
         "summary": "The change's signed attestation (C-2) as a Sigstore bundle: the DSSE envelope of an in-toto statement (predicate https://clearance.hangarplatform.dev/change-attestation/v1) and the certificate and Rekor entry that verify it. `clearance attest verify` checks it offline. 404 until a deploy reports an applied outcome",
+        "x-clearance-roles": [
+          "person",
+          "delegate",
+          "auditor",
+          "feed"
+        ]
+      }
+    },
+    "/v1/clearances/{id}/attestation/verify": {
+      "get": {
+        "operationId": "verifyClearanceAttestation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyAnswer"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The stored attestation verified server-side exactly as `clearance attest verify` does: its signature against the configured trust (a static key, or a keyless trust root with the core's identity and issuer), the Rekor entry, and that the statement names the change's cleared digest (tree, or terraform plan) and this change. {verified, checked_at, subject, key_id, rekor{log_index, integrated_time, verified}, errors}. Answers 200 with verified false and the reasons for a bundle that fails; 404 when the change has no attestation or this deployment has no trust configured. The answer is remembered per attestation digest until the replica restarts (`cached`); the lists show it as `verification`",
+        "x-clearance-roles": [
+          "person",
+          "delegate",
+          "auditor",
+          "feed"
+        ]
+      }
+    },
+    "/v1/clearances/{id}/records": {
+      "get": {
+        "operationId": "listChangeRecords",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeRecordPage"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "One change's history: its deploy.* records (request, clear, answer, outcome, attestation, exception, ...) in chain order, each with its seq, hash, tool, ts, principal and the record. The cursor is seq. Seen by whoever may see the change; secret-bearing keys in a record's state_change are redacted for all but an auditor",
         "x-clearance-roles": [
           "person",
           "delegate",
@@ -3986,6 +5499,22 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "bucket",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -4045,7 +5574,7 @@
             "bearer": []
           }
         ],
-        "summary": "Records you may see, counted by rule, tool, agent, app, decision or coverage (`by`), with the same filters as the list. outcomes=exclude (default) counts each decision once; include or only count the outcome records too. by=cost sums what runs cost instead, per task (default: the task tree), session (one run), agent or principal (`per`): the model-call outcomes' usage (charged_tokens is what the model proxy charged the session budgets) and the run.finish records' runs and wall seconds; each item's count is its model calls",
+        "summary": "Records you may see, counted by rule, tool, agent, app, decision, coverage, provider (the registered provider or gate that wrote it) or boundary (`by`), with the same filters as the list, and scope=<scope> for one observed scope's records. bucket=1m|5m|15m|1h|6h|1d cuts the window (since is required, until defaults to now, at most 1500 buckets) into epoch-aligned time buckets: each item is then a bucket (its start) and a key, in time order, at most 10000. outcomes=exclude (default) counts each decision once; include or only count the outcome records too. by=cost sums what runs cost instead, per task (default: the task tree), session (one run), agent or principal (`per`): the model-call outcomes' usage (charged_tokens is what the model proxy charged the session budgets) and the run.finish records' runs and wall seconds; each item's count is its model calls",
         "x-clearance-roles": [
           "person",
           "delegate",
@@ -4498,6 +6027,127 @@
         "summary": "The clearance token verification keys, a JWKS (EC P-256, ES256, kid = the RFC 7638 thumbprint): the key the core signs with and keys retired within the last 24 hours. Public",
         "x-clearance-roles": [
           "any"
+        ]
+      }
+    },
+    "/v1/map": {
+      "get": {
+        "operationId": "getMap",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "group",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expand",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MapResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The coverage map in one read (from and to, RFC 3339; default the last 24 hours). The declared registry joined with the records, computed in a fixed number of aggregate queries: nodes (gate types with their instances, mode mix and what they decided; target groups and their targets with coverage mix, observer health and lanes; observers), edges (a gate type or observer to a group, or, with expand=<group>[,<group>], to each of its targets: volume is decisions, status the worst state), the needs-attention list (targets with no gate, blind or degraded observers, gates in flag mode, changes holding, declared gates that decided nothing and decisions from gates nobody declared) and `partial`: what the records cannot yet say. target=<id> is the one-target detail (also the changes moving through it, its exceptions and recent evidence); group=<g> narrows to one cluster or account. Observation facts are whole-scope for every reader (O-5); gate decisions, exceptions and evidence are the records the viewer may see",
+        "x-clearance-roles": [
+          "person",
+          "delegate",
+          "auditor",
+          "observer"
         ]
       }
     },
@@ -5182,6 +6832,117 @@
           "feed"
         ],
         "x-clearance-stream": true
+      }
+    },
+    "/v1/targets": {
+      "get": {
+        "operationId": "listTargets",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "source",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "group",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "env",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "app",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TargetList"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The declared target registry: what each publishing source (a cluster's gitops render, an account's bootstrap) declares should be protected, the union of every source's set (PUT /v1/targets/{source} on the core). A target has an id, name, kind (k8s-namespace, k8s-cluster, aws-account, github-environment, other), group (the cluster or account), env, app, owner, registry tier (a name), the coverage scope its observations arrive under, its gates (type, instance, mode enforce or flag) and its observers (provider, source); sources lists each set's digest (the one its targets.load record carries). A declaration, not evidence: GET /v1/map reconciles it with the records",
+        "x-clearance-roles": [
+          "person",
+          "delegate",
+          "auditor",
+          "observer"
+        ]
       }
     },
     "/v1/whoami": {

@@ -25,6 +25,41 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 - api: `GET /v1/whoami`, the caller's principal, kind, roles held, groups, owned apps, admin or not (`CLEARANCE_ADMINS`)
   and the token's issuer and expiry; and `awaiting=me` on `GET /v1/clearances`, the holding changes the caller may clear
   now, decided by the gate's own `gate.RoleFor` so the api re-implements no policy.
+- api: `GET /v1/clearances/{id}/records`, one change's `deploy.*` records in chain order (`seq`, `hash`, `tool`, `ts`,
+  `principal`, the record), paged by `seq` and visible as the change is; and `request: {seq, hash}` (the change's first
+  `deploy.request`) on `GET /v1/clearances/{id}`. Backed by the new partial index `clearance_evidence_change`
+  (`(record->'change'->>'id', seq) WHERE tool LIKE 'deploy.%'`).
+- api: `GET /v1/attestations`, the signed attestations newest first (`app`, `env`, `since`, `until`, `limit`, `after`),
+  each with its change (app, env, release, tree digest), signing time, digest, backend, key id, Rekor index and uuid and the
+  outcome and `deploy.attestation` seqs (index `clearance_attestations_seq`); `GET /v1/clearances` rows gain `attested` and
+  `attestation`; `GET /v1/clearances/counts?by=attestation` counts `attested`, `pending` (applied, not yet attested) and
+  `none`.
+- api: `GET /v1/clearances/{id}/attestation/verify` verifies the stored bundle with the code `clearance attest verify`
+  runs, against the trust set in `CLEARANCE_API_ATTEST_KEY` or `CLEARANCE_API_ATTEST_TRUST_ROOT`, `_IDENTITY`, `_ISSUER`
+  (and `_REKOR_KEY`) and the change's cleared digest, and answers `{verified, checked_at, subject, key_id, rekor, errors}`.
+  The answer is cached in memory per attestation digest and shown as `verification` on the change and the lists.
+  `GET /v1/attestation-config` serves the non-secret config a portal needs (`CLEARANCE_API_ATTEST_REKOR_URL`, identity,
+  issuer, key ids, the offline verify command). Chart values `api.attest.*` (an existing ConfigMap of public material).
+
+- The Map's API (Clearance core and clearance-api; the Backstage plugin's Map reads it).
+  - core: `PUT /v1/targets/{source}`, the declared target registry. A source (a cluster's gitops render, an account's
+    bootstrap) publishes the targets it declares (id, name, kind, group, env, app, owner, registry tier, the coverage `scope`
+    they map to, gates `{type, instance, mode: enforce|flag}` and observers `{provider, source}`); the core validates strictly
+    (caps: 2000 targets per source, 32 gates and 16 observers per target), replaces that source's set only, and records a
+    changed set once as `targets.load` with the set's sha256 digest (an unchanged one records nothing). A provider publishes
+    for the sources its new `targets` registration names (`CLEARANCE_PROVIDERS`). New table `clearance_targets`. Python
+    client `publish_targets` (regenerated models), Go client `PublishTargets`.
+  - api: `GET /v1/targets`, the union of every source's set. `GET /v1/map?from&to[&group][&expand][&target]`, the coverage
+    map in one read: gate types with instance counts, mode mix, decisions, refusals and holds; target groups and targets with
+    the six-state coverage mix, observer health and the Requested to Verified lanes; edges (width is decisions, status the
+    worst state); the needs-attention list (no gate, blind or degraded observers, flag-mode gates, changes holding, declared
+    gates that decided nothing, decisions from gates nobody declared); `partial`, what the records cannot yet say
+    (Observed and Verified are not joined to each change until G-ARGO-3). `target=` adds the C10 detail: the changes moving
+    through the target, its exceptions and recent evidence. Computed in four aggregate statements; `GET /v1/map` is about
+    50 ms on 25 000 records and 0.5 s on 250 000. New index `clearance_evidence_written`.
+  - api: `GET /v1/evidence/counts` groups by `provider` and `boundary`, takes `scope=` and `bucket=1m|5m|15m|1h|6h|1d`
+    (time buckets, at most 1500).
+
 
 ## [0.44.1] - 2026-11-13
 

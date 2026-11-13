@@ -122,6 +122,14 @@ api:
   feedReaders:
     - {principal: "hangar-prod/clearance-system/clearance-agent", cluster: hangar-prod}
   gatewayURL: http://autopilot-gateway.autopilot-system.svc:8080
+  attest:
+    configMap: clearance-attest-trust
+    key: attest-signing.pub
+    trustRoot: trusted-root.json
+    rekorKey: rekor.pub
+    identity: https://kubernetes.io/namespaces/clearance/serviceaccounts/clearance-core
+    issuer: https://kubernetes.default.svc
+    rekorUrl: https://rekor.example.test
 networkPolicy:
   core:
     from:

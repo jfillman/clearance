@@ -36,7 +36,8 @@ const (
 	headSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 )
 
-const providersJSON = `[{"name": "autopilot-gateway", "version": "0.3.27", "principals": ["autopilot-system/clearance"]}]`
+const providersJSON = `[{"name": "autopilot-gateway", "version": "0.3.27", "principals": ["autopilot-system/clearance"]},
+ {"name": "targets-prod", "version": "0.1.0", "principals": ["hangar-prod/gitops/targets"], "targets": ["hangar-prod"]}]`
 
 type groups map[string][]string
 
@@ -184,6 +185,29 @@ func TestEvaluateOutcomeAndRecordAgainstTheCore(t *testing.T) {
 	}
 	if c.BreakerState() != client.BreakerClosed {
 		t.Fatal(c.BreakerState())
+	}
+}
+
+func TestPublishTargetsAgainstTheCore(t *testing.T) {
+	_, srv := coreServer(t)
+	c := newClient(t, srv.URL, "hangar-prod/gitops/targets")
+	ctx := context.Background()
+	req := &client.TargetsRequest{Targets: []client.Target{{ID: "gate-api-prod", Name: "gate-api", Kind: "k8s-namespace", Group: "hangar-prod",
+		Env: "prod", App: "gate-api", Scope: "hangar-prod", Gates: []client.TargetGate{{Type: "glidepath", Instance: "gate-api-cicd", Mode: "enforce"}}}}}
+	a, err := c.PublishTargets(ctx, "hangar-prod", req)
+	if err != nil || !a.Changed || a.Targets != 1 || len(a.Digest) != 64 || a.Seq == nil || a.Source != "hangar-prod" {
+		t.Fatalf("%+v %v", a, err)
+	}
+	b, err := c.PublishTargets(ctx, "hangar-prod", req) // nil observers are sent as []
+	if err != nil || b.Changed || b.Digest != a.Digest || b.Seq != nil {
+		t.Fatalf("the same set changes nothing: %+v %v", b, err)
+	}
+	if w, err := c.PublishTargets(ctx, "hangar-prod", &client.TargetsRequest{}); err != nil || !w.Changed || w.Targets != 0 {
+		t.Fatalf("a nil list withdraws: %+v %v", w, err)
+	}
+	var apiErr *client.APIError
+	if _, err := c.PublishTargets(ctx, "hangar-dev", req); !errors.As(err, &apiErr) || apiErr.Status != 403 {
+		t.Fatalf("another source is refused: %v", err)
 	}
 }
 

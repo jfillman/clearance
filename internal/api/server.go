@@ -64,6 +64,9 @@ type Options struct {
 	Log                 *slog.Logger
 	// StreamPoll is how often the stream hub reads the chain's head (0: StreamPoll).
 	StreamPoll time.Duration
+	// Attest is the trust attestations are verified against (nil: GET /v1/clearances/{id}/attestation/verify answers
+	// 404 and nothing is called verified) and the Rekor URL the portal links to.
+	Attest *AttestTrust
 }
 
 // Server is the read API. Build it with New.
@@ -72,6 +75,7 @@ type Server struct {
 	log     *slog.Logger
 	handler http.Handler
 	hub     *hub
+	verify  *verifier // nil: no attestation trust configured
 }
 
 // New builds the server.
@@ -85,7 +89,7 @@ func New(opt Options) (*Server, error) {
 	if opt.Log == nil {
 		opt.Log = slog.Default()
 	}
-	s := &Server{opt: opt, log: opt.Log, hub: newHub(opt.Store, opt.StreamPoll, opt.Log)}
+	s := &Server{opt: opt, log: opt.Log, hub: newHub(opt.Store, opt.StreamPoll, opt.Log), verify: newVerifier(opt.Attest)}
 	mux := http.NewServeMux()
 	for _, rt := range Routes() {
 		if rt.serve == nil {
