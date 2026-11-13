@@ -9,8 +9,6 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
-## [0.46.0] - 2026-11-13
-
 ### Added
 
 - slack: **clearance-slack**, phases 3 and 4 of using Clearance without Backstage ([docs/slack.md](docs/slack.md)). A standalone Go
@@ -32,6 +30,11 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   `clearance` events of `GET /v1/stream`, whole scope. Still no change by id, no clearance token (a `cluster=&state=cleared` filter is
   only a filter for it), no evidence record. This widens what a principal already in `CLEARANCE_API_NOTIFIERS` (Tower's backend)
   may read when it calls without naming a person.
+
+## [0.46.0] - 2026-11-13
+
+### Added
+
 - cli: the person write commands, phase 2 of using Clearance without Backstage ([docs/cli.md](docs/cli.md#writes)). They
   go to the core (`CLEARANCE_URL`) with the person's own token and `X-Clearance-Via: cli`, show what they will act on
   first (to stderr), ask for confirmation, and send once. `changes clear <id> [--reason]`, `changes deny <id> --reason`,
