@@ -182,3 +182,11 @@ func (a *ForeignWorkloadAuthenticator) Authenticate(ctx context.Context, token s
 	}
 	return Principal{ID: a.Name + "/" + nsSA, Kind: KindForeignWorkload}, nil
 }
+
+// VerifyIDToken checks an ID token the way OIDCAuthenticator does (RS256 or ES256 signature from keys, then exp,
+// iat, iss and aud) and returns its claims, without the sign-in allowlist: for a relying party that completes an
+// authorization-code login and then leaves who may do what to Clearance, which sees the same token on every call
+// (the web server, internal/web). nonce, azp and auth_time are the caller's to check.
+func VerifyIDToken(ctx context.Context, token, issuer, audience string, keys *JWKS, leeway time.Duration, now func() time.Time) (map[string]any, error) {
+	return tokenVerifier{issuer, audience, keys, OIDCAlgorithms, leeway, now}.verify(ctx, token, "ID token rejected")
+}

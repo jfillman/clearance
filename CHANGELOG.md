@@ -11,6 +11,15 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ### Added
 
+- web: `clearance web`, the backend-for-frontend of the standalone web UI (WEB-4, [docs/web.md](docs/web.md)). Serves the
+  UI bundle from `embed.FS` (a placeholder until WEB-3's build lands in `internal/web/static/`); signs people in with
+  OIDC authorization code + PKCE (S256) as a confidential client (secret from a file), `state` and `nonce` checked, the
+  ID token verified by `internal/authn` (new `authn.VerifyIDToken`); keeps sessions in memory only (`__Host-` cookie,
+  HttpOnly, Secure, SameSite=Strict, capped by the token's `exp` and one hour, idle timeout, bounded map); forwards
+  `/api/read/*` to clearance-api, `/api/write/*` to the core and `/api/gateway/*` to the gateway with the person's own ID
+  token as the bearer and `X-Clearance-Via: web` on writes, from an allowlist of headers; CSRF token and Origin check on
+  every non-GET; strict CSP and the usual headers; passes the core's `auth-not-fresh` refusal on with a fresh-login
+  redirect (`prompt=login`, `max_age`). No policy, no answer caching. Config `CLEARANCE_WEB_*`. Not in the chart yet.
 - providers: `"kinds": []` in a `CLEARANCE_PROVIDERS` entry grants no record kind, so a provider that only publishes `targets` (or
   `definitions`) needs no write it never uses (Apron's target publisher had to register `federated.decision`). An entry
   with `"kinds": []` and neither `targets` nor `definitions` is refused at startup. Absent `kinds` still means every
