@@ -36,6 +36,10 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   names must match, else `403 DG-PERSON-ALLOWED`. G8 finding: the admin and approver checks already applied to a
   delegate-named person; the OIDC allowlist did not (it runs on a token a delegate does not carry). Unset by default, so
   nothing changes until a deployment sets it.
+- providers: `"kinds": []` in a `CLEARANCE_PROVIDERS` entry grants no record kind, so a provider that only publishes `targets` (or
+  `definitions`) needs no write it never uses (Apron's target publisher had to register `federated.decision`). An entry
+  with `"kinds": []` and neither `targets` nor `definitions` is refused at startup. Absent `kinds` still means every
+  non-observation kind, also beside `targets`, so no existing registration changes.
 
 ### Changed
 

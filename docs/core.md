@@ -72,7 +72,7 @@ A JSON array (at most 64 KiB), strictly decoded. Without it no caller may evalua
   core's own name.
 - `version` is `provider.version`, 1 to 64 characters.
 - `principals` are fnmatch globs on the authenticated principal. A caller is the first provider whose globs match.
-- `kinds` narrows which `POST /v1/records` kinds the provider may write (default: all of them but the observation kinds, which a provider writes only when it names them).
+- `kinds` narrows which `POST /v1/records` kinds the provider may write. Absent, it is all of them but the observation kinds, which a provider writes only when it names them. `"kinds": []` is none: the spelling for a provider that only publishes `targets` (or `definitions`) and must write no record; such an entry needs `targets` or `definitions`, else the config is refused. An entry with `targets` and no `kinds` is still every kind: absence is never read as none, so an entry registered before `[]` existed keeps what it had.
 - `intent_capture` is `redacted` (the default) or `full`, for its records' intent text.
 - `definitions: true` lets the provider publish its cluster-pinned agent definitions (`PUT /v1/definitions`). At
   most one provider has it, because a publish replaces the whole set: two publishers would undo each other.
