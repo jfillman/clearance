@@ -28,6 +28,8 @@ type TokenStore interface {
 var (
 	ErrNoToken    = errors.New("no stored token")
 	ErrNoKeychain = errors.New("no OS keychain is available")
+	// ErrTokenTooBig is a token the keychain entry cannot hold (macOS limits the entry to about 4 KiB).
+	ErrTokenTooBig = errors.New("the ID token is too large for the keychain")
 )
 
 // Stored is what the keychain holds: the ID token, never a refresh token, and when it was saved.
@@ -39,6 +41,12 @@ type Stored struct {
 
 // Keychain is the OS keychain through go-keyring (macOS Keychain, Windows Credential Manager, the Secret Service on
 // Linux). Without one, login fails: the token is never written to a file.
+//
+// On macOS go-keyring (v0.2.8) runs `security -i` and writes the add-generic-password command to its standard input,
+// so the token is in a pipe and never in any process's argument list (checked by polling `ps` through repeated
+// saves). It reads with `find-generic-password -w`, which prints to a pipe. No cgo is needed, so the static,
+// cross-compiled release binary and the distroless image are unaffected; a cgo Keychain binding
+// (keybase/go-keychain) would add nothing here and would break CGO_ENABLED=0 builds.
 type Keychain struct{}
 
 const (
@@ -64,6 +72,9 @@ func (Keychain) Get() (Stored, error) {
 func (Keychain) Set(st Stored) error {
 	b, _ := json.Marshal(st)
 	if err := keyring.Set(keychainService, keychainAccount, string(b)); err != nil {
+		if errors.Is(err, keyring.ErrSetDataTooBig) {
+			return fmt.Errorf("%w (an ID token this large does not fit one macOS keychain entry; use --token-stdin)", ErrTokenTooBig)
+		}
 		return fmt.Errorf("%w: %v", ErrNoKeychain, err)
 	}
 	return nil

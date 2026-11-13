@@ -1767,10 +1767,16 @@
       },
       "GateErrorBody": {
         "properties": {
+          "age": {
+            "type": "string"
+          },
           "error": {
             "type": "string"
           },
           "hint": {
+            "type": "string"
+          },
+          "max_age": {
             "type": "string"
           },
           "rule": {
@@ -3714,11 +3720,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/GateErrorBody"
                 }
               }
             },
-            "description": "no bearer token, or one the authenticator refused"
+            "description": "no bearer token, one the authenticator refused, or (rule DG-AUTH-NOT-FRESH, with max_age and age) a sign-in older than CLEARANCE_FRESH_AUTH_* allows for this action: sign in again"
           },
           "403": {
             "content": {
@@ -3766,7 +3772,7 @@
             "bearer": []
           }
         ],
-        "summary": "An admin (CLEARANCE_ADMINS), or a delegate naming one in the on-behalf-of header, opens a break-glass window on one protected environment: a reason, a TTL (a Go duration, at most CLEARANCE_BREAKGLASS_MAX_TTL, never over 4h) and the cluster and env. Recorded as breakglass.open and committed before the answer, so the record precedes every change it covers. It clears nothing; exceptions inside it carry its id. At the TTL the core reconciles it (breakglass.close).",
+        "summary": "An admin (CLEARANCE_ADMINS), or a delegate naming one in the on-behalf-of header, opens a break-glass window on one protected environment: a reason, a TTL (a Go duration, at most CLEARANCE_BREAKGLASS_MAX_TTL, never over 4h) and the cluster and env. Recorded as breakglass.open and committed before the answer, so the record precedes every change it covers. It clears nothing; exceptions inside it carry its id. At the TTL the core reconciles it (breakglass.close). The call may carry X-Clearance-Via (cli, web, slack, api, or a name from CLEARANCE_VIAS_EXTRA) and X-Clearance-Surface-Ref (at most 512 bytes of printable text), recorded as claimed `surface` {via, ref}; a bad value is 400 (DG-VIA, DG-SURFACE-REF). A delegate naming the person may forward their sign-in time in X-Clearance-Auth-Time (unix seconds), which CLEARANCE_FRESH_AUTH_DELEGATES=require demands.",
         "x-clearance-auth": "bearer",
         "x-clearance-max-body": 16384
       }
@@ -3799,11 +3805,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/GateErrorBody"
                 }
               }
             },
-            "description": "no bearer token, or one the authenticator refused"
+            "description": "no bearer token, one the authenticator refused, or (rule DG-AUTH-NOT-FRESH, with max_age and age) a sign-in older than CLEARANCE_FRESH_AUTH_* allows for this action: sign in again"
           },
           "403": {
             "content": {
@@ -3841,7 +3847,7 @@
             "bearer": []
           }
         ],
-        "summary": "An admin closes a break-glass window early; it is reconciled at once (breakglass.close lists what the record store knows changed in the window).",
+        "summary": "An admin closes a break-glass window early; it is reconciled at once (breakglass.close lists what the record store knows changed in the window). The call may carry X-Clearance-Via (cli, web, slack, api, or a name from CLEARANCE_VIAS_EXTRA) and X-Clearance-Surface-Ref (at most 512 bytes of printable text), recorded as claimed `surface` {via, ref}; a bad value is 400 (DG-VIA, DG-SURFACE-REF). A delegate naming the person may forward their sign-in time in X-Clearance-Auth-Time (unix seconds), which CLEARANCE_FRESH_AUTH_DELEGATES=require demands.",
         "x-clearance-auth": "bearer",
         "x-clearance-max-body": 65536
       }
@@ -3885,11 +3891,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/GateErrorBody"
                 }
               }
             },
-            "description": "no bearer token, or one the authenticator refused"
+            "description": "no bearer token, one the authenticator refused, or (rule DG-AUTH-NOT-FRESH, with max_age and age) a sign-in older than CLEARANCE_FRESH_AUTH_* allows for this action: sign in again"
           },
           "403": {
             "content": {
@@ -4030,6 +4036,17 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "description": "{\"reason\"?: string}",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
@@ -4070,11 +4087,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/GateErrorBody"
                 }
               }
             },
-            "description": "no bearer token, or one the authenticator refused"
+            "description": "no bearer token, one the authenticator refused, or (rule DG-AUTH-NOT-FRESH, with max_age and age) a sign-in older than CLEARANCE_FRESH_AUTH_* allows for this action: sign in again"
           },
           "403": {
             "content": {
@@ -4122,7 +4139,7 @@
             "bearer": []
           }
         ],
-        "summary": "A person (or a delegate naming one in the on-behalf-of header) approves a holding change.",
+        "summary": "A person (or a delegate naming one in the on-behalf-of header) approves a holding change. The body is empty or {\"reason\": string}: a note recorded on deploy.clear as claimed. The call may carry X-Clearance-Via (cli, web, slack, api, or a name from CLEARANCE_VIAS_EXTRA) and X-Clearance-Surface-Ref (at most 512 bytes of printable text), recorded as claimed `surface` {via, ref}; a bad value is 400 (DG-VIA, DG-SURFACE-REF). A delegate naming the person may forward their sign-in time in X-Clearance-Auth-Time (unix seconds), which CLEARANCE_FRESH_AUTH_DELEGATES=require demands.",
         "x-clearance-auth": "bearer",
         "x-clearance-max-body": 65536
       }
@@ -4191,11 +4208,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/GateErrorBody"
                 }
               }
             },
-            "description": "no bearer token, or one the authenticator refused"
+            "description": "no bearer token, one the authenticator refused, or (rule DG-AUTH-NOT-FRESH, with max_age and age) a sign-in older than CLEARANCE_FRESH_AUTH_* allows for this action: sign in again"
           },
           "403": {
             "content": {
@@ -4243,7 +4260,7 @@
             "bearer": []
           }
         ],
-        "summary": "A person who could clear a holding change denies it, with a reason.",
+        "summary": "A person who could clear a holding change denies it, with a reason. The call may carry X-Clearance-Via (cli, web, slack, api, or a name from CLEARANCE_VIAS_EXTRA) and X-Clearance-Surface-Ref (at most 512 bytes of printable text), recorded as claimed `surface` {via, ref}; a bad value is 400 (DG-VIA, DG-SURFACE-REF). A delegate naming the person may forward their sign-in time in X-Clearance-Auth-Time (unix seconds), which CLEARANCE_FRESH_AUTH_DELEGATES=require demands.",
         "x-clearance-auth": "bearer",
         "x-clearance-max-body": 65536
       }
@@ -4894,11 +4911,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/GateErrorBody"
                 }
               }
             },
-            "description": "no bearer token, or one the authenticator refused"
+            "description": "no bearer token, one the authenticator refused, or (rule DG-AUTH-NOT-FRESH, with max_age and age) a sign-in older than CLEARANCE_FRESH_AUTH_* allows for this action: sign in again"
           },
           "403": {
             "content": {
@@ -4936,7 +4953,7 @@
             "bearer": []
           }
         ],
-        "summary": "Bulk resolution: a person (an admin, CLEARANCE_ADMINS, or a delegate naming one in the on-behalf-of header) resolves up to 200 observations or gate exceptions at once with the same state, cause and note as POST /v1/observations/{seq}/resolution. Each item gets a resolution record of its own, exactly as the single route writes it (about that seq, naming the person), never one record for many; every record of the call carries the same resolution.batch {id, size}. The records are written in one transaction. The answer names the batch and, for each item, the record written (recorded), why it was skipped (skipped: not an observation or a resolvable exception, a seq named twice, or its newest resolution already has the same state, cause and note) or why its record was refused (failed). The same validation as the single route: a state or cause outside the vocabulary, or reverted without a cause, refuses the whole call with 400.",
+        "summary": "Bulk resolution: a person (an admin, CLEARANCE_ADMINS, or a delegate naming one in the on-behalf-of header) resolves up to 200 observations or gate exceptions at once with the same state, cause and note as POST /v1/observations/{seq}/resolution. Each item gets a resolution record of its own, exactly as the single route writes it (about that seq, naming the person), never one record for many; every record of the call carries the same resolution.batch {id, size}. The records are written in one transaction. The answer names the batch and, for each item, the record written (recorded), why it was skipped (skipped: not an observation or a resolvable exception, a seq named twice, or its newest resolution already has the same state, cause and note) or why its record was refused (failed). The same validation as the single route: a state or cause outside the vocabulary, or reverted without a cause, refuses the whole call with 400. The call may carry X-Clearance-Via (cli, web, slack, api, or a name from CLEARANCE_VIAS_EXTRA) and X-Clearance-Surface-Ref (at most 512 bytes of printable text), recorded as claimed `surface` {via, ref}; a bad value is 400 (DG-VIA, DG-SURFACE-REF). A delegate naming the person may forward their sign-in time in X-Clearance-Auth-Time (unix seconds), which CLEARANCE_FRESH_AUTH_DELEGATES=require demands.",
         "x-clearance-auth": "bearer",
         "x-clearance-max-body": 65536
       }
@@ -4989,11 +5006,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/GateErrorBody"
                 }
               }
             },
-            "description": "no bearer token, or one the authenticator refused"
+            "description": "no bearer token, one the authenticator refused, or (rule DG-AUTH-NOT-FRESH, with max_age and age) a sign-in older than CLEARANCE_FRESH_AUTH_* allows for this action: sign in again"
           },
           "403": {
             "content": {
@@ -5031,7 +5048,7 @@
             "bearer": []
           }
         ],
-        "summary": "A person (an admin, CLEARANCE_ADMINS, or a delegate naming one in the on-behalf-of header) sets how an observed change ended: state (reverted, ratified, declared-break-glass, still-live) and, for reverted, its cause (agent-caused, policy-triggered, human-initiated, automated-remediation, requirement-changed, external-dependency, unattributed), with an optional note. Recorded as a resolution record about the observation, naming the person (principal, initiator, resolution.by). Append-only: an edit is another record about the same seq, and the newest wins when it is read; the earlier ones stay in the chain. The seq may also be a gate exception (deploy.exception of kind out-of-band, drift, untraced-apply or digest-mismatch), resolved in the scope of its destination (cluster, else workspace backend/key#name); attempted-refused and monitoring-protection exceptions are not resolved this way.",
+        "summary": "A person (an admin, CLEARANCE_ADMINS, or a delegate naming one in the on-behalf-of header) sets how an observed change ended: state (reverted, ratified, declared-break-glass, still-live) and, for reverted, its cause (agent-caused, policy-triggered, human-initiated, automated-remediation, requirement-changed, external-dependency, unattributed), with an optional note. Recorded as a resolution record about the observation, naming the person (principal, initiator, resolution.by). Append-only: an edit is another record about the same seq, and the newest wins when it is read; the earlier ones stay in the chain. The seq may also be a gate exception (deploy.exception of kind out-of-band, drift, untraced-apply or digest-mismatch), resolved in the scope of its destination (cluster, else workspace backend/key#name); attempted-refused and monitoring-protection exceptions are not resolved this way. The call may carry X-Clearance-Via (cli, web, slack, api, or a name from CLEARANCE_VIAS_EXTRA) and X-Clearance-Surface-Ref (at most 512 bytes of printable text), recorded as claimed `surface` {via, ref}; a bad value is 400 (DG-VIA, DG-SURFACE-REF). A delegate naming the person may forward their sign-in time in X-Clearance-Auth-Time (unix seconds), which CLEARANCE_FRESH_AUTH_DELEGATES=require demands.",
         "x-clearance-auth": "bearer",
         "x-clearance-max-body": 16384
       }

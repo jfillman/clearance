@@ -24,6 +24,7 @@ type Env struct {
 	Now            func() time.Time
 	Sleep          func(context.Context, time.Duration) error
 	IsTTY          bool   // stdout is a terminal: table is the default format, else json
+	StdinTTY       bool   // stdin is a terminal: the write commands can ask for confirmation
 	ConfigPath     string // "" reads no file
 	Version        string
 	Prog           string // clearance or clr, for messages
@@ -35,9 +36,10 @@ type Env struct {
 // DefaultEnv is the real environment.
 func DefaultEnv(version, prog string) *Env {
 	st, _ := os.Stdout.Stat()
+	in, _ := os.Stdin.Stat()
 	return &Env{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, Getenv: os.Getenv, Store: Keychain{},
 		HTTP: NewHTTP(30 * time.Second), StreamHTTP: NewHTTP(0), Now: time.Now, Sleep: sleep,
-		IsTTY: st != nil && st.Mode()&os.ModeCharDevice != 0, Version: version, Prog: prog}
+		IsTTY: st != nil && st.Mode()&os.ModeCharDevice != 0, StdinTTY: in != nil && in.Mode()&os.ModeCharDevice != 0, Version: version, Prog: prog}
 }
 
 func sleep(ctx context.Context, d time.Duration) error {
@@ -67,6 +69,7 @@ type session struct {
 	tokenStdin bool
 	cfg        Config
 	name       string
+	stdinUsed  bool   // a command read stdin (a --from-file -): no prompt can be answered from it
 	tok        string // the accepted token, kept for the invocation (stdin is read once)
 	tokEnd     time.Time
 }

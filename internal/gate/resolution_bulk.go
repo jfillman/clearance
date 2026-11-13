@@ -188,6 +188,10 @@ func (h *Handler) setResolutions(w http.ResponseWriter, r *http.Request) {
 		httpjson.Write(w, http.StatusUnauthorized, map[string]any{"error": "a bearer token is required"})
 		return
 	}
+	ctx, ok := h.withMeta(w, r)
+	if !ok {
+		return
+	}
 	raw, err := io.ReadAll(io.LimitReader(r.Body, MaxBulkResolutionBody+1))
 	if err != nil {
 		httpjson.Write(w, http.StatusBadRequest, map[string]any{"error": "the body could not be read"})
@@ -208,7 +212,7 @@ func (h *Handler) setResolutions(w http.ResponseWriter, r *http.Request) {
 		httpjson.Write(w, http.StatusBadRequest, map[string]any{"error": msg})
 		return
 	}
-	out, err := h.Svc.SetResolutions(r.Context(), p, req, r.Header.Get(vocab.Get().OnBehalfOfHeader))
+	out, err := h.Svc.SetResolutions(ctx, p, req, r.Header.Get(vocab.Get().OnBehalfOfHeader))
 	if err != nil {
 		h.fail(w, err)
 		return

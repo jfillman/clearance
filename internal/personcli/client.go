@@ -1,6 +1,7 @@
 package personcli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -29,18 +30,28 @@ type Client struct {
 	Token     string
 	HTTP      *http.Client
 	UserAgent string
+	// Name is what messages call the server ("" is clearance-api; the write commands say "the Clearance core").
+	Name string
 }
 
 // APIError is a non-2xx answer.
 type APIError struct {
 	Status  int
 	Message string
+	// Rule, Hint and MaxAge are the core's refusal fields (a gate rule such as DG-AUTH-NOT-FRESH, what to do, and for
+	// that rule the longest sign-in age the action allows).
+	Rule, Hint, MaxAge string
+	// From names the server that answered, for messages ("" is clearance-api).
+	From string
 }
 
 func (e *APIError) Error() string { return fmt.Sprintf("HTTP %d: %s", e.Status, e.Message) }
 
 // NetError is a request that got no answer.
-type NetError struct{ Err error }
+type NetError struct {
+	Err  error
+	From string
+}
 
 func (e *NetError) Error() string { return e.Err.Error() }
 func (e *NetError) Unwrap() error { return e.Err }
@@ -52,13 +63,48 @@ func NewHTTP(timeout time.Duration) *http.Client {
 }
 
 func (c *Client) request(ctx context.Context, path string, q url.Values, stream bool) (*http.Response, error) {
+	return c.do(ctx, "GET", path, q, nil, stream)
+}
+
+// Post writes a JSON body (nil: none) to the core with the person's token and reads the JSON answer into out. The
+// headers are the write's own (X-Clearance-Via). It never retries: a write is sent once.
+func (c *Client) Post(ctx context.Context, path string, body any, headers map[string]string, out any) error {
+	var rd io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		rd = bytes.NewReader(b)
+	}
+	resp, err := c.do(ctx, "POST", path, nil, rd, false, headers)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	if err != nil {
+		return &NetError{Err: err, From: c.Name}
+	}
+	return json.Unmarshal(b, out)
+}
+
+func (c *Client) do(ctx context.Context, method, path string, q url.Values, body io.Reader, stream bool, headers ...map[string]string) (*http.Response, error) {
 	u := c.Base + path
 	if len(q) > 0 {
 		u += "?" + q.Encode()
 	}
-	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	req, err := http.NewRequestWithContext(ctx, method, u, body)
 	if err != nil {
 		return nil, err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	for _, h := range headers {
+		for k, v := range h {
+			req.Header.Set(k, v)
+		}
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Token)
 	req.Header.Set("User-Agent", c.UserAgent)
@@ -74,13 +120,16 @@ func (c *Client) request(ctx context.Context, path string, q url.Values, stream 
 		if errors.As(err, &ue) {
 			err = ue.Err
 		}
-		return nil, &NetError{err}
+		return nil, &NetError{Err: err, From: c.Name}
 	}
 	if resp.StatusCode/100 != 2 {
 		defer resp.Body.Close()
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		var body struct {
-			Error string `json:"error"`
+			Error  string `json:"error"`
+			Rule   string `json:"rule"`
+			Hint   string `json:"hint"`
+			MaxAge string `json:"max_age"`
 		}
 		msg := strings.TrimSpace(string(b))
 		if json.Unmarshal(b, &body) == nil && body.Error != "" {
@@ -89,7 +138,7 @@ func (c *Client) request(ctx context.Context, path string, q url.Values, stream 
 		if len(msg) > 300 {
 			msg = msg[:300]
 		}
-		return nil, &APIError{resp.StatusCode, msg}
+		return nil, &APIError{Status: resp.StatusCode, Message: msg, Rule: body.Rule, Hint: body.Hint, MaxAge: body.MaxAge, From: c.Name}
 	}
 	return resp, nil
 }
@@ -103,7 +152,7 @@ func (c *Client) Get(ctx context.Context, path string, q url.Values, out any) er
 	defer resp.Body.Close()
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil {
-		return &NetError{err}
+		return &NetError{Err: err, From: c.Name}
 	}
 	return json.Unmarshal(b, out)
 }
@@ -130,7 +179,7 @@ func (c *Client) Stream(ctx context.Context, path string, q url.Values, lastID s
 		if errors.As(err, &ue) {
 			err = ue.Err
 		}
-		return nil, &NetError{err}
+		return nil, &NetError{Err: err, From: c.Name}
 	}
 	if resp.StatusCode != 200 {
 		defer resp.Body.Close()
@@ -139,7 +188,7 @@ func (c *Client) Stream(ctx context.Context, path string, q url.Values, lastID s
 			Error string `json:"error"`
 		}
 		_ = json.Unmarshal(b, &body)
-		return nil, &APIError{resp.StatusCode, body.Error}
+		return nil, &APIError{Status: resp.StatusCode, Message: body.Error}
 	}
 	return resp.Body, nil
 }
@@ -163,24 +212,40 @@ func mapError(err error) *exitError {
 	var ae *APIError
 	if errors.As(err, &ae) {
 		switch {
+		case ae.Status == 401 && ae.Rule == "DG-AUTH-NOT-FRESH":
+			return fail(ExitUnauthorized, "sign in again (`clearance login`): %s", ae.Message)
 		case ae.Status == 401:
 			return fail(ExitUnauthorized, "not signed in, or the token was refused: run `clearance login`")
 		case ae.Status == 403:
-			return fail(ExitForbidden, "forbidden: %s", ae.Message)
+			return fail(ExitForbidden, "forbidden: %s%s", ae.Message, hint(ae))
 		case ae.Status == 404:
 			return fail(ExitNotFound, "not found: %s", ae.Message)
 		case ae.Status == 429:
-			return fail(ExitUnavailable, "rate limited by clearance-api (HTTP 429); retry shortly")
+			return fail(ExitUnavailable, "rate limited by %s (HTTP 429); retry shortly", serverName(ae.From))
 		case ae.Status >= 500:
-			return fail(ExitUnavailable, "clearance-api is unavailable (HTTP %d: %s)", ae.Status, ae.Message)
+			return fail(ExitUnavailable, "%s is unavailable (HTTP %d: %s)", serverName(ae.From), ae.Status, ae.Message)
 		}
-		return fail(ExitError, "request refused (HTTP %d): %s", ae.Status, ae.Message)
+		return fail(ExitError, "request refused (HTTP %d): %s%s", ae.Status, ae.Message, hint(ae))
 	}
 	var ne *NetError
 	if errors.As(err, &ne) {
-		return fail(ExitUnavailable, "cannot reach clearance-api: %v", ne.Err)
+		return fail(ExitUnavailable, "cannot reach %s: %v", serverName(ne.From), ne.Err)
 	}
 	return fail(ExitError, "%v", err)
+}
+
+func serverName(n string) string {
+	if n == "" {
+		return "clearance-api"
+	}
+	return n
+}
+
+func hint(ae *APIError) string {
+	if ae.Hint == "" {
+		return ""
+	}
+	return " (" + ae.Hint + ")"
 }
 
 // isMissingRoute is a 404 from the router (this api does not have the route), as opposed to a 404 about a change.

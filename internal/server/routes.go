@@ -102,9 +102,20 @@ var errs = func(codes ...int) []Response {
 	return out
 }
 
+// freshErr is the 401 of a person's write: the token, or (DG-AUTH-NOT-FRESH, with max_age and age) a sign-in older than
+// the deployment allows for the action.
+var freshErr = Response{401, "no bearer token, one the authenticator refused, or (rule DG-AUTH-NOT-FRESH, with max_age and age) " +
+	"a sign-in older than CLEARANCE_FRESH_AUTH_* allows for this action: sign in again", gate.ErrorBody{}}
+
+// personWrite is what every person write's description says about the headers it reads.
+const personWrite = " The call may carry X-Clearance-Via (cli, web, slack, api, or a name from CLEARANCE_VIAS_EXTRA) and X-Clearance-Surface-Ref (at most 512 " +
+	"bytes of printable text), recorded as claimed `surface` {via, ref}; a bad value is 400 (DG-VIA, DG-SURFACE-REF). " +
+	"A delegate naming the person may forward their sign-in time in X-Clearance-Auth-Time (unix seconds), which " +
+	"CLEARANCE_FRESH_AUTH_DELEGATES=require demands."
+
 var gateErrs = []Response{
 	{400, "a malformed change or reason", ErrorResponse{}},
-	{401, "no bearer token, or one the authenticator refused", ErrorResponse{}},
+	freshErr,
 	{403, "the caller is not a verifier, or may not decide this change", gate.ErrorBody{}},
 	{404, "no such change, or a Clearance that keeps no changes (DG-OFF)", gate.ErrorBody{}},
 	{409, "the change is not holding, or the person already approved it", gate.ErrorBody{}},
@@ -240,14 +251,16 @@ var routeTable = []Route{
 	},
 	{
 		Method: "POST", Path: "/v1/clearances/{change_id}/clear", OperationID: "clearChange", Auth: AuthBearer,
-		MaxBody:   gate.MaxPersonBody,
-		Summary:   "A person (or a delegate naming one in the on-behalf-of header) approves a holding change.",
-		Responses: append([]Response{{200, "the change and the record's seq", gate.Decided{}}}, gateErrs...),
+		MaxBody: gate.MaxPersonBody,
+		Summary: "A person (or a delegate naming one in the on-behalf-of header) approves a holding change. The body is " +
+			"empty or {\"reason\": string}: a note recorded on deploy.clear as claimed." + personWrite,
+		RequestNote: `{"reason"?: string}`,
+		Responses:   append([]Response{{200, "the change and the record's seq", gate.Decided{}}}, gateErrs...),
 	},
 	{
 		Method: "POST", Path: "/v1/clearances/{change_id}/deny", OperationID: "denyChange", Auth: AuthBearer,
 		MaxBody:     gate.MaxPersonBody,
-		Summary:     "A person who could clear a holding change denies it, with a reason.",
+		Summary:     "A person who could clear a holding change denies it, with a reason." + personWrite,
 		RequestNote: `{"reason": string}`,
 		Responses:   append([]Response{{200, "the change and the record's seq", gate.Decided{}}}, gateErrs...),
 	},
@@ -258,11 +271,11 @@ var routeTable = []Route{
 			"break-glass window on one protected environment: a reason, a TTL (a Go duration, at most " +
 			"CLEARANCE_BREAKGLASS_MAX_TTL, never over 4h) and the cluster and env. Recorded as breakglass.open and " +
 			"committed before the answer, so the record precedes every change it covers. It clears nothing; " +
-			"exceptions inside it carry its id. At the TTL the core reconciles it (breakglass.close).",
+			"exceptions inside it carry its id. At the TTL the core reconciles it (breakglass.close)." + personWrite,
 		Request: gate.BreakglassRequest{},
 		Responses: []Response{{200, "the open window", gate.Breakglass{}},
 			{400, "a malformed body, a TTL out of range, or an environment that is not protected", gate.ErrorBody{}},
-			errs(401)[0], {403, "not an admin, or a delegate naming no admin", gate.ErrorBody{}},
+			freshErr, {403, "not an admin, or a delegate naming no admin", gate.ErrorBody{}},
 			{404, "a Clearance that keeps no changes (DG-OFF)", gate.ErrorBody{}},
 			{409, "a window is already open on that environment", gate.ErrorBody{}}, errs(413)[0]},
 	},
@@ -270,8 +283,8 @@ var routeTable = []Route{
 		Method: "POST", Path: "/v1/breakglass/{id}/close", OperationID: "closeBreakglass", Auth: AuthBearer,
 		MaxBody: gate.MaxPersonBody,
 		Summary: "An admin closes a break-glass window early; it is reconciled at once (breakglass.close lists what " +
-			"the record store knows changed in the window).",
-		Responses: []Response{{200, "the closed window", gate.Breakglass{}}, errs(401)[0],
+			"the record store knows changed in the window)." + personWrite,
+		Responses: []Response{{200, "the closed window", gate.Breakglass{}}, freshErr,
 			{403, "not an admin", gate.ErrorBody{}}, {404, "no such window", gate.ErrorBody{}},
 			{409, "the window is already closed", gate.ErrorBody{}}},
 	},
@@ -286,11 +299,11 @@ var routeTable = []Route{
 			"record about the same seq, and the newest wins when it is read; the earlier ones stay in the chain. The seq may " +
 			"also be a gate exception (deploy.exception of kind out-of-band, drift, untraced-apply or digest-mismatch), " +
 			"resolved in the scope of its destination (cluster, else workspace backend/key#name); attempted-refused and " +
-			"monitoring-protection exceptions are not resolved this way.",
+			"monitoring-protection exceptions are not resolved this way." + personWrite,
 		Request: gate.ResolutionRequest{},
 		Responses: []Response{{200, "the record written, naming the person", gate.ResolutionRecorded{}},
 			{400, "a state or cause outside the vocabulary, or a body that is not {state, cause?, note?}", gate.ErrorBody{}},
-			errs(401)[0], {403, "not an admin, or a delegate naming none", gate.ErrorBody{}},
+			freshErr, {403, "not an admin, or a delegate naming none", gate.ErrorBody{}},
 			{404, "no such observation (the seq is neither an observation nor a resolvable gate exception), or a Clearance that keeps no changes (DG-OFF)", gate.ErrorBody{}},
 			errs(413)[0]},
 	},
@@ -305,11 +318,11 @@ var routeTable = []Route{
 			"names the batch and, for each item, the record written (recorded), why it was skipped (skipped: not an " +
 			"observation or a resolvable exception, a seq named twice, or its newest resolution already has the same " +
 			"state, cause and note) or why its record was refused (failed). The same validation as the single route: a " +
-			"state or cause outside the vocabulary, or reverted without a cause, refuses the whole call with 400.",
+			"state or cause outside the vocabulary, or reverted without a cause, refuses the whole call with 400." + personWrite,
 		Request: gate.BulkResolutionRequest{},
 		Responses: []Response{{200, "the batch id and each item's outcome", gate.BulkResolutionResult{}},
 			{400, "no items, more than 200, a state or cause outside the vocabulary, or a body that is not {items, state, cause?, note?}", gate.ErrorBody{}},
-			errs(401)[0], {403, "not an admin, or a delegate naming none", gate.ErrorBody{}},
+			freshErr, {403, "not an admin, or a delegate naming none", gate.ErrorBody{}},
 			{404, "a Clearance that keeps no changes (DG-OFF)", gate.ErrorBody{}},
 			errs(413)[0]},
 	},

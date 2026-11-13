@@ -51,6 +51,11 @@ gate:
   trustedRegistries: ["ghcr.io/riley-roooo/"]
   protectedEnvironments: ["hangar-prod/*"]
   breakglassMaxTTL: 2h
+  freshAuthTier2: 30m
+  freshAuthTier3Breakglass: 15m
+  freshAuthDelegates: require
+  delegatePersonAllowed: ["user:*@example.com"]
+  viasExtra: ["portal"]
   unboundTree: refuse
 agents:
   configMap: clearance-agents

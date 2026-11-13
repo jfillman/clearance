@@ -170,6 +170,26 @@ app.kubernetes.io/component: {{ .component }}
 - name: CLEARANCE_BREAKGLASS_MAX_TTL
   value: {{ . | quote }}
 {{- end }}
+{{- with .Values.gate.freshAuthTier2 }}
+- name: CLEARANCE_FRESH_AUTH_TIER2
+  value: {{ . | quote }}
+{{- end }}
+{{- with .Values.gate.freshAuthTier3Breakglass }}
+- name: CLEARANCE_FRESH_AUTH_TIER3_BREAKGLASS
+  value: {{ . | quote }}
+{{- end }}
+{{- with .Values.gate.freshAuthDelegates }}
+- name: CLEARANCE_FRESH_AUTH_DELEGATES
+  value: {{ . | quote }}
+{{- end }}
+{{- with .Values.gate.delegatePersonAllowed }}
+- name: CLEARANCE_DELEGATE_PERSON_ALLOWED
+  value: {{ include "clearance.csv" . | quote }}
+{{- end }}
+{{- with .Values.gate.viasExtra }}
+- name: CLEARANCE_VIAS_EXTRA
+  value: {{ include "clearance.csv" . | quote }}
+{{- end }}
 {{- with .Values.gate.unboundTree }}
 - name: CLEARANCE_GATE_UNBOUND_TREE
   value: {{ . | quote }}

@@ -173,6 +173,11 @@ All configuration comes from the environment. An empty variable counts as unset.
 | `CLEARANCE_ADMINS` | Principal globs (`user:<login>`) that may deny any held change and break glass. |
 | `CLEARANCE_PROTECTED_ENVIRONMENTS` | Comma-separated `<cluster glob>/<env glob>` entries: the environments the gate protects. **Unset: every environment is protected** (fail closed). A change to any other is cleared at tier 0, reason `unprotected` ([gate.md](gate.md#protected-environments)). |
 | `CLEARANCE_BREAKGLASS_MAX_TTL` | The longest break-glass window, a Go duration from `1m` to `4h` (default `4h`, the ceiling). |
+| `CLEARANCE_FRESH_AUTH_TIER2` | The longest sign-in age that may clear a tier 2 change, a Go duration from `1m` to `24h`. **Unset (the product default): no requirement.** [Fresh sign-in](#fresh-sign-in-and-the-surface-g3-g4). |
+| `CLEARANCE_FRESH_AUTH_TIER3_BREAKGLASS` | The same limit for clearing a tier 3 change and for opening or closing break-glass. Recommended `15m` where tier 3 or break-glass is used. Unset: a tier 3 clear uses the tier 2 limit; break-glass has none. |
+| `CLEARANCE_FRESH_AUTH_DELEGATES` | `exempt` (default) or `require`: whether a delegate-named person's write must forward the sign-in time (`X-Clearance-Auth-Time`, unix seconds). |
+| `CLEARANCE_VIAS_EXTRA` | Surface names a person's write may claim in `X-Clearance-Via` beside `cli`, `web`, `slack` and `api`: the deployment's portal (comma-separated lowercase words). |
+| `CLEARANCE_DELEGATE_PERSON_ALLOWED` | Globs (`user:<login>`) a person a delegate names must match, the delegate path's counterpart of `CLEARANCE_OIDC_ALLOWED_USERS`. Unset: any `user:<name>` the delegate says (the behaviour before it existed). |
 | `CLEARANCE_EXPIRE_SECONDS` | How often holding changes past their TTL are expired (default 60, at most 86400). |
 | `CLEARANCE_MAX_CLOCK_SKEW` | How far an evaluation's `context.now` may be from the core's clock, a Go duration (default `5m`, at most `24h`). `0` turns the check off, and `clearance core` refuses that without `--memory`: a decision record's `ts` is the evaluation's `now` and is verified, so a kept chain never takes an unbounded one. A test core on a fixed clock runs `clearance core --memory --insecure-dev-auth --max-clock-skew 0`. |
 | `CLEARANCE_AGENTS_DIR` | Bundled agent definitions (`*.yaml`). Default none. |
@@ -236,6 +241,65 @@ The source of truth is the package documentation of `internal/core`, `internal/b
 `authn.EnvVars`. `clearance register`
 reads `CLEARANCE_URL` and GitHub Actions' `GITHUB_EVENT_PATH`, `GITHUB_REPOSITORY`, `GITHUB_SHA` and
 `GITHUB_ACTOR`.
+
+## Fresh sign-in and the surface (G3, G4)
+
+Two additions to every **person write** (clear, deny, resolution and bulk resolution, break-glass open and close).
+
+### Fresh sign-in (G3)
+
+A person's write may be refused when the sign-in behind it is too old. The core evaluates it from the ID token it
+verified, so it holds from every surface (the CLI, Tower, a Slack action) and cannot be skipped by a client.
+
+- **The sign-in time** is the token's `auth_time` when the IdP sends it (the moment the person authenticated), else its
+  `iat` (people-dex sends no `auth_time`; its `iat` is the sign-in, and a CLI token is never refreshed). Both are
+  verified by the authenticator. A token with neither integer, or one dated in the future beyond the 30 s leeway, is not
+  fresh.
+- **The limits**, per action class, each a Go duration from `1m` to `24h`, **unset by default: no requirement** (a
+  deployment that has not chosen sees no change):
+
+| Variable | Applies to |
+|---|---|
+| `CLEARANCE_FRESH_AUTH_TIER2` | clearing a tier 2 change |
+| `CLEARANCE_FRESH_AUTH_TIER3_BREAKGLASS` | clearing a tier 3 change, and opening or closing break-glass. **Recommended `15m`.** When unset, a tier 3 clear falls back to the tier 2 limit (a higher tier is never less strict than a lower one) and break-glass has none |
+
+  Deny, resolutions, and clearing tier 0 and 1 (by policy) have no class. The check runs after the person is identified
+  and the admin check (break-glass) has passed, before any state is read for the write, so a refused write records
+  nothing.
+- **The refusal** is `401`, `{"error": "your sign-in is 22m0s old; this action needs one at most 15m0s old", "rule":
+  "DG-AUTH-NOT-FRESH", "max_age": "15m0s", "age": "22m0s", "hint": ...}`. The CLI turns it into "sign in again
+  (`clearance login`)" and exit 4; the person signs in again and repeats the action.
+- **Delegates.** A delegate (Tower's backend) names the person; it holds the person's session, not their ID token, so it
+  cannot prove their `auth_time`. By default (`CLEARANCE_FRESH_AUTH_DELEGATES=exempt`) a delegate-named write is **not**
+  checked: the limits apply to direct person tokens only, and nothing about the delegate path is weakened. With
+  `require`, the delegate must forward the person's sign-in time in `X-Clearance-Auth-Time` (unix seconds) and it is
+  checked against the same limits; a write without it is refused the same way (no `age` in the answer). That time is the
+  delegate's word, trusted exactly as far as the delegate already is for naming the person. Tower's backend does not send
+  it yet; turning `require` on before it does would refuse every delegated tier 2/3 clear.
+- `core --memory --insecure-dev-auth` tokens have no age: a dev person token just signed in, so the limits never refuse it.
+
+### Who a delegate may name (G8)
+
+The core applies its **admin check** (`CLEARANCE_ADMINS`) to the person a delegate names, for break-glass and
+resolutions, and the approver rules (owner or outside group from the directory, not the proposer, not twice) for clears,
+exactly as for a person who signs in themselves (`TestG8TheCoreChecksThePersonADelegateNames`). It did **not** apply the
+OIDC allowlist (`CLEARANCE_OIDC_ALLOWED_USERS`): that runs in the authenticator, on a token, and a delegate-named person
+never presents one. `CLEARANCE_DELEGATE_PERSON_ALLOWED` closes that: globs (`user:<login>`) the named person must match,
+else `403 DG-PERSON-ALLOWED`. It is **unset by default** (any `user:<name>` a delegate says, as before) because the name a
+delegate sends (a Backstage user entity) need not have the shape of the OIDC claim the allowlist matches (an email), and
+turning it on blindly could lock Tower out. Set it to the names Tower actually sends.
+
+### The surface (G4)
+
+Any person write may say where it came from, in two headers: `X-Clearance-Via` (`cli`, `web`, `slack`, `api`, or a name in
+`CLEARANCE_VIAS_EXTRA`; else `400 DG-VIA`) and `X-Clearance-Surface-Ref` (printable text, at most 512 bytes, such as a Slack permalink; needs a
+`via`, else `400 DG-SURFACE-REF`). The core records them as a **claimed** `surface` {`via`, `ref`} on the evidence record
+([evidence.md](evidence.md#the-surface-of-a-persons-write-revision-7-g4)): `deploy.clear`, `deploy.deny`, every
+`resolution` of a call, `breakglass.open` and an early `breakglass.close`. Nothing verifies it; the verified identity is
+the person. The CLI sends `cli`; a portal's backend (on Hangar, Tower's, a separate repo) names itself in `CLEARANCE_VIAS_EXTRA` and
+sends that name for the person it names; a Slack service sends `slack` with the message permalink.
+
+A clear may also carry `{"reason": "..."}` (at most 4000 characters), recorded as the claimed `reason` of `deploy.clear`.
 
 ## The clearance token
 

@@ -2,12 +2,14 @@ package gate
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"github.com/jfillman/clearance/internal/vocab"
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/jfillman/clearance/internal/authn"
 	"github.com/jfillman/clearance/internal/httpjson"
@@ -45,6 +47,10 @@ func (h *Handler) openBreakglass(w http.ResponseWriter, r *http.Request) {
 		httpjson.Write(w, http.StatusUnauthorized, map[string]any{"error": "a bearer token is required"})
 		return
 	}
+	ctx, ok := h.withMeta(w, r)
+	if !ok {
+		return
+	}
 	raw, err := io.ReadAll(io.LimitReader(r.Body, MaxBreakglassBody+1))
 	if err != nil {
 		httpjson.Write(w, http.StatusBadRequest, map[string]any{"error": "the body could not be read"})
@@ -65,7 +71,7 @@ func (h *Handler) openBreakglass(w http.ResponseWriter, r *http.Request) {
 		httpjson.Write(w, http.StatusBadRequest, map[string]any{"error": msg})
 		return
 	}
-	out, err := h.Svc.OpenBreakglass(r.Context(), p, req, r.Header.Get(vocab.Get().OnBehalfOfHeader))
+	out, err := h.Svc.OpenBreakglass(ctx, p, req, r.Header.Get(vocab.Get().OnBehalfOfHeader))
 	if err != nil {
 		h.fail(w, err)
 		return
@@ -79,7 +85,11 @@ func (h *Handler) closeBreakglass(w http.ResponseWriter, r *http.Request) {
 		httpjson.Write(w, http.StatusUnauthorized, map[string]any{"error": "a bearer token is required"})
 		return
 	}
-	out, err := h.Svc.CloseBreakglass(r.Context(), p, r.PathValue("id"), r.Header.Get(vocab.Get().OnBehalfOfHeader))
+	ctx, ok := h.withMeta(w, r)
+	if !ok {
+		return
+	}
+	out, err := h.Svc.CloseBreakglass(ctx, p, r.PathValue("id"), r.Header.Get(vocab.Get().OnBehalfOfHeader))
 	if err != nil {
 		h.fail(w, err)
 		return
@@ -121,7 +131,27 @@ func (h *Handler) clear(w http.ResponseWriter, r *http.Request) {
 		httpjson.Write(w, http.StatusUnauthorized, map[string]any{"error": "a bearer token is required"})
 		return
 	}
-	out, err := h.Svc.Clear(r.Context(), p, r.PathValue("change_id"), r.Header.Get(vocab.Get().OnBehalfOfHeader))
+	ctx, ok := h.withMeta(w, r)
+	if !ok {
+		return
+	}
+	body, status, msg := PersonBody(r)
+	if status != 0 {
+		httpjson.Write(w, status, map[string]any{"error": msg})
+		return
+	}
+	// Other fields are ignored, as they were before reason existed: a delegate may send any body on a clear.
+	if reason, ok := body["reason"]; ok && reason != nil {
+		text, err := CheckReason(reason)
+		if err != nil {
+			h.fail(w, err)
+			return
+		}
+		m := metaFrom(ctx)
+		m.Reason = text
+		ctx = WithCallMeta(ctx, m)
+	}
+	out, err := h.Svc.Clear(ctx, p, r.PathValue("change_id"), r.Header.Get(vocab.Get().OnBehalfOfHeader))
 	if err != nil {
 		h.fail(w, err)
 		return
@@ -135,6 +165,10 @@ func (h *Handler) deny(w http.ResponseWriter, r *http.Request) {
 		httpjson.Write(w, http.StatusUnauthorized, map[string]any{"error": "a bearer token is required"})
 		return
 	}
+	ctx, ok := h.withMeta(w, r)
+	if !ok {
+		return
+	}
 	body, status, msg := PersonBody(r)
 	if status != 0 {
 		httpjson.Write(w, status, map[string]any{"error": msg})
@@ -146,7 +180,7 @@ func (h *Handler) deny(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	out, err := h.Svc.Deny(r.Context(), p, r.PathValue("change_id"), body["reason"], r.Header.Get(vocab.Get().OnBehalfOfHeader))
+	out, err := h.Svc.Deny(ctx, p, r.PathValue("change_id"), body["reason"], r.Header.Get(vocab.Get().OnBehalfOfHeader))
 	if err != nil {
 		h.fail(w, err)
 		return
@@ -159,6 +193,7 @@ func (h *Handler) fail(w http.ResponseWriter, err error) {
 	var bc *BadChange
 	var nv *NotVerifier
 	var br *BadReport
+	var fa *FreshAuthError
 	switch {
 	case errors.As(err, &nv):
 		httpjson.Write(w, http.StatusForbidden, map[string]any{"error": nv.Message})
@@ -167,7 +202,14 @@ func (h *Handler) fail(w http.ResponseWriter, err error) {
 	case errors.As(err, &br):
 		httpjson.Write(w, http.StatusBadRequest, map[string]any{"error": br.Message})
 	case errors.As(err, &ge):
-		httpjson.Write(w, ge.Status, ErrorBody{ge.Message, ge.Rule, ge.Hint})
+		httpjson.Write(w, ge.Status, ErrorBody{Error: ge.Message, Rule: ge.Rule, Hint: ge.Hint})
+	case errors.As(err, &fa):
+		body := ErrorBody{Error: fa.Error(), Rule: RuleAuthNotFresh, MaxAge: fa.MaxAge.String(),
+			Hint: "Sign in again (clearance login), then repeat the action."}
+		if !fa.Missing {
+			body.Age = fa.Age.Round(time.Second).String()
+		}
+		httpjson.Write(w, http.StatusUnauthorized, body)
 	default:
 		if h.Log != nil {
 			h.Log.Error("gate: operation failed", "error", err.Error())
@@ -181,6 +223,9 @@ type ErrorBody struct {
 	Error string `json:"error"`
 	Rule  string `json:"rule"`
 	Hint  string `json:"hint"`
+	// MaxAge and Age (Go durations) are on a DG-AUTH-NOT-FRESH refusal: the limit and the sign-in's age ("" when none was sent).
+	MaxAge string `json:"max_age,omitempty"`
+	Age    string `json:"age,omitempty"`
 }
 
 // PersonBody is server.py _body: at most 64 KiB (413), empty is {}, not JSON is 400, a non-object is {}.
@@ -204,4 +249,15 @@ func PersonBody(r *http.Request) (map[string]any, int, string) {
 		return map[string]any{}, 0, ""
 	}
 	return m, 0, ""
+}
+
+// withMeta is the request's context carrying what the call says about itself (CallMeta), or the 400 for a malformed
+// header (false).
+func (h *Handler) withMeta(w http.ResponseWriter, r *http.Request) (context.Context, bool) {
+	m, err := ParseCallMeta(r.Header, h.Svc.Config.ExtraVias...)
+	if err != nil {
+		h.fail(w, err)
+		return nil, false
+	}
+	return WithCallMeta(r.Context(), m), true
 }

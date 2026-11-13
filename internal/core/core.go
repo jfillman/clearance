@@ -12,6 +12,15 @@
 //	                              rules only). A bundle whose sources cannot be read fails the start.
 //	CLEARANCE_VERIFIERS           principal globs that may register changes and ask for provenance
 //	CLEARANCE_DELEGATES           principal globs that may act for a person they name (the on-behalf-of header)
+//	CLEARANCE_FRESH_AUTH_TIER2    longest sign-in age that may clear a tier 2 change (Go duration, 1m to 24h; unset = no limit)
+//	CLEARANCE_FRESH_AUTH_TIER3_BREAKGLASS
+//	                              the same for clearing tier 3 and for opening or closing break-glass (unset: tier 3
+//	                              uses the tier 2 limit, break-glass none)
+//	CLEARANCE_FRESH_AUTH_DELEGATES  exempt (default) or require: a delegate-named person's write needs the sign-in
+//	                              time forwarded in X-Clearance-Auth-Time and checked against the same limits
+//	CLEARANCE_VIAS_EXTRA          surface names a person's write may claim (X-Clearance-Via) beside cli, web, slack and api:
+//	                              the deployment's portal (comma-separated lowercase words)
+//	CLEARANCE_DELEGATE_PERSON_ALLOWED  globs (user:<login>) a person named by a delegate must match (unset: any)
 //	CLEARANCE_ADMINS              principal globs (user:<login>) that may deny any held change and break glass
 //	CLEARANCE_PROTECTED_ENVIRONMENTS
 //	                              comma-separated <cluster glob>/<env glob> entries: the environments the gate
@@ -76,6 +85,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -201,6 +211,18 @@ func FromEnv(getenv func(string) string) (Config, error) {
 			return cfg, fmt.Errorf("CLEARANCE_TRUSTED_REGISTRIES: %q is not a registry prefix ending in \"/\"", r)
 		}
 	}
+	cfg.Gate.DelegatePersons = list(get("CLEARANCE_DELEGATE_PERSON_ALLOWED", ""))
+	cfg.Gate.ExtraVias = list(get("CLEARANCE_VIAS_EXTRA", ""))
+	for _, v := range cfg.Gate.ExtraVias {
+		if !gate.ViaName.MatchString(v) || slices.Contains(gate.Vias, v) {
+			return cfg, fmt.Errorf("CLEARANCE_VIAS_EXTRA: %q is not a new surface name (a lowercase word of at most 32 characters, not one of %s)",
+				v, strings.Join(gate.Vias, ", "))
+		}
+	}
+	if cfg.Gate.Fresh, err = ParseFreshAuth(get("CLEARANCE_FRESH_AUTH_TIER2", ""), get("CLEARANCE_FRESH_AUTH_TIER3_BREAKGLASS", ""),
+		get("CLEARANCE_FRESH_AUTH_DELEGATES", "")); err != nil {
+		return cfg, err
+	}
 	if routes := get("MODEL_ROUTES", ""); routes != "" {
 		cfg.Gate.Models = []string{}
 		for _, pair := range list(routes) {
@@ -279,6 +301,36 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		return cfg, err
 	}
 	return cfg, nil
+}
+
+// ParseFreshAuth reads CLEARANCE_FRESH_AUTH_TIER2, CLEARANCE_FRESH_AUTH_TIER3_BREAKGLASS and
+// CLEARANCE_FRESH_AUTH_DELEGATES: "" or "0" is no requirement; else a Go duration from gate.MinFreshAge to
+// gate.MaxFreshAge. The delegates mode is exempt (the default) or require.
+func ParseFreshAuth(tier2, tier3, delegates string) (gate.Freshness, error) {
+	var f gate.Freshness
+	for _, c := range []struct {
+		name, v string
+		to      *time.Duration
+	}{{"CLEARANCE_FRESH_AUTH_TIER2", tier2, &f.Tier2}, {"CLEARANCE_FRESH_AUTH_TIER3_BREAKGLASS", tier3, &f.Tier3Breakglass}} {
+		if c.v == "" || c.v == "0" {
+			continue
+		}
+		d, err := time.ParseDuration(c.v)
+		if err != nil || d < gate.MinFreshAge || d > gate.MaxFreshAge {
+			return f, fmt.Errorf("%s: %q is not a Go duration from %s to %s (0 or unset is no requirement)", c.name, c.v,
+				gate.MinFreshAge, gate.MaxFreshAge)
+		}
+		*c.to = d
+	}
+	switch delegates {
+	case "", gate.FreshDelegatesExempt:
+		f.Delegates = gate.FreshDelegatesExempt
+	case gate.FreshDelegatesRequire:
+		f.Delegates = delegates
+	default:
+		return f, fmt.Errorf("CLEARANCE_FRESH_AUTH_DELEGATES is exempt or require, not %q", delegates)
+	}
+	return f, nil
 }
 
 // MinTokenTTL is the shortest token life a deployment may set.
@@ -743,6 +795,11 @@ func DevAuthenticator() authn.Authenticator {
 		if strings.HasPrefix(token, "user:") {
 			kind = authn.KindPerson
 		}
-		return authn.Principal{ID: token, Kind: kind}, nil
+		p := authn.Principal{ID: token, Kind: kind}
+		if kind == authn.KindPerson {
+			// A dev token has no sign-in age: it just signed in, so a freshness limit never refuses it.
+			p.Claims = map[string]any{authn.ClaimAuthTime: time.Now().Unix(), authn.ClaimAuthTimeSource: "dev"}
+		}
+		return p, nil
 	})
 }

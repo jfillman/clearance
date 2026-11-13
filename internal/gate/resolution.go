@@ -147,6 +147,7 @@ func resolutionEvent(w *writer, scope, what string, about int64, person string, 
 		"resolution": res,
 		"initiator":  map[string]any{"sub": who.sub, "iss": who.iss},
 	}
+	withSurface(w.ctx, ev)
 	if _, err := observe.Check(evidence.KindResolution, ev, vocab.Get()); err != nil {
 		return nil, &Error{Rule: "DG-RESOLUTION", Message: err.Error(), Status: http.StatusBadRequest,
 			Hint: fmt.Sprintf("state is one of %v; a reverted resolution names its cause, one of %v.", observe.ResolutionStates, observe.RevertCauses)}
@@ -174,6 +175,10 @@ func (h *Handler) setResolution(w http.ResponseWriter, r *http.Request) {
 		httpjson.Write(w, http.StatusUnauthorized, map[string]any{"error": "a bearer token is required"})
 		return
 	}
+	ctx, ok := h.withMeta(w, r)
+	if !ok {
+		return
+	}
 	about, err := strconv.ParseInt(r.PathValue("seq"), 10, 64)
 	if err != nil || about < 0 {
 		httpjson.Write(w, http.StatusBadRequest, map[string]any{"error": "seq is the seq of an observation"})
@@ -199,7 +204,7 @@ func (h *Handler) setResolution(w http.ResponseWriter, r *http.Request) {
 		httpjson.Write(w, http.StatusBadRequest, map[string]any{"error": msg})
 		return
 	}
-	out, err := h.Svc.SetResolution(r.Context(), p, about, req, r.Header.Get(vocab.Get().OnBehalfOfHeader))
+	out, err := h.Svc.SetResolution(ctx, p, about, req, r.Header.Get(vocab.Get().OnBehalfOfHeader))
 	if err != nil {
 		h.fail(w, err)
 		return

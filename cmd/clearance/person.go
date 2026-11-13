@@ -11,8 +11,8 @@ import (
 	"github.com/jfillman/clearance/internal/personcli"
 )
 
-// The person commands (docs/cli.md): sign-in and the read commands, against clearance-api with the person's own
-// ID token. `clr` is the same binary under another name: a symlink (`ln -s clearance clr`) is all it takes; the
+// The person commands (docs/cli.md): sign-in, the read commands (clearance-api) and the write commands (the core),
+// each with the person's own ID token. `clr` is the same binary under another name: a symlink (`ln -s clearance clr`) is all it takes; the
 // commands behave the same and only their messages name it.
 
 func personEnv() *personcli.Env {
@@ -62,6 +62,12 @@ func init() {
 	reg("changes list", "list changes (--app --env --state --tier --since)", (*personcli.Env).ChangesList)
 	reg("changes show", "one change: why this tier, approvals, what it binds to, outcome, attestation", (*personcli.Env).ChangesShow)
 	reg("changes history", "a change's deploy.* records in chain order", (*personcli.Env).ChangesHistory)
+	reg("changes clear", "approve a holding change as yourself (--reason, --yes); goes to the core", (*personcli.Env).ChangesClear)
+	reg("changes deny", "deny a holding change (--reason required, --yes); goes to the core", (*personcli.Env).ChangesDeny)
+	reg("exceptions resolve", "resolve exceptions: seqs, --from-file or --all-matching, --as STATE [--cause C] [--plan] [--yes]", (*personcli.Env).ExceptionsResolve)
+	reg("breakglass open", "open a break-glass window (admin; always interactive)", (*personcli.Env).BreakglassOpen)
+	reg("breakglass close", "close a break-glass window early (admin)", (*personcli.Env).BreakglassClose)
+	reg("breakglass list", "the break-glass windows open now (admin)", (*personcli.Env).BreakglassList)
 	reg("attest get", "a change's attestation summary", (*personcli.Env).AttestGet)
 	reg("attest download", "save a change's attestation bundle (-o file)", (*personcli.Env).AttestDownload)
 	reg("exceptions list", "the exceptions (--scope --kind --since)", (*personcli.Env).ExceptionsList)
