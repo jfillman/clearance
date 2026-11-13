@@ -129,22 +129,16 @@ spec:
       ports:
         - {protocol: UDP, port: 53}
         - {protocol: TCP, port: 53}
-    {{- if or (not .Values.web.apiURL) (not .Values.web.coreURL) }}
-    # clearance-api and the core (this release's pods)
+    # clearance-api and the core (this release's pods, always; another host is networkPolicy.web.extraEgress)
     - to:
-        {{- if not .Values.web.apiURL }}
         - podSelector:
             matchLabels:
               {{- include "clearance.selector" (dict "ctx" . "component" "api") | nindent 14 }}
-        {{- end }}
-        {{- if not .Values.web.coreURL }}
         - podSelector:
             matchLabels:
               {{- include "clearance.selector" (dict "ctx" . "component" "core") | nindent 14 }}
-        {{- end }}
       ports:
         - {protocol: TCP, port: 8080}
-    {{- end }}
     {{- with $np.web.idp.to }}
     # The people IdP (networkPolicy.web.idp)
     - to:
