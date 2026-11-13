@@ -167,3 +167,18 @@ func TestProvidersTargetsAreChecked(t *testing.T) {
 		}
 	}
 }
+
+// A targets-only provider registers "kinds": []: it publishes targets and may write no record. targets-dev omits kinds,
+// which stays every non-observation kind (the unchanged default), so it still may.
+func TestTargetsOnlyProviderWritesNoRecords(t *testing.T) {
+	f := memFixture(t)
+	f.do("PUT", "/v1/targets/hangar-prod", tgtProd, targetsBody(target("a", nil))).want(t, 200, "")
+	rec := func(prov string) map[string]any {
+		return map[string]any{"provider": prov, "kind": "run.launch", "record": map[string]any{
+			"session": "s-1", "principal": "autopilot-runs/x", "agent": "x", "result": "created"}}
+	}
+	f.do("POST", "/v1/records", tgtProd, rec("targets-prod")).want(t, 403, "may not write run.launch")
+	f.do("POST", "/v1/records", tgtProd, map[string]any{"provider": "targets-prod", "kind": "observation", "record": map[string]any{}}).
+		want(t, 403, "may not write observation")
+	f.do("POST", "/v1/records", tgtDev, rec("targets-dev")).want(t, 200, "")
+}
