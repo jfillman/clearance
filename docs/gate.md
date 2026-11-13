@@ -118,7 +118,7 @@ Evidence records, in the existing chain, `boundary: deployment`:
 | `deploy.request` | the check registers a change | app, env, repo, pr, commit, tree digest, objects, tier and why, provenance, requirement |
 | `deploy.clear` | policy or a person clears | principal (policy or the person), via, which requirement it satisfies; `approvals` (each person's IdP `sub` and `iss`, `via`, `role`, `at`), `cleared_by`, and `token` (the clearance token's nonce) when it cleared the change (C-1) |
 | `deploy.revoke` | a new head supersedes a cleared change | the revoked token's nonce and the head that superseded it (C-1) |
-| `deploy.attestation` | the core signed the change's attestation after an applied `deploy.outcome` (C-2) | `attestation` {digest (sha256 of the DSSE envelope), backend, outcome_seq, rekor_log_index, rekor_uuid, key_id}; [core.md](core.md#change-attestations) |
+| `deploy.attestation` | the core signed the change's attestation after an applied `deploy.outcome` (C-2) | `attestation` {digest (sha256 of the DSSE envelope), backend, outcome_seq, rekor_log_index, rekor_uuid, key_id}; [core.md](core.md#change-attestations); one change's records, in order: `GET /v1/clearances/{id}/records`; the signed list and server-side verification: [clearance-api.md](clearance-api.md#change-history-and-attestations) |
 | `deploy.deny` | a person denies, or the classifier denies (unknown agent) | reason, rule |
 | `deploy.expire` | the TTL passes | — |
 | `deploy.exception` | admission or the controller sees a change no grant covers | object, who applied it (the admission request's user) |
@@ -517,7 +517,7 @@ release log already holds a promotion attestation by Rekor index, which is the p
 | the attestation predicate (C-2) | `release: {id}` | the core's signer, copied from the change |
 | `release-tracking-<chainId>` ConfigMap | `clearanceId`, `clearanceTree`, `clearanceRequestSeq`, `clearanceRequestHash` | the `clearance-gate` task, right after `POST /v1/clearances` answers (the answer gains the `deploy.request` record's `seq` and `hash`) |
 | glidepath-api `GET /v1/apps/{app}/releases/{chainId}` | `clearance: {id, tree, request: {seq, hash}}` | glidepath-api, from the ConfigMap |
-| the release log `releases/<app>@<tag>.yaml` | `clearance: {id, tree, state, request: {seq, hash}, outcome: {seq, hash}, attestation: {digest, rekorLogIndex}}` | Tower, when it writes the final outcome, read from clearance-api `GET /v1/clearances/{id}` |
+| the release log `releases/<app>@<tag>.yaml` | `clearance: {id, tree, state, request: {seq, hash}, outcome: {seq, hash}, attestation: {digest, rekorLogIndex}}` | Tower, when it writes the final outcome, read from clearance-api `GET /v1/clearances/{id}`; `request` is the answer's `request: {seq, hash}` (the change's first `deploy.request`) |
 | `release.yaml` `releaseTracking` | **nothing new** | it is inside the rendered tree: a change id written there would change the tree it names, so it carries only `releaseId`, as today |
 
 **Following the link.**

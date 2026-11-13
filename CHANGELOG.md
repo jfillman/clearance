@@ -15,6 +15,22 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   from the one distinct-names read (`Store.Scopes`), up to 1000 names, no per-scope statement (a scope picker no longer waits
   seconds for statements it discards). `names` with a `scope`, or any value but `only`, is 400. Tests on both stores prove no
   statement read happens.
+- api: `GET /v1/clearances/{id}/records`, one change's `deploy.*` records in chain order (`seq`, `hash`, `tool`, `ts`,
+  `principal`, the record), paged by `seq` and visible as the change is; and `request: {seq, hash}` (the change's first
+  `deploy.request`) on `GET /v1/clearances/{id}`. Backed by the new partial index `clearance_evidence_change`
+  (`(record->'change'->>'id', seq) WHERE tool LIKE 'deploy.%'`).
+- api: `GET /v1/attestations`, the signed attestations newest first (`app`, `env`, `since`, `until`, `limit`, `after`),
+  each with its change (app, env, release, tree digest), signing time, digest, backend, key id, Rekor index and uuid and the
+  outcome and `deploy.attestation` seqs (index `clearance_attestations_seq`); `GET /v1/clearances` rows gain `attested` and
+  `attestation`; `GET /v1/clearances/counts?by=attestation` counts `attested`, `pending` (applied, not yet attested) and
+  `none`.
+- api: `GET /v1/clearances/{id}/attestation/verify` verifies the stored bundle with the code `clearance attest verify`
+  runs, against the trust set in `CLEARANCE_API_ATTEST_KEY` or `CLEARANCE_API_ATTEST_TRUST_ROOT`, `_IDENTITY`, `_ISSUER`
+  (and `_REKOR_KEY`) and the change's cleared digest, and answers `{verified, checked_at, subject, key_id, rekor, errors}`.
+  The answer is cached in memory per attestation digest and shown as `verification` on the change and the lists.
+  `GET /v1/attestation-config` serves the non-secret config a portal needs (`CLEARANCE_API_ATTEST_REKOR_URL`, identity,
+  issuer, key ids, the offline verify command). Chart values `api.attest.*` (an existing ConfigMap of public material).
+
 - The Map's API (Clearance core and clearance-api; the Backstage plugin's Map reads it).
   - core: `PUT /v1/targets/{source}`, the declared target registry. A source (a cluster's gitops render, an account's
     bootstrap) publishes the targets it declares (id, name, kind, group, env, app, owner, registry tier, the coverage `scope`

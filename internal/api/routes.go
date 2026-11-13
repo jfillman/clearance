@@ -68,6 +68,8 @@ type ClearanceView struct {
 	gate.Change
 	Token       *gate.TokenView  `json:"token"`
 	Attestation *AttestationView `json:"attestation"`
+	// Request is the change's first deploy.request record (its seq and hash on the chain); null when it has none.
+	Request *RecordRef `json:"request"`
 }
 
 // AttestationView is the reference to a change's attestation: the envelope's digest (the one the deploy.attestation
@@ -82,12 +84,19 @@ type AttestationView struct {
 	OutcomeSeq    int64  `json:"outcome_seq"`
 	RecordSeq     int64  `json:"record_seq"`
 	CreatedAt     string `json:"created_at"`
+	// Verification is this replica's last check of the bundle (GET /v1/clearances/{id}/attestation/verify); null
+	// when it has not checked it. Only a verification with verified true says the attestation is verified.
+	Verification *VerificationBrief `json:"verification"`
 }
 
 // ListedChange is a list item: the stored change, and its token in the grant feed (cluster and state=cleared).
 type ListedChange struct {
 	gate.Change
 	Token *gate.TokenView `json:"token,omitempty"`
+	// Attested and Attestation are on every list but the grant feed: whether the change has a signed attestation,
+	// and its reference (as getClearance serves it).
+	Attested    *bool            `json:"attested,omitempty"`
+	Attestation *AttestationView `json:"attestation,omitempty"`
 }
 
 // ErrorBody is every refusal.
@@ -221,8 +230,9 @@ var routeTable = []Route{
 		Response: ChangePage{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).listClearances},
 	{OperationID: "countClearances", Method: "GET", Path: "/v1/clearances/counts", Roles: PersonRoles,
 		Params: []string{"app", "env", "state", "since", "by"},
-		Summary: "Changes counted by state, tier, app, env or cleared_by (the C1 stats: holding, cleared by policy " +
-			"and by people, denied)",
+		Summary: "Changes counted by state, tier, app, env, cleared_by or attestation (the C1 stats: holding, cleared by policy " +
+			"and by people, denied). by=attestation: attested (a signed attestation is stored), pending (the deploy " +
+			"reported an applied outcome and none is stored yet: the signer is waiting or retrying) and none (no applied outcome)",
 		Response: Counts{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).countClearances},
 	{OperationID: "getClearance", Method: "GET", Path: "/v1/clearances/{id}", Roles: FeedRoles, Params: []string{},
 		Summary: "One change: the objects and paths it touches, every reason for its tier, the requirement, the " +
@@ -234,6 +244,36 @@ var routeTable = []Route{
 			"(predicate " + attest.PredicateType + ") and the certificate and Rekor entry that verify it. " +
 			"`clearance attest verify` checks it offline. 404 until a deploy reports an applied outcome",
 		Response: attest.Bundle{}, Errors: []int{401, 403, 404, 503}, serve: (*Server).getAttestation},
+	{OperationID: "verifyClearanceAttestation", Method: "GET", Path: "/v1/clearances/{id}/attestation/verify", Roles: FeedRoles,
+		Params: []string{},
+		Summary: "The stored attestation verified server-side exactly as `clearance attest verify` does: its signature " +
+			"against the configured trust (a static key, or a keyless trust root with the core's identity and issuer), the " +
+			"Rekor entry, and that the statement names the change's cleared digest (tree, or terraform plan) and this " +
+			"change. {verified, checked_at, subject, key_id, rekor{log_index, integrated_time, verified}, errors}. Answers " +
+			"200 with verified false and the reasons for a bundle that fails; 404 when the change has no attestation or " +
+			"this deployment has no trust configured. The answer is remembered per attestation digest until the replica " +
+			"restarts (`cached`); the lists show it as `verification`",
+		Response: VerifyAnswer{}, Errors: []int{401, 403, 404, 503}, serve: (*Server).getAttestationVerify},
+	{OperationID: "listChangeRecords", Method: "GET", Path: "/v1/clearances/{id}/records", Roles: FeedRoles,
+		Params: []string{"limit", "after"},
+		Summary: "One change's history: its deploy.* records (request, clear, answer, outcome, attestation, exception, " +
+			"...) in chain order, each with its seq, hash, tool, ts, principal and the record. The cursor is seq. Seen " +
+			"by whoever may see the change; secret-bearing keys in a record's state_change are redacted for all but an auditor",
+		Response: ChangeRecordPage{}, Errors: []int{400, 401, 403, 404, 503}, serve: (*Server).listChangeRecords},
+	{OperationID: "listAttestations", Method: "GET", Path: "/v1/attestations", Roles: PersonRoles,
+		Params: []string{"app", "env", "since", "until", "limit", "after"},
+		Summary: "The signed change attestations, newest first (the cursor is record_seq, the deploy.attestation record's " +
+			"seq): each with its change (app, env, release, tree digest), when it was signed, the envelope digest, " +
+			"backend, key id, Rekor log index and uuid, the deploy.outcome it attests and this replica's last " +
+			"verification. since and until bound the time signed. A person sees the attestations of the changes they may see. " +
+			"For the changes applied and not yet attested, GET /v1/clearances/counts?by=attestation (pending)",
+		Response: AttestationPage{}, Errors: []int{400, 401, 403, 503}, serve: (*Server).listAttestations},
+	{OperationID: "getAttestationConfig", Method: "GET", Path: "/v1/attestation-config", Roles: PersonRoles,
+		Params: []string{},
+		Summary: "The non-secret attestation configuration a portal needs: whether this api can verify (verifiable), the " +
+			"backends, Rekor's public URL and the link to an entry, the keyless identity and issuer, the static key ids and the " +
+			"offline verify command. Public keys only",
+		Response: AttestationConfig{}, Errors: []int{401, 403}, serve: (*Server).getAttestationConfig},
 	{OperationID: "getClearancePolicy", Method: "GET", Path: "/v1/clearance-policy", Roles: PersonRoles,
 		Params: []string{},
 		Summary: "The deployment gate's baseline policy: the tier table, the people each tier needs, the outside " +

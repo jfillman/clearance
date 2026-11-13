@@ -4,20 +4,24 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/jfillman/clearance/internal/attest"
 	"github.com/jfillman/clearance/internal/authn"
 	"github.com/jfillman/clearance/internal/bundles"
 	"github.com/jfillman/clearance/internal/directory/backstage"
 	"github.com/jfillman/clearance/internal/gate"
 	"github.com/jfillman/clearance/internal/profile"
 	"github.com/jfillman/clearance/internal/store/pg"
+	"github.com/jfillman/clearance/internal/token"
 	"github.com/jfillman/clearance/internal/vocab"
 )
 
@@ -35,6 +39,12 @@ import (
 //	                                    core's store (clearance_definitions), refreshed every
 //	CLEARANCE_API_DEFINITIONS_INTERVAL  seconds (default 30)
 //	CLEARANCE_API_POOL                  Postgres connections per replica (default 5)
+//	CLEARANCE_API_ATTEST_KEY            the attestation signing key's public half (PEM) or the core's JWKS: verifies
+//	                                    static-key attestations (GET /v1/clearances/{id}/attestation/verify)
+//	CLEARANCE_API_ATTEST_TRUST_ROOT     keyless: a Sigstore trusted-root.json, or Fulcio's root and intermediate PEM
+//	CLEARANCE_API_ATTEST_IDENTITY, _ISSUER  keyless: the identity and OIDC issuer the certificate must name
+//	CLEARANCE_API_ATTEST_REKOR_KEY      keyless with a PEM trust root: Rekor's public key (not with a trusted-root.json)
+//	CLEARANCE_API_ATTEST_REKOR_URL      Rekor's public URL, for the portal's "open in Rekor" links
 //	CLEARANCE_BUNDLES, CLEARANCE_BUNDLE_SOURCES, CLEARANCE_ENV_*  the policy the core runs (internal/bundles), for
 //	                                    /v1/policy and the explainer
 //	CLEARANCE_GATEWAY_URL               where the runtime's writes go, named in /v1/contract as gateway
@@ -60,6 +70,7 @@ type Config struct {
 	BackstageURL                   string
 	BackstageTokenFile             string
 	Auth                           authn.Authenticator
+	Attest                         *AttestTrust // nil: nothing configured, so nothing is verified here
 }
 
 func list(v string) []string {
@@ -135,7 +146,91 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	if cfg.Auth, err = authn.FromEnv(getenv); err != nil {
 		return cfg, err
 	}
+	if cfg.Attest, err = attestTrustFromEnv(getenv); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
+}
+
+// attestTrustFromEnv reads the attestation trust: nil when no variable names any. The checks are the CLI's
+// (`clearance attest verify`): a keyless trust root needs the identity and issuer, a PEM one Rekor's key, and a
+// trusted-root.json carries Rekor's keys so refuses one.
+func attestTrustFromEnv(getenv func(string) string) (*AttestTrust, error) {
+	names := []string{"CLEARANCE_API_ATTEST_KEY", "CLEARANCE_API_ATTEST_TRUST_ROOT", "CLEARANCE_API_ATTEST_IDENTITY",
+		"CLEARANCE_API_ATTEST_ISSUER", "CLEARANCE_API_ATTEST_REKOR_KEY", "CLEARANCE_API_ATTEST_REKOR_URL"}
+	any := false
+	for _, n := range names {
+		any = any || getenv(n) != ""
+	}
+	if !any {
+		return nil, nil
+	}
+	t := &AttestTrust{Identity: getenv("CLEARANCE_API_ATTEST_IDENTITY"), Issuer: getenv("CLEARANCE_API_ATTEST_ISSUER"),
+		RekorURL: getenv("CLEARANCE_API_ATTEST_REKOR_URL")}
+	read := func(name string) ([]byte, error) {
+		path := getenv(name)
+		f, err := os.Open(path)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", name, err)
+		}
+		defer f.Close()
+		b, err := io.ReadAll(io.LimitReader(f, token.MaxEnvelopeBytes+1))
+		if err != nil || len(b) > token.MaxEnvelopeBytes {
+			return nil, fmt.Errorf("%s: unreadable or over %d bytes", name, token.MaxEnvelopeBytes)
+		}
+		return b, nil
+	}
+	if t.RekorURL != "" {
+		u, err := attest.CheckURL("CLEARANCE_API_ATTEST_REKOR_URL", t.RekorURL)
+		if err != nil {
+			return nil, err
+		}
+		t.RekorURL = u.String()
+	}
+	if getenv("CLEARANCE_API_ATTEST_KEY") != "" {
+		b, err := read("CLEARANCE_API_ATTEST_KEY")
+		if err != nil {
+			return nil, err
+		}
+		if t.Keys, err = attest.ParseKeys(b); err != nil {
+			return nil, fmt.Errorf("CLEARANCE_API_ATTEST_KEY: %w", err)
+		}
+	}
+	if getenv("CLEARANCE_API_ATTEST_TRUST_ROOT") != "" {
+		b, err := read("CLEARANCE_API_ATTEST_TRUST_ROOT")
+		if err != nil {
+			return nil, err
+		}
+		if t.Identity == "" || t.Issuer == "" {
+			return nil, errors.New("CLEARANCE_API_ATTEST_TRUST_ROOT needs CLEARANCE_API_ATTEST_IDENTITY and CLEARANCE_API_ATTEST_ISSUER")
+		}
+		pemKey := getenv("CLEARANCE_API_ATTEST_REKOR_KEY")
+		if strings.HasPrefix(strings.TrimSpace(string(b)), "{") {
+			if pemKey != "" {
+				return nil, errors.New("CLEARANCE_API_ATTEST_REKOR_KEY: not with a trusted-root.json, which carries Rekor's keys")
+			}
+			if t.Trust, err = attest.ParseTrustedRoot(b); err != nil {
+				return nil, fmt.Errorf("CLEARANCE_API_ATTEST_TRUST_ROOT: %w", err)
+			}
+		} else {
+			if pemKey == "" {
+				return nil, errors.New("CLEARANCE_API_ATTEST_TRUST_ROOT as PEM needs CLEARANCE_API_ATTEST_REKOR_KEY")
+			}
+			if t.Roots, err = attest.ParseRoots(b); err != nil {
+				return nil, fmt.Errorf("CLEARANCE_API_ATTEST_TRUST_ROOT: %w", err)
+			}
+			kb, err := read("CLEARANCE_API_ATTEST_REKOR_KEY")
+			if err != nil {
+				return nil, err
+			}
+			if t.RekorKey, err = attest.ParseRekorKey(kb); err != nil {
+				return nil, fmt.Errorf("CLEARANCE_API_ATTEST_REKOR_KEY: %w", err)
+			}
+		}
+	} else if t.Identity != "" || t.Issuer != "" || getenv("CLEARANCE_API_ATTEST_REKOR_KEY") != "" {
+		return nil, errors.New("CLEARANCE_API_ATTEST_IDENTITY, _ISSUER and _REKOR_KEY are for a keyless trust root (CLEARANCE_API_ATTEST_TRUST_ROOT)")
+	}
+	return t, nil
 }
 
 // ShutdownTimeout is how long Run waits for requests in flight once its context ends.
@@ -185,7 +280,7 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 	}
 	gp := gate.DefaultPolicy().View()
 	srv, err := New(Options{Store: st, Auth: cfg.Auth, Access: access, Engine: eng, GatePolicy: &gp,
-		Definitions: defs, GatewayURL: cfg.GatewayURL, CoreURL: cfg.CoreURL, Log: log})
+		Definitions: defs, GatewayURL: cfg.GatewayURL, CoreURL: cfg.CoreURL, Log: log, Attest: cfg.Attest})
 	if err != nil {
 		return err
 	}

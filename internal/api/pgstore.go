@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/jfillman/clearance/internal/canon"
 	"github.com/jfillman/clearance/internal/evidence"
 	"github.com/jfillman/clearance/internal/store"
@@ -463,7 +465,7 @@ func (s *PG) Change(ctx context.Context, id string) (json.RawMessage, error) {
 
 // changeCountCol is api.py change_counts' column per `by`.
 var changeCountCol = map[string]string{"state": "c.state", "tier": "c.record->>'tier'", "app": "c.app",
-	"env": "c.env", "cleared_by": "c.record->>'cleared_by'"}
+	"env": "c.env", "cleared_by": "c.record->>'cleared_by'", "attestation": attestationState}
 
 func (s *PG) ChangeCounts(ctx context.Context, f ChangeFilter, v *Viewer, by string) ([]Count, error) {
 	col, ok := changeCountCol[by]
@@ -671,4 +673,92 @@ func in(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// attestationState is the by=attestation group of a change: attested (an attestation row), pending (the deploy
+// reported an applied outcome and no attestation is stored yet: the signer is waiting or retrying) or none (nothing
+// to attest: no applied outcome).
+const attestationState = "CASE WHEN EXISTS (SELECT 1 FROM clearance_attestations a WHERE a.change_id = c.id) THEN 'attested' " +
+	"WHEN c.record->'outcome'->>'applied' = 'true' THEN 'pending' ELSE 'none' END"
+
+// ChangeRecords reads clearance_evidence_change: (the change id, seq) of the deploy.* records. The LIKE is the
+// index's own predicate, spelled as the index spells it.
+func (s *PG) ChangeRecords(ctx context.Context, id, tool string, limit int, after *int64) ([]Record, error) {
+	b := &q{}
+	b.add("e.record->'change'->>'id' = " + b.arg(id))
+	b.add("e.record->>'tool' LIKE 'deploy.%'")
+	if tool != "" {
+		b.add("e.record->>'tool' = " + b.arg(tool))
+	}
+	if after != nil {
+		b.add("e.seq > " + b.arg(*after))
+	}
+	return s.records(ctx, "SELECT e.record::text, e.assurance FROM clearance_evidence e WHERE "+b.sql()+
+		" ORDER BY e.seq LIMIT "+b.arg(limit), b.args)
+}
+
+// attestationRefCols are clearance_attestations' columns without the bundle, in scanAttestationRef's order.
+const attestationRefCols = "a.change_id, a.digest, a.backend, a.key_id, a.rekor_log_index, a.rekor_uuid, a.outcome_seq, a.record_seq, a.created_at"
+
+func scanAttestationRef(row pgx.Row, extra ...any) (store.Attestation, error) {
+	var a store.Attestation
+	dst := append([]any{&a.ChangeID, &a.Digest, &a.Backend, &a.KeyID, &a.RekorLogIndex, &a.RekorUUID, &a.OutcomeSeq,
+		&a.RecordSeq, &a.CreatedAt}, extra...)
+	err := row.Scan(dst...)
+	return a, err
+}
+
+// Attestations walks clearance_attestations_seq (record_seq DESC) and joins each row's change by its primary key.
+func (s *PG) Attestations(ctx context.Context, f AttestationFilter, v *Viewer, limit int, after *int64) ([]AttestationRow, error) {
+	b := &q{}
+	b.changeScope(v)
+	b.eq("c.app", f.App)
+	b.eq("c.env", f.Env)
+	if !f.Since.IsZero() {
+		b.add("a.created_at >= " + b.arg(f.Since))
+	}
+	if !f.Until.IsZero() {
+		b.add("a.created_at < " + b.arg(f.Until))
+	}
+	if after != nil {
+		b.add("a.record_seq < " + b.arg(*after))
+	}
+	rows, done, err := s.R.Query(ctx, "SELECT "+attestationRefCols+", c.record::text FROM clearance_attestations a "+
+		"JOIN clearance_changes c ON c.id = a.change_id WHERE "+b.sql()+" ORDER BY a.record_seq DESC LIMIT "+b.arg(limit), b.args...)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	defer rows.Close()
+	out := []AttestationRow{}
+	for rows.Next() {
+		var text string
+		a, err := scanAttestationRef(rows, &text)
+		if err != nil {
+			return nil, fmt.Errorf("pg: %w", err)
+		}
+		out = append(out, AttestationRow{Attestation: a, Change: json.RawMessage(text)})
+	}
+	return out, rows.Err()
+}
+
+func (s *PG) AttestationsOf(ctx context.Context, ids []string) (map[string]store.Attestation, error) {
+	out := map[string]store.Attestation{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, done, err := s.R.Query(ctx, "SELECT "+attestationRefCols+" FROM clearance_attestations a WHERE a.change_id = ANY($1)", ids)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	defer rows.Close()
+	for rows.Next() {
+		a, err := scanAttestationRef(rows)
+		if err != nil {
+			return nil, fmt.Errorf("pg: %w", err)
+		}
+		out[a.ChangeID] = a
+	}
+	return out, rows.Err()
 }

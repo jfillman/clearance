@@ -166,6 +166,29 @@ type Store interface {
 	Feed(ctx context.Context, cluster string) (*store.Feed, error)
 	// Installations are the GitHub App installations the records name (principal app:<id>), at most MaxLimit.
 	Installations(ctx context.Context) ([]Installation, error)
+
+	// ChangeRecords is the gate's deploy.* records that name change id (record.change.id), in chain order (seq
+	// ascending), with seq above after (when not nil), at most limit. tool, when not "", keeps one tool. Unscoped: the
+	// caller checks the change's visibility.
+	ChangeRecords(ctx context.Context, id, tool string, limit int, after *int64) ([]Record, error)
+	// Attestations is up to limit attestations of the changes the viewer may see matching f, newest first (by the
+	// deploy.attestation record's seq), below seq after (when not nil), each with its change as stored.
+	Attestations(ctx context.Context, f AttestationFilter, v *Viewer, limit int, after *int64) ([]AttestationRow, error)
+	// AttestationsOf is the attestations (without their bundles) of the changes ids, by change id.
+	AttestationsOf(ctx context.Context, ids []string) (map[string]store.Attestation, error)
+}
+
+// AttestationFilter is the attestation list's filters; "" and the zero time are unset. Since and Until bound the
+// time the attestation was signed (since <= signed < until).
+type AttestationFilter struct {
+	App, Env     string
+	Since, Until time.Time
+}
+
+// AttestationRow is one attestation (its Bundle left empty) with the change it attests as stored.
+type AttestationRow struct {
+	Attestation store.Attestation
+	Change      json.RawMessage
 }
 
 // PRFilter is the receipts' and verdicts' filters.

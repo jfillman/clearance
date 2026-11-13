@@ -57,6 +57,10 @@ the inbox, trigger history, results), so the Go API serves only Clearance's own 
 | countClearances | `GET /v1/clearances/counts` | **ported** |
 | getClearance | `GET /v1/clearances/{id}` | **ported**; adds `token` (C-1) and `attestation` (C-2: the digest, backend and Rekor index of the signed change attestation, or `null`) |
 | (new) getClearanceAttestation | `GET /v1/clearances/{id}/attestation` | **new** (C-2): the change's attestation as a Sigstore bundle, for `clearance attest verify`; 404 until a deploy reports an applied outcome ([core.md](core.md#change-attestations)) |
+| (new) verifyClearanceAttestation | `GET /v1/clearances/{id}/attestation/verify` | **new**: the stored bundle verified server-side ([below](#change-history-and-attestations)) |
+| (new) listChangeRecords | `GET /v1/clearances/{id}/records` | **new**: one change's `deploy.*` records in chain order ([below](#change-history-and-attestations)) |
+| (new) listAttestations | `GET /v1/attestations` | **new**: the signed attestations, newest first ([below](#change-history-and-attestations)) |
+| (new) getAttestationConfig | `GET /v1/attestation-config` | **new**: Rekor's public URL, the keyless identity and issuer, the static key ids, the offline verify command |
 | getClearancePolicy | `GET /v1/clearance-policy` | **ported** |
 | getContract | `GET /v1/contract` | **ported**; an OpenAPI 3.1 document since C-10, naming `x-clearance-core` (`CLEARANCE_CORE_URL`) and `x-clearance-gateway` |
 | (healthz, readyz) | `GET /healthz`, `/readyz` | **ported**; readyz checks the database |
@@ -387,6 +391,9 @@ gateway, never by the App), the receipts of pull requests that installation chec
 | `CLEARANCE_API_POOL` | 5 | Postgres connections per replica (1 to 50) |
 | `CLEARANCE_BUNDLES`, `CLEARANCE_BUNDLE_SOURCES`, `CLEARANCE_BUNDLE_SOURCE_WAIT`, `CLEARANCE_ENV_*` | none | the policy bundles the core runs ([core.md](core.md#policy-bundles)), for `/v1/policy` and the explainer; loaded as the core loads them: a source that does not answer leaves the bundle degraded (named in `/readyz` `degraded`, still 200) until it answers |
 | `CLEARANCE_ON_BEHALF_OF_HEADER`, `CLEARANCE_V0_PROVIDER` and the rest of the vocabulary | core.md | the header a delegate names a person in, the provider v0-draft rows are projected with ([core.md](core.md#configuration)) |
+| `CLEARANCE_API_ATTEST_KEY` | none | the attestation signing key's **public** half (PEM) or the core's JWKS: verifies static-key attestations |
+| `CLEARANCE_API_ATTEST_TRUST_ROOT`, `CLEARANCE_API_ATTEST_IDENTITY`, `CLEARANCE_API_ATTEST_ISSUER` | none | keyless: a Sigstore `trusted-root.json` (or Fulcio's root and intermediates as PEM, with `CLEARANCE_API_ATTEST_REKOR_KEY`) and the identity and OIDC issuer the certificate must name; the same inputs as `clearance attest verify` |
+| `CLEARANCE_API_ATTEST_REKOR_URL` | none | Rekor's public URL, for "open in Rekor" links (`/v1/attestation-config`). The chart: `api.attest.*`, files in an existing ConfigMap mounted at `/etc/clearance/attest-trust` |
 | `CLEARANCE_CORE_URL` | none | where Clearance's writes go, named in `/v1/contract` as `core` |
 | `CLEARANCE_GATEWAY_URL` | none | where the runtime's writes go, named in `/v1/contract` as `gateway` |
 | `BACKSTAGE_URL`, `BACKSTAGE_TOKEN_FILE` | none, `/var/run/clearance/backstage-token` | a person's groups (memberOf) and the apps they own (Components by `spec.owner`, `backstage.Ownership`) |
@@ -401,8 +408,11 @@ The schema has the primary key on `seq`, `clearance_evidence_receipt`, `clearanc
 installations' records, `((record->>'principal'), seq) WHERE principal LIKE 'app:%'`, behind
 `/v1/github/installations` and the installation filter) and the `clearance_changes` indexes and (C-6)
 `clearance_evidence_exceptions`, a partial index on `seq` whose predicate `GET /v1/exceptions` repeats word for word
-(`TestExceptionsUseTheIndex`); this package adds none
-(the core owns the schema). The stream reads the primary key's range above its cursor; the signed feed is one row
+(`TestExceptionsUseTheIndex`), and, for the change history, `clearance_evidence_change`
+(`((record->'change'->>'id'), seq) WHERE record->>'tool' LIKE 'deploy.%'`, behind `GET /v1/clearances/{id}/records` and
+the `request` reference) and `clearance_attestations_seq` (`record_seq DESC`, behind `GET /v1/attestations`); both are
+in the core's schema (`CREATE INDEX IF NOT EXISTS`), and this package's queries repeat the predicate as written; this
+package adds none of its own (the core owns the schema). The stream reads the primary key's range above its cursor; the signed feed is one row
 of `clearance_feeds` by its primary key. The list is paged by `seq DESC` on the primary key and every filter is
 applied on the way; at the lab's size that is well inside the statement timeout. Before the chain is large, the
 core's schema should gain (a migration, not done here):
@@ -415,6 +425,48 @@ core's schema should gain (a migration, not done here):
 - `clearance_evidence ((record->>'target')) WHERE record->>'tool' = 'provenance.verify'`: verdicts by PR.
 - `clearance_changes ((record->>'updated_at'))`: the changes list's order and cursor (api.py orders by the record's
   `updated_at`, not the indexed column).
+
+### Change history and attestations
+
+Built for the Tower change detail and Attestations boards. All reads; every one is as visible as the change.
+
+- `GET /v1/clearances/{id}/records[?limit&after]`: the change's `deploy.*` records (request, clear, answer, revoke,
+  outcome, attestation, exception, ...) in chain order, found by the record's `change.id`. Each item is `{seq, hash,
+  tool, ts, principal, record}` (the record as `GET /v1/evidence/{seq}` serves it); `next` is the last `seq` when the page
+  is full, pass it as `after`. A person reads them redacted like an exception (secret-bearing `state_change` keys); an
+  auditor as stored.
+- `GET /v1/clearances/{id}` gains `request: {seq, hash}`, the change's first `deploy.request` (the record
+  `POST /v1/clearances` wrote when it registered the change; the `request` the release log carries, [gate.md](gate.md#the-release-record-join-g-argo-6-built)),
+  or `null`.
+- `GET /v1/attestations[?app&env&since&until&limit&after]`: the attestations of the changes you may see, newest first,
+  `since`/`until` bounding when they were signed, cursor `record_seq`. An item: `change_id, app, env, cluster, release_id`
+  (the change's `outcome.release`), `tree_digest, signed_at, digest, backend, key_id, rekor_log_index, rekor_uuid,
+  outcome_seq, record_seq` (the `deploy.attestation` record's seq) and `verification`.
+- `GET /v1/clearances` rows gain `attested` and `attestation` (the reference `GET /v1/clearances/{id}` shows, null for
+  none) on every list but the grant feed.
+- `GET /v1/clearances/counts?by=attestation`: `attested` (a signed attestation is stored), `pending` (the deploy
+  reported an applied outcome and none is stored: the signer is waiting or retrying, or attestation is off) and `none`
+  (no applied outcome). The stat tile "applied, not attested" is `pending`. Same `app`, `env`, `state`, `since` filters.
+- `GET /v1/attestation-config`: `{verifiable, modes, rekor_url, rekor_entry_url, identity, issuer, key_ids,
+  verify_commands}`. Public values only (the keyless identity and issuer, the static keys' ids, Rekor's URL, a
+  `rekor_entry_url` with `{log_index}` to fill); no key material. `verifiable` is false when no trust is configured.
+
+**Server-side verification**, `GET /v1/clearances/{id}/attestation/verify`: a pure read (clearance-api has no write
+path). It runs `attest.Verify`, the code `clearance attest verify` runs, on the stored bundle, with the trust the api
+was started with (`CLEARANCE_API_ATTEST_*`) and the change's cleared digest as the required subject (the tree digest,
+or the plan digest for a terraform change). It then holds the bundle to the change: the envelope's digest is the stored
+one, and the statement is about this change id. The answer is `{verified, cached, checked_at, digest, subject, mode,
+key_id, identity, issuer, rekor: {log_index, integrated_time, verified}, errors}`. A bundle that fails is a 200 with
+`verified: false` and the reason in `errors`; 404 is no such change, no attestation, or no trust configured. What it
+trusts: only the configured keys, trust root, identity and issuer; the database is not trusted (a stored bundle that
+does not verify, or whose digest is not the recorded one, fails). What it does not do is what the CLI does not: it
+checks Rekor's signed entry timestamp, not an inclusion proof. A portal says "verified" **only** when this answers
+`verified: true`; the lists' `verification` is the last such answer (`{verified, checked_at}`, null if never checked).
+
+The answer is remembered per replica, in memory, by change id and envelope digest (at most 5000, the oldest half
+dropped when full), until the replica restarts; `cached: true` says it was not re-run. Verification is offline
+cryptography (no Rekor call), so re-running it is cheap, but the list never re-verifies rows. A replica that has not
+been asked shows `verification: null`.
 
 ### Verifying against api.py
 
