@@ -9,6 +9,8 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.44.1] - 2026-11-13
+
 ### Fixed
 
 - api: `GET /v1/coverage` with no `scope` no longer slows down and times out as health history grows. The scope list was
@@ -1300,7 +1302,8 @@ What the Autopilot gateway needs of the core before the hangar-dev cutover (R-3e
   scope, narrow-only limits, CEL policy, sessions, the hash-chained audit log and the gateway; the Hangar pack's
   `glidepath.*` and `airframe.*` tools over glidepath-api and a GET-only Kubernetes adapter.
 
-[Unreleased]: https://github.com/jfillman/clearance/compare/v0.44.0...HEAD
+[Unreleased]: https://github.com/jfillman/clearance/compare/v0.44.1...HEAD
+[0.44.1]: https://github.com/jfillman/clearance/compare/v0.44.0...v0.44.1
 [0.44.0]: https://github.com/jfillman/clearance/compare/v0.43.0...v0.44.0
 [0.43.0]: https://github.com/jfillman/clearance/compare/v0.42.1...v0.43.0
 [0.42.1]: https://github.com/jfillman/clearance/compare/v0.42.0...v0.42.1
