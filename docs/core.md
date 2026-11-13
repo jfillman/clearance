@@ -441,6 +441,8 @@ transaction.
 - `GET /v1/clearances/{id}` adds `attestation`: `{digest, backend, key_id, rekor_log_index, rekor_uuid, outcome_seq,
   record_seq, created_at}`, or `null`.
 - `GET /v1/clearances/{id}/attestation` is the bundle (404 until the change has one).
+- `GET /v1/clearances/{id}/attestation/verify` verifies the stored bundle server-side with `attest.Verify`, against the
+  trust clearance-api is configured with, and `GET /v1/attestations` lists them ([clearance-api.md](clearance-api.md#change-history-and-attestations)).
 
 **Verifying.** `clearance attest verify` checks, offline: the payload type; the signature (static: a key in `--key`;
 keyless: the leaf certificate chains to `--trust-root` at **Rekor's integrated time**, with `--identity` as its SAN and

@@ -143,6 +143,9 @@ CREATE TABLE IF NOT EXISTS clearance_ledger_checkpoints (
   note   bytea       NOT NULL,
   at     timestamptz NOT NULL
 );
+CREATE INDEX IF NOT EXISTS clearance_evidence_change ON clearance_evidence ((record->'change'->>'id'), seq)
+  WHERE record->>'tool' LIKE 'deploy.%';
+CREATE INDEX IF NOT EXISTS clearance_attestations_seq ON clearance_attestations (record_seq DESC);
 `
 
 // Options tune a store; the zero value is the defaults.

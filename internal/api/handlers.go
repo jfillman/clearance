@@ -23,7 +23,7 @@ import (
 // CHANGE_COUNT_BY). ChangeStates are a change's states.
 var (
 	CountBy       = []string{"rule", "tool", "agent", "app", "decision", "coverage"}
-	ChangeCountBy = []string{"state", "tier", "app", "env", "cleared_by"}
+	ChangeCountBy = []string{"state", "tier", "app", "env", "cleared_by", "attestation"}
 	ChangeStates  = gate.States
 	outcomeModes  = []string{OutcomesInclude, OutcomesExclude, OutcomesOnly}
 	// CostPer are what counts by=cost groups by; costField the record field of each.
@@ -394,6 +394,9 @@ func (s *Server) listClearances(w http.ResponseWriter, r *http.Request, v *Viewe
 			s.readFailed(w, r, err)
 			return
 		}
+	} else if items, err = s.withAttestations(r, items); err != nil {
+		s.readFailed(w, r, err)
+		return
 	}
 	page := ChangePage{Items: items}
 	if len(items) == limit && limit > 0 {
@@ -461,7 +464,7 @@ func (s *Server) getClearance(w http.ResponseWriter, r *http.Request, v *Viewer)
 	}
 	var view any
 	if att != nil {
-		view = viewAttestation(*att)
+		view = s.attView(*att)
 	}
 	vb, err := json.Marshal(view)
 	if err != nil {
@@ -469,6 +472,19 @@ func (s *Server) getClearance(w http.ResponseWriter, r *http.Request, v *Viewer)
 		return
 	}
 	joined, err := addField(out[0], "attestation", vb)
+	if err != nil {
+		s.readFailed(w, r, err)
+		return
+	}
+	req, err := s.requestRef(r, r.PathValue("id"))
+	if err != nil {
+		s.readFailed(w, r, err)
+		return
+	}
+	rb, err := json.Marshal(req)
+	if err == nil {
+		joined, err = addField(joined, "request", rb)
+	}
 	if err != nil {
 		s.readFailed(w, r, err)
 		return

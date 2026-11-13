@@ -364,6 +364,22 @@ api:
   gatewayURL: ""
   # CLEARANCE_API_POOL: the read pool's size.
   pool: 5
+  # What GET /v1/clearances/{id}/attestation/verify trusts, and what GET /v1/attestation-config shows. Public material
+  # only: an existing ConfigMap you manage, mounted read-only at /etc/clearance/attest-trust, holding the files named
+  # below. Empty: the api verifies nothing and no portal may call an attestation verified.
+  attest:
+    configMap: ""
+    # CLEARANCE_API_ATTEST_KEY: the static signing key's public half (PEM) or the core's JWKS; a file in the ConfigMap.
+    key: ""
+    # CLEARANCE_API_ATTEST_TRUST_ROOT: keyless, a Sigstore trusted-root.json (`clearance trust-root build`) or Fulcio's
+    # PEM chain (then rekorKey too); a file in the ConfigMap. With identity and issuer.
+    trustRoot: ""
+    rekorKey: ""
+    # CLEARANCE_API_ATTEST_IDENTITY and _ISSUER: what the keyless certificate must name (the core's OIDC subject, issuer).
+    identity: ""
+    issuer: ""
+    # CLEARANCE_API_ATTEST_REKOR_URL: Rekor's public URL, for "open in Rekor" links.
+    rekorUrl: ""
   # CLEARANCE_API_DEFINITIONS_INTERVAL: seconds between re-reads of the stored agent definitions.
   definitionsInterval: 30
   resources:

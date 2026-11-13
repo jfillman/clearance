@@ -561,6 +561,23 @@ func (m *memStore) ChangeCounts(_ context.Context, f ChangeFilter, v *Viewer, by
 			keys = append(keys, keyOf(json.Number(strconv.FormatInt(cv.Tier, 10))))
 		case "cleared_by":
 			keys = append(keys, cv.ClearedBy)
+		case "attestation":
+			state := "none"
+			var oc struct {
+				Outcome *struct {
+					Applied bool `json:"applied"`
+				} `json:"outcome"`
+			}
+			_ = json.Unmarshal(c.Record, &oc)
+			for _, a := range m.atts {
+				if a.ChangeID == c.ID {
+					state = "attested"
+				}
+			}
+			if state == "none" && oc.Outcome != nil && oc.Outcome.Applied {
+				state = "pending"
+			}
+			keys = append(keys, &state)
 		}
 	}
 	out := group(keys)
@@ -712,6 +729,62 @@ func (m *memStore) Installations(context.Context) ([]Installation, error) {
 		inst := byID[p]
 		sort.Strings(inst.Repos)
 		out = append(out, *inst)
+	}
+	return out, m.fail
+}
+
+func (m *memStore) ChangeRecords(_ context.Context, id, tool string, limit int, after *int64) ([]Record, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := []Record{}
+	for _, r := range m.recs {
+		seq, _ := seqOf(r)
+		t, _ := str(r["tool"])
+		ch, _ := r["change"].(map[string]any)
+		if cid, _ := str(ch["id"]); cid != id || !strings.HasPrefix(t, "deploy.") || (tool != "" && t != tool) ||
+			(after != nil && seq <= *after) || len(out) >= limit {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out, m.fail
+}
+
+func (m *memStore) Attestations(_ context.Context, f AttestationFilter, v *Viewer, limit int, after *int64) ([]AttestationRow, error) {
+	var out []AttestationRow
+	for _, a := range m.atts {
+		for _, c := range m.changes {
+			if c.ID != a.ChangeID || !changeVisible(c.Record, v) || (f.App != "" && c.App != f.App) || (f.Env != "" && c.Env != f.Env) {
+				continue
+			}
+			if (!f.Since.IsZero() && a.CreatedAt.Before(f.Since)) || (!f.Until.IsZero() && !a.CreatedAt.Before(f.Until)) ||
+				(after != nil && a.RecordSeq >= *after) {
+				continue
+			}
+			a := a
+			a.Bundle = nil
+			out = append(out, AttestationRow{Attestation: a, Change: c.Record})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Attestation.RecordSeq > out[j].Attestation.RecordSeq })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	if out == nil {
+		out = []AttestationRow{}
+	}
+	return out, m.fail
+}
+
+func (m *memStore) AttestationsOf(_ context.Context, ids []string) (map[string]store.Attestation, error) {
+	out := map[string]store.Attestation{}
+	for _, a := range m.atts {
+		for _, id := range ids {
+			if a.ChangeID == id {
+				a.Bundle = nil
+				out[id] = a
+			}
+		}
 	}
 	return out, m.fail
 }
