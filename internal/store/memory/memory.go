@@ -278,6 +278,9 @@ func (t *tx) UseSigningKey(ctx context.Context, k store.SigningKey, now time.Tim
 		}
 	}
 	if old, ok := keys[k.KeyID]; ok {
+		if old.RevokedAt != nil {
+			return store.ErrKeyRevoked
+		}
 		old.RetiredAt = nil
 		keys[k.KeyID] = old
 	} else {
@@ -285,6 +288,38 @@ func (t *tx) UseSigningKey(ctx context.Context, k store.SigningKey, now time.Tim
 	}
 	t.keys = keys
 	return nil
+}
+
+func (t *tx) RevokeSigningKey(ctx context.Context, keyID string, now time.Time) (store.SigningKey, bool, error) {
+	if err := t.lock(); err != nil {
+		return store.SigningKey{}, false, err
+	}
+	defer t.mu.Unlock()
+	keys := t.keys
+	if keys == nil {
+		t.s.mu.RLock()
+		keys = make(map[string]store.SigningKey, len(t.s.keys))
+		for id, x := range t.s.keys {
+			keys[id] = x
+		}
+		t.s.mu.RUnlock()
+	}
+	k, ok := keys[keyID]
+	switch {
+	case !ok:
+		return store.SigningKey{}, false, store.ErrNotFound
+	case k.RevokedAt != nil:
+		k.JWK = bytes.Clone(k.JWK)
+		return k, false, nil
+	case k.RetiredAt == nil:
+		return store.SigningKey{}, false, store.ErrKeyInUse
+	}
+	at := now
+	k.RevokedAt = &at
+	keys[keyID] = k
+	t.keys = keys
+	k.JWK = bytes.Clone(k.JWK)
+	return k, true, nil
 }
 
 func (t *tx) PutBreakglass(ctx context.Context, b store.Breakglass) error {

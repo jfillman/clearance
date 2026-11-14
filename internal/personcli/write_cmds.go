@@ -728,3 +728,121 @@ func (e *Env) PacketDeliver(ctx context.Context, args []string) int {
 		return nil
 	}())
 }
+
+// PacketRevoke is `clearance packet revoke <packet-id> <delivery-id> --reason R`: an admin revokes a delivery. From the record
+// on, every read, sample and new receipt under its credential is refused PK-REVOKED. A revoked delivery is never un-revoked: open a
+// new one. The answer shows the revoked state, when and why (the same answer on a repeat).
+func (e *Env) PacketRevoke(ctx context.Context, args []string) int {
+	var reason string
+	var yes bool
+	s, pos, ee := e.begin("packet revoke", "<packet-id> <delivery-id> --reason TEXT [--yes]", args, func(fs *flag.FlagSet) {
+		fs.StringVar(&reason, "reason", "", "why (1 to 200 printable characters; recorded in the chain and carried in packets: no secret)")
+		fs.BoolVar(&yes, "yes", false, "do not ask for confirmation")
+	})
+	if ee != nil {
+		return e.finish("packet revoke", ee)
+	}
+	if len(pos) != 2 || reason == "" {
+		return e.finish("packet revoke", s.usageErr())
+	}
+	return e.finish("packet revoke", func() error {
+		core, err := s.coreClient()
+		if err != nil {
+			return err
+		}
+		if ee := s.confirm(yes, false, fmt.Sprintf("Revoke delivery %s of packet %s? Its credential stops working at once and this cannot be undone; a recipient that already downloaded the packet keeps it.", pos[1], pos[0]), ""); ee != nil {
+			return ee
+		}
+		var raw json.RawMessage
+		if err := core.Post(ctx, "/v1/packets/"+url.PathEscape(pos[0])+"/deliveries/"+url.PathEscape(pos[1])+"/revoke", map[string]any{"reason": reason}, viaHeaders, &raw); err != nil {
+			return err
+		}
+		if wrote, err := emit(e.Stdout, s.format, raw, ""); wrote || err != nil {
+			return err
+		}
+		var out map[string]any
+		_ = json.Unmarshal(raw, &out)
+		fmt.Fprintf(e.Stdout, "delivery %s to %s is %s (revoked at %s, record %v, new: %v): %s\n", str(out, "id"), str(out, "recipient"), str(out, "state"),
+			str(out, "revoked_at"), out["seq"], out["created"], str(out, "reason"))
+		return nil
+	}())
+}
+
+// PacketRevokeKey is `clearance packet revoke-key <recipient> <key-id> --reason R [--as-of T]`: an admin revokes a key a recipient
+// registered, as of a time. A receipt signed with it is refused at submit; `clearance verify` fails one signed at or after the as-of time.
+func (e *Env) PacketRevokeKey(ctx context.Context, args []string) int {
+	var reason, asOf string
+	var yes bool
+	s, pos, ee := e.begin("packet revoke-key", "<recipient> <key-id> --reason TEXT [--as-of RFC3339] [--yes]", args, func(fs *flag.FlagSet) {
+		fs.StringVar(&reason, "reason", "", "why (1 to 200 printable characters; recorded in the chain and carried in packets: no secret)")
+		fs.StringVar(&asOf, "as-of", "", "the time the key is revoked as of (default now; a past time says it was compromised since then)")
+		fs.BoolVar(&yes, "yes", false, "do not ask for confirmation")
+	})
+	if ee != nil {
+		return e.finish("packet revoke-key", ee)
+	}
+	if len(pos) != 2 || reason == "" {
+		return e.finish("packet revoke-key", s.usageErr())
+	}
+	return e.finish("packet revoke-key", func() error {
+		core, err := s.coreClient()
+		if err != nil {
+			return err
+		}
+		if ee := s.confirm(yes, false, fmt.Sprintf("Revoke key %s of recipient %s? Receipts signed with it are refused from now on and this cannot be undone.", pos[1], pos[0]), ""); ee != nil {
+			return ee
+		}
+		body := map[string]any{"reason": reason}
+		if asOf != "" {
+			body["as_of"] = asOf
+		}
+		var raw json.RawMessage
+		if err := core.Post(ctx, "/v1/assurance/recipients/"+url.PathEscape(pos[0])+"/keys/"+url.PathEscape(pos[1])+"/revoke", body, viaHeaders, &raw); err != nil {
+			return err
+		}
+		if wrote, err := emit(e.Stdout, s.format, raw, ""); wrote || err != nil {
+			return err
+		}
+		var out map[string]any
+		_ = json.Unmarshal(raw, &out)
+		fmt.Fprintf(e.Stdout, "key %s of %s is %s as of %s (recorded %s, record %v, new: %v): %s\n", str(out, "key_id"), str(out, "recipient"), str(out, "state"),
+			str(out, "as_of"), str(out, "revoked_at"), out["seq"], out["created"], str(out, "reason"))
+		return nil
+	}())
+}
+
+// KeyRevoke is `clearance keys revoke <key-id> --reason R`: an admin revokes a retired token signing key. The key in use is refused (rotate first).
+func (e *Env) KeyRevoke(ctx context.Context, args []string) int {
+	var reason string
+	var yes bool
+	s, pos, ee := e.begin("keys revoke", "<key-id> --reason TEXT [--yes]", args, func(fs *flag.FlagSet) {
+		fs.StringVar(&reason, "reason", "", "why (1 to 200 printable characters; recorded in the chain)")
+		fs.BoolVar(&yes, "yes", false, "do not ask for confirmation")
+	})
+	if ee != nil {
+		return e.finish("keys revoke", ee)
+	}
+	if len(pos) != 1 || reason == "" {
+		return e.finish("keys revoke", s.usageErr())
+	}
+	return e.finish("keys revoke", func() error {
+		core, err := s.coreClient()
+		if err != nil {
+			return err
+		}
+		if ee := s.confirm(yes, false, fmt.Sprintf("Revoke token signing key %s? Nothing it signed verifies after this, including packet credentials, and this cannot be undone.", pos[0]), ""); ee != nil {
+			return ee
+		}
+		var raw json.RawMessage
+		if err := core.Post(ctx, "/v1/keys/"+url.PathEscape(pos[0])+"/revoke", map[string]any{"reason": reason}, viaHeaders, &raw); err != nil {
+			return err
+		}
+		if wrote, err := emit(e.Stdout, s.format, raw, ""); wrote || err != nil {
+			return err
+		}
+		var out map[string]any
+		_ = json.Unmarshal(raw, &out)
+		fmt.Fprintf(e.Stdout, "key %s is %s (at %s, record %v, new: %v)\n", str(out, "key_id"), str(out, "state"), str(out, "revoked_at"), out["seq"], out["created"])
+		return nil
+	}())
+}

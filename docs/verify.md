@@ -88,6 +88,11 @@ inclusion proofs bind it; when it is not carried the check is **NOT CHECKED**, s
 later, the same root at the same size: a different root is a **FORK**). It cannot check that the receipted packet's id is the digest
 of its manifest (that packet is not here): whoever holds it can.
 
+**Revoked recipient keys.** When the section carries `key_revocations` ([assurance.md](assurance.md#a-recipients-key)), a receipt signed with a revoked key
+**fails** if it was signed at or after the revocation's `as_of` time (or recorded after the revocation record), and is reported valid as signed, with the revocation
+printed, if it was signed before. The time is read from the packet and its carried `assurance.key.revoke` record, never from a live call. A revocation recorded after the packet was cut is not in it:
+cut a new packet to see it.
+
 ## Samples
 
 `clearance verify --sample sample.json [--packet dir]` checks a sample of a packet's cleared changes ([sampling.md](sampling.md))

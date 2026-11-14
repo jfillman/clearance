@@ -9,6 +9,18 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Added
+
+- **Revocation of the W6 assurance surface** ([docs/assurance.md](docs/assurance.md#revocation)); the Cloud spec's access-grant revoke now has its core half.
+  `POST /v1/packets/{id}/deliveries/{delivery}/revoke` (admin; `packet.revoke` record before the answer, idempotent): every read and sample under the delivery's credential is
+  refused `PK-REVOKED` and the refusal is a record under the existing per-delivery cap; a new receipt for it is refused, receipts already recorded stay. Immediate in the
+  process that took the revoke and within one second plus a store read in any other replica; a revocation state that cannot be read refuses the read (503).
+  `POST /v1/assurance/recipients/{recipient}/keys/{kid}/revoke` (`assurance.key.revoke`, as of a time): a receipt signed with the key is refused at submit; the next packet carries
+  the revocation (`acceptances.key_revocations` with its record) and `clearance verify` fails a receipt signed at or after it and prints the revocation on one signed before.
+  `POST /v1/keys/{kid}/revoke` (`token.key.revoke`): a retired token signing key is revoked: `GET /v1/keys` omits it, credentials it signed are a bare 401, the key in use is refused (409),
+  and the core will not start with it again (`clearance_signing_keys.revoked_at`, a nullable column added with `ADD COLUMN IF NOT EXISTS`). Statement keys are untouched.
+  CLI: `clearance packet revoke`, `packet revoke-key`, `keys revoke`. Python client regenerated.
+
 ## [0.48.0] - 2026-11-14
 
 ### Fixed

@@ -153,6 +153,9 @@ type Server struct {
 	keyMu     sync.Mutex
 	kidKeys   map[string]json.RawMessage
 
+	// rev is the revocations of deliveries and recipient keys the chain holds (see revocation.go).
+	rev revIndex
+
 	// targetsMu serializes target publishes: the held-digest check and the write it guards are one step.
 	targetsMu sync.Mutex
 }

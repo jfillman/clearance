@@ -72,13 +72,23 @@ type Token struct {
 }
 
 // SigningKey is one row of clearance_signing_keys: a token verification key the core has signed with (GET
-// /v1/keys). RetiredAt is set when the core started with another key.
+// /v1/keys). RetiredAt is set when the core started with another key. RevokedAt is set when an admin revoked the
+// key: a revoked key verifies no clearance token, packet credential or grant feed (GET /v1/keys stops serving it), and
+// UseSigningKey refuses it for good. Only a retired key can be revoked. The statement keys (GET /v1/statement-keys)
+// are read from the same rows and ignore RevokedAt: they are a separate set with their own rules.
 type SigningKey struct {
 	KeyID     string
 	JWK       json.RawMessage
 	CreatedAt time.Time
 	RetiredAt *time.Time
+	RevokedAt *time.Time
 }
+
+// ErrKeyRevoked is returned by UseSigningKey for a key that was revoked: a revoked key is never used again.
+var ErrKeyRevoked = errors.New("store: the signing key was revoked")
+
+// ErrKeyInUse is returned by RevokeSigningKey for the key in use: rotate first.
+var ErrKeyInUse = errors.New("store: the signing key is the one in use")
 
 // Attestation is one row of clearance_attestations (C-2): the signed change attestation of a change whose deploy
 // reported an outcome. One per change. Digest is "sha256:<hex>" of the DSSE envelope (attest.EnvelopeDigest); Bundle
@@ -150,7 +160,11 @@ type Tx interface {
 	// PutFeed writes the cluster's signed grant feed (an upsert by cluster).
 	PutFeed(ctx context.Context, f Feed) error
 	// UseSigningKey records k as the key in use (inserted, or un-retired) and retires every other key at now.
+	// It returns ErrKeyRevoked for a key that was revoked.
 	UseSigningKey(ctx context.Context, k SigningKey, now time.Time) error
+	// RevokeSigningKey marks the key revoked at now. It returns the row as it stands (already revoked: unchanged and
+	// changed is false), ErrNotFound for a key the core never signed with and ErrKeyInUse for the key in use.
+	RevokeSigningKey(ctx context.Context, keyID string, now time.Time) (key SigningKey, changed bool, err error)
 	// PutBreakglass writes a break-glass window (an upsert by id).
 	PutBreakglass(ctx context.Context, b Breakglass) error
 	// PutAttestation writes the change's attestation (an upsert by change id).

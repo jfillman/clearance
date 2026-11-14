@@ -72,3 +72,28 @@ func FuzzDefinitionsBody(f *testing.F) {
 		}
 	})
 }
+
+// FuzzRevokeBodies feeds the three revoke routes' bodies and path ids: never a panic; an accepted reason is clean printable text of
+// the bounded length; an id the routes accept holds nothing that could escape a path or a record.
+func FuzzRevokeBodies(f *testing.F) {
+	f.Add([]byte(`{"reason":"credential leaked"}`), "dl-12")
+	f.Add([]byte(`{"reason":"lost","as_of":"2026-11-13T10:00:00Z"}`), "kid_-Z9")
+	f.Add([]byte(`{"reason":"`+strings.Repeat("x", 300)+`"}`), "dl-"+strings.Repeat("9", 30))
+	f.Add([]byte(`{"reason":"a\u0000b","extra":1}`), "../x")
+	f.Fuzz(func(t *testing.T, raw []byte, id string) {
+		var a RevokeRequest
+		if strictDecode(bytes.NewReader(raw), &a) == nil && cleanText(a.Reason, MaxRevokeReason) {
+			if len(a.Reason) > 4*MaxRevokeReason || strings.ContainsAny(a.Reason, "\x00\n\r\t") {
+				t.Fatalf("an accepted reason is not clean: %q", a.Reason)
+			}
+		}
+		var b RecipientKeyRevokeRequest
+		_ = strictDecode(bytes.NewReader(raw), &b)
+		if deliveryIDRe.MatchString(id) && (strings.ContainsAny(id, "/.\\%? ") || len(id) > 21) {
+			t.Fatalf("a delivery id the route accepts: %q", id)
+		}
+		if keyIDRe.MatchString(id) && (strings.ContainsAny(id, "/.\\%? \x00") || len(id) > 64) {
+			t.Fatalf("a key id the routes accept: %q", id)
+		}
+	})
+}

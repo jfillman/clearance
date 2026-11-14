@@ -521,6 +521,9 @@ func (s *Server) accessKeys(r *http.Request) (token.KeySet, error) {
 	}
 	ks := token.KeySet{}
 	for _, k := range rows {
+		if k.RevokedAt != nil {
+			continue // a revoked key verifies nothing: its credentials are an unknown key, a bare 401
+		}
 		var j token.JWK
 		if json.Unmarshal(k.JWK, &j) != nil {
 			continue
@@ -624,18 +627,29 @@ func (s *Server) getPacket(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "part is "+strings.Join(packet.Parts, " or "))
 		return
 	}
+	// From the check of the credential and of its delivery's revocation until the fetch record is written, no revoke can commit
+	// (revocation.go): a read is recorded before a revocation, or refused.
+	release := s.rev.readLock()
+	defer release()
 	claims, ok := s.credentialClaims(w, r)
 	if !ok {
 		return
 	}
 	id := r.PathValue("id")
 	now := s.opt.Clock()
+	rv, revoked, err := s.deliveryRevocation(ctx, claims.Subject)
+	if err != nil {
+		s.revocationUnreadable(w, r, err)
+		return
+	}
 	rule, msg, status := "", "", 0
 	switch {
 	case id != claims.Packet:
 		rule, msg, status = RulePacketScope, "this credential opens packet "+claims.Packet+", not "+id, http.StatusForbidden
 	case part != "" && !slices.Contains(claims.Scope, part):
 		rule, msg, status = RulePacketScope, "this credential's scope is "+strings.Join(claims.Scope, ", ")+": it does not open the "+part+" part", http.StatusForbidden
+	case revoked:
+		rule, msg, status = RulePacketRevoked, "this delivery was revoked at "+rv.at+": ask the subscriber for a new delivery", http.StatusForbidden
 	case now.Before(time.Unix(claims.NotBefore, 0)):
 		rule, msg, status = RulePacketNotYet, "this credential is not good until "+pycompat.ISO(time.Unix(claims.NotBefore, 0)), http.StatusForbidden
 	case !now.Before(time.Unix(claims.Expires, 0)):
@@ -678,6 +692,7 @@ func (s *Server) getPacket(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "the read could not be recorded, so it was not served")
 		return
 	}
+	release() // the read is committed (recorded): a revoke may now be written, and it follows this record
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Clearance-Packet-Digest", b.Digest)
@@ -816,6 +831,9 @@ func (s *Server) acceptReceipt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Idempotent on the signed payload: the same receipt again is the record already written, and writes nothing.
+	// The revocation gate is taken before receiptMu (revocation.go): a revoke cannot commit between the check below and the record.
+	release := s.rev.readLock()
+	defer release()
 	s.receiptMu.Lock()
 	defer s.receiptMu.Unlock()
 	idx, err := s.receiptIndex(ctx)
@@ -826,6 +844,22 @@ func (s *Server) acceptReceipt(w http.ResponseWriter, r *http.Request) {
 	if have, ok := idx[id+"|"+v.PayloadSHA256]; ok {
 		have.Created = false
 		writeJSON(w, http.StatusOK, have)
+		return
+	}
+	// A receipt already recorded stays (above). A new one under a revoked delivery, or signed with a revoked key, is refused:
+	// not recorded (the signature attributes it, but a refusal is not a ledger fact worth a write per attempt).
+	if info, revoked, err := s.deliveryRevocation(ctx, vp.Delivery); err != nil {
+		s.revocationUnreadable(w, r, err)
+		return
+	} else if revoked {
+		writeJSON(w, http.StatusForbidden, PacketError{Error: "delivery " + vp.Delivery + " was revoked at " + info.at + ": the subscriber must open a new delivery, and a receipt answers that one", Rule: RulePacketRevoked})
+		return
+	}
+	if info, revoked, err := s.recipientKeyRevocation(ctx, vp.Recipient, v.KeyID); err != nil {
+		s.revocationUnreadable(w, r, err)
+		return
+	} else if revoked {
+		writeJSON(w, http.StatusForbidden, PacketError{Error: "the key " + v.KeyID + " of " + vp.Recipient + " was revoked (as of " + info.asOf + "): sign the receipt with a key that is registered and not revoked", Rule: RuleRecipientKeyGone})
 		return
 	}
 	var out ReceiptRecorded

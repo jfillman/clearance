@@ -461,6 +461,8 @@ func (s *Server) getSample(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "no such packet")
 		return
 	}
+	release := s.rev.readLock() // see getPacket: held from the check of the revocation until the sampling is recorded
+	defer release()
 	claims, ok := s.credentialClaims(w, r)
 	if !ok {
 		return
@@ -473,10 +475,17 @@ func (s *Server) getSample(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := s.opt.Clock()
+	rv, revoked, err := s.deliveryRevocation(ctx, claims.Subject)
+	if err != nil {
+		s.revocationUnreadable(w, r, err)
+		return
+	}
 	rule, msg, status := "", "", 0
 	switch {
 	case id != claims.Packet:
 		rule, msg, status = RulePacketScope, "this credential opens packet "+claims.Packet+", not "+id, http.StatusForbidden
+	case revoked:
+		rule, msg, status = RulePacketRevoked, "this delivery was revoked at "+rv.at+": ask the subscriber for a new delivery", http.StatusForbidden
 	case !slices.Contains(claims.Scope, packet.PartSummary) || !slices.Contains(claims.Scope, packet.PartEvidence):
 		rule, msg, status = RulePacketScope, "a sample needs both parts of the packet (the population is in the summary, the records and proofs in the evidence); this credential's scope is "+strings.Join(claims.Scope, ", "), http.StatusForbidden
 	case now.Before(time.Unix(claims.NotBefore, 0)):
@@ -529,6 +538,7 @@ func (s *Server) getSample(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	doc.Recorded = rec
+	release() // the sampling is committed (recorded, or was already): a revoke may now be written
 	s.serveSample(w, doc, created)
 }
 

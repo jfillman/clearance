@@ -340,7 +340,7 @@ var routeTable = []Route{
 	{
 		Method: "GET", Path: "/v1/keys", OperationID: "getKeys", Auth: AuthNone, MaxBody: DefaultMaxBody,
 		Summary: "The clearance token verification keys, a JWKS (EC P-256, ES256, kid = the RFC 7638 thumbprint): the " +
-			"key in use and keys retired within the last 24 hours. Public: a verifier checks tokens offline with it.",
+			"key in use and keys retired within the last 24 hours, never a revoked one (POST /v1/keys/{kid}/revoke). Public: a verifier checks tokens offline with it.",
 		Responses: append([]Response{{200, "the key set", token.JWKS{}}}, errs(503)...),
 		serve:     func(s *Server) http.HandlerFunc { return s.keys },
 	},
@@ -381,6 +381,40 @@ var routeTable = []Route{
 		Request:   DeliveryRequest{},
 		Responses: append([]Response{{200, "the delivery and its credential", Delivery{}}}, errs(400, 401, 403, 404, 413, 503)...),
 		serve:     func(s *Server) http.HandlerFunc { return s.deliverPacket },
+	},
+	{
+		Method: "POST", Path: "/v1/packets/{id}/deliveries/{delivery}/revoke", OperationID: "revokeDelivery", Auth: AuthBearer, MaxBody: MaxRevokeBody,
+		Summary: "An admin revokes a delivery: from the record on, every read of the packet and every sample under the delivery's credential is " +
+			"refused PK-REVOKED (and the refusal is a record, capped per delivery per hour like every refusal), and a receipt for the delivery that was " +
+			"not recorded yet is refused PK-REVOKED; receipts already recorded stay. A packet.revoke record, written before the answer; effective at " +
+			"once in the process that took it and within one second plus a store read in any other replica (an unreadable state refuses the request, 503). " +
+			"Revoking a revoked delivery is the same answer and records nothing. A revoked delivery is never un-revoked: open a new one. A recipient that already " +
+			"downloaded the packet still has it.",
+		Request:   RevokeRequest{},
+		Responses: append([]Response{{200, "the revocation", DeliveryRevoked{}}}, errs(400, 401, 403, 404, 413, 503)...),
+		serve:     func(s *Server) http.HandlerFunc { return s.revokeDelivery },
+	},
+	{
+		Method: "POST", Path: "/v1/assurance/recipients/{recipient}/keys/{kid}/revoke", OperationID: "revokeRecipientKey", Auth: AuthBearer, MaxBody: MaxRevokeBody,
+		Summary: "An admin revokes a key a recipient registered (CLEARANCE_PROVIDERS), as of a time (default now; a past time says it was " +
+			"compromised since then; never in the future). An assurance.key.revoke record, written before the answer. From then a receipt signed with the key is " +
+			"refused PK-KEY-REVOKED at submit; receipts already recorded stay recorded. The next packet carries the revocation beside the receipts the key signed, and " +
+			"`clearance verify` fails a receipt signed at or after the as-of time and prints the revocation on one signed before it. Revoking a revoked key is the same " +
+			"answer and records nothing; removing the key from the configuration does not undo it.",
+		Request:   RecipientKeyRevokeRequest{},
+		Responses: append([]Response{{200, "the revocation", RecipientKeyRevoked{}}}, errs(400, 401, 403, 404, 413, 503)...),
+		serve:     func(s *Server) http.HandlerFunc { return s.revokeRecipientKey },
+	},
+	{
+		Method: "POST", Path: "/v1/keys/{kid}/revoke", OperationID: "revokeKey", Auth: AuthBearer, MaxBody: MaxRevokeBody,
+		Summary: "An admin revokes a retired token signing key. A token.key.revoke record and the key's revoked flag commit together before the answer. " +
+			"From then GET /v1/keys no longer lists the key (a verifier that does not find a kid refuses what it signed), no packet credential it signed " +
+			"verifies (a bare 401: the check reads the key table on every request), and the core re-signs the clearance tokens and grant feeds it " +
+			"signed with the key in use. The key in use is refused (409: rotate first). A revoked key is never used again: the core refuses to start with it. " +
+			"Statement keys (GET /v1/statement-keys) are a separate set and are not touched. Revoking a revoked key is the same answer and records nothing.",
+		Request:   RevokeRequest{},
+		Responses: append([]Response{{200, "the revocation", TokenKeyRevoked{}}}, errs(400, 401, 403, 404, 409, 413, 503)...),
+		serve:     func(s *Server) http.HandlerFunc { return s.revokeTokenKey },
 	},
 	{
 		Method: "POST", Path: "/v1/statements", OperationID: "issueStatement", Auth: AuthBearer, MaxBody: MaxStatementBody,
@@ -424,7 +458,8 @@ var routeTable = []Route{
 		Summary: "The recipient reads the packet (the bundle) under the credential its delivery returned, in the bearer header. " +
 			"No Clearance account. The credential is checked for its signature (anything the core did not sign is a bare 401); " +
 			"then every answer is a packet.fetch record, written before the answer: an allowed read before a byte is served, and a " +
-			"refusal (PK-EXPIRED, PK-NOT-YET, PK-SCOPE for another packet or a part outside its scope, PK-RECIPIENT, PK-GONE) with its rule.",
+			"refusal (PK-EXPIRED, PK-NOT-YET, PK-SCOPE for another packet or a part outside its scope, PK-REVOKED for a revoked delivery, PK-RECIPIENT, PK-GONE) with its rule. " +
+			"A revocation state that cannot be read refuses the read (503).",
 		Query: []QueryParam{{Name: "part", Description: "read one part of the packet (summary or evidence); it must be in the credential's scope"}},
 		Responses: []Response{{200, "the bundle (cut to the credential's scope)", PacketBundle{}},
 			{400, "an unknown query parameter or part", ErrorResponse{}},

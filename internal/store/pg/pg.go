@@ -37,7 +37,8 @@ import (
 // clearance_signing_keys, C-1; clearance_feeds and the App installations' index, C-10; clearance_breakglass and the
 // exceptions index behind clearance-api's GET /v1/exceptions, C-6; clearance_ledger_checkpoints, C-3: the witnessed checkpoints of the evidence ledger; clearance_evidence_cost, A-4: the records
 // clearance-api's counts by=cost sums, model-call outcomes with usage and run.finish with cost): CREATE ... IF NOT
-// EXISTS only, so migrate never alters or drops what is there.
+// EXISTS only (and one ADD COLUMN IF NOT EXISTS, clearance_signing_keys.revoked_at: a nullable column no other reader selects),
+// so migrate never drops or rewrites what is there.
 const Schema = `
 CREATE TABLE IF NOT EXISTS clearance_evidence (
   seq        bigint PRIMARY KEY,
@@ -99,6 +100,7 @@ CREATE TABLE IF NOT EXISTS clearance_signing_keys (
   created_at timestamptz NOT NULL,
   retired_at timestamptz
 );
+ALTER TABLE clearance_signing_keys ADD COLUMN IF NOT EXISTS revoked_at timestamptz;
 CREATE TABLE IF NOT EXISTS clearance_attestations (
   change_id       text        PRIMARY KEY,
   digest          text        NOT NULL,
@@ -721,15 +723,60 @@ func (t *tx) UseSigningKey(ctx context.Context, k store.SigningKey, now time.Tim
 	defer t.mu.Unlock()
 	ctx, cancel := deadline(ctx, t.s.opt)
 	defer cancel()
+	var revoked bool
+	if err := t.tx.QueryRow(ctx, "SELECT revoked_at IS NOT NULL FROM clearance_signing_keys WHERE key_id = $1", k.KeyID).Scan(&revoked); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("pg: use signing key: %w", err)
+	} else if revoked {
+		return store.ErrKeyRevoked
+	}
 	if _, err := t.tx.Exec(ctx, "UPDATE clearance_signing_keys SET retired_at = $2 WHERE key_id <> $1 AND retired_at IS NULL",
 		k.KeyID, now); err != nil {
 		return fmt.Errorf("pg: use signing key: %w", err)
 	}
 	if _, err := t.tx.Exec(ctx, "INSERT INTO clearance_signing_keys (key_id, jwk, created_at) VALUES ($1, $2, $3) "+
-		"ON CONFLICT (key_id) DO UPDATE SET retired_at = NULL", k.KeyID, string(k.JWK), now); err != nil {
+		"ON CONFLICT (key_id) DO UPDATE SET retired_at = NULL WHERE clearance_signing_keys.revoked_at IS NULL", k.KeyID, string(k.JWK), now); err != nil {
 		return fmt.Errorf("pg: use signing key: %w", err)
 	}
 	return nil
+}
+
+func (t *tx) RevokeSigningKey(ctx context.Context, keyID string, now time.Time) (store.SigningKey, bool, error) {
+	ctx = t.ctx // detached and bounded: see Store.Atomic
+	if err := t.lock(); err != nil {
+		return store.SigningKey{}, false, err
+	}
+	defer t.mu.Unlock()
+	ctx, cancel := deadline(ctx, t.s.opt)
+	defer cancel()
+	var k store.SigningKey
+	var jwk string
+	err := t.tx.QueryRow(ctx, "SELECT key_id, jwk::text, created_at, retired_at, revoked_at FROM clearance_signing_keys WHERE key_id = $1 FOR UPDATE", keyID).
+		Scan(&k.KeyID, &jwk, &k.CreatedAt, &k.RetiredAt, &k.RevokedAt)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return store.SigningKey{}, false, store.ErrNotFound
+	case err != nil:
+		return store.SigningKey{}, false, fmt.Errorf("pg: revoke signing key: %w", err)
+	}
+	k.JWK, k.CreatedAt = []byte(jwk), k.CreatedAt.UTC()
+	for _, p := range []**time.Time{&k.RetiredAt, &k.RevokedAt} {
+		if *p != nil {
+			at := (*p).UTC()
+			*p = &at
+		}
+	}
+	switch {
+	case k.RevokedAt != nil:
+		return k, false, nil
+	case k.RetiredAt == nil:
+		return store.SigningKey{}, false, store.ErrKeyInUse
+	}
+	if _, err := t.tx.Exec(ctx, "UPDATE clearance_signing_keys SET revoked_at = $2 WHERE key_id = $1 AND revoked_at IS NULL", keyID, now); err != nil {
+		return store.SigningKey{}, false, fmt.Errorf("pg: revoke signing key: %w", err)
+	}
+	at := now.UTC()
+	k.RevokedAt = &at
+	return k, true, nil
 }
 
 // Reads in a transaction see its own writes.
@@ -1243,7 +1290,7 @@ func tokensDue(ctx context.Context, q querier, opt Options, due time.Time, keyID
 func signingKeys(ctx context.Context, q querier, opt Options, since time.Time) ([]store.SigningKey, error) {
 	ctx, cancel := deadline(ctx, opt)
 	defer cancel()
-	rows, err := q.Query(ctx, "SELECT key_id, jwk::text, created_at, retired_at FROM clearance_signing_keys "+
+	rows, err := q.Query(ctx, "SELECT key_id, jwk::text, created_at, retired_at, revoked_at FROM clearance_signing_keys "+
 		`WHERE retired_at IS NULL OR retired_at > $1 ORDER BY created_at DESC, key_id COLLATE "C"`, since)
 	if err != nil {
 		return nil, fmt.Errorf("pg: %w", err)
@@ -1253,13 +1300,17 @@ func signingKeys(ctx context.Context, q querier, opt Options, since time.Time) (
 	for rows.Next() {
 		var k store.SigningKey
 		var jwk string
-		if err := rows.Scan(&k.KeyID, &jwk, &k.CreatedAt, &k.RetiredAt); err != nil {
+		if err := rows.Scan(&k.KeyID, &jwk, &k.CreatedAt, &k.RetiredAt, &k.RevokedAt); err != nil {
 			return nil, fmt.Errorf("pg: %w", err)
 		}
 		k.JWK, k.CreatedAt = []byte(jwk), k.CreatedAt.UTC()
 		if k.RetiredAt != nil {
 			at := k.RetiredAt.UTC()
 			k.RetiredAt = &at
+		}
+		if k.RevokedAt != nil {
+			at := k.RevokedAt.UTC()
+			k.RevokedAt = &at
 		}
 		out = append(out, k)
 	}

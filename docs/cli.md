@@ -178,6 +178,9 @@ URLs.
 | `exceptions resolve --all-matching [--scope --kind --tool --app --since --until] --as ...` | every exception the exceptions-list filters match (resolvable kinds; at most 2000) |
 | `packet publish <dir>` | `POST /v1/packets` (admin): publish a `clearance packet` directory ([assurance.md](assurance.md)) |
 | `packet deliver <pk-id> --recipient R --for 168h` | `POST /v1/packets/{id}/deliveries` (admin): prints the recipient's credential once |
+| `packet revoke <pk-id> <dl-id> --reason R [--yes]` | `POST /v1/packets/{id}/deliveries/{delivery}/revoke` (admin): the credential is refused from now on, for good; prints the revoked state, when and why ([assurance.md](assurance.md#revocation)) |
+| `packet revoke-key <recipient> <kid> --reason R [--as-of T] [--yes]` | `POST /v1/assurance/recipients/{recipient}/keys/{kid}/revoke` (admin): a receipt signed with the key is refused at submit; `verify` fails one signed at or after `--as-of` |
+| `keys revoke <kid> --reason R [--yes]` | `POST /v1/keys/{kid}/revoke` (admin): revoke a retired token signing key; `GET /v1/keys` stops listing it |
 | `receipt pull`, `receipt sign`, `receipt submit` | the recipient's side, no account: read a packet under a credential, sign a receipt with your own key, send it |
 | `receipt sample --packet pk-.. --seed S [--n --stratify] --out F` | the recipient's side: `GET /v1/packets/{id}/sample`, a sample of the packet's cleared changes with an inclusion proof per record ([sampling.md](sampling.md)); check it with `clearance verify --sample F --packet <dir> --sample-record R` |
 | `verify --statement F --statement-keys K --statement-issuer I --log-keys L --witness-policy W --independent-witness N --packet DIR --status S` | check a [verification statement](statement.md) offline: the seven checks, exit 0 only when every one ran and passed (a revoked or superseded statement exits 1; a missing input is NOT CHECKED, exit 2) |

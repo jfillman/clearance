@@ -5,6 +5,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"time"
 
 	"github.com/jfillman/clearance/internal/receipt"
 	"github.com/jfillman/clearance/internal/token"
@@ -28,6 +29,10 @@ func (c *ctx) receiptCount() int {
 //   - when the chain record the core wrote for it (packet.receipt) is among the carried records, that record is the one
 //     the section names, holds this receipt's digest and recipient, and so is bound by the packet's hash checks and
 //     inclusion proofs;
+//   - when the packet carries the revocation of a key a receipt was signed with (Acceptances.KeyRevocations, with the core's
+//     assurance.key.revoke record carried beside it), a receipt signed at or after the revocation's as-of time FAILS, one recorded
+//     after the revocation record FAILS, and one signed before it is valid as signed with the revocation printed. The time comes
+//     from material the packet carries, never from a live call; a revocation recorded after the packet was cut is not in it;
 //   - the checkpoint the receipted packet stood on is consistent with this packet's: the same log, never later, and the
 //     same root where the sizes are equal (a different root at the same size is a fork).
 //
@@ -54,7 +59,42 @@ func (c *ctx) acceptancesCheck() {
 	for _, r := range c.recs {
 		bySeq[r.seq] = r
 	}
+	// The revocations of recipient keys the packet carries (assurance.key.revoke records), by recipient and key id.
+	type revoked struct {
+		seq   int64
+		hash  string
+		asOf  time.Time
+		bound bool
+	}
+	revs := map[string]revoked{}
 	var bad, notes []string
+	for _, kr := range p.Acceptances.KeyRevocations {
+		asOf, err := time.Parse(time.RFC3339, kr.AsOf)
+		if err != nil {
+			bad = append(bad, fmt.Sprintf("the revocation of key %s of %s (record %d) has no readable as_of time: %q", short8(kr.KeyID), kr.Recipient, kr.Seq, kr.AsOf))
+			continue
+		}
+		rv := revoked{seq: kr.Seq, hash: kr.RecordHash, asOf: asOf}
+		if cr, ok := bySeq[kr.Seq]; ok {
+			m, _ := cr.m["revocation"].(map[string]any)
+			switch {
+			case cr.m["tool"] != "assurance.key.revoke" || cr.m["decision"] != "allow":
+				bad = append(bad, fmt.Sprintf("the revocation of key %s of %s names record %d, which is %v, not an assurance.key.revoke", short8(kr.KeyID), kr.Recipient, kr.Seq, cr.m["tool"]))
+				continue
+			case cr.computed != kr.RecordHash && cr.stated != kr.RecordHash:
+				bad = append(bad, fmt.Sprintf("the revocation of key %s of %s: record %d hashes to %s, the section says %s", short8(kr.KeyID), kr.Recipient, kr.Seq, short8(cr.computed), short8(kr.RecordHash)))
+				continue
+			case m["recipient"] != kr.Recipient || m["key_id"] != kr.KeyID || m["as_of"] != kr.AsOf:
+				bad = append(bad, fmt.Sprintf("the revocation of key %s of %s: record %d says another recipient, key or as-of time", short8(kr.KeyID), kr.Recipient, kr.Seq))
+				continue
+			}
+			rv.bound = true
+		}
+		k := kr.Recipient + "\x00" + kr.KeyID
+		if old, ok := revs[k]; !ok || rv.asOf.Before(old.asOf) {
+			revs[k] = rv
+		}
+	}
 	vouched, own, unbound := 0, 0, 0
 	for i, r := range p.Acceptances.Receipts {
 		name := fmt.Sprintf("receipt %d (%s from %s, record %d)", i+1, r.Verdict, r.Recipient, r.Seq)
@@ -110,6 +150,22 @@ func (c *ctx) acceptancesCheck() {
 		}
 		if v.PayloadSHA256 != r.PayloadSHA256 {
 			bad = append(bad, fmt.Sprintf("%s: the receipt's payload hashes to %s, the section says %s", name, short8(v.PayloadSHA256), short8(r.PayloadSHA256)))
+		}
+		// A revoked key: a receipt signed at or after the revocation's as-of time is not trusted, and neither is one the core recorded
+		// after the revocation record (it refuses those at submit). One signed before it is valid as signed, and the revocation is printed.
+		if rv, ok := revs[pl.Recipient+"\x00"+kid]; ok {
+			signed, serr := time.Parse(time.RFC3339, pl.SignedAt)
+			switch {
+			case serr != nil || !signed.Before(rv.asOf):
+				bad = append(bad, fmt.Sprintf("%s: signed at %s with key %s, which was revoked as of %s (record %d): a receipt signed with a revoked key is not trusted", name, pl.SignedAt, short8(kid), rv.asOf.UTC().Format(time.RFC3339), rv.seq))
+			case r.Seq > rv.seq:
+				bad = append(bad, fmt.Sprintf("%s: recorded as record %d, after the revocation of its key (record %d): the core refuses such a receipt", name, r.Seq, rv.seq))
+			default:
+				notes = append(notes, fmt.Sprintf("%s: signed at %s, before key %s was revoked (as of %s, record %d): valid as signed", name, pl.SignedAt, short8(kid), rv.asOf.UTC().Format(time.RFC3339), rv.seq))
+			}
+			if !rv.bound {
+				notes = append(notes, fmt.Sprintf("%s: the revocation's chain record (%d) is not among the records this packet carries: the packet's word for it, not bound to the ledger here", name, rv.seq))
+			}
 		}
 		// The chain record, where it is carried.
 		if cr, ok := bySeq[r.Seq]; ok {
