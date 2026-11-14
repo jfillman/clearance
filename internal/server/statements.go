@@ -926,7 +926,13 @@ func (s *Server) issueStatement(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusConflict, "this request was answered by statement "+e.id+", which was revoked: a revoked statement is not answered as if it stood. To issue the same content again as a new statement, send reissue: "+e.id)
 				return true
 			}
-			if revoked, _ := s.statementKeyRevoked(ctx, e.kid); revoked {
+			revoked, kerr := s.statementKeyRevoked(ctx, e.kid)
+			if kerr != nil {
+				// Fail closed: a statement is not answered as standing on a key whose state could not be read.
+				writeError(w, http.StatusServiceUnavailable, "the signing keys could not be read")
+				return true
+			}
+			if revoked {
 				writeError(w, http.StatusConflict, "this request was answered by statement "+e.id+", which was signed by a revoked key and no longer verifies: revoke it (POST /v1/statements/"+e.id+"/revoke), then send the same request with reissue: "+e.id)
 				return true
 			}

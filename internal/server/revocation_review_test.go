@@ -38,6 +38,8 @@ type hookStore struct {
 	records func(ctx context.Context, from int64, limit int) error
 	// sigKeys counts SigningKeys reads.
 	sigKeys atomic.Int64
+	// failSigKeys makes SigningKeys fail.
+	failSigKeys atomic.Bool
 }
 
 func (s *hookStore) Records(ctx context.Context, from int64, limit int) ([]store.Record, error) {
@@ -54,6 +56,9 @@ func (s *hookStore) Records(ctx context.Context, from int64, limit int) ([]store
 
 func (s *hookStore) SigningKeys(ctx context.Context, since time.Time) ([]store.SigningKey, error) {
 	s.sigKeys.Add(1)
+	if s.failSigKeys.Load() {
+		return nil, errFlaky
+	}
 	return s.Store.SigningKeys(ctx, since)
 }
 
@@ -911,5 +916,29 @@ func TestACarriedReceiptRecordWithNoReadableTimeFails(t *testing.T) {
 	c := a.verifyDir(t, dir)
 	if c.Status != verify.Fail || !strings.Contains(strings.Join(c.Findings, "\n"), "no readable time") {
 		t.Fatalf("%+v", c)
+	}
+}
+
+// TestIssuingAStandingStatementFailsClosedWhenTheKeyStateCannotBeRead (PR Lens): the same request that a standing statement answered is not
+// answered 200 when the signing keys cannot be read to say whether its key was revoked.
+func TestIssuingAStandingStatementFailsClosedWhenTheKeyStateCannotBeRead(t *testing.T) {
+	l := p3Lab(t, p3opts{})
+	ctx := context.Background()
+	st := l.issue(t, l.req())
+	hs := &hookStore{Store: l.f.core.Store}
+	b, err := server.New(ctx, server.Options{Store: hs, Engine: l.f.core.Engine, Auth: core.DevAuthenticator(), Providers: l.f.core.Config.Providers, Version: "test",
+		MaxClockSkew: -1, Gate: l.f.core.Gate, Statements: server.StatementOptions{LogKeys: []byte(l.vkey + "\n"), WitnessPolicy: l.policy}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(b.StopStatements)
+	hs.failSigKeys.Store(true)
+	rec := serve(b.Handler(), ctx, "POST", "/v1/statements", "user:admin", l.req())
+	if rec.Code != 503 || strings.Contains(rec.Body.String(), st.ID) {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	hs.failSigKeys.Store(false)
+	if rec := serve(b.Handler(), ctx, "POST", "/v1/statements", "user:admin", l.req()); rec.Code != 200 {
+		t.Fatalf("with the keys readable it is the same statement: %d %s", rec.Code, rec.Body)
 	}
 }
