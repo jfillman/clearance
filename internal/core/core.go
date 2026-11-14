@@ -138,6 +138,9 @@ type Config struct {
 	Auth        authn.Authenticator
 	// MaxClockSkew is server.Options.MaxClockSkew: 0 the default, negative off (CheckMaxClockSkew: --memory only).
 	MaxClockSkew time.Duration
+	// PacketReadsPerHour is server.Options.PacketReadsPerHour (CLEARANCE_PACKET_READS_PER_HOUR): 0 the default (60),
+	// negative unlimited.
+	PacketReadsPerHour int
 	// DevRecords is server.Options.DevRecords (GET /v1/dev/records): `clearance core --memory --insecure-dev-auth`.
 	// Build refuses it without Memory.
 	DevRecords bool
@@ -241,6 +244,13 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	cfg.ExpireEvery = time.Duration(secs * float64(time.Second))
 	if cfg.MaxClockSkew, err = ParseMaxClockSkew(get("CLEARANCE_MAX_CLOCK_SKEW", "")); err != nil {
 		return cfg, fmt.Errorf("CLEARANCE_MAX_CLOCK_SKEW: %w", err)
+	}
+	if v := get("CLEARANCE_PACKET_READS_PER_HOUR", ""); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 100000 {
+			return cfg, errors.New("CLEARANCE_PACKET_READS_PER_HOUR must be a whole number from 1 to 100000")
+		}
+		cfg.PacketReadsPerHour = n
 	}
 	parts := []string{get("CLEARANCE_GITHUB_APP_ID", ""), get("CLEARANCE_GITHUB_APP_KEY_FILE", ""),
 		get("CLEARANCE_GITHUB_APP_WEBHOOK_SECRET_FILE", "")}
@@ -583,7 +593,7 @@ func (c *Core) wire(ctx context.Context) error {
 		led = c.Ledger
 	}
 	srv, err := server.New(ctx, server.Options{Ledger: led, OnOutcome: onOutcome, Attestation: status, Store: c.Store, Engine: c.Engine, Auth: cfg.Auth,
-		Providers: cfg.Providers, Version: cfg.Version, Clock: c.clock, Log: c.log, MaxClockSkew: cfg.MaxClockSkew,
+		Providers: cfg.Providers, Version: cfg.Version, Clock: c.clock, Log: c.log, MaxClockSkew: cfg.MaxClockSkew, PacketReadsPerHour: cfg.PacketReadsPerHour,
 		DevRecords:      cfg.DevRecords,
 		Definitions:     &definitions.Service{Registry: reg, Store: c.Store, Clock: c.clock, Writer: writer},
 		ParseDefinition: parse, Gate: g, Review: rev, Provenance: prov, App: c.App, RunTask: c.RunTask})

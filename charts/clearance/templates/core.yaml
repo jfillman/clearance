@@ -74,6 +74,10 @@ spec:
             - name: CLEARANCE_MAX_CLOCK_SKEW
               value: {{ . | quote }}
             {{- end }}
+            {{- with .Values.core.packetReadsPerHour }}
+            - name: CLEARANCE_PACKET_READS_PER_HOUR
+              value: {{ . | quote }}
+            {{- end }}
             {{- with .Values.gate.agentLogins }}
             - name: AGENT_LOGINS
               value: {{ include "clearance.csv" . | quote }}

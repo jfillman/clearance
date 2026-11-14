@@ -99,6 +99,7 @@ unset, so the core's default applies. Lists are joined with commas.
 | `vocabulary.aiCoauthors` | `CLEARANCE_AI_COAUTHORS` | The AI co-author matchers (`<email>` or `Name <email>`). Unset (null): the core's default list; an empty list `[]` turns the check off (rendered as `none`). |
 | `audience` | `CLEARANCE_AUDIENCE` | Callers' token audience (default `clearance`). |
 | `gate.expireSeconds` | `CLEARANCE_EXPIRE_SECONDS` | How often expired changes are swept (60). |
+| `core.packetReadsPerHour` | `CLEARANCE_PACKET_READS_PER_HOUR` | Allowed reads of one packet delivery served and recorded an hour (empty: `60`; 1 to 100000). Past it a read is 429 and writes no record ([assurance.md](assurance.md)). |
 | `core.maxClockSkew` | `CLEARANCE_MAX_CLOCK_SKEW` | How far an evaluation's `context.now` may be from the core's clock, a Go duration (empty: `5m`; at most `24h`). The core refuses `0` (off) here: off is for `clearance core --memory` test cores. |
 | `gate.agentLogins` | `AGENT_LOGINS` | GitHub logins agents open PRs as (default none). |
 | `gate.modelRoutes` | `MODEL_ROUTES` | `alias=upstream` pairs a definition release may name. |

@@ -20,7 +20,8 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	trustRoot := fs.String("trust-root", "", "attestations: a Sigstore TrustedRoot JSON (`clearance trust-root build`), or Fulcio certificates (PEM) with --rekor-key. Without it keyless attestations are not checked")
 	rekorKey := fs.String("rekor-key", "", "attestations: Rekor's public key (PEM), with a PEM --trust-root")
 	attestKey := fs.String("attest-key", "", "attestations: the public key (PEM) or JWKS that verifies a static-key attestation")
-	recipientKeys := fs.String("recipient-keys", "", "acceptance receipts: the recipients' public keys (PEM, or a JWKS), as the recipients gave them to you. Without it each receipt's own copy of the key is used and reported as taken from the packet")
+	var recipientKeys recipientFlag
+	fs.Var(&recipientKeys, "recipient-keys", "acceptance receipts: <recipient name>=<file>, repeatable: the recipient's public keys (PEM, or a JWKS), as that recipient gave them to you. A receipt naming a recipient is checked only under keys supplied for that name. A recipient with none: the receipt's own copy of the key is used and reported as taken from the packet")
 	identity := fs.String("identity", "", "attestations: the identity the signing certificate must name. Without --identity and --issuer the signer is read from each attestation and reported as unpinned")
 	issuer := fs.String("issuer", "", "attestations: the OIDC issuer the signing certificate must record")
 	seen := fs.String("seen-file", "", "the local note of checkpoints seen (default: <user config dir>/clearance/verify-seen.json)")
@@ -69,8 +70,25 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	}
 	if !read("log-keys", *logKeys, &o.LogKeys, &o.LogKeysSrc) || !read("witness-policy", *policy, &o.WitnessPolicy, &o.WitnessPolicySrc) ||
 		!read("trust-root", *trustRoot, &o.TrustRoot, &o.TrustRootSrc) || !read("rekor-key", *rekorKey, &o.RekorKey, nil) ||
-		!read("attest-key", *attestKey, &o.AttestKeys, &o.AttestKeysSrc) || !read("recipient-keys", *recipientKeys, &o.RecipientKeys, &o.RecipientKeysSrc) {
+		!read("attest-key", *attestKey, &o.AttestKeys, &o.AttestKeysSrc) {
 		return 2
+	}
+	for _, kv := range recipientKeys {
+		name, path, ok := strings.Cut(kv, "=")
+		if !ok || name == "" || path == "" {
+			fmt.Fprintf(stderr, "verify: --recipient-keys %q is <recipient name>=<file>\n", kv)
+			return 2
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			fmt.Fprintf(stderr, "verify: --recipient-keys: %v\n", err)
+			return 2
+		}
+		if o.RecipientKeys == nil {
+			o.RecipientKeys, o.RecipientKeysSrc = map[string][]byte{}, map[string]string{}
+		}
+		o.RecipientKeys[name] = append(o.RecipientKeys[name], b...)
+		o.RecipientKeysSrc[name] = path
 	}
 	if (o.Identity == "") != (o.Issuer == "") {
 		fmt.Fprintln(stderr, "verify: --identity and --issuer go together")
@@ -89,3 +107,9 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	rep.Write(stdout)
 	return rep.ExitCode()
 }
+
+// recipientFlag is a repeatable <name>=<file> flag.
+type recipientFlag []string
+
+func (r *recipientFlag) String() string     { return strings.Join(*r, ",") }
+func (r *recipientFlag) Set(v string) error { *r = append(*r, v); return nil }

@@ -80,6 +80,9 @@ type Options struct {
 	}
 	// MaxClockSkew bounds |context.now - Clock()| on an evaluation; 0 is DefaultMaxClockSkew, negative is off.
 	MaxClockSkew time.Duration
+	// PacketReadsPerHour caps the allowed reads of one packet delivery an hour (each is a record and a read of up to 64
+	// MiB): 0 is DefaultPacketReadsPerHour, negative is unlimited. Past it a read is 429 and writes no record.
+	PacketReadsPerHour int
 	// DevRecords serves GET /v1/dev/records (DevRecordsPath): the chain, for another package's tests to read what
 	// the core recorded. `clearance core --memory --insecure-dev-auth` only; not in the contract (clearance-api is
 	// the reader of a kept chain).
@@ -114,7 +117,14 @@ type Server struct {
 	eventMu sync.Mutex
 
 	// refused limits how many refusals of one packet delivery are written to the chain an hour (P-1).
-	refused refusals
+	refused hourly
+	reads   hourly
+	bundles bundles
+
+	// receiptMu serializes receipt submissions and guards receipts, the index of receipts already recorded (by packet id
+	// and payload digest), so a resubmitted receipt writes nothing.
+	receiptMu sync.Mutex
+	receipts  map[string]ReceiptRecorded
 
 	// targetsMu serializes target publishes: the held-digest check and the write it guards are one step.
 	targetsMu sync.Mutex

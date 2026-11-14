@@ -3224,6 +3224,9 @@
       },
       "ReceiptRecorded": {
         "properties": {
+          "created": {
+            "type": "boolean"
+          },
           "hash": {
             "type": "string"
           },
@@ -3244,6 +3247,7 @@
           }
         },
         "required": [
+          "created",
           "hash",
           "packet_id",
           "payload_sha256",

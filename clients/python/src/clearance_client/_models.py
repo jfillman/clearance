@@ -1943,6 +1943,7 @@ class ReceiptRecorded(Model):
 
     _STRICT: ClassVar[bool] = False
     _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("created", "created", ("bool",), True),
         Field("hash", "hash", ("str",), True),
         Field("packet_id", "packet_id", ("str",), True),
         Field("payload_sha256", "payload_sha256", ("str",), True),
@@ -1951,6 +1952,7 @@ class ReceiptRecorded(Model):
         Field("verdict", "verdict", ("str",), True),
     )
 
+    created: bool
     hash: str
     packet_id: str
     payload_sha256: str

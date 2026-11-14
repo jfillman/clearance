@@ -182,6 +182,7 @@ All configuration comes from the environment. An empty variable counts as unset.
 | `CLEARANCE_VIAS_EXTRA` | Surface names a person's write may claim in `X-Clearance-Via` beside `cli`, `web`, `slack` and `api`: the deployment's portal (comma-separated lowercase words). |
 | `CLEARANCE_DELEGATE_PERSON_ALLOWED` | Globs (`user:<login>`) a person a delegate names must match, the delegate path's counterpart of `CLEARANCE_OIDC_ALLOWED_USERS`. Unset: any `user:<name>` the delegate says (the behaviour before it existed). |
 | `CLEARANCE_EXPIRE_SECONDS` | How often holding changes past their TTL are expired (default 60, at most 86400). |
+| `CLEARANCE_PACKET_READS_PER_HOUR` | Allowed reads of one packet delivery the core serves and records an hour (default `60`, 1 to 100000); past it `GET /v1/packets/{id}` is 429 with `Retry-After` and writes no record. [assurance.md](assurance.md). |
 | `CLEARANCE_MAX_CLOCK_SKEW` | How far an evaluation's `context.now` may be from the core's clock, a Go duration (default `5m`, at most `24h`). `0` turns the check off, and `clearance core` refuses that without `--memory`: a decision record's `ts` is the evaluation's `now` and is verified, so a kept chain never takes an unbounded one. A test core on a fixed clock runs `clearance core --memory --insecure-dev-auth --max-clock-skew 0`. |
 | `CLEARANCE_AGENTS_DIR` | Bundled agent definitions (`*.yaml`). Default none. |
 | `AGENT_LOGINS` | GitHub logins agents open PRs as. Default none: an agent PR is known by its Clearance record or its trailers. |

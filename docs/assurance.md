@@ -94,8 +94,11 @@ answered with it:
 | `PK-RECIPIENT` | 403 | the recipient is no longer registered |
 | `PK-GONE` | 404 | the core does not hold the packet |
 
-A leaked credential must not fill the chain: after 60 recorded refusals of one delivery in an hour the refusals are still
-answered (429) but no longer written.
+The path id must be a packet id (`pk-` and 32 hex digits): anything else is 404 with no record, before anything is read.
+A leaked credential cannot fill the chain: per delivery and per hour, at most 60 refusals are recorded (past it the refusal
+is answered 429 and not written) and at most `CLEARANCE_PACKET_READS_PER_HOUR` (default 60) allowed reads are served and
+recorded (past it 429 with `Retry-After`, no record). The core keeps the last few validated packets in memory, so a read does
+not reload and re-hash the whole bundle.
 
 `clearance receipt pull --core URL --packet pk-... --out dir` (credential from `--credential-file`, `-` or
 `$CLEARANCE_PACKET_CREDENTIAL`, never a flag) reads and unpacks it; `clearance verify dir` checks it.
@@ -127,6 +130,10 @@ is refused (and not recorded: the caller is not attributable).
 `clearance receipt sign --packet-dir dir --delivery dl-.. --recipient name --engagement E --verdict accepted --key key.pem`
 makes one offline, for a firm with no system to sign from; `clearance receipt submit --core URL --receipt file` sends it.
 Receipts are append-only statements: a later receipt for the same delivery does not replace the first; both are carried.
+Submitting the same signed receipt again is idempotent: the answer is 200 with `created: false` and the record already written,
+and nothing is written. Every decision and recorded field comes from the verified payload, never the unsigned envelope. A receipt
+may be signed and submitted after the delivery's window ends (a firm finishes its review after its access lapses); it may not be
+signed before the window began or in the future.
 
 ### The next packet
 
@@ -134,6 +141,17 @@ Receipts are append-only statements: a later receipt for the same delivery does 
 `acceptances`, `csv/acceptances.csv`, the PDF): each as signed, with the registered key it was checked with and its
 record's seq and hash; the records themselves are carried too, so they have inclusion proofs when checkpointed.
 `clearance verify` checks each receipt offline ([verify.md](verify.md#acceptance-receipts)).
+
+## Known limits
+
+- The refusal and read counters are per core replica (the core is one replica) and per wall-clock hour.
+- No credential revocation: keep windows short. The credential verifies against the core's token keys: the key in use and keys
+  retired within the last 24 hours plus the longest credential life (30 days) are accepted, so a retired key keeps verifying
+  credentials it signed until they expire; the core has no way to mark a key revoked.
+- `Bundle.Unpack` writes slash paths as given; it has not been run on Windows file systems.
+- `clearance verify --recipient-keys <recipient>=<file>` (repeatable) binds keys to recipients: a receipt naming A verifies
+  only under keys supplied for A. Without a key for a recipient the receipt's own copy is used (SELF-VOUCHED). A receipt whose
+  chain record the packet does not carry is NOT CHECKED (signature only).
 
 ## What this is not
 

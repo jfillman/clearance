@@ -22,6 +22,8 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   recorded as `packet.receipt`). The next packet's Acceptances section carries every prior receipt and `clearance verify` checks each
   offline (signature, printed fields, record, checkpoint consistency; `--recipient-keys`). `clearance packet publish|deliver` (admin) and
   `clearance receipt pull|sign|submit` (the recipient's side, no account). Store: `clearance_packets` (memory and Postgres).
+  Reads are capped per delivery (`CLEARANCE_PACKET_READS_PER_HOUR`, default 60; chart `core.packetReadsPerHour`); resubmitting a signed receipt is idempotent;
+  `clearance verify --recipient-keys <recipient>=<file>` binds keys to recipients.
   Gate evidence: `go test ./internal/server -run TestP1` (a fake assurance provider end to end, including the GRC-lead-forwards-unchanged case).
 
 ## [0.47.1] - 2026-11-13

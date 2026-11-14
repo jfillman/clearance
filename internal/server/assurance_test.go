@@ -313,43 +313,58 @@ func TestP1AssuranceProviderEndToEnd(t *testing.T) {
 		pk.Acceptances.Receipts[0].Verdict != receipt.AcceptedWithNotes || pk.Acceptances.Receipts[1].PacketID != id {
 		t.Fatalf("%+v", pk.Acceptances)
 	}
-	keys := filepath.Join(t.TempDir(), "recipients.pem")
-	_ = os.WriteFile(keys, []byte(auditor.pub+grc.pub), 0o644)
-	kb, _ := os.ReadFile(keys)
-	rep := verify.Verify(dir2, verify.Options{RecipientKeys: kb, RecipientKeysSrc: keys})
+	kb := map[string][]byte{auditor.name: []byte(auditor.pub), grc.name: []byte(grc.pub)}
+	rep := verify.Verify(dir2, verify.Options{RecipientKeys: kb, RecipientKeysSrc: map[string]string{auditor.name: "a.pem", grc.name: "g.pem"}})
 	if c := checkNamed(t, rep, "acceptances"); c.Status != verify.Pass || rep.Failed() {
 		t.Fatalf("%+v\n%+v", c, rep.Checks)
 	}
 	if c := checkNamed(t, verify.Verify(dir2, verify.Options{}), "acceptances"); c.Status != verify.SelfVouched {
 		t.Fatalf("without the recipients' keys the receipts are self-vouched: %+v", c)
 	}
-	// Someone else's key does not vouch for the receipt (the carried copy then does, and is labelled).
-	otherPEM := newFakeRecipient(t, "x").pub
-	if c := checkNamed(t, verify.Verify(dir2, verify.Options{RecipientKeys: []byte(otherPEM)}), "acceptances"); c.Status != verify.SelfVouched {
-		t.Fatalf("%+v", c)
+	// Keys are bound to recipients: the hub's key supplied for the auditor does not vouch for the auditor's receipt, and the
+	// auditor's own carried key does not stand in for it.
+	swapped := map[string][]byte{auditor.name: []byte(grc.pub), grc.name: []byte(grc.pub)}
+	if c := checkNamed(t, verify.Verify(dir2, verify.Options{RecipientKeys: swapped}), "acceptances"); c.Status != verify.Fail {
+		t.Fatalf("B's key on a receipt claiming A passed: %+v", c)
 	}
-	// A section that says something the signed receipt does not fails, even with the manifest rewritten to match.
+	// A valid signature whose chain record the packet does not carry is not a pass.
+	raw0, _ := os.ReadFile(filepath.Join(dir2, "packet.json"))
+	var d0 map[string]any
+	_ = json.Unmarshal(raw0, &d0)
+	d0["acceptances"].(map[string]any)["receipts"].([]any)[0].(map[string]any)["seq"] = 999999
+	rewritePacketJSON(t, dir2, d0)
+	if c := checkNamed(t, verify.Verify(dir2, verify.Options{RecipientKeys: kb}), "acceptances"); c.Status != verify.NotChecked {
+		t.Fatalf("a receipt with no carried chain record: %+v", c)
+	}
+	_ = os.WriteFile(filepath.Join(dir2, "packet.json"), raw0, 0o644)
+	rewritePacketJSON(t, dir2, func() map[string]any { var m map[string]any; _ = json.Unmarshal(raw0, &m); return m }())
 	var doc map[string]any
-	_ = json.Unmarshal(raw, &doc)
+	_ = json.Unmarshal(raw0, &doc)
 	doc["acceptances"].(map[string]any)["receipts"].([]any)[0].(map[string]any)["verdict"] = "accepted"
-	forgedPacket, _ := json.Marshal(doc)
-	_ = os.WriteFile(filepath.Join(dir2, "packet.json"), forgedPacket, 0o644)
-	var man struct {
-		Schema string            `json:"schema"`
-		Files  map[string]string `json:"files"`
-	}
-	mb, _ := os.ReadFile(filepath.Join(dir2, "MANIFEST.json"))
-	_ = json.Unmarshal(mb, &man)
-	sum := sha256.Sum256(forgedPacket)
-	man.Files["packet.json"] = hex.EncodeToString(sum[:])
-	mb, _ = json.Marshal(man)
-	_ = os.WriteFile(filepath.Join(dir2, "MANIFEST.json"), mb, 0o644)
+	rewritePacketJSON(t, dir2, doc)
 	if c := checkNamed(t, verify.Verify(dir2, verify.Options{RecipientKeys: kb}), "acceptances"); c.Status != verify.Fail {
 		t.Fatalf("a rewritten verdict passed: %+v", c)
 	}
 	if ok, bad := evidence.Verify(f.records()); !ok {
 		t.Fatalf("the chain breaks at %d", bad)
 	}
+}
+
+// rewritePacketJSON writes doc as packet.json and rewrites the manifest to match, as a forger would.
+func rewritePacketJSON(t *testing.T, dir string, doc map[string]any) {
+	t.Helper()
+	b, _ := json.Marshal(doc)
+	_ = os.WriteFile(filepath.Join(dir, "packet.json"), b, 0o644)
+	var man struct {
+		Schema string            `json:"schema"`
+		Files  map[string]string `json:"files"`
+	}
+	mb, _ := os.ReadFile(filepath.Join(dir, "MANIFEST.json"))
+	_ = json.Unmarshal(mb, &man)
+	sum := sha256.Sum256(b)
+	man.Files["packet.json"] = hex.EncodeToString(sum[:])
+	mb, _ = json.Marshal(man)
+	_ = os.WriteFile(filepath.Join(dir, "MANIFEST.json"), mb, 0o644)
 }
 
 func isStatus(err error, status int) bool {

@@ -40,22 +40,22 @@ func (c *ctx) acceptancesCheck() {
 		return
 	}
 	chk := Check{Name: "acceptances: each receipt's signature and binding"}
-	var supplied token.KeySet
-	if len(c.opts.RecipientKeys) > 0 {
-		ks, err := token.ParsePublicKeys(c.opts.RecipientKeys)
+	supplied := map[string]token.KeySet{}
+	for name, raw := range c.opts.RecipientKeys {
+		ks, err := token.ParsePublicKeys(raw)
 		if err != nil {
-			chk.Status, chk.Detail = Fail, fmt.Sprintf("--recipient-keys is not readable: %v", err)
+			chk.Status, chk.Detail = Fail, fmt.Sprintf("--recipient-keys %s is not readable: %v", name, err)
 			c.rep.add(chk)
 			return
 		}
-		supplied = ks
+		supplied[name] = ks
 	}
 	bySeq := map[int64]rec{}
 	for _, r := range c.recs {
 		bySeq[r.seq] = r
 	}
 	var bad, notes []string
-	vouched, own := 0, 0
+	vouched, own, unbound := 0, 0, 0
 	for i, r := range p.Acceptances.Receipts {
 		name := fmt.Sprintf("receipt %d (%s from %s, record %d)", i+1, r.Verdict, r.Recipient, r.Seq)
 		raw := []byte(r.Envelope)
@@ -77,18 +77,25 @@ func (c *ctx) acceptancesCheck() {
 		// The signature, under the best key there is.
 		var keys token.KeySet
 		trust := trustNone
-		switch kid := r.KeyID; {
-		case supplied != nil && supplied[kid] != nil:
-			keys, trust = token.KeySet{kid: supplied[kid]}, trustSupplied
-		case r.Key != nil:
+		kid := r.KeyID
+		if mine, ok := supplied[pl.Recipient]; ok {
+			// Keys were supplied for this recipient: only they vouch for it. A key supplied for another recipient, or
+			// one the packet carries, does not.
+			pub := mine[kid]
+			if pub == nil {
+				bad = append(bad, fmt.Sprintf("%s: signed by key %s, which is not one you supplied for recipient %s", name, short8(kid), pl.Recipient))
+				continue
+			}
+			keys, trust = token.KeySet{kid: pub}, trustSupplied
+		} else if r.Key != nil {
 			pub, err := r.Key.Public()
 			if err != nil || r.Key.Kid != kid {
 				bad = append(bad, fmt.Sprintf("%s: the key the receipt carries is not a P-256 key with that id", name))
 				continue
 			}
 			keys, trust = token.KeySet{kid: pub}, trustPacket
-		default:
-			bad = append(bad, fmt.Sprintf("%s: no key to check it with (none supplied for key %s, none carried)", name, short8(kid)))
+		} else {
+			bad = append(bad, fmt.Sprintf("%s: no key to check it with (none supplied for recipient %s, none carried)", name, pl.Recipient))
 			continue
 		}
 		v, err := receipt.Verify(raw, keys)
@@ -117,7 +124,8 @@ func (c *ctx) acceptancesCheck() {
 				bad = append(bad, fmt.Sprintf("%s: record %d is about another receipt or packet", name, r.Seq))
 			}
 		} else {
-			notes = append(notes, fmt.Sprintf("%s: its chain record is not among the records this packet carries, so only the signature was checked", name))
+			unbound++
+			notes = append(notes, fmt.Sprintf("%s: its chain record is not among the records this packet carries, so the receipt is not bound to the ledger here: only the signature was checked", name))
 		}
 		// Consistency with this packet's checkpoint.
 		if rc, here := pl.Checkpoint, c.cp; rc != nil && here != nil {
@@ -135,8 +143,14 @@ func (c *ctx) acceptancesCheck() {
 	switch {
 	case len(bad) > 0:
 		chk.Status, chk.Detail, chk.Findings = Fail, strconv.Itoa(len(bad))+" finding(s) in "+strconv.Itoa(len(p.Acceptances.Receipts))+" receipt(s)", bad
+	case unbound > 0:
+		chk.Status, chk.Detail = NotChecked, fmt.Sprintf("%d receipt(s) carry a valid signature, but %d chain record(s) are not carried, so their binding to the ledger was not checked", own+vouched, unbound)
+		chk.Findings = notes
+		c.rep.add(chk)
+		c.rep.note("Acceptance receipts show that a recipient signed a statement about an earlier packet, with a key it registered; they do not show the recipient's review was right.")
+		return
 	case vouched > 0:
-		chk.Status, chk.Trust = SelfVouched, "the recipients' keys were TAKEN FROM THE PACKET ITSELF: pass --recipient-keys with the keys the recipients gave you"
+		chk.Status, chk.Trust = SelfVouched, "the recipients' keys were TAKEN FROM THE PACKET ITSELF: pass --recipient-keys <recipient>=<file> with the keys each recipient gave you"
 		chk.Detail = fmt.Sprintf("%d receipt(s) verify; %d under keys you supplied, %d under the packet's own copy", own+vouched, own, vouched)
 	default:
 		chk.Status, chk.Trust = Pass, "keys you supplied"

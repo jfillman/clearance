@@ -26,7 +26,7 @@ So the verifier takes the trust inputs from **you**, and says in the output whic
 | The witness policy | `--witness-policy` | The packet's `ledger/witness-policy.txt`, reported the same way |
 | The attestation trust root: a Sigstore TrustedRoot JSON (`clearance trust-root build`), or Fulcio certificates (PEM) with `--rekor-key` | `--trust-root` | Keyless attestations are **NOT CHECKED** |
 | A static-key attestation's public key (PEM or JWKS) | `--attest-key` | Static-key attestations are **NOT CHECKED** |
-| The assurance recipients' public keys (PEM or JWKS), as the recipients gave them to you | `--recipient-keys` | Each acceptance receipt's own copy of its key is used and the check prints **SELF-VOUCHED** |
+| Each assurance recipient's public keys (PEM or JWKS), as that recipient gave them to you | `--recipient-keys <recipient>=<file>` (repeatable) | Each acceptance receipt's own copy of its key is used and the check prints **SELF-VOUCHED** |
 | Who must have signed a keyless attestation | `--identity` with `--issuer` | The signer is read from each attestation's own certificate and labelled "not pinned": the signature and chain verify, but who signed is the attestation's own claim |
 
 The top of the report lists each input and where it came from. Only a checkpoint authenticated by log keys you
@@ -82,9 +82,9 @@ supplied is written to the note of checkpoints seen (below).
 When the packet's Acceptances section carries receipts ([assurance.md](assurance.md)), one more check runs for all of them:
 the section's printed fields are the signed payload's own (a table saying "accepted" over a receipt that says "rejected" fails
 even when the manifest was rewritten to match); the DSSE signature holds under the recipient's key (yours from
-`--recipient-keys`, else the receipt's carried copy, **SELF-VOUCHED**); the receipt hashes to the digest the section states;
+`--recipient-keys name=file` for the recipient the receipt names, else the receipt's carried copy, **SELF-VOUCHED**; a key supplied for another recipient never vouches); the receipt hashes to the digest the section states;
 when the chain record the core wrote for it is among the carried records it is the right one (so the packet's hash checks and
-inclusion proofs bind it); and the checkpoint the receipted packet stood on is consistent with this packet's (same log, never
+inclusion proofs bind it; when it is not carried the check is **NOT CHECKED**, signature only); and the checkpoint the receipted packet stood on is consistent with this packet's (same log, never
 later, the same root at the same size: a different root is a **FORK**). It cannot check that the receipted packet's id is the digest
 of its manifest (that packet is not here): whoever holds it can.
 

@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -64,8 +65,14 @@ const (
 	MaxDeliveryWindow = token.MaxAccessLifetime
 	MinDeliveryWindow = time.Minute
 	// maxRefusalRecords is how many refusals of one delivery are recorded in an hour: past it the refusal is still
-	// answered, and counted, but no longer written (a leaked credential must not be a way to fill the chain).
+	// answered (429), and counted, but no longer written.
 	maxRefusalRecords = 60
+	// DefaultPacketReadsPerHour is how many allowed reads of one delivery are served and recorded in an hour (Options.
+	// PacketReadsPerHour, CLEARANCE_PACKET_READS_PER_HOUR). With the refusal cap, a leaked credential can add at most
+	// this many plus maxRefusalRecords records an hour, per replica, until its window ends.
+	DefaultPacketReadsPerHour = 60
+	// bundleCacheSize is how many validated packets the core keeps in memory (a packet is immutable).
+	bundleCacheSize = 4
 )
 
 // PacketBundle is a packet as the core keeps and serves it: the packet directory as one JSON document, the files
@@ -138,6 +145,9 @@ type ReceiptRecorded struct {
 	Recipient     string `json:"recipient"`
 	Verdict       string `json:"verdict"`
 	PayloadSHA256 string `json:"payload_sha256"`
+	// Created is false when the core already held this signed receipt: nothing was written, and seq and hash are
+	// the record that holds it.
+	Created bool `json:"created"`
 }
 
 // packetErrorBody is a packet route's refusal: the usual error and, for a refused read, the rule.
@@ -149,32 +159,87 @@ type PacketError struct {
 var packetVerified = union(evidence.ProviderVerified, "ts", "tool", "decision", "rule", "target", "principal", "initiator", "args_sha256",
 	"result", "packet", "delivery", "receipt", "fetch", "delegate", "task_id", "session", "parent", "agent", "tier")
 
-// refusals counts the refusals recorded per delivery in the hour (maxRefusalRecords).
-type refusals struct {
+// hourly counts events per key in the wall-clock hour (a refusal, or an allowed read, of one delivery). It is per
+// replica and per wall-clock hour: a known limit.
+type hourly struct {
 	mu sync.Mutex
-	by map[string]refusalCount
+	by map[string]hourlyCount
 }
 
-type refusalCount struct {
+type hourlyCount struct {
 	hour int64
 	n    int
 }
 
-// allow says whether a refusal of this delivery may be recorded now, and counts it.
-func (r *refusals) allow(delivery string, now time.Time) bool {
+// allow counts one event under key and says whether it is within limit (limit < 0: unlimited).
+func (r *hourly) allow(key string, now time.Time, limit int) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.by == nil || len(r.by) > 10000 {
-		r.by = map[string]refusalCount{}
+		r.by = map[string]hourlyCount{}
 	}
 	h := now.Unix() / 3600
-	c := r.by[delivery]
+	c := r.by[key]
 	if c.hour != h {
-		c = refusalCount{hour: h}
+		c = hourlyCount{hour: h}
 	}
 	c.n++
-	r.by[delivery] = c
-	return c.n <= maxRefusalRecords
+	r.by[key] = c
+	return limit < 0 || c.n <= limit
+}
+
+// bundles keeps the last few validated packets: a packet is immutable (its id is its content's address), so a read
+// need not load and re-validate up to 64 MiB again.
+type bundles struct {
+	mu    sync.Mutex
+	byID  map[string]*packet.Bundle
+	parts map[string][]byte // id + "|" + parts: the cut bundle
+}
+
+func (c *bundles) get(id, digest string) *packet.Bundle {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if b := c.byID[id]; b != nil && b.Digest == digest {
+		return b
+	}
+	return nil
+}
+
+func (c *bundles) put(b *packet.Bundle) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.byID == nil || len(c.byID) >= bundleCacheSize {
+		c.byID, c.parts = map[string]*packet.Bundle{}, map[string][]byte{}
+	}
+	c.byID[b.ID] = b
+}
+
+func (c *bundles) cut(b *packet.Bundle, scope []string) ([]byte, error) {
+	key := b.ID + "|" + strings.Join(scope, ",")
+	c.mu.Lock()
+	if body, ok := c.parts[key]; ok {
+		c.mu.Unlock()
+		return body, nil
+	}
+	c.mu.Unlock()
+	body, err := b.Restrict(scope)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	if c.parts != nil {
+		c.parts[key] = body
+	}
+	c.mu.Unlock()
+	return body, nil
+}
+
+// readLimit is the allowed reads of one delivery an hour (negative: unlimited).
+func (s *Server) readLimit() int {
+	if s.opt.PacketReadsPerHour == 0 {
+		return DefaultPacketReadsPerHour
+	}
+	return s.opt.PacketReadsPerHour
 }
 
 func packetPath(id string) string { return "/v1/packets/" + id }
@@ -482,6 +547,11 @@ func bearer(r *http.Request) string {
 // packet, a part outside its scope) is recorded with the rule that refused it.
 func (s *Server) getPacket(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	// The id goes into signed records and answers: only a packet id is accepted, before anything is read or written.
+	if !packet.ValidID(r.PathValue("id")) {
+		writeError(w, http.StatusNotFound, "no such packet")
+		return
+	}
 	q := r.URL.Query()
 	for k, vs := range q {
 		if k != "part" || len(vs) != 1 {
@@ -537,32 +607,40 @@ func (s *Server) getPacket(w http.ResponseWriter, r *http.Request) {
 	case recipient(s.opt.Providers, claims.Recipient) == nil:
 		rule, msg, status = RulePacketRecipient, claims.Recipient+" is no longer a registered recipient", http.StatusForbidden
 	}
-	var pk store.Packet
+	if rule == "" && !s.reads.allow("a|"+claims.Subject, now, s.readLimit()) {
+		w.Header().Set("Retry-After", "3600")
+		writeJSON(w, http.StatusTooManyRequests, PacketError{Error: "this delivery has been read " + strconv.Itoa(s.readLimit()) + " times this hour: try again later"})
+		return
+	}
+	var b *packet.Bundle
 	if rule == "" {
-		pk, err = s.opt.Store.Packet(ctx, id)
-		switch {
-		case errors.Is(err, store.ErrNotFound) || (err == nil && pk.Digest != claims.Digest):
-			rule, msg, status = RulePacketGone, "the core does not hold the packet this credential names", http.StatusNotFound
-		case err != nil:
-			writeError(w, http.StatusServiceUnavailable, "the store could not be read")
-			return
+		if b = s.bundles.get(id, claims.Digest); b == nil {
+			pk, err := s.opt.Store.Packet(ctx, id)
+			switch {
+			case errors.Is(err, store.ErrNotFound) || (err == nil && pk.Digest != claims.Digest):
+				rule, msg, status = RulePacketGone, "the core does not hold the packet this credential names", http.StatusNotFound
+			case err != nil:
+				writeError(w, http.StatusServiceUnavailable, "the store could not be read")
+				return
+			default:
+				if b, err = packet.LoadBundle(pk.Bundle); err != nil {
+					s.log.ErrorContext(ctx, "packet: the stored bundle is unreadable", "packet", id, "error", err.Error())
+					writeError(w, http.StatusServiceUnavailable, "the stored packet could not be read")
+					return
+				}
+				s.bundles.put(b)
+			}
 		}
 	}
 	if rule != "" {
 		s.refusePacketRead(w, r, claims, id, part, rule, msg, status, now)
 		return
 	}
-	b, err := packet.LoadBundle(pk.Bundle)
-	if err != nil {
-		s.log.ErrorContext(ctx, "packet: the stored bundle is unreadable", "packet", id, "error", err.Error())
-		writeError(w, http.StatusServiceUnavailable, "the stored packet could not be read")
-		return
-	}
 	scope := claims.Scope
 	if part != "" {
 		scope = []string{part}
 	}
-	body, err := b.Restrict(scope)
+	body, err := s.bundles.cut(b, scope)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "the stored packet could not be read")
 		return
@@ -579,7 +657,7 @@ func (s *Server) getPacket(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Clearance-Packet-Digest", pk.Digest)
+	w.Header().Set("X-Clearance-Packet-Digest", b.Digest)
 	w.Header().Set("X-Clearance-Packet-Scope", strings.Join(scope, ","))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
@@ -604,7 +682,7 @@ func (s *Server) fetchEvent(c *token.AccessClaims, id, part string, scope []stri
 // the answer does too. A flood of refusals of one delivery is recorded up to maxRefusalRecords an hour.
 func (s *Server) refusePacketRead(w http.ResponseWriter, r *http.Request, c *token.AccessClaims, id, part, rule, msg string, status int, now time.Time) {
 	ctx := r.Context()
-	if !s.refused.allow(c.Subject, now) {
+	if !s.refused.allow("r|"+c.Subject, now, maxRefusalRecords) {
 		w.Header().Set("Retry-After", "3600")
 		writeJSON(w, http.StatusTooManyRequests, PacketError{Error: "this delivery has been refused " + strconv.Itoa(maxRefusalRecords) + " times this hour: " + msg, Rule: rule})
 		return
@@ -662,6 +740,12 @@ func (s *Server) acceptReceipt(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "not an acceptance receipt: "+err.Error())
 		return
 	}
+	// From here the decisions and the record rest on the verified payload, never on what Read showed unsigned.
+	vp := &v.Payload
+	if vp.PacketID != id || vp.Recipient != pl.Recipient {
+		writeError(w, http.StatusBadRequest, "the signed receipt is not the one that was read")
+		return
+	}
 	pk, err := s.opt.Store.Packet(ctx, id)
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "no such packet")
@@ -675,7 +759,7 @@ func (s *Server) acceptReceipt(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "the stored packet could not be read")
 		return
 	}
-	dseq, _ := strconv.ParseInt(strings.TrimPrefix(pl.Delivery, "dl-"), 10, 64)
+	dseq, _ := strconv.ParseInt(strings.TrimPrefix(vp.Delivery, "dl-"), 10, 64)
 	drecs, err := s.opt.Store.Records(ctx, dseq, 1)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "the store could not be read")
@@ -688,11 +772,11 @@ func (s *Server) acceptReceipt(w http.ResponseWriter, r *http.Request) {
 	d, _ := dl["delivery"].(map[string]any)
 	dp, _ := dl["packet"].(map[string]any)
 	if dl == nil || dl["tool"] != ToolPacketDeliver || fmt.Sprint(dl["seq"]) != strconv.FormatInt(dseq, 10) ||
-		fmt.Sprint(dp["id"]) != id || fmt.Sprint(d["recipient"]) != pl.Recipient {
-		writeError(w, http.StatusBadRequest, pl.Delivery+" is not a delivery of this packet to "+pl.Recipient)
+		fmt.Sprint(dp["id"]) != id || fmt.Sprint(d["recipient"]) != vp.Recipient {
+		writeError(w, http.StatusBadRequest, vp.Delivery+" is not a delivery of this packet to "+vp.Recipient)
 		return
 	}
-	if msg := checkReceiptBinding(pl, pk, meta, d, s.opt.Clock()); msg != "" {
+	if msg := checkReceiptBinding(vp, pk, meta, d, s.opt.Clock()); msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
@@ -708,22 +792,38 @@ func (s *Server) acceptReceipt(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "the receipt is not JSON")
 		return
 	}
+	// Idempotent on the signed payload: the same receipt again is the record already written, and writes nothing.
+	s.receiptMu.Lock()
+	defer s.receiptMu.Unlock()
+	idx, err := s.receiptIndex(ctx)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "the store could not be read")
+		return
+	}
+	if have, ok := idx[id+"|"+v.PayloadSHA256]; ok {
+		have.Created = false
+		writeJSON(w, http.StatusOK, have)
+		return
+	}
 	var out ReceiptRecorded
 	err = s.opt.Store.Atomic(ctx, func(tx store.Tx) error {
 		rec, err := tx.Append(ctx, store.Event{"ts": pycompat.ISO(s.opt.Clock()), "task_id": nil, "session": nil, "parent": nil,
-			"principal": "recipient:" + pl.Recipient, "agent": nil, "tool": packet.ToolReceipt, "tier": nil, "decision": "allow", "rule": nil,
+			"principal": "recipient:" + vp.Recipient, "agent": nil, "tool": packet.ToolReceipt, "tier": nil, "decision": "allow", "rule": nil,
 			"target": "packet:" + id, "args_sha256": v.PayloadSHA256, "boundary": "deployment",
-			"result": fmt.Sprintf("%s: acceptance receipt from %s for packet %s", pl.Verdict, pl.Recipient, id),
-			"packet": map[string]any{"id": id, "digest": pk.Digest}, "delivery": map[string]any{"id": pl.Delivery, "recipient": pl.Recipient},
-			"receipt": map[string]any{"verdict": pl.Verdict, "engagement": pl.Engagement, "payload_sha256": v.PayloadSHA256, "key_id": v.KeyID,
+			"result": fmt.Sprintf("%s: acceptance receipt from %s for packet %s", vp.Verdict, vp.Recipient, id),
+			"packet": map[string]any{"id": id, "digest": pk.Digest}, "delivery": map[string]any{"id": vp.Delivery, "recipient": vp.Recipient},
+			"receipt": map[string]any{"verdict": vp.Verdict, "engagement": vp.Engagement, "payload_sha256": v.PayloadSHA256, "key_id": v.KeyID,
 				"key": jm, "envelope": em}}, s.coreWriter(packetVerified))
 		if err != nil {
 			return err
 		}
 		seq, _ := gate.SeqInt(rec["seq"])
-		out = ReceiptRecorded{Seq: seq, Hash: fmt.Sprint(rec["hash"]), PacketID: id, Recipient: pl.Recipient, Verdict: pl.Verdict, PayloadSHA256: v.PayloadSHA256}
+		out = ReceiptRecorded{Seq: seq, Hash: fmt.Sprint(rec["hash"]), PacketID: id, Recipient: vp.Recipient, Verdict: vp.Verdict, PayloadSHA256: v.PayloadSHA256, Created: true}
 		return nil
 	})
+	if err == nil {
+		idx[id+"|"+v.PayloadSHA256] = out
+	}
 	if err != nil {
 		s.log.ErrorContext(ctx, "packet: the receipt could not be recorded", "packet", id, "error", err.Error())
 		writeError(w, http.StatusServiceUnavailable, "the receipt could not be recorded")
@@ -762,4 +862,41 @@ func checkReceiptBinding(pl *receipt.Payload, pk store.Packet, meta packet.Meta,
 		return "the receipt was signed before the delivery's window began"
 	}
 	return ""
+}
+
+// receiptIndex is the receipts the chain holds, by packet id and payload digest, read once and then kept by the one
+// writer (the caller holds receiptMu).
+func (s *Server) receiptIndex(ctx context.Context) (map[string]ReceiptRecorded, error) {
+	if s.receipts != nil {
+		return s.receipts, nil
+	}
+	idx := map[string]ReceiptRecorded{}
+	const page = 5000
+	for from := int64(0); ; {
+		recs, err := s.opt.Store.Records(ctx, from, page)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range recs {
+			if r["tool"] != packet.ToolReceipt {
+				continue
+			}
+			pk, _ := r["packet"].(map[string]any)
+			rc, _ := r["receipt"].(map[string]any)
+			seq, _ := gate.SeqInt(r["seq"])
+			dl, _ := r["delivery"].(map[string]any)
+			key := fmt.Sprint(pk["id"]) + "|" + fmt.Sprint(rc["payload_sha256"])
+			if _, ok := idx[key]; !ok {
+				idx[key] = ReceiptRecorded{Seq: seq, Hash: fmt.Sprint(r["hash"]), PacketID: fmt.Sprint(pk["id"]), Recipient: fmt.Sprint(dl["recipient"]),
+					Verdict: fmt.Sprint(rc["verdict"]), PayloadSHA256: fmt.Sprint(rc["payload_sha256"])}
+			}
+		}
+		if len(recs) < page {
+			break
+		}
+		last, _ := gate.SeqInt(recs[len(recs)-1]["seq"])
+		from = last + 1
+	}
+	s.receipts = idx
+	return idx, nil
 }

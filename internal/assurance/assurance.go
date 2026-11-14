@@ -128,6 +128,8 @@ type Recorded struct {
 	Recipient     string `json:"recipient"`
 	Verdict       string `json:"verdict"`
 	PayloadSHA256 string `json:"payload_sha256"`
+	// Created is false when the core already held this signed receipt.
+	Created bool `json:"created"`
 }
 
 // Submit posts a signed receipt (the DSSE envelope's JSON).
