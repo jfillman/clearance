@@ -192,6 +192,14 @@ func TestRevokeDelivery(t *testing.T) {
 		if ruleOf(s) != server.RulePacketRevoked || f.denyCount(server.ToolPacketSample, server.RulePacketRevoked) != 1 {
 			t.Fatalf("%v", s.body)
 		}
+		// The scope check still comes first on the sample route too: a credential cut to one part gets PK-SCOPE whether or not it was revoked.
+		sc := l.f.deliver(t, l.id, map[string]any{"recipient": l.auditor.name, "window": l.window(0), "scope": []string{"summary"}})
+		live := f.do("GET", "/v1/packets/"+l.id+"/sample?seed=s", sc.Credential, nil).want(t, 403, "")
+		f.do("POST", l.revokePath(sc.ID), "user:admin", map[string]any{"reason": "x"}).want(t, 200, "")
+		dead := f.do("GET", "/v1/packets/"+l.id+"/sample?seed=s", sc.Credential, nil).want(t, 403, "")
+		if ruleOf(live) != server.RulePacketScope || ruleOf(dead) != server.RulePacketScope {
+			t.Fatalf("live %v, revoked %v", live.body, dead.body)
+		}
 		// It does not say whether a packet exists: asked for another packet, a revoked credential gets the answer any credential gets.
 		unknown := "/v1/packets/pk-00000000000000000000000000000000"
 		ra := f.do("GET", unknown, d.Credential, nil).want(t, 403, "")

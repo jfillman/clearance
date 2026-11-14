@@ -482,10 +482,10 @@ func (s *Server) getSample(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case id != claims.Packet:
 		rule, msg, status = RulePacketScope, "this credential opens packet "+claims.Packet+", not "+id, http.StatusForbidden
-	case revoked:
-		rule, msg, status = RulePacketRevoked, "this delivery was revoked at "+rv.at+": ask the subscriber for a new delivery", http.StatusForbidden
 	case !slices.Contains(claims.Scope, packet.PartSummary) || !slices.Contains(claims.Scope, packet.PartEvidence):
 		rule, msg, status = RulePacketScope, "a sample needs both parts of the packet (the population is in the summary, the records and proofs in the evidence); this credential's scope is "+strings.Join(claims.Scope, ", "), http.StatusForbidden
+	case revoked:
+		rule, msg, status = RulePacketRevoked, "this delivery was revoked at "+rv.at+": ask the subscriber for a new delivery", http.StatusForbidden
 	case now.Before(time.Unix(claims.NotBefore, 0)):
 		rule, msg, status = RulePacketNotYet, "this credential is not good until "+pycompat.ISO(time.Unix(claims.NotBefore, 0)), http.StatusForbidden
 	case !now.Before(time.Unix(claims.Expires, 0)):
