@@ -32,7 +32,8 @@ const (
 var RecordKinds = []string{"session.open", "run.launch", "run.delete", "run.finish", "human.answer",
 	"session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome",
 	"deploy.exception", "deploy.degraded", "federated.decision",
-	"observation", "assessment", "resolution", "observation.health", "observation.verification"}
+	"observation", "assessment", "resolution", "observation.health", "observation.verification",
+	"grc.push", "grc.report"}
 
 // CoverageUnavailable is a tool.call record's coverage: a T0 read the provider allowed while the core was
 // unreachable (the outage policy), posted once it answers.

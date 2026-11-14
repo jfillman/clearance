@@ -224,7 +224,7 @@ var routeTable = []Route{
 		Params: []string{"app", "env", "state", "repo", "pr", "tier", "since", "limit", "after", "cluster", "awaiting"},
 		Summary: "The deployment gate's changes, newest first: tier and why, state (holding, cleared, denied, " +
 			"expired, superseded, degraded, exception), the requirement and the approvals so far, what the grant binds to. A person sees " +
-			"their apps' changes and the ones their groups may clear; the cursor is updated_at. cluster=<c>&state=" +
+			"their apps' changes and the ones their groups may clear; the order is updated_at then id, and the cursor (next, pass it back as after) is \"<updated_at>,<id>\", so changes sharing a second are never dropped between pages; a bare updated_at from an older client still means strictly older. cluster=<c>&state=" +
 			"cleared is the grant feed: the cluster's cleared changes whose clearance token is live, each with its " +
 			"token; a feed reader (CLEARANCE_API_FEED_READERS) may read only that, for its own clusters. awaiting=me keeps the holding " +
 			"changes the caller may clear now (the gate's own rule: in the owner group or an unfilled outside group, not the proposer, " +

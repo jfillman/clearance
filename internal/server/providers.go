@@ -215,7 +215,7 @@ func (p *Provider) mayWrite(kind string) bool {
 		return false
 	}
 	if p.Kinds == nil {
-		return !observe.Is(kind)
+		return !observe.Is(kind) && !isGRCKind(kind)
 	}
 	return slices.Contains(p.Kinds, kind)
 }

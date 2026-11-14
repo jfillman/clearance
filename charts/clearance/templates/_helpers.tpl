@@ -20,6 +20,7 @@
 {{- define "clearance.apiName" -}}{{ include "clearance.fullname" . }}-api{{- end -}}
 {{- define "clearance.webName" -}}{{ include "clearance.fullname" . }}-web{{- end -}}
 {{- define "clearance.slackName" -}}{{ include "clearance.fullname" . }}-slack{{- end -}}
+{{- define "clearance.grcName" -}}{{ include "clearance.fullname" . }}-grc{{- end -}}
 {{- define "clearance.pgName" -}}{{ include "clearance.fullname" . }}-pg{{- end -}}
 
 {{- define "clearance.labels" -}}
@@ -417,4 +418,25 @@ readinessProbe:
   periodSeconds: 5
   timeoutSeconds: 3
   failureThreshold: 3
+{{- end -}}
+
+{{/* clearance-grc (P-4): its service account and principal at the core and the api, and its image. */}}
+{{- define "clearance.grcSA" -}}
+{{- if .Values.grc.serviceAccount.create -}}{{ default (include "clearance.grcName" .) .Values.grc.serviceAccount.name }}{{- else -}}{{ required "grc.serviceAccount.name is required when grc.serviceAccount.create is false" .Values.grc.serviceAccount.name }}{{- end -}}
+{{- end -}}
+{{- define "clearance.grcPrincipal" -}}{{ .Release.Namespace }}/{{ include "clearance.grcSA" . }}{{- end -}}
+{{/* A principal list with clearance-grc added when it is on: (dict "ctx" $ "list" .Values.api.notifiers) */}}
+{{- define "clearance.withGRC" -}}
+{{- $l := .list | default list -}}
+{{- if .ctx.Values.grc.enabled }}{{ $l = append $l (include "clearance.grcPrincipal" .ctx) }}{{ end -}}
+{{- join "," $l -}}
+{{- end -}}
+{{- define "clearance.grcImage" -}}
+{{- $repo := required "grc.image.repository is required" .Values.grc.image.repository -}}
+{{- if .Values.grc.image.digest -}}
+{{- if not (regexMatch "^sha256:[0-9a-f]{64}$" .Values.grc.image.digest) -}}{{- fail "grc.image.digest is sha256:<64 hex>" -}}{{- end -}}
+{{- printf "%s@%s" $repo .Values.grc.image.digest -}}
+{{- else -}}
+{{- printf "%s:%s" $repo (default (printf "v%s" .Chart.AppVersion) .Values.grc.image.tag) -}}
+{{- end -}}
 {{- end -}}

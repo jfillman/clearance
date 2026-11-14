@@ -1,4 +1,4 @@
-{{- define "clearance.npEgress" -}}
+{{- define "clearance.npEgressDNS" -}}
 {{- $np := .Values.networkPolicy -}}
 # DNS
 - to:
@@ -9,6 +9,10 @@
   ports:
     - {protocol: UDP, port: 53}
     - {protocol: TCP, port: 53}
+{{- end -}}
+{{- define "clearance.npEgress" -}}
+{{- $np := .Values.networkPolicy -}}
+{{- include "clearance.npEgressDNS" . }}
 # Postgres
 {{- if or $np.postgres.to .Values.cnpg.enabled }}
 - to:
@@ -55,9 +59,15 @@ spec:
       {{- include "clearance.selector" (dict "ctx" $ "component" $component) | nindent 6 }}
   policyTypes: [Ingress, Egress]
   ingress:
-    {{- if or $from $.Values.slack.enabled }}
+    {{- if or $from $.Values.slack.enabled $.Values.grc.enabled }}
     - from:
         {{- with $from }}{{ toYaml . | nindent 8 }}{{ end }}
+        {{- if $.Values.grc.enabled }}
+        # clearance-grc, this release's own pod
+        - podSelector:
+            matchLabels:
+              {{- include "clearance.selector" (dict "ctx" $ "component" "grc") | nindent 14 }}
+        {{- end }}
         {{- if $.Values.slack.enabled }}
         # clearance-slack, this release's own pod
         - podSelector:
@@ -214,6 +224,56 @@ spec:
         - {protocol: TCP, port: 443}
     {{- end }}
     {{- with $np.slack.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}
+{{- if .Values.grc.enabled }}
+---
+# clearance-grc: no ingress (the probes are the kubelet's), egress to DNS, the core and the api of this release, and the
+# hub: 443 to any public address by default, or to networkPolicy.grc.cidrs when you pin it, plus extraEgress. No Postgres
+# rule at all (it keeps no state), whatever cnpg.enabled is.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "clearance.fullname" . }}-grc
+  labels:
+    {{- include "clearance.labels" . | nindent 4 }}
+    app.kubernetes.io/component: grc
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "clearance.selector" (dict "ctx" . "component" "grc") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    {{- include "clearance.npEgressDNS" . | nindent 4 }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "clearance.selector" (dict "ctx" . "component" "core") | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              {{- include "clearance.selector" (dict "ctx" . "component" "api") | nindent 14 }}
+      ports:
+        - {protocol: TCP, port: 8080}
+    {{- if $np.grc.cidrs }}
+    # The hub's API, pinned to the addresses you named
+    - to:
+        {{- range $np.grc.cidrs }}
+        - ipBlock: {cidr: {{ . | quote }}}
+        {{- end }}
+      ports:
+        - {protocol: TCP, port: 443}
+    {{- else if $np.grc.internet }}
+    # The hub's API, on the internet
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10]
+      ports:
+        - {protocol: TCP, port: 443}
+    {{- end }}
+    {{- with $np.grc.extraEgress }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 {{- end }}

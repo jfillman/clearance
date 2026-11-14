@@ -588,13 +588,16 @@ func (m *memStore) Changes(_ context.Context, f ChangeFilter, v *Viewer, limit i
 	for i := range idx {
 		idx[i] = i
 	}
-	sort.SliceStable(idx, func(a, b int) bool { return views[idx[a]].UpdatedAt > views[idx[b]].UpdatedAt })
+	sort.SliceStable(idx, func(a, b int) bool {
+		x, y := views[idx[a]], views[idx[b]]
+		return x.UpdatedAt > y.UpdatedAt || (x.UpdatedAt == y.UpdatedAt && x.ID > y.ID)
+	})
 	out := []json.RawMessage{}
 	for _, i := range idx {
 		if len(out) == limit {
 			break
 		}
-		if after == "" || views[i].UpdatedAt < after {
+		if after == "" || beforeCursor(views[i].UpdatedAt, views[i].ID, after) {
 			out = append(out, rows[i].Record)
 		}
 	}
