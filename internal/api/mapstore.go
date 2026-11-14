@@ -47,26 +47,24 @@ type HoldRow struct {
 const gateTools = "('deploy.request', 'deploy.clear', 'deploy.deny', 'deploy.expire', 'deploy.outcome', 'deploy.exception', 'deploy.degraded')"
 
 // GateActivity groups the gate records of [from, to) the viewer may see. A runtime decision is a record the core
-// wrote with a `policy` that is not an outcome. The statement is bounded below by the first record written at or after
-// from (clearance_evidence_written), since a record's ts is never before the time it was written.
+// wrote with a `policy` that is not an outcome. The statement reads only the records on the clearance_evidence_gate
+// partial index (the gate predicate below, spelled as the index spells it), by ts range: it never walks the chain.
 func (s *PG) GateActivity(ctx context.Context, v *Viewer, from, to string) ([]GateRow, bool, error) {
 	b := &q{}
 	with := b.evidenceScope(v)
 	core := b.arg(evidence.CoreProviderName)
-	fromT, err := time.Parse(time.RFC3339, from)
-	if err != nil {
-		return nil, false, fmt.Errorf("api: gate activity from %q", from)
-	}
-	b.add("e.seq >= COALESCE((SELECT min(w.seq) FROM clearance_evidence w WHERE w.written_at >= " + b.arg(fromT) + "), 0)")
 	b.add("e.record->>'ts' >= " + b.arg(from))
 	b.add("e.record->>'ts' < " + b.arg(to))
 	b.add("(e.record->>'tool' IN " + gateTools + " OR (e.record->>'boundary' = 'runtime' AND e.record ? 'policy' AND NOT (e.record ? 'outcome_of')))")
-	cols := "COALESCE(NULLIF(e.record->'provider'->>'name', " + core + "), ''), COALESCE(c.record->>'registered_by', ''), " +
-		"COALESCE(e.record->>'boundary', ''), COALESCE(e.record->>'tool', ''), COALESCE(e.record->>'decision', ''), " +
-		"COALESCE(e.record->>'coverage', ''), CASE WHEN e.record->>'boundary' = 'deployment' THEN COALESCE(e.record->>'app', '') ELSE '' END, " +
-		"COALESCE(e.record->'change'->>'env', ''), COALESCE(e.record->'outcome'->>'applied', ''), COALESCE(e.record->>'matched', '')"
-	rows, done, err := s.R.Query(ctx, with+"SELECT "+cols+", count(*), count(DISTINCT e.record->'change'->>'id') "+
-		"FROM clearance_evidence e LEFT JOIN clearance_changes c ON c.id = e.record->'change'->>'id' WHERE "+b.sql()+
+	// One jsonb_to_record per record: a record is TOASTed, and each e.record->>'f' would fetch and decompress it again.
+	cols := "COALESCE(NULLIF(x.provider->>'name', " + core + "), ''), COALESCE(c.record->>'registered_by', ''), " +
+		"COALESCE(x.boundary, ''), COALESCE(x.tool, ''), COALESCE(x.decision, ''), " +
+		"COALESCE(x.coverage, ''), CASE WHEN x.boundary = 'deployment' THEN COALESCE(x.app, '') ELSE '' END, " +
+		"COALESCE(x.change->>'env', ''), COALESCE(x.outcome->>'applied', ''), COALESCE(x.matched, '')"
+	rows, done, err := s.R.Query(ctx, with+"SELECT "+cols+", count(*), count(DISTINCT x.change->>'id') "+
+		"FROM clearance_evidence e CROSS JOIN LATERAL jsonb_to_record(e.record) AS x(provider jsonb, boundary text, tool text, "+
+		"decision text, coverage text, app text, change jsonb, outcome jsonb, matched text) "+
+		"LEFT JOIN clearance_changes c ON c.id = x.change->>'id' WHERE "+b.sql()+
 		" GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 LIMIT "+b.arg(MaxGateRows+1), b.args...)
 	if err != nil {
 		return nil, false, err
@@ -92,15 +90,14 @@ func (s *PG) GateActivity(ctx context.Context, v *Viewer, from, to string) ([]Ga
 	return out, cut, nil
 }
 
-// ScopeCoverage groups the observations and assessments of the scopes in [from, to), on the observed partial index
-// (clearance_evidence_observed: the predicate is repeated literally).
+// ScopeCoverage groups the observations and assessments of the scopes in [from, to), on the clearance_evidence_obs_ts
+// partial index (scope, ts: the tool predicate is repeated literally), so it reads the records of the window and no others.
 func (s *PG) ScopeCoverage(ctx context.Context, v *Viewer, scopes []string, from, to string) ([]ScopeRow, error) {
 	if len(scopes) == 0 {
 		return nil, nil
 	}
 	b := &q{}
 	with := b.evidenceScope(v)
-	b.add(observedTools)
 	b.add("e.record->>'tool' IN ('observation', 'assessment')")
 	b.add("e.record->>'scope' = ANY(" + b.arg(scopes) + ")")
 	b.add("e.record->>'ts' >= " + b.arg(from))
@@ -124,23 +121,31 @@ func (s *PG) ScopeCoverage(ctx context.Context, v *Viewer, scopes []string, from
 	return out, rows.Err()
 }
 
+// healthTail is how many of a scope's newest health records HealthBeforeScopes reads (see there).
+const healthTail = 500
+
 // HealthBeforeScopes is HealthBefore for many scopes in one pass: per scope and source, the health records before
-// `before` from the last one the collector wrote as healthy through the newest.
+// `before` from the last one the collector wrote as healthy through the newest. It reads the newest healthTail
+// records of each scope (clearance_evidence_health, backwards from `before`) and finds the anchor among them, so its
+// cost is bounded however long the chain is. The Map reads the state at the window's end, so only a core-written flip
+// (monitoring forced blind or degraded) that has held for more than healthTail records of one scope, with no healthy
+// collector record since, loses its start: its state still reads as the flip's, from the oldest record read.
 func (s *PG) HealthBeforeScopes(ctx context.Context, v *Viewer, scopes []string, before string) ([]Record, error) {
 	if len(scopes) == 0 {
 		return nil, nil
 	}
 	b := &q{}
 	with := b.evidenceScope(v)
-	b.add(observedTools)
 	b.add("e.record->>'tool' = 'observation.health'")
-	b.add("e.record->>'scope' = ANY(" + b.arg(scopes) + ")")
+	b.add("e.record->>'scope' = s.scope")
 	b.add("e.record->>'ts' < " + b.arg(before))
 	core := b.arg(evidence.CoreProviderName)
-	pre := "h AS (SELECT e.seq, e.record, e.assurance, " +
-		"max(CASE WHEN COALESCE(e.record->'provider'->>'name', '') <> " + core + " AND e.record->'health'->>'state' = 'healthy' " +
-		"THEN e.seq END) OVER (PARTITION BY e.record->>'scope', COALESCE(e.record->'source'->>'name', '')) AS aseq " +
-		"FROM clearance_evidence e WHERE " + b.sql() + ") "
+	list := b.arg(scopes)
+	pre := "h AS (SELECT t.seq, t.record, t.assurance, " +
+		"max(CASE WHEN COALESCE(t.record->'provider'->>'name', '') <> " + core + " AND t.record->'health'->>'state' = 'healthy' " +
+		"THEN t.seq END) OVER (PARTITION BY s.scope, COALESCE(t.record->'source'->>'name', '')) AS aseq " +
+		"FROM unnest(" + list + "::text[]) AS s(scope) CROSS JOIN LATERAL (SELECT e.seq, e.record, e.assurance FROM clearance_evidence e WHERE " +
+		b.sql() + " ORDER BY e.seq DESC LIMIT " + fmt.Sprint(healthTail) + ") t) "
 	if with == "" {
 		with = "WITH "
 	} else {

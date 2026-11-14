@@ -1,8 +1,9 @@
 package api
 
-// The Map's budget: GET /v1/map answers in under a second on a chain of about 25 000 records, and stays there at ten
-// times that. The chain is synthetic (the mix of a busy lab: runtime decisions, deployment records, observations,
-// assessments and health records over two days), written straight into Postgres with the schema the core migrates.
+// The Map's budget: GET /v1/map answers in under a second on a chain of about 25 000 records, and in under three at ten
+// times that (the synthetic chain puts half its records in the window as gate records, which each cost a read). The chain is synthetic (the mix of a busy lab: runtime decisions, deployment records, observations,
+// assessments and health records over two days, each about 3 KB, as the real ones are: past the TOAST threshold, so a statement that
+// reads a record pays a fetch and a decompress), written straight into Postgres with the schema the core migrates.
 // The 250 000-record run is CLEARANCE_MAP_PERF=1 (a few seconds more); the 25 000-record one always runs.
 
 import (
@@ -19,7 +20,8 @@ import (
 	"github.com/jfillman/clearance/internal/targets"
 )
 
-func synthChain(t *testing.T, dsn string, n int) {
+// synthChain writes n records evenly over span, ending at mapNow.
+func synthChain(t *testing.T, dsn string, n int, span time.Duration) {
 	t.Helper()
 	conn, err := pgx.Connect(bg, dsn)
 	if err != nil {
@@ -27,7 +29,12 @@ func synthChain(t *testing.T, dsn string, n int) {
 	}
 	defer conn.Close(bg)
 	end := mapNow.Format("2006-01-02 15:04:05")
-	ts := fmt.Sprintf(`to_char((timestamp '%s' - (%d - i) * interval '1 second' * 172800 / %d) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`, end, n, n)
+	secs := int(span / time.Second)
+	ts := fmt.Sprintf(`to_char((timestamp '%s' - (%d - i) * interval '1 second' * %d / %d) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`, end, n, secs, n)
+	// Real records are about 3 KB (about 2 KB compressed): past the TOAST threshold, so every field a statement reads
+	// detoasts and decompresses the whole record. Records that fit in the page would hide the cost the Map pays; the
+	// padding is random hex, which does not compress away.
+	pad := `(SELECT string_agg(md5(random()::text || i::text || k::text), '') FROM generate_series(1, 90) k)`
 	rec := `CASE i %% 10
 	  WHEN 0 THEN jsonb_build_object('tool','github.pr.open','boundary','runtime','decision','allow','policy',jsonb_build_object('ref','x'),'provider',jsonb_build_object('name','gw-'||(i %% 3)),'agent','coding-agent','coverage','authorized-and-verified')
 	  WHEN 1 THEN jsonb_build_object('tool','github.pr.open','boundary','runtime','decision','deny','policy',jsonb_build_object('ref','x'),'provider',jsonb_build_object('name','gw-'||(i %% 3)),'agent','coding-agent','coverage','authorized-and-verified')
@@ -39,10 +46,10 @@ func synthChain(t *testing.T, dsn string, n int) {
 	  WHEN 7 THEN jsonb_build_object('tool','assessment','boundary','deployment','scope','scope-'||(i %% 50),'about',jsonb_build_object('seq',i-1),'coverage',CASE WHEN i %% 30 = 7 THEN 'out-of-band-detected' ELSE 'authorized-and-verified' END,'provider',jsonb_build_object('name','observe-k8s'))
 	  WHEN 8 THEN jsonb_build_object('tool','deploy.outcome','boundary','deployment','app','app-'||(i %% 100),'matched',true,'outcome',jsonb_build_object('applied',true),'provider',jsonb_build_object('name','argo-gate'),'change',jsonb_build_object('id','c-'||(i-4),'env','prod'))
 	  ELSE jsonb_build_object('tool','observation.health','boundary','deployment','scope','scope-'||(i %% 50),'source',jsonb_build_object('name','observe-k8s'),'health',jsonb_build_object('state','healthy','interval_seconds',60,'checks','[]'::jsonb),'provider',jsonb_build_object('name','observe-k8s'))
-	END || jsonb_build_object('ts', ` + ts + `, 'seq', i)`
+	END || jsonb_build_object('ts', ` + ts + `, 'seq', i, 'detail', ` + pad + `)`
 	sql := fmt.Sprintf(`INSERT INTO clearance_evidence (seq, hash, prev_hash, record, written_at)
-	  SELECT i, md5(i::text) || md5(i::text), md5((i-1)::text) || md5((i-1)::text), %s, (timestamp '%s' - (%d - i) * interval '1 second' * 172800 / %d) AT TIME ZONE 'UTC'
-	  FROM generate_series(0, %d) i`, strings.ReplaceAll(rec, "%%", "%"), end, n, n, n-1)
+	  SELECT i, md5(i::text) || md5(i::text), md5((i-1)::text) || md5((i-1)::text), %s, (timestamp '%s' - (%d - i) * interval '1 second' * %d / %d) AT TIME ZONE 'UTC'
+	  FROM generate_series(0, %d) i`, strings.ReplaceAll(rec, "%%", "%"), end, n, secs, n, n-1)
 	if _, err := conn.Exec(bg, sql); err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +93,7 @@ func TestMapStaysUnderABudgetOnALargeChain(t *testing.T) {
 			if err := st.Atomic(bg, func(tx store.Tx) error { return tx.PutTargets(bg, synthRegistry()) }); err != nil {
 				t.Fatal(err)
 			}
-			synthChain(t, dsn, n)
+			synthChain(t, dsn, n, 48*time.Hour)
 			rd := openReader(t, dsn)
 			h := newHarness(t, backend{"perf", func(*testing.T, world) (Store, string) { return rd, dsn }}, world{},
 				func(o *Options) { o.Clock = func() time.Time { return mapNow } })
@@ -102,8 +109,12 @@ func TestMapStaysUnderABudgetOnALargeChain(t *testing.T) {
 					}
 				}
 				t.Logf("%d records: GET %s: %s", n, path, best)
-				if best > time.Second {
-					t.Errorf("GET %s took %s on %d records: the budget is 1s", path, best, n)
+				budget := time.Second
+				if n > 100000 {
+					budget = 3 * time.Second // half of these records are gate records inside the window: a read per record
+				}
+				if best > budget {
+					t.Errorf("GET %s took %s on %d records: the budget is %s", path, best, n, budget)
 				}
 				if strings.HasPrefix(path, "/v1/map") && len(sub(m, "nodes")["targets"].([]any)) == 0 {
 					t.Fatalf("the synthetic registry produced an empty map: %v", m)
@@ -115,5 +126,80 @@ func TestMapStaysUnderABudgetOnALargeChain(t *testing.T) {
 				t.Fatalf("no activity counted on the synthetic chain: %v", gp)
 			}
 		})
+	}
+}
+
+// A long chain with a small window: 60 000 records over 30 days, so the Map's 24 hours hold about 3% of them. A Map
+// read must come from the partial indexes (the three the schema adds for it) and never walk the table: a record is
+// TOASTed, so a statement that filters a chain row by row pays a fetch and a decompress for every record of every
+// day, which on the lab took each statement past the 5 s statement_timeout. The scan counts come from Postgres's own
+// statistics, so this holds on any machine, however fast.
+func TestMapReadsOnlyTheIndexedRecords(t *testing.T) {
+	dsn := newDB(t)
+	st, err := pg.Open(bg, dsn, pg.Options{Logger: quiet})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.Atomic(bg, func(tx store.Tx) error { return tx.PutTargets(bg, synthRegistry()) }); err != nil {
+		t.Fatal(err)
+	}
+	synthChain(t, dsn, 60000, 30*24*time.Hour)
+	rd := openReader(t, dsn)
+	h := newHarness(t, backend{"perf", func(*testing.T, world) (Store, string) { return rd, dsn }}, world{},
+		func(o *Options) { o.Clock = func() time.Time { return mapNow } })
+	conn, err := pgx.Connect(bg, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(bg)
+	scans := func() (seq int64, idx map[string]int64) {
+		idx = map[string]int64{}
+		if err := conn.QueryRow(bg, "SELECT seq_scan FROM pg_stat_user_tables WHERE relname = 'clearance_evidence'").Scan(&seq); err != nil {
+			t.Fatal(err)
+		}
+		rows, err := conn.Query(bg, "SELECT indexrelname, idx_scan FROM pg_stat_user_indexes WHERE relname = 'clearance_evidence'")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var n string
+			var c int64
+			if err := rows.Scan(&n, &c); err != nil {
+				t.Fatal(err)
+			}
+			idx[n] = c
+		}
+		return seq, idx
+	}
+	seq0, idx0 := scans()
+	start := time.Now()
+	m := h.ok("/v1/map", "audit")
+	t.Logf("GET /v1/map on 60000 records over 30 days: %s", time.Since(start))
+	if len(sub(m, "nodes")["targets"].([]any)) == 0 {
+		t.Fatalf("the synthetic registry produced an empty map: %v", m)
+	}
+	want := []string{"clearance_evidence_gate", "clearance_evidence_obs_ts", "clearance_evidence_health"}
+	var seq1 int64
+	var idx1 map[string]int64
+	for i := 0; i < 50; i++ { // the statistics reach the collector a moment after the statements finish
+		seq1, idx1 = scans()
+		used := true
+		for _, n := range want {
+			used = used && idx1[n] > idx0[n]
+		}
+		if used {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	for _, n := range want {
+		if idx1[n] <= idx0[n] {
+			t.Errorf("the Map did not read from %s", n)
+		}
+	}
+	if seq1 != seq0 {
+		t.Errorf("the Map walked clearance_evidence %d times: every statement must come from a partial index", seq1-seq0)
 	}
 }

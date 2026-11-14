@@ -82,6 +82,17 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 - **Slack: a tier 3 clear can no longer be enabled.** `slack.clearMaxTier` / `CLEARANCE_SLACK_CLEAR_MAX_TIER` is now 0 to 2 (was 0 to 3; the default
   stays 2). A tier 3 clear needs a fresh sign-in, which a long-lived Slack link cannot give. A deployment that set 3 fails at render and at start: set 2.
 
+### Fixed
+
+- **`GET /v1/map` no longer times out (503 `read failed`, SQLSTATE 57014) on a real chain.** Records are TOASTed, and the Map's gate and
+  health statements walked every record of the chain (the health one read a scope's whole history), so each took 5 to 8 s on the lab
+  against the 5 s `statement_timeout`. Each statement now reads only its records from a new partial index (`clearance_evidence_gate`,
+  `clearance_evidence_obs_ts`, `clearance_evidence_health`), health reads the newest 500 records per scope, the four statements run at once,
+  and a record's fields are extracted with one `jsonb_to_record`. The response is unchanged. **Migration:** the first start builds the three
+  indexes (`CREATE INDEX IF NOT EXISTS`, which blocks only the writer that is starting; readers go on, and the build runs outside
+  `statement_timeout`); it scans the chain once, so allow about 100 microseconds a record on a small node (a few seconds on a lab chain of
+  40 000). Details in [docs/clearance-api.md](docs/clearance-api.md#the-coverage-map-and-the-target-registry).
+
 ## [0.48.0] - 2026-11-14
 
 ### Fixed

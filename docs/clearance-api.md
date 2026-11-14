@@ -244,11 +244,19 @@ record) and `boundary`, takes `scope=<scope>` (one observed scope's records, rea
 `bucket=1m|5m|15m|1h|6h|1d` (needs `since`; `until` defaults to now; at most 1500 buckets): each item is then a bucket
 (`bucket`, its epoch-aligned start) and a key, in time order, at most 10000 items.
 
-**Budget.** The Map is one `GateActivity` statement over the window's gate records (bounded below by the first record
-written at or after `from`, `clearance_evidence_written`), one over the declared scopes' observations (on
-`clearance_evidence_observed`, its predicate repeated word for word), one for their health, and one for the holding changes.
-`TestMapStaysUnderABudgetOnALargeChain` holds `GET /v1/map` under a second on 25 000 records (about 50 ms) and, with
-`CLEARANCE_MAP_PERF=1`, on 250 000 (about 0.5 s).
+**Budget.** The Map is four independent statements, run at once (it waits for the slowest, not their sum, each under the store's
+`statement_timeout`): `GateActivity` over the window's gate records, `ScopeCoverage` over the declared scopes' observations and
+assessments in the window, `HealthBeforeScopes` for their health, and `Holding` for the changes holding. A record is TOASTed (about
+2 KB compressed), so what a statement costs is how many records it has to fetch and decompress. Each therefore reads only its own records
+from a partial index the schema adds (`CREATE INDEX IF NOT EXISTS` at core start): `clearance_evidence_gate` (the gate records by `ts`),
+`clearance_evidence_obs_ts` (observations and assessments by scope and `ts`) and `clearance_evidence_health` (health records by scope and
+`seq`), each predicate repeated word for word in `mapstore.go`. The window's reads cost the records in the window (gate records and
+observations), never the chain's length; health reads the newest 500 health records of each scope, so a core-written monitoring flip held
+longer than that loses its start (its state still reads as the flip's). `GateActivity` extracts a record's fields with one
+`jsonb_to_record`, so a record is decompressed once.
+`TestMapReadsOnlyTheIndexedRecords` fails if a Map read walks the table or misses one of the three indexes (it reads Postgres's own scan
+counts, so it holds on any machine); `TestMapStaysUnderABudgetOnALargeChain` holds `GET /v1/map` under a second on 25 000 records
+(about 0.2 s) and, with `CLEARANCE_MAP_PERF=1`, under three seconds on 250 000 (about 1.5 s: half of them gate records inside the window).
 
 ### The grant feed and the token (C-1)
 

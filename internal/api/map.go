@@ -12,6 +12,7 @@ import (
 	"github.com/jfillman/clearance/internal/evidence"
 	"github.com/jfillman/clearance/internal/observe"
 	"github.com/jfillman/clearance/internal/targets"
+	"golang.org/x/sync/errgroup"
 )
 
 // GET /v1/map: the coverage map in one read. The declared registry (GET /v1/targets) says what should be protected and
@@ -429,18 +430,6 @@ func (s *Server) mapRead(ctx context.Context, v *Viewer, all, asked []DeclaredTa
 	st := s.opt.Store
 	b := &mapBuild{byInst: map[string][]int{}, scopes: map[string]scopeTally{}, health: map[string]map[string]observe.SourceHealth{}}
 	var cut bool
-	var err error
-	if b.rows, cut, err = st.GateActivity(ctx, v, evidence.ISO(from), evidence.ISO(to)); err != nil {
-		return nil, false, err
-	}
-	for i, g := range b.rows {
-		if g.Provider != "" {
-			b.byInst[g.Provider] = append(b.byInst[g.Provider], i)
-		}
-		if g.RegisteredBy != "" && g.RegisteredBy != g.Provider {
-			b.byInst[g.RegisteredBy] = append(b.byInst[g.RegisteredBy], i)
-		}
-	}
 	seen := map[string]bool{}
 	var scopes []string
 	for _, t := range asked {
@@ -451,9 +440,37 @@ func (s *Server) mapRead(ctx context.Context, v *Viewer, all, asked []DeclaredTa
 	}
 	sort.Strings(scopes)
 	rd := readerOf(v)
-	rows, err := st.ScopeCoverage(ctx, rd, scopes, evidence.ISO(from), evidence.ISO(to))
-	if err != nil {
+	// The four reads are independent, so they run at once: the Map waits for the slowest, not for their sum, and each
+	// keeps the store's own per-statement bound.
+	var rows []ScopeRow
+	var hs []Record
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() (err error) {
+		b.rows, cut, err = st.GateActivity(gctx, v, evidence.ISO(from), evidence.ISO(to))
+		return err
+	})
+	g.Go(func() (err error) {
+		rows, err = st.ScopeCoverage(gctx, rd, scopes, evidence.ISO(from), evidence.ISO(to))
+		return err
+	})
+	g.Go(func() (err error) {
+		hs, err = st.HealthBeforeScopes(gctx, rd, scopes, evidence.ISO(to))
+		return err
+	})
+	g.Go(func() (err error) {
+		b.holding, err = st.Holding(gctx, v)
+		return err
+	})
+	if err := g.Wait(); err != nil {
 		return nil, false, err
+	}
+	for i, g := range b.rows {
+		if g.Provider != "" {
+			b.byInst[g.Provider] = append(b.byInst[g.Provider], i)
+		}
+		if g.RegisteredBy != "" && g.RegisteredBy != g.Provider {
+			b.byInst[g.RegisteredBy] = append(b.byInst[g.RegisteredBy], i)
+		}
 	}
 	for _, sc := range scopes {
 		b.scopes[sc] = scopeTally{mix: map[string]int64{}}
@@ -467,10 +484,6 @@ func (s *Server) mapRead(ctx context.Context, v *Viewer, all, asked []DeclaredTa
 			t.mix[r.Coverage] += r.Count
 		}
 		b.scopes[r.Scope] = t
-	}
-	hs, err := st.HealthBeforeScopes(ctx, rd, scopes, evidence.ISO(to))
-	if err != nil {
-		return nil, false, err
 	}
 	per := map[string][]Record{}
 	for _, h := range hs {
@@ -488,9 +501,6 @@ func (s *Server) mapRead(ctx context.Context, v *Viewer, all, asked []DeclaredTa
 			m[sh.Source] = sh
 		}
 		b.health[sc] = m
-	}
-	if b.holding, err = st.Holding(ctx, v); err != nil {
-		return nil, false, err
 	}
 	return b, cut, nil
 }
