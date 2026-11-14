@@ -129,7 +129,7 @@ func TestSlackRefusals(t *testing.T) {
 		"no idp client":     {"slack.idpClientId=", "slack.idpClientId is required"},
 		"no issuer":         {"oidc.issuer=,oidc.audience=", "oidc.issuer is required"},
 		"unknown transport": {"slack.transport=smoke", "slack.transport is socket or events"},
-		"a tier of 4":       {"slack.clearMaxTier=4", "slack.clearMaxTier is 0 to 3"},
+		"a tier of 3":       {"slack.clearMaxTier=3", "slack.clearMaxTier is 0 to 2"},
 		"a bad digest":      {"slack.image.digest=latest", "slack.image.digest is sha256"},
 	} {
 		t.Run(name, func(t *testing.T) {
