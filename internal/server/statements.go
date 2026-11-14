@@ -51,7 +51,7 @@ const (
 	// for this long is not a state the page may speak for.
 	statementMaxStale = 10 * time.Second
 	// statementRefreshTimeout bounds one read of the chain's tail.
-	statementRefreshTimeout = 3 * time.Second
+	statementRefreshTimeout = 10 * time.Second
 )
 
 var statementVerified = union(packetVerified, "statement")
@@ -415,7 +415,7 @@ func (s *Server) statementLoop(lctx context.Context) {
 	}()
 	var lastLog time.Time
 	for {
-		rctx, c := context.WithTimeout(lctx, 10*time.Second)
+		rctx, c := context.WithTimeout(lctx, statementRefreshTimeout)
 		err := s.refreshForWrite(rctx)
 		c()
 		wait := statementTailEvery
