@@ -397,13 +397,16 @@ var routeTable = []Route{
 	{
 		Method: "POST", Path: "/v1/assurance/recipients/{recipient}/keys/{kid}/revoke", OperationID: "revokeRecipientKey", Auth: AuthBearer, MaxBody: MaxRevokeBody,
 		Summary: "An admin revokes a key a recipient registered (CLEARANCE_PROVIDERS), as of a time (default now; a past time says it was " +
-			"compromised since then; never in the future). An assurance.key.revoke record, written before the answer. From then a receipt signed with the key is " +
+			"compromised since then; at most the clock-skew allowance ahead of the core's clock; never before the first delivery the core recorded to the " +
+			"recipient (422); more than 24 hours back only with backdate: true, else 409 saying how many recorded receipts it would fail). An assurance.key.revoke " +
+			"record carrying both as_of and the core's own time, written before the answer. From then a receipt signed with the key is " +
 			"refused PK-KEY-REVOKED at submit; receipts already recorded stay recorded. The next packet carries the revocation beside the receipts the key signed, and " +
-			"`clearance verify` fails a receipt signed at or after the as-of time and prints the revocation on one signed before it. Revoking a revoked key is the same " +
+			"`clearance verify` fails a receipt the core recorded at or after the as-of time and prints the revocation on one recorded before it. Revoking a revoked key is the same " +
 			"answer and records nothing; removing the key from the configuration does not undo it.",
-		Request:   RecipientKeyRevokeRequest{},
-		Responses: append([]Response{{200, "the revocation", RecipientKeyRevoked{}}}, errs(400, 401, 403, 404, 413, 503)...),
-		serve:     func(s *Server) http.HandlerFunc { return s.revokeRecipientKey },
+		Request: RecipientKeyRevokeRequest{},
+		Responses: append([]Response{{200, "the revocation", RecipientKeyRevoked{}}, {409, "an as_of more than 24 hours back without backdate: true; says how many recorded receipts it would fail", BackdateRefusal{}},
+			{422, "an as_of before the first delivery the core recorded to the recipient", PacketError{}}}, errs(400, 401, 403, 404, 413, 503)...),
+		serve: func(s *Server) http.HandlerFunc { return s.revokeRecipientKey },
 	},
 	{
 		Method: "POST", Path: "/v1/keys/{kid}/revoke", OperationID: "revokeKey", Auth: AuthBearer, MaxBody: MaxRevokeBody,
@@ -411,7 +414,9 @@ var routeTable = []Route{
 			"From then GET /v1/keys no longer lists the key (a verifier that does not find a kid refuses what it signed), no packet credential it signed " +
 			"verifies (a bare 401: the check reads the key table on every request), and the core re-signs the clearance tokens and grant feeds it " +
 			"signed with the key in use. The key in use is refused (409: rotate first). A revoked key is never used again: the core refuses to start with it. " +
-			"Statement keys (GET /v1/statement-keys) are a separate set and are not touched. Revoking a revoked key is the same answer and records nothing.",
+			"A revoked key is revoked for verification statements too: it leaves GET /v1/statement-keys, a statement it signed verifies as failed (signing key " +
+			"revoked; the issuer must reissue), and the answer lists the ids of the statements that stood so the admin can revoke and reissue them. Revoking a " +
+			"revoked key is the same answer and records nothing.",
 		Request:   RevokeRequest{},
 		Responses: append([]Response{{200, "the revocation", TokenKeyRevoked{}}}, errs(400, 401, 403, 404, 409, 413, 503)...),
 		serve:     func(s *Server) http.HandlerFunc { return s.revokeTokenKey },

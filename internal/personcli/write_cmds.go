@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"github.com/jfillman/clearance/internal/packet"
@@ -772,10 +773,11 @@ func (e *Env) PacketRevoke(ctx context.Context, args []string) int {
 // registered, as of a time. A receipt signed with it is refused at submit; `clearance verify` fails one signed at or after the as-of time.
 func (e *Env) PacketRevokeKey(ctx context.Context, args []string) int {
 	var reason, asOf string
-	var yes bool
-	s, pos, ee := e.begin("packet revoke-key", "<recipient> <key-id> --reason TEXT [--as-of RFC3339] [--yes]", args, func(fs *flag.FlagSet) {
+	var yes, backdate bool
+	s, pos, ee := e.begin("packet revoke-key", "<recipient> <key-id> --reason TEXT [--as-of RFC3339 [--backdate]] [--yes]", args, func(fs *flag.FlagSet) {
 		fs.StringVar(&reason, "reason", "", "why (1 to 200 printable characters; recorded in the chain and carried in packets: no secret)")
 		fs.StringVar(&asOf, "as-of", "", "the time the key is revoked as of (default now; a past time says it was compromised since then)")
+		fs.BoolVar(&backdate, "backdate", false, "mean an --as-of more than 24 hours back (the core says how many recorded receipts it would fail, and you confirm)")
 		fs.BoolVar(&yes, "yes", false, "do not ask for confirmation")
 	})
 	if ee != nil {
@@ -797,7 +799,22 @@ func (e *Env) PacketRevokeKey(ctx context.Context, args []string) int {
 			body["as_of"] = asOf
 		}
 		var raw json.RawMessage
-		if err := core.Post(ctx, "/v1/assurance/recipients/"+url.PathEscape(pos[0])+"/keys/"+url.PathEscape(pos[1])+"/revoke", body, viaHeaders, &raw); err != nil {
+		path := "/v1/assurance/recipients/" + url.PathEscape(pos[0]) + "/keys/" + url.PathEscape(pos[1]) + "/revoke"
+		err = core.Post(ctx, path, body, viaHeaders, &raw)
+		var ae *APIError
+		if errors.As(err, &ae) && ae.Rule == "PK-BACKDATE" {
+			// The core refuses an as-of more than a day back unless it is meant, and says what it would fail.
+			if !backdate {
+				ae.Hint = "add --backdate to mean an --as-of more than 24 hours back"
+				return ae
+			}
+			if ee := s.confirm(yes, false, "BACK-DATED: "+ae.Message+". The first revocation stands for good. Revoke as of "+asOf+" anyway?", ""); ee != nil {
+				return ee
+			}
+			body["backdate"] = true
+			err = core.Post(ctx, path, body, viaHeaders, &raw)
+		}
+		if err != nil {
 			return err
 		}
 		if wrote, err := emit(e.Stdout, s.format, raw, ""); wrote || err != nil {
@@ -843,6 +860,14 @@ func (e *Env) KeyRevoke(ctx context.Context, args []string) int {
 		var out map[string]any
 		_ = json.Unmarshal(raw, &out)
 		fmt.Fprintf(e.Stdout, "key %s is %s (at %s, record %v, new: %v)\n", str(out, "key_id"), str(out, "state"), str(out, "revoked_at"), out["seq"], out["created"])
+		if ids, _ := out["statements"].([]any); len(ids) > 0 {
+			fmt.Fprintf(e.Stdout, "%d verification statement(s) signed by this key stand and now fail verification (signing key revoked). For each: `%s statement revoke`/POST /v1/statements/{id}/revoke, then issue it again (reissue) under the key in use:\n", len(ids), e.Prog)
+			for _, id := range ids {
+				fmt.Fprintf(e.Stdout, "  %v\n", id)
+			}
+		} else if msg := str(out, "statements_error"); msg != "" {
+			fmt.Fprintf(e.Stdout, "could not list the statements this key signed: %s\n", msg)
+		}
 		return nil
 	}())
 }

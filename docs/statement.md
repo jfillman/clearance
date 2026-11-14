@@ -138,6 +138,11 @@ HTML, and verifies it offline. **The hosted proof on the production hostname is 
 - **Soundness.** A check whose inputs are missing is **NOT CHECKED**, never a pass. Nothing is decided on the statement until its
   signature has verified. Keys are bound to the party they are for: the statement's own claim of who issued it is not trust.
   Revocation is checked against the issuer's current state. See [the seven checks](#the-seven-checks).
+- **A revoked token key is revoked for statements.** When an admin revokes a retired token signing key (`POST /v1/keys/{kid}/revoke`,
+  [assurance.md](assurance.md#one-of-the-cores-token-keys)), it leaves `GET /v1/statement-keys`, `/s/<id>/keys.json` serves no key for a statement it signed, and the page of
+  such a statement shows the signature check failed with "signing key revoked; the issuer must reissue this statement": never a pass, and the statement's content is not shown.
+  The revoke's answer lists the standing statements the key signed. Reissue: revoke each statement, then `reissue` it under the key in use (the same request without
+  `reissue` is 409 and says so). A statement a retired key signed that was NOT revoked with it verifies as before.
 - **Issuing and revoking are authenticated, admin-gated, idempotent and recorded before they answer.** `statement.issue` and
   `statement.revoke` are chain records written before the response; the same request again is the same statement and writes
   nothing; a write that fails is not served. No credential is in a record, a log or an error.

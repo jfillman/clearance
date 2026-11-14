@@ -156,10 +156,11 @@ the same call again is the first answer (`created: false`) and writes nothing. N
 | What | Call | Record | Effect |
 | --- | --- | --- | --- |
 | A delivery (its credential) | `POST /v1/packets/{id}/deliveries/{delivery}/revoke` `{reason}`; `clearance packet revoke <pk-id> <dl-id> --reason R` | `packet.revoke` | every read and sample under it is refused `PK-REVOKED`; a receipt for it is refused |
-| A recipient's key | `POST /v1/assurance/recipients/{recipient}/keys/{kid}/revoke` `{reason, as_of?}`; `clearance packet revoke-key <recipient> <kid> --reason R [--as-of T]` | `assurance.key.revoke` | a receipt signed with it is refused at submit; `clearance verify` fails one signed at or after `as_of` |
-| One of the core's retired token keys | `POST /v1/keys/{kid}/revoke` `{reason}`; `clearance keys revoke <kid> --reason R` | `token.key.revoke` | nothing it signed verifies; `GET /v1/keys` stops listing it |
+| A recipient's key | `POST /v1/assurance/recipients/{recipient}/keys/{kid}/revoke` `{reason, as_of?, backdate?}`; `clearance packet revoke-key <recipient> <kid> --reason R [--as-of T [--backdate]]` | `assurance.key.revoke` | a receipt signed with it is refused at submit; `clearance verify` fails one the core recorded at or after `as_of` |
+| One of the core's retired token keys | `POST /v1/keys/{kid}/revoke` `{reason}`; `clearance keys revoke <kid> --reason R` | `token.key.revoke` | nothing it signed verifies; `GET /v1/keys` and `GET /v1/statement-keys` stop listing it |
 
-`reason` is 1 to 200 printable characters. It is in the chain and in the packets that carry the record: put no secret in it.
+`reason` is 1 to 200 printable characters: no control character (the C1 range too), no format character (bidirectional controls, zero-width
+characters and joiners) and no line or paragraph separator. It is in the chain and in the packets that carry the record: put no secret in it.
 
 ### A delivery
 
@@ -175,30 +176,57 @@ recorded stay, and sending one of them again is still the same 200 `created: fal
 withdraws the grant, and a receipt answers a grant. A reviewer who signed offline before the revoke and submits after is refused; the
 subscriber opens a new delivery for the same recipient and packet (fresh caps, a new credential) and the reviewer signs again naming it.
 
-**How fast.** In the process that took the revoke, at once: a read holds a lock from the check of the revocation until its
-`packet.fetch` record is written, and a revoke holds it from its own read of the chain until its record is written and the state updated.
-So a read is recorded before the revocation record or refused, and no read begins after the answer and is served. (A read that was
-already recorded may still be streaming its bytes: nothing can recall it.) In any other replica, within **one second plus one store
-read**: each replica keeps the revocations it read from the chain, and a request that finds that copy older than one second reads the
-chain's tail first (one indexed read when nothing is new) and folds in what it finds. A store that cannot be read refuses the request (503).
-The chart runs one core, but the check never depends on one process's memory.
+**How fast, and what the lock covers.** A read does its slow work (loading and cutting the packet, drawing a sample) without the revocation
+gate. It then takes the gate, checks again that the credential's key is still accepted and the delivery is not revoked, writes its `packet.fetch`
+(or `packet.sample`) record, and lets go. A revoke holds the gate from its own read of the chain until its record is written and the state
+updated. So in the process that took the revoke, at once: a read is recorded before the revocation record or refused, and no read that begins after
+the answer is served. (A read already recorded may still be streaming its bytes: nothing can recall it.) The gate covers one check and one
+append, so a slow read cannot hold up a revoke or other recipients; every wait for it, and for the other locks on these paths, ends with the request's own
+deadline (503 `busy`, Retry-After). Another server object over the same store sees a revocation within **one second plus one store read**: each keeps the
+revocations it read from the chain, and a request that finds that copy older than one second reads the chain's tail first (one indexed read when nothing is
+new). A store that cannot be read refuses the request (503): a revocation that cannot be read is never taken as absent.
+
+**At start.** The core reads the revocation index (and the receipt index) in the background, a page at a time. Until it has, credentialed routes
+(read, sample, receipt) and the revoke routes wait up to two seconds and then answer 503 with Retry-After: never a scan inside a request, never a
+read served on state that was not read. A read that fails part-way resumes where it stopped and the index counts as read only after the last page.
+
+**Replicas.** The Postgres store takes a single-writer advisory lock, so a second Clearance process cannot serve credentialed reads today. The
+one-second bound across processes therefore matters only at a failover (the new process reads the chain before it serves); the test that exercises it
+(`TestASecondServerObjectSeesARevocationWithinTheIndexAge`) shows only that a second server object over the same store refreshes its index from the chain,
+not that two processes work. The token-key check reads the key table on every request and needs no such bound.
 
 ### A recipient's key
 
-`as_of` is the time the key is distrusted from (RFC 3339; default now; a past time says "compromised since then"; never in the future). A
-receipt signed with the key is refused `PK-KEY-REVOKED` at submit, whatever its signing time (403, not recorded). Receipts already recorded stay
-recorded. Removing the key from `CLEARANCE_PROVIDERS` does not undo the revocation; the key must be a registered key of that recipient to be
-revoked.
+A key is revoked **as of** a time. `as_of` is RFC 3339 and defaults to now. The rules, in the order the core applies them:
+
+- not more than the core's clock-skew allowance (5 minutes) after the core's clock: 400;
+- more than 24 hours before now only with `backdate: true`; without it the answer is 409 `PK-BACKDATE` saying how many receipts already recorded with the
+  key would fail verification (`affected_receipts`). `clearance packet revoke-key --as-of T --backdate` shows that count in its confirmation;
+- not before the first delivery the core recorded to that recipient: 422. The core does not record when a key was registered (the keys come from
+  `CLEARANCE_PROVIDERS`), so the first delivery is the earliest time the core can say a credential of the recipient existed.
+
+The first revocation of a key stands: a repeat is the first answer, whatever `as_of` it carries; nothing un-revokes or moves it. The record carries both `as_of` and
+`recorded_at`, the core's own time. Removing the key from `CLEARANCE_PROVIDERS` does not undo the revocation; the key must be a registered key of that recipient.
+A receipt signed with the key is refused `PK-KEY-REVOKED` at submit, whatever its signing time (403, not recorded); receipts already recorded stay recorded.
 
 **How the offline verifier learns it.** Not from a live call. The next packet carries, in `acceptances.key_revocations`, the revocation of every
-key a carried receipt was signed with: the recipient, the key id, `as_of`, and the seq and hash of the core's `assurance.key.revoke` record, which is
-carried among the packet's records (so the chain checks and the inclusion proofs bind it). `clearance verify` then:
+key a carried receipt was signed with: the recipient, the key id, `as_of`, `revoked_at` (the core's time) and the seq and hash of the core's
+`assurance.key.revoke` record, carried among the packet's records. `clearance verify` reads revocations from the section **and** from the carried records
+(the same provenance test the packet builder applies: provider `clearance`, boundary `deployment`, `tool` and `revocation` among the fields the core verified), and:
 
-- **fails** a receipt signed (its `signed_at`) at or after `as_of`, and one the core recorded after the revocation record (the core refuses those);
-- reports a receipt signed **before** `as_of` as valid as signed, and prints the revocation beside it;
-- **fails** a revocation row that differs from the record it names, and says so when the record is not among the carried ones (the packet's word only).
+- **fails** the packet when a carried core revocation record for a key that signed a carried receipt is missing from the section, or a row differs from its record
+  (recipient, key, `as_of`, `revoked_at`, provenance, hash);
+- **fails** a receipt the core recorded (the record's own time, not the signer's `signed_at`) at or after `as_of`, and one recorded after the revocation record;
+- reports a receipt recorded **before** `as_of` as valid as recorded, printing "revoked as of X, recorded by the core at Y", with a warning when the two differ by
+  more than a day (a back-dated revocation);
+- where a receipt's own record is not carried (it is then not bound to the ledger, and says so), falls back to `signed_at`;
+- says when the revocation's chain record is not among the carried ones (the packet's word only).
 
 A packet cut before the revocation does not carry it, so it verifies as it did: cut a new packet. A key that signed no carried receipt is not listed.
+**What it cannot catch.** A packet whose `key_revocations` row AND carried record were both removed fails the figures check (`packet.json: counted figures
+recompute from the records`: the revocation record is one of the records the packet counts), but whoever rewrites `packet.json` and the manifest can rewrite those
+figures too, and nothing else the verifier holds catches it: the manifest and the packet id change with any edit and only help a reader who has the original id from elsewhere; inclusion
+proofs cover the records a packet carries, not the ones it left out. A reader who needs to know every revocation holds the chain (`GET /v1/evidence`), not a packet.
 
 ### One of the core's token keys
 
@@ -206,14 +234,20 @@ The core signs clearance tokens, packet credentials and grant feeds with one key
 retired keys in `GET /v1/keys` for 24 hours, plus 30 days for credentials. Revoking a **retired** key (`POST /v1/keys/{kid}/revoke`) commits the record
 and the key's revoked flag together. From then:
 
-- a packet credential it signed is an unknown key: a bare 401, nothing written. The check reads the key table on every request, so it holds in every replica at once;
+- a packet credential it signed is an unknown key: a bare 401, nothing written. The check reads the key table on every request, so it holds at once, and a read that
+  passed the check just before is recorded before the revocation (the gate above);
 - `GET /v1/keys` (the core's and clearance-api's) leaves the key out. It is omitted, not flagged: a verifier that does not know a flag would go on trusting a flagged
   key, and one that does not find the `kid` refuses what it signed. A verifier that caches `GET /v1/keys` (the grant-sync agent: 5 minutes; the response says `max-age=300`)
   keeps trusting the key until its cache lapses;
 - the key can never be used again: the core refuses to start with a revoked key.
 
-The key **in use** is refused (409): rotate first (start the core with another key, [core.md](core.md)), then revoke the old one. The statement keys
-(`GET /v1/statement-keys`) are a separate set read from the same rows and are not touched: a statement signed by the key stays verifiable as the statement keys say.
+The key **in use** is refused (409): rotate first (start the core with another key, [core.md](core.md)), then revoke the old one.
+
+**Statements.** A revoked token key is revoked for [verification statements](statement.md) too. It is no longer listed at `GET /v1/statement-keys` (so an offline
+`clearance verify --statement` fails closed on a statement it signed), `/s/<id>/keys.json` serves no key for it, and the hosted page of a statement it signed shows
+the signature check **failed** with the reason "signing key revoked; the issuer must reissue this statement" (never a pass). The answer to the revoke lists the ids of the
+statements that stood (`statements`; the CLI prints them): revoke each (`POST /v1/statements/{id}/revoke`) and issue it again with `reissue` under the key in use. The same
+request without that is refused 409 and says so. The revoked state is read with the key table's row once and kept; this process's own revocation updates it at once.
 
 **Clearance tokens and the grant feed signed by the revoked key.** They are short-lived (15 minutes) and re-issued: a key that is no longer in use has had every
 live token re-signed at the first refresh after the rotation (`gate.Service.Refresh` re-issues a token signed by any key but the one in use, and a read of a token does
@@ -243,6 +277,9 @@ no recipient-specific detail, checked on a hosted page and by `clearance verify 
   [revoked](#one-of-the-cores-token-keys)**. Rotating the key does not by itself invalidate credentials already issued.
 - A key revocation reaches an offline verifier only through a packet cut after it (see [Revocation](#a-recipients-key)); a verifier that is
   handed an older packet cannot know.
+- **A receipt submitted with a stolen key before the revocation is recorded cannot be told from an honest one.** The core's record time is the only
+  bound it has, and the key was valid until then. `as_of` exists for that case: revoke the key as of the time it was stolen (with `backdate`), and every receipt the core
+  recorded at or after it fails `clearance verify`, whatever `signed_at` says. Receipts recorded before that time stay valid.
 - A delivery is not listed or read back by an admin route: the revoke answer is how its state is seen (and the `packet.revoke` records in the chain).
   No route lists deliveries yet; packets cut later carry key revocations, not deliveries.
 - `Bundle.Unpack` writes slash paths as given; it has not been run on Windows file systems.

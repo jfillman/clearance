@@ -18,6 +18,24 @@
         ],
         "type": "object"
       },
+      "BackdateRefusal": {
+        "properties": {
+          "affected_receipts": {
+            "type": "integer"
+          },
+          "error": {
+            "type": "string"
+          },
+          "rule": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "affected_receipts",
+          "error"
+        ],
+        "type": "object"
+      },
       "BreakglassList": {
         "properties": {
           "items": {
@@ -3306,6 +3324,9 @@
           "as_of": {
             "type": "string"
           },
+          "backdate": {
+            "type": "boolean"
+          },
           "reason": {
             "type": "string"
           }
@@ -4252,6 +4273,15 @@
           },
           "state": {
             "type": "string"
+          },
+          "statements": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "statements_error": {
+            "type": "string"
           }
         },
         "required": [
@@ -4259,7 +4289,8 @@
           "key_id",
           "revoked_at",
           "seq",
-          "state"
+          "state",
+          "statements"
         ],
         "type": "object"
       },
@@ -4642,6 +4673,16 @@
             },
             "description": "no such resource"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackdateRefusal"
+                }
+              }
+            },
+            "description": "an as_of more than 24 hours back without backdate: true; says how many recorded receipts it would fail"
+          },
           "413": {
             "content": {
               "application/json": {
@@ -4651,6 +4692,16 @@
               }
             },
             "description": "the body is over the route's cap"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PacketError"
+                }
+              }
+            },
+            "description": "an as_of before the first delivery the core recorded to the recipient"
           },
           "503": {
             "content": {
@@ -4668,7 +4719,7 @@
             "bearer": []
           }
         ],
-        "summary": "An admin revokes a key a recipient registered (CLEARANCE_PROVIDERS), as of a time (default now; a past time says it was compromised since then; never in the future). An assurance.key.revoke record, written before the answer. From then a receipt signed with the key is refused PK-KEY-REVOKED at submit; receipts already recorded stay recorded. The next packet carries the revocation beside the receipts the key signed, and `clearance verify` fails a receipt signed at or after the as-of time and prints the revocation on one signed before it. Revoking a revoked key is the same answer and records nothing; removing the key from the configuration does not undo it.",
+        "summary": "An admin revokes a key a recipient registered (CLEARANCE_PROVIDERS), as of a time (default now; a past time says it was compromised since then; at most the clock-skew allowance ahead of the core's clock; never before the first delivery the core recorded to the recipient (422); more than 24 hours back only with backdate: true, else 409 saying how many recorded receipts it would fail). An assurance.key.revoke record carrying both as_of and the core's own time, written before the answer. From then a receipt signed with the key is refused PK-KEY-REVOKED at submit; receipts already recorded stay recorded. The next packet carries the revocation beside the receipts the key signed, and `clearance verify` fails a receipt the core recorded at or after the as-of time and prints the revocation on one recorded before it. Revoking a revoked key is the same answer and records nothing; removing the key from the configuration does not undo it.",
         "x-clearance-auth": "bearer",
         "x-clearance-max-body": 4096
       }
@@ -6047,7 +6098,7 @@
             "bearer": []
           }
         ],
-        "summary": "An admin revokes a retired token signing key. A token.key.revoke record and the key's revoked flag commit together before the answer. From then GET /v1/keys no longer lists the key (a verifier that does not find a kid refuses what it signed), no packet credential it signed verifies (a bare 401: the check reads the key table on every request), and the core re-signs the clearance tokens and grant feeds it signed with the key in use. The key in use is refused (409: rotate first). A revoked key is never used again: the core refuses to start with it. Statement keys (GET /v1/statement-keys) are a separate set and are not touched. Revoking a revoked key is the same answer and records nothing.",
+        "summary": "An admin revokes a retired token signing key. A token.key.revoke record and the key's revoked flag commit together before the answer. From then GET /v1/keys no longer lists the key (a verifier that does not find a kid refuses what it signed), no packet credential it signed verifies (a bare 401: the check reads the key table on every request), and the core re-signs the clearance tokens and grant feeds it signed with the key in use. The key in use is refused (409: rotate first). A revoked key is never used again: the core refuses to start with it. A revoked key is revoked for verification statements too: it leaves GET /v1/statement-keys, a statement it signed verifies as failed (signing key revoked; the issuer must reissue), and the answer lists the ids of the statements that stood so the admin can revoke and reissue them. Revoking a revoked key is the same answer and records nothing.",
         "x-clearance-auth": "bearer",
         "x-clearance-max-body": 4096
       }

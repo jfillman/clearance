@@ -467,6 +467,10 @@ func (s *Server) statementKeyRows(ctx context.Context) ([]store.SigningKey, erro
 	}
 	out := rows[:0:0]
 	for _, k := range rows {
+		// A revoked token key is revoked for statements too: it is not published, so an offline verifier fails closed on a statement it signed.
+		if k.RevokedAt != nil || s.statementKeyRevokedNow(k.KeyID) {
+			continue
+		}
 		if k.RetiredAt == nil || live[k.KeyID] {
 			out = append(out, k)
 		}
@@ -491,6 +495,12 @@ func (s *Server) statementKeyFor(ctx context.Context, kid string) (token.JWK, bo
 		}
 		for _, k := range rows {
 			s.kidKeys[k.KeyID] = k.JWK
+			if k.RevokedAt != nil {
+				if s.revokedKids == nil {
+					s.revokedKids = map[string]bool{}
+				}
+				s.revokedKids[k.KeyID] = true
+			}
 		}
 		raw, ok = s.kidKeys[kid]
 		s.keyMu.Unlock()
@@ -503,6 +513,57 @@ func (s *Server) statementKeyFor(ctx context.Context, kid string) (token.JWK, bo
 		return token.JWK{}, false, nil
 	}
 	return j, true, nil
+}
+
+// markStatementKeyRevoked records that a token key was revoked, for the statement paths of this process, and drops the checks run so far (a statement
+// the key signed must fail from the next read, not when its cached result ages out).
+func (s *Server) markStatementKeyRevoked(kid string) {
+	s.keyMu.Lock()
+	if s.revokedKids == nil {
+		s.revokedKids = map[string]bool{}
+	}
+	s.revokedKids[kid] = true
+	s.keyMu.Unlock()
+	c := &s.stmtRes
+	c.mu.Lock()
+	clear(c.by)
+	c.order = nil
+	c.mu.Unlock()
+}
+
+func (s *Server) statementKeyRevokedNow(kid string) bool {
+	s.keyMu.Lock()
+	defer s.keyMu.Unlock()
+	return s.revokedKids[kid]
+}
+
+// statementKeyRevoked says whether the token key with this id was revoked. The state is read from the key table with the key's JWK (once) and
+// kept; a revocation taken by this process updates it at once.
+func (s *Server) statementKeyRevoked(ctx context.Context, kid string) (bool, error) {
+	if _, _, err := s.statementKeyFor(ctx, kid); err != nil {
+		return false, err
+	}
+	return s.statementKeyRevokedNow(kid), nil
+}
+
+// standingStatementsOf are the ids of the statements signed by the key that stand: not revoked and not superseded. What a revoked key leaves
+// the admin to revoke and issue again.
+func (s *Server) standingStatementsOf(ctx context.Context, kid string) ([]string, error) {
+	s.StartStatements()
+	if err := s.refreshForWrite(ctx); err != nil {
+		return nil, err
+	}
+	x := &s.stmts
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	ids := []string{}
+	for _, e := range x.byID {
+		if e.kid == kid && !e.revoked && e.supersededBy == "" {
+			ids = append(ids, e.id)
+		}
+	}
+	slices.Sort(ids)
+	return ids, nil
 }
 
 // statementKeys is GET /v1/statement-keys: the statement verification keys (a JWKS), public like /v1/keys. It is anonymous and starts
@@ -833,6 +894,10 @@ func (s *Server) issueStatement(w http.ResponseWriter, r *http.Request) {
 			e := x.byID[id]
 			if e.revoked {
 				writeError(w, http.StatusConflict, "this request was answered by statement "+e.id+", which was revoked: a revoked statement is not answered as if it stood. To issue the same content again as a new statement, send reissue: "+e.id)
+				return true
+			}
+			if revoked, _ := s.statementKeyRevoked(ctx, e.kid); revoked {
+				writeError(w, http.StatusConflict, "this request was answered by statement "+e.id+", which was signed by a revoked key and no longer verifies: revoke it (POST /v1/statements/"+e.id+"/revoke), then send the same request with reissue: "+e.id)
 				return true
 			}
 			w.Header().Set("Cache-Control", "no-store")

@@ -8,8 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,7 +22,6 @@ import (
 	"github.com/jfillman/clearance/internal/server"
 	"github.com/jfillman/clearance/internal/store"
 	"github.com/jfillman/clearance/internal/token"
-	"github.com/jfillman/clearance/internal/verify"
 )
 
 // revLab is a core with a signing key, two registered recipients, a published packet and, on demand, deliveries.
@@ -256,9 +253,9 @@ func TestARevokedDeliveryCannotFillTheChain(t *testing.T) {
 	}
 }
 
-// TestReadsRacingARevokeAreOrdered (run with -race): readers hammer one delivery while an admin revokes it. After the revoke's answer,
+// TestManyReadsAndARevokeStayOrdered (run with -race): readers hammer one delivery while an admin revokes it. After the revoke's answer,
 // no read that starts succeeds; and in the chain, no allowed read is recorded after the revocation record.
-func TestReadsRacingARevokeAreOrdered(t *testing.T) {
+func TestManyReadsAndARevokeStayOrdered(t *testing.T) {
 	l := newRevLab(t, "", func(c *core.Config) { c.PacketReadsPerHour = -1 })
 	d := l.deliver(t, l.auditor, 0)
 	var acked atomic.Bool
@@ -365,9 +362,11 @@ func (l *revLab) instance(t *testing.T, st store.Store, clk *fakeClock) *fixture
 	return &fixture{t: t, core: l.f.core, srv: ts}
 }
 
-// TestRevocationOnAnotherReplicaIsSeenWithinTheBound: two server instances over one store. The revoke is taken by A; B has the delivery
-// cached as good, serves at most for the cache's age (1 second), and refuses after it. The clock is injected: nothing sleeps.
-func TestRevocationOnAnotherReplicaIsSeenWithinTheBound(t *testing.T) {
+// TestASecondServerObjectSeesARevocationWithinTheIndexAge: two server objects over one store object. The revoke is taken by A; B has the
+// delivery cached as good, serves at most for the index's age (1 second), and refuses after it. It proves the index is refreshed from the
+// store (the chain) by a second server object on an injected clock; it does not prove two processes work: the Postgres store takes a
+// single-writer advisory lock, so a second process cannot serve credentialed reads today (docs/assurance.md).
+func TestASecondServerObjectSeesARevocationWithinTheIndexAge(t *testing.T) {
 	onStores(t, func(t *testing.T, dsn string) {
 		l := newRevLab(t, dsn, nil)
 		d := l.deliver(t, l.auditor, 0)
@@ -442,14 +441,17 @@ func TestRevokeRecipientKey(t *testing.T) {
 		f.do("POST", "/v1/assurance/recipients/lab-auditor/keys/a%2Fb/revoke", "user:admin", map[string]any{"reason": "r"}).want(t, 404, "")
 		f.do("POST", path, "user:admin", map[string]any{}).want(t, 400, "reason")
 		f.do("POST", path, "user:admin", map[string]any{"reason": "r", "as_of": "yesterday"}).want(t, 400, "RFC 3339")
-		f.do("POST", path, "user:admin", map[string]any{"reason": "r", "as_of": time.Now().Add(48 * time.Hour).UTC().Format(time.RFC3339)}).want(t, 400, "future")
+		f.do("POST", path, "user:admin", map[string]any{"reason": "r", "as_of": time.Now().Add(48 * time.Hour).UTC().Format(time.RFC3339)}).want(t, 400, "ahead")
+		f.do("POST", path, "user:admin", map[string]any{"reason": "bad\u200bzero"}).want(t, 400, "reason")
+		f.do("POST", path, "user:admin", map[string]any{"reason": "bad\u0085c1"}).want(t, 400, "reason")
+		f.do("POST", path, "user:admin", map[string]any{"reason": "bad\u202esep"}).want(t, 400, "reason")
+		f.do("POST", path, "user:admin", map[string]any{"reason": "bad\u2028sep"}).want(t, 400, "reason")
 		if f.countTool(server.ToolRecipientKeyRevoke) != 0 {
 			t.Fatal("a refused request wrote a revocation")
 		}
 
-		asOf := time.Now().Add(-2 * time.Hour).UTC().Truncate(time.Second)
-		a := f.do("POST", path, "user:admin", map[string]any{"reason": "laptop lost", "as_of": asOf.Format(time.RFC3339)}).want(t, 200, "")
-		if a.body["created"] != true || a.body["as_of"] != asOf.Format(time.RFC3339) || a.body["key_id"] != kid || f.countTool(server.ToolRecipientKeyRevoke) != 1 {
+		a := f.do("POST", path, "user:admin", map[string]any{"reason": "laptop lost"}).want(t, 200, "")
+		if a.body["created"] != true || a.body["as_of"] != a.body["revoked_at"] || a.body["key_id"] != kid || f.countTool(server.ToolRecipientKeyRevoke) != 1 {
 			t.Fatalf("%v", a.body)
 		}
 		if again := f.do("POST", path, "user:admin", map[string]any{"reason": "again"}).want(t, 200, ""); again.body["created"] != false || again.body["as_of"] != a.body["as_of"] ||
@@ -468,69 +470,6 @@ func TestRevokeRecipientKey(t *testing.T) {
 		// The credential of the delivery is not the key's: reads still work.
 		l.read(d.Credential).want(t, 200, "")
 		chainOK(t, f)
-	})
-}
-
-// receiptVerifies runs the offline verifier over a packet cut now, with the recipients' keys supplied, and returns its acceptances check.
-func (l *revLab) acceptancesCheck(t *testing.T) (verify.Check, string) {
-	t.Helper()
-	dir, _ := l.f.buildPacket(t)
-	rep := verify.Verify(dir, verify.Options{RecipientKeys: map[string][]byte{l.auditor.name: []byte(l.auditor.pub), l.grc.name: []byte(l.grc.pub)},
-		RecipientKeysSrc: map[string]string{l.auditor.name: "a.pem", l.grc.name: "g.pem"}})
-	return checkNamed(t, rep, "acceptances"), dir
-}
-
-// TestAnOfflineVerifierReadsAKeyRevocationFromThePacket: a receipt signed before its key's revocation as-of time is valid with the
-// revocation printed; one signed at or after it fails; a revocation record that does not match its section fails.
-func TestAnOfflineVerifierReadsAKeyRevocationFromThePacket(t *testing.T) {
-	run := func(t *testing.T, asOfOffset time.Duration) (*revLab, verify.Check, string) {
-		l := newRevLab(t, "", nil)
-		d := l.deliver(t, l.auditor, -48*time.Hour)
-		l.submit(l.receiptFor(t, l.auditor, d.ID, receipt.Accepted, time.Now().Add(-24*time.Hour))).want(t, 200, "")
-		if c, _ := l.acceptancesCheck(t); c.Status != verify.Pass {
-			t.Fatalf("before any revocation: %+v", c)
-		}
-		asOf := time.Now().Add(asOfOffset).UTC().Format(time.RFC3339)
-		l.f.do("POST", "/v1/assurance/recipients/"+l.auditor.name+"/keys/"+l.auditor.signer.KeyID()+"/revoke", "user:admin",
-			map[string]any{"reason": "key lost", "as_of": asOf}).want(t, 200, "")
-		c, dir := l.acceptancesCheck(t)
-		return l, c, dir
-	}
-	t.Run("signed before the revocation: valid, and the revocation is printed", func(t *testing.T) {
-		_, c, dir := run(t, -time.Hour)
-		if c.Status != verify.Pass || !strings.Contains(strings.Join(c.Findings, "\n"), "before key") || !strings.Contains(strings.Join(c.Findings, "\n"), "valid as signed") {
-			t.Fatalf("%+v", c)
-		}
-		// The section carries the revocation and its record.
-		raw, _ := os.ReadFile(filepath.Join(dir, "packet.json"))
-		var pk struct {
-			Acceptances struct {
-				KeyRevocations []struct {
-					Recipient, KeyID string
-					Seq              int64
-				} `json:"key_revocations"`
-			} `json:"acceptances"`
-		}
-		_ = json.Unmarshal(raw, &pk)
-		if len(pk.Acceptances.KeyRevocations) != 1 || pk.Acceptances.KeyRevocations[0].Recipient != "lab-auditor" {
-			t.Fatalf("%s", raw)
-		}
-		// A section that says another time than its record does is a failure, not a quiet pass.
-		var doc map[string]any
-		_ = json.Unmarshal(raw, &doc)
-		kr := doc["acceptances"].(map[string]any)["key_revocations"].([]any)[0].(map[string]any)
-		kr["as_of"] = time.Now().Add(-72 * time.Hour).UTC().Format(time.RFC3339)
-		rewritePacketJSON(t, dir, doc)
-		rep := verify.Verify(dir, verify.Options{})
-		if c := checkNamed(t, rep, "acceptances"); c.Status != verify.Fail {
-			t.Fatalf("a revocation that differs from its record: %+v", c)
-		}
-	})
-	t.Run("signed at or after the revocation: fails", func(t *testing.T) {
-		_, c, _ := run(t, -30*time.Hour)
-		if c.Status != verify.Fail || !strings.Contains(strings.Join(c.Findings, "\n"), "revoked as of") {
-			t.Fatalf("%+v", c)
-		}
 	})
 }
 

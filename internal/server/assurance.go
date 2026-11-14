@@ -627,10 +627,6 @@ func (s *Server) getPacket(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "part is "+strings.Join(packet.Parts, " or "))
 		return
 	}
-	// From the check of the credential and of its delivery's revocation until the fetch record is written, no revoke can commit
-	// (revocation.go): a read is recorded before a revocation, or refused.
-	release := s.rev.readLock()
-	defer release()
 	claims, ok := s.credentialClaims(w, r)
 	if !ok {
 		return
@@ -680,6 +676,20 @@ func (s *Server) getPacket(w http.ResponseWriter, r *http.Request) {
 	body, err := s.bundles.cut(b, scope)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "the stored packet could not be read")
+		return
+	}
+	// The slow part is done. From the re-check of the credential's key and of the delivery's revocation until the fetch record is written,
+	// no revoke can commit (revocation.go): a read is recorded before a revocation, or refused.
+	release, ok := s.commitGate(w, r, true)
+	if !ok {
+		return
+	}
+	defer release()
+	if rv, revoked, err := s.deliveryRevocation(ctx, claims.Subject); err != nil {
+		s.revocationUnreadable(w, r, err)
+		return
+	} else if revoked {
+		s.refusePacketRead(w, r, claims, id, part, RulePacketRevoked, "this delivery was revoked at "+rv.at+": ask the subscriber for a new delivery", http.StatusForbidden, now)
 		return
 	}
 	// Recorded before a byte is served: a read that could not be recorded is not made.
@@ -809,7 +819,7 @@ func (s *Server) acceptReceipt(w http.ResponseWriter, r *http.Request) {
 	}
 	d, _ := dl["delivery"].(map[string]any)
 	dp, _ := dl["packet"].(map[string]any)
-	if dl == nil || dl["tool"] != ToolPacketDeliver || fmt.Sprint(dl["seq"]) != strconv.FormatInt(dseq, 10) ||
+	if dl == nil || dl["tool"] != ToolPacketDeliver || fmt.Sprint(dl["seq"]) != strconv.FormatInt(dseq, 10) || !coreRecordWith(dl, "delivery") ||
 		fmt.Sprint(dp["id"]) != id || fmt.Sprint(d["recipient"]) != vp.Recipient {
 		writeError(w, http.StatusBadRequest, vp.Delivery+" is not a delivery of this packet to "+vp.Recipient)
 		return
@@ -831,21 +841,28 @@ func (s *Server) acceptReceipt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Idempotent on the signed payload: the same receipt again is the record already written, and writes nothing.
-	// The revocation gate is taken before receiptMu (revocation.go): a revoke cannot commit between the check below and the record.
-	release := s.rev.readLock()
-	defer release()
-	s.receiptMu.Lock()
-	defer s.receiptMu.Unlock()
-	idx, err := s.receiptIndex(ctx)
-	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "the store could not be read")
+	// The indexes are read in the background from start: until they are, 503 with Retry-After, never a scan inside the request.
+	if err := s.waitWarm(ctx, true); err != nil {
+		s.revocationUnreadable(w, r, err)
 		return
 	}
+	if err := s.receiptMu.Lock(ctx); err != nil {
+		s.gateBusy(w)
+		return
+	}
+	defer s.receiptMu.Unlock()
+	idx := s.receipts
 	if have, ok := idx[id+"|"+v.PayloadSHA256]; ok {
 		have.Created = false
 		writeJSON(w, http.StatusOK, have)
 		return
 	}
+	// The revocation gate is taken for the check and the record only (revocation.go): a revoke cannot commit between them.
+	release, ok := s.commitGate(w, r, false)
+	if !ok {
+		return
+	}
+	defer release()
 	// A receipt already recorded stays (above). A new one under a revoked delivery, or signed with a revoked key, is refused:
 	// not recorded (the signature attributes it, but a refusal is not a ledger fact worth a write per attempt).
 	if info, revoked, err := s.deliveryRevocation(ctx, vp.Delivery); err != nil {
@@ -919,6 +936,28 @@ func checkReceiptBinding(pl *receipt.Payload, pk store.Packet, meta packet.Meta,
 		return "the receipt was signed before the delivery's window began"
 	}
 	return ""
+}
+
+// receiptWarm is closed once the receipt index has been read.
+func (s *Server) receiptWarm() chan struct{} {
+	s.receiptsReadyOnce.Do(func() { s.receiptsReady = make(chan struct{}) })
+	return s.receiptsReady
+}
+
+// warmReceipts reads the receipt index (once, in the background from start); a read that fails leaves it unread and is tried again.
+func (s *Server) warmReceipts(ctx context.Context) error {
+	if err := s.receiptMu.Lock(ctx); err != nil {
+		return err
+	}
+	defer s.receiptMu.Unlock()
+	if s.receipts != nil {
+		return nil
+	}
+	if _, err := s.receiptIndex(ctx); err != nil {
+		return err
+	}
+	close(s.receiptWarm())
+	return nil
 }
 
 // receiptIndex is the receipts the chain holds, by packet id and payload digest, read once and then kept by the one

@@ -461,8 +461,6 @@ func (s *Server) getSample(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "no such packet")
 		return
 	}
-	release := s.rev.readLock() // see getPacket: held from the check of the revocation until the sampling is recorded
-	defer release()
 	claims, ok := s.credentialClaims(w, r)
 	if !ok {
 		return
@@ -525,6 +523,27 @@ func (s *Server) getSample(w http.ResponseWriter, r *http.Request) {
 	// The answer must be one the verifier will read: refuse before recording what cannot be served.
 	if n, err := encodedSize(doc); err != nil || n > s.sampleMaxBytes() {
 		writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("this sample would be over %d bytes (the most `clearance verify --sample` reads): ask for a smaller n", s.sampleMaxBytes()))
+		return
+	}
+	// The slow part is done (the packet, the frame, the draw). The gate covers the re-check and the record only (see getPacket). The sampling
+	// index is read before it, so the gate is never held across a scan of the chain.
+	s.sampleMu.Lock()
+	_, ierr := s.sampleIdx(ctx)
+	s.sampleMu.Unlock()
+	if ierr != nil {
+		writeError(w, http.StatusServiceUnavailable, "the store could not be read")
+		return
+	}
+	release, ok := s.commitGate(w, r, true)
+	if !ok {
+		return
+	}
+	defer release()
+	if rv, revoked, err := s.deliveryRevocation(ctx, claims.Subject); err != nil {
+		s.revocationUnreadable(w, r, err)
+		return
+	} else if revoked {
+		s.refuseSample(w, r, claims, id, RulePacketRevoked, "this delivery was revoked at "+rv.at+": ask the subscriber for a new delivery", http.StatusForbidden, now)
 		return
 	}
 	rec, created, status, msg, rule := s.recordSampling(ctx, claims, id, doc, params, now)

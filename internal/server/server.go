@@ -128,8 +128,11 @@ type Server struct {
 
 	// receiptMu serializes receipt submissions and guards receipts, the index of receipts already recorded (by packet id
 	// and payload digest), so a resubmitted receipt writes nothing.
-	receiptMu sync.Mutex
+	receiptMu ctxMutex
 	receipts  map[string]ReceiptRecorded
+	// receiptsReady is closed once the receipt index has been read (in the background, from start).
+	receiptsReady     chan struct{}
+	receiptsReadyOnce sync.Once
 
 	// sampleMu serializes samplings (P-2) and guards sampled, the index of samplings the chain already holds, so asking for a
 	// sample already drawn writes nothing. samplers keeps the checked sampling frame of the last few packets.
@@ -152,6 +155,8 @@ type Server struct {
 	envelopes envelopeCache
 	keyMu     sync.Mutex
 	kidKeys   map[string]json.RawMessage
+	// revokedKids are the token keys revoked (read with their JWK, or marked by this process's revocation): not statement keys any more.
+	revokedKids map[string]bool
 
 	// rev is the revocations of deliveries and recipient keys the chain holds (see revocation.go).
 	rev revIndex
@@ -185,6 +190,7 @@ func New(ctx context.Context, opt Options) (*Server, error) {
 		}
 	}
 	s.mountServices()
+	s.startWarm()
 	if opt.DevRecords {
 		s.mux.HandleFunc("GET "+DevRecordsPath, s.devRecords)
 	}

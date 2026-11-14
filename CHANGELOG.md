@@ -20,6 +20,12 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   `POST /v1/keys/{kid}/revoke` (`token.key.revoke`): a retired token signing key is revoked: `GET /v1/keys` omits it, credentials it signed are a bare 401, the key in use is refused (409),
   and the core will not start with it again (`clearance_signing_keys.revoked_at`, a nullable column added with `ADD COLUMN IF NOT EXISTS`). Statement keys are untouched.
   CLI: `clearance packet revoke`, `packet revoke-key`, `keys revoke`. Python client regenerated.
+  Review round: a read's slow work now runs outside the revocation gate (it covers one re-check and one append) and every wait on it ends with the request's context;
+  the revocation and receipt indexes are read in the background from start (credentialed and revoke routes answer 503 with Retry-After until then); a recipient-key `as_of`
+  more than 24 hours back needs `backdate: true` (409 says how many recorded receipts it would fail), may not precede the first delivery to the recipient (422), and the record
+  carries `recorded_at`; `clearance verify` also reads revocations from the carried records, fails a packet that omits one it carries, and judges a receipt by the core's record
+  time, not `signed_at`; a revoked token key is revoked for verification statements too (`/v1/statement-keys`, the hosted page, the revoke answer lists the statements to reissue);
+  revoke reasons refuse control, format and separator characters.
 
 ## [0.48.0] - 2026-11-14
 

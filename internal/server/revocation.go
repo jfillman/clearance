@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -11,12 +12,16 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/jfillman/clearance/internal/evidence"
 	"github.com/jfillman/clearance/internal/gate"
 	"github.com/jfillman/clearance/internal/packet"
 	"github.com/jfillman/clearance/internal/pycompat"
+	"github.com/jfillman/clearance/internal/receipt"
 	"github.com/jfillman/clearance/internal/store"
+	"github.com/jfillman/clearance/internal/token"
 )
 
 // Revocation of the W6 assurance surface: a delivery (and so its credential), a recipient's registered key, and one of the
@@ -28,10 +33,15 @@ import (
 // that cannot be read is never taken as absent. A token key is revoked in the key table too (a row flag), because that table is
 // what GET /v1/keys, clearance-api's copy of it and UseSigningKey read.
 //
-// Ordering inside one process: a read holds revIndex.gate for reading from the check of the revocation until its fetch (or
-// sampling) record is written; a revoke holds it for writing from its own read of the chain until its record is written and
-// folded in. So a read is either recorded before the revocation record or refused: no read is recorded after the
-// revocation was acknowledged.
+// The index is first read by a goroutine New starts, a page at a time (a scan that fails resumes where it stopped and the index is warm
+// only after the last page). Until it is warm, the credentialed routes and the revoke routes wait a short while for it and then answer 503
+// with Retry-After: never a scan inside a request, and never a read served on a state that was not read.
+//
+// Ordering inside one process: a read does its expensive work (loading and cutting the packet, drawing a sample) WITHOUT the gate, then
+// takes revIndex.gate for reading, re-runs the checks a revoke could have changed (the credential's key, the delivery's revocation) and
+// writes its fetch (or sampling) record, and releases it. A revoke holds the gate for writing from its own read of the chain until its
+// record is written and folded in. So a read is either recorded before the revocation record or refused, and the gate covers one
+// check and one Append, not a read's slow part. Every wait for the gate, and for the mutexes beside it, ends with the request's context.
 
 // Record kinds the revocation routes write.
 const (
@@ -51,6 +61,12 @@ const (
 // the access-grant card asks for (5 seconds) with a wide margin.
 const revMaxAge = time.Second
 
+// warmGrace is how long a request on a core that has not finished reading its indexes waits for them before answering 503 with Retry-After.
+const warmGrace = 2 * time.Second
+
+// BackdateAfter is how far back an as_of may be without the caller saying so (backdate: true).
+const BackdateAfter = 24 * time.Hour
+
 var (
 	deliveryIDRe = regexp.MustCompile(`^dl-[0-9]{1,18}$`)
 	keyIDRe      = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
@@ -58,6 +74,9 @@ var (
 
 // revocationVerified marks the fields the core checked on a revocation record.
 var revocationVerified = union(packetVerified, "revocation")
+
+// errRevCold is the revocation index not being read yet (a slow store or a long chain at start).
+var errRevCold = errors.New("the revocation state is not read yet")
 
 // revInfo is what the chain says of one revocation.
 type revInfo struct {
@@ -68,34 +87,58 @@ type revInfo struct {
 	hash   string
 }
 
+// recordedReceipt is a receipt the core recorded: when, and what its signer said.
+type recordedReceipt struct{ recorded, signed time.Time }
+
 type revIndex struct {
 	// gate orders reads against revokes (see the package comment above).
-	gate sync.RWMutex
+	gate ctxGate
 
-	refreshMu sync.Mutex // one reader of the chain's tail at a time; guards next
+	refreshMu ctxMutex // one reader of the chain's tail at a time; guards next
 	next      int64
 
 	mu         sync.RWMutex
 	deliveries map[string]revInfo
 	keys       map[string]revInfo // recipient + "\x00" + key id
-	synced     time.Time          // when the last COMPLETE read of the chain's tail began
-	warmed     bool
+	// firstDelivery is the time of the first packet.deliver the core recorded to each recipient: before it, no credential of the
+	// recipient's existed, so a key cannot be revoked as of an earlier time. keyReceipts are the receipts the core recorded, by recipient
+	// and key id: how many a back-dated revocation would fail.
+	firstDelivery map[string]time.Time
+	keyReceipts   map[string][]recordedReceipt
+	synced        time.Time // when the last COMPLETE read of the chain's tail began
+	warmed        bool
+
+	warmOnce sync.Once
+	warmCh   chan struct{} // closed when the index is first warm
 }
 
 func (x *revIndex) initLocked() {
 	if x.deliveries == nil {
 		x.deliveries, x.keys = map[string]revInfo{}, map[string]revInfo{}
+		x.firstDelivery, x.keyReceipts = map[string]time.Time{}, map[string][]recordedReceipt{}
 	}
+}
+
+func (x *revIndex) warmChan() chan struct{} {
+	x.warmOnce.Do(func() { x.warmCh = make(chan struct{}) })
+	return x.warmCh
 }
 
 func keyRevKey(recipient, kid string) string { return recipient + "\x00" + kid }
 
-// readLock is held by a request from the check of a revocation until the record that commits it is written. The returned
-// func releases it and may be called more than once.
-func (x *revIndex) readLock() func() {
-	x.gate.RLock()
-	var once sync.Once
-	return func() { once.Do(x.gate.RUnlock) }
+// cleanTextStrict is cleanText for the revoke routes' reasons: it also refuses every control character (the C1 range too), the format
+// characters that hide text (bidirectional controls, zero-width and joiner characters: category Cf), and the line and paragraph separators.
+// cleanText itself is unchanged (see its callers: an engagement or a statement reason with a zero-width joiner in it is still accepted).
+func cleanTextStrict(v string, max int) bool {
+	if !cleanText(v, max) {
+		return false
+	}
+	for _, r := range v {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r) {
+			return false
+		}
+	}
+	return utf8.ValidString(v)
 }
 
 // coreRecordWith is true for a record the core wrote itself as a record of this field: its provider is the core, its boundary is
@@ -122,17 +165,27 @@ func coreRecordWith(r store.Record, field string) bool {
 // revokePageSize is how many records one read of the chain's tail takes (a variable so a test can make it short).
 var revokePageSize = 2000
 
-// refreshRevocations reads the chain from next on and folds every revocation record in, a page at a time (each page applied as
-// it is read, so a read that timed out resumes). The caller holds refreshMu.
+// refreshRevocations reads the chain from next on and folds in every revocation record (and the deliveries and receipts a back-dated
+// revocation is checked against), a page at a time (each page applied as it is read, so a read that timed out resumes and the index is
+// warm only after the last page). The caller holds refreshMu.
 func (s *Server) refreshRevocations(ctx context.Context) error {
 	x := &s.rev
 	started := s.opt.Clock()
+	markWarm := func() {
+		x.initLocked()
+		x.synced, x.warmed = started, true
+		x.warmChan()
+		select {
+		case <-x.warmCh:
+		default:
+			close(x.warmCh)
+		}
+	}
 	if head, _, err := s.opt.Store.Head(ctx); err != nil {
 		return err
 	} else if head < x.next {
 		x.mu.Lock()
-		x.initLocked()
-		x.synced, x.warmed = started, true
+		markWarm()
 		x.mu.Unlock()
 		return nil
 	}
@@ -142,9 +195,10 @@ func (s *Server) refreshRevocations(ctx context.Context) error {
 			return err
 		}
 		type fold struct {
-			delivery bool
-			id       string
-			info     revInfo
+			kind string // "delivery", "key", "first", "receipt"
+			id   string
+			info revInfo
+			t, u time.Time
 		}
 		var folds []fold
 		next := x.next
@@ -152,42 +206,75 @@ func (s *Server) refreshRevocations(ctx context.Context) error {
 			seq, _ := gate.SeqInt(r["seq"])
 			next = seq + 1
 			tool, _ := r["tool"].(string)
-			if (tool != ToolPacketRevoke && tool != ToolRecipientKeyRevoke) || r["decision"] != "allow" || !coreRecordWith(r, "revocation") {
+			if r["decision"] != "allow" {
 				continue
 			}
-			rv, _ := r["revocation"].(map[string]any)
-			info := revInfo{at: fmt.Sprint(r["ts"]), reason: fmt.Sprint(rv["reason"]), seq: seq, hash: fmt.Sprint(r["hash"])}
+			ts, _ := time.Parse(time.RFC3339, fmt.Sprint(r["ts"]))
 			switch tool {
-			case ToolPacketRevoke:
-				d, _ := r["delivery"].(map[string]any)
-				if id, _ := d["id"].(string); rv["kind"] == "delivery" && deliveryIDRe.MatchString(id) {
-					folds = append(folds, fold{delivery: true, id: id, info: info})
+			case ToolPacketDeliver:
+				if d, _ := r["delivery"].(map[string]any); coreRecordWith(r, "delivery") && !ts.IsZero() {
+					if rc, _ := d["recipient"].(string); rc != "" {
+						folds = append(folds, fold{kind: "first", id: rc, t: ts})
+					}
 				}
-			case ToolRecipientKeyRevoke:
+			case packet.ToolReceipt:
+				rc, _ := r["receipt"].(map[string]any)
+				dl, _ := r["delivery"].(map[string]any)
+				kid, _ := rc["key_id"].(string)
+				if recip, _ := dl["recipient"].(string); coreRecordWith(r, "receipt") && kid != "" && recip != "" && !ts.IsZero() {
+					if raw, err := json.Marshal(rc["envelope"]); err == nil {
+						if pl, err := receipt.Read(raw); err == nil {
+							signed, _ := time.Parse(time.RFC3339, pl.SignedAt)
+							folds = append(folds, fold{kind: "receipt", id: keyRevKey(recip, kid), t: ts, u: signed})
+						}
+					}
+				}
+			case ToolPacketRevoke, ToolRecipientKeyRevoke:
+				if !coreRecordWith(r, "revocation") {
+					continue
+				}
+				rv, _ := r["revocation"].(map[string]any)
+				info := revInfo{at: fmt.Sprint(r["ts"]), reason: fmt.Sprint(rv["reason"]), seq: seq, hash: fmt.Sprint(r["hash"])}
+				if tool == ToolPacketRevoke {
+					d, _ := r["delivery"].(map[string]any)
+					if id, _ := d["id"].(string); rv["kind"] == "delivery" && deliveryIDRe.MatchString(id) {
+						folds = append(folds, fold{kind: "delivery", id: id, info: info})
+					}
+					continue
+				}
 				rc, _ := rv["recipient"].(string)
 				kid, _ := rv["key_id"].(string)
 				asOf, _ := rv["as_of"].(string)
 				if _, err := time.Parse(time.RFC3339, asOf); rv["kind"] == "recipient-key" && providerName.MatchString(rc) && keyIDRe.MatchString(kid) && err == nil {
 					info.asOf = asOf
-					folds = append(folds, fold{id: keyRevKey(rc, kid), info: info})
+					folds = append(folds, fold{kind: "key", id: keyRevKey(rc, kid), info: info})
 				}
 			}
 		}
 		x.mu.Lock()
 		x.initLocked()
 		for _, f := range folds {
-			m := x.keys
-			if f.delivery {
-				m = x.deliveries
-			}
-			if _, ok := m[f.id]; !ok { // the first revocation stands
-				m[f.id] = f.info
+			switch f.kind {
+			case "delivery":
+				if _, ok := x.deliveries[f.id]; !ok { // the first revocation stands
+					x.deliveries[f.id] = f.info
+				}
+			case "key":
+				if _, ok := x.keys[f.id]; !ok {
+					x.keys[f.id] = f.info
+				}
+			case "first":
+				if old, ok := x.firstDelivery[f.id]; !ok || f.t.Before(old) {
+					x.firstDelivery[f.id] = f.t
+				}
+			case "receipt":
+				x.keyReceipts[f.id] = append(x.keyReceipts[f.id], recordedReceipt{recorded: f.t, signed: f.u})
 			}
 		}
 		x.next = next
 		last := len(recs) < revokePageSize
 		if last {
-			x.synced, x.warmed = started, true
+			markWarm()
 		}
 		x.mu.Unlock()
 		if last {
@@ -196,10 +283,74 @@ func (s *Server) refreshRevocations(ctx context.Context) error {
 	}
 }
 
+// startWarm reads the revocation index and the receipt index in the background, until both are warm or the server stops. A failed read
+// is retried a second later and resumes where it stopped.
+func (s *Server) startWarm() {
+	go func() {
+		for s.life.Err() == nil {
+			ok := true
+			if err := s.warmRevocations(s.life); err != nil {
+				s.log.Warn("revocation: reading the revocation index failed; trying again", "error", err.Error())
+				ok = false
+			}
+			if err := s.warmReceipts(s.life); err != nil {
+				s.log.Warn("receipts: reading the receipt index failed; trying again", "error", err.Error())
+				ok = false
+			}
+			if ok {
+				return
+			}
+			select {
+			case <-s.life.Done():
+				return
+			case <-time.After(time.Second):
+			}
+		}
+	}()
+}
+
+func (s *Server) warmRevocations(ctx context.Context) error {
+	x := &s.rev
+	if err := x.refreshMu.Lock(ctx); err != nil {
+		return err
+	}
+	defer x.refreshMu.Unlock()
+	x.mu.RLock()
+	done := x.warmed
+	x.mu.RUnlock()
+	if done {
+		return nil
+	}
+	return s.refreshRevocations(ctx)
+}
+
+// waitWarm waits for the revocation index (and, when receipts is set, the receipt index) to be read, for at most warmGrace and the
+// request's context; errRevCold otherwise.
+func (s *Server) waitWarm(ctx context.Context, receipts bool) error {
+	t := time.NewTimer(warmGrace)
+	defer t.Stop()
+	for _, ch := range []chan struct{}{s.rev.warmChan(), s.receiptWarm()} {
+		if ch == s.receiptWarm() && !receipts {
+			continue
+		}
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return errRevCold
+		case <-t.C:
+			return errRevCold
+		}
+	}
+	return nil
+}
+
 // freshRevocations makes the index no older than revMaxAge, reading the chain's tail when it is. An error means the state
 // could not be read: the caller refuses the request.
 func (s *Server) freshRevocations(ctx context.Context) error {
 	x := &s.rev
+	if err := s.waitWarm(ctx, false); err != nil {
+		return err
+	}
 	x.mu.RLock()
 	age := s.opt.Clock().Sub(x.synced)
 	ok := x.warmed && age >= 0 && age < revMaxAge
@@ -207,7 +358,9 @@ func (s *Server) freshRevocations(ctx context.Context) error {
 	if ok {
 		return nil
 	}
-	x.refreshMu.Lock()
+	if err := x.refreshMu.Lock(ctx); err != nil {
+		return err
+	}
 	defer x.refreshMu.Unlock()
 	// Another request may have refreshed while this one waited.
 	x.mu.RLock()
@@ -242,24 +395,49 @@ func (s *Server) recipientKeyRevocation(ctx context.Context, recipient, kid stri
 	return info, ok, nil
 }
 
-// revocationUnreadable is what a request answers when the revocation state could not be read.
+// revocationUnreadable is what a request answers when the revocation state could not be read, or is not read yet.
 func (s *Server) revocationUnreadable(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, errRevCold) {
+		w.Header().Set("Retry-After", "2")
+		writeError(w, http.StatusServiceUnavailable, "the revocation state is not read yet, so nothing was served: try again shortly")
+		return
+	}
 	s.log.ErrorContext(r.Context(), "revocation: the state could not be read", "error", err.Error())
 	writeError(w, http.StatusServiceUnavailable, "the revocation state could not be read, so nothing was served")
 }
 
-// RevokeRequest is the body of the three revoke routes: why. A recipient key may also say the time it is revoked as of.
+// gateBusy is what a request answers when it could not take the revocation gate before its own context ended.
+func (s *Server) gateBusy(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", "1")
+	writeError(w, http.StatusServiceUnavailable, "the core is busy recording another request: try again")
+}
+
+// RevokeRequest is the body of the delivery and token-key revoke routes: why.
 type RevokeRequest struct {
-	// Reason is recorded in the chain (1 to 200 printable characters). Do not put a secret in it: it is carried in packets.
+	// Reason is recorded in the chain (1 to 200 printable characters: no control, format or separator characters). Do not put a secret
+	// in it: it is carried in packets.
 	Reason string `json:"reason" contract:"required"`
 }
 
 // RecipientKeyRevokeRequest is POST /v1/assurance/recipients/{recipient}/keys/{kid}/revoke's body.
 type RecipientKeyRevokeRequest struct {
 	Reason string `json:"reason" contract:"required"`
-	// AsOf is the time from which the key is not trusted (RFC 3339): a receipt signed at or after it fails `clearance verify`.
-	// Default now; a past time says the key was compromised since then; never in the future.
+	// AsOf is the time from which the key is not trusted (RFC 3339): a receipt the core recorded at or after it, or signed at or after it
+	// where no record is carried, fails `clearance verify`. Default now. It may be at most the core's clock-skew allowance (5 minutes)
+	// ahead of the core's clock, never earlier than the first delivery the core recorded to the recipient (422), and more than 24 hours
+	// back only with backdate: true.
 	AsOf string `json:"as_of,omitempty"`
+	// Backdate says the caller means an as_of more than 24 hours before now. Without it that as_of is refused (409), and the refusal says
+	// how many receipts already recorded would fail.
+	Backdate bool `json:"backdate,omitempty"`
+}
+
+// BackdateRefusal is the 409 of an as_of more than 24 hours back sent without backdate: true.
+type BackdateRefusal struct {
+	Error string `json:"error" contract:"required"`
+	Rule  string `json:"rule,omitempty"`
+	// AffectedReceipts is how many receipts the core already recorded with this key that would fail verification with this as_of.
+	AffectedReceipts int `json:"affected_receipts" contract:"required"`
 }
 
 // DeliveryRevoked is POST /v1/packets/{id}/deliveries/{delivery}/revoke's answer.
@@ -282,6 +460,7 @@ type RecipientKeyRevoked struct {
 	KeyID     string `json:"key_id" contract:"required"`
 	State     string `json:"state" contract:"required"`
 	Created   bool   `json:"created" contract:"required"`
+	// AsOf is the time the key is revoked as of; RevokedAt is when the core recorded the revocation (its own clock).
 	AsOf      string `json:"as_of" contract:"required"`
 	RevokedAt string `json:"revoked_at" contract:"required"`
 	Reason    string `json:"reason" contract:"required"`
@@ -297,6 +476,12 @@ type TokenKeyRevoked struct {
 	RevokedAt string `json:"revoked_at" contract:"required"`
 	Seq       *int64 `json:"seq"`
 	Hash      string `json:"hash,omitempty"`
+	// Statements are the ids of the verification statements that stand (not revoked, not superseded) and were signed by this key. A revoked
+	// key is revoked for statements too: each now verifies as failed ("signing key revoked"), and the admin revokes it
+	// (POST /v1/statements/{id}/revoke) and issues it again (reissue) under the key in use.
+	Statements []string `json:"statements" contract:"required"`
+	// StatementsError is set, and Statements is empty, when the statement index could not be read: list them with GET /v1/statements?key=.
+	StatementsError string `json:"statements_error,omitempty"`
 }
 
 const stateRevoked = "revoked"
@@ -314,8 +499,8 @@ func decodeRevoke(w http.ResponseWriter, r *http.Request, into any, shape string
 }
 
 func badReason(w http.ResponseWriter, reason string) bool {
-	if !cleanText(reason, MaxRevokeReason) {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("reason is 1 to %d printable characters", MaxRevokeReason))
+	if !cleanTextStrict(reason, MaxRevokeReason) {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("reason is 1 to %d printable characters (no control, format or separator characters)", MaxRevokeReason))
 		return true
 	}
 	return false
@@ -323,6 +508,47 @@ func badReason(w http.ResponseWriter, reason string) bool {
 
 // MaxRevokeBody caps the revoke routes' bodies.
 const MaxRevokeBody = 4 << 10
+
+// freshRevocationsLocked is freshRevocations for a caller that already holds the gate for writing: it always reads the chain's
+// tail (a revoke decides on what the chain holds now, never on a cache).
+func (s *Server) freshRevocationsLocked(ctx context.Context) error {
+	x := &s.rev
+	if err := s.waitWarm(ctx, false); err != nil {
+		return err
+	}
+	if err := x.refreshMu.Lock(ctx); err != nil {
+		return err
+	}
+	defer x.refreshMu.Unlock()
+	return s.refreshRevocations(ctx)
+}
+
+// commitGate is taken by a read (or a sample, or a receipt) when its expensive work is done: it takes the gate for reading and, for a
+// read under a credential, re-checks that the credential's key is still one the core accepts, so a key revoked since the first check is
+// refused. ok is false when the answer has been written (503 busy, or the bare 401). release must be called, once the record is written.
+func (s *Server) commitGate(w http.ResponseWriter, r *http.Request, credential bool) (release func(), ok bool) {
+	rel, err := s.rev.gate.Read(r.Context())
+	if err != nil {
+		s.gateBusy(w)
+		return nil, false
+	}
+	if credential {
+		keys, err := s.accessKeys(r)
+		if err != nil {
+			rel()
+			writeError(w, http.StatusServiceUnavailable, "the store could not be read")
+			return nil, false
+		}
+		_, issuer, gerr := s.opt.Gate.Credentials()
+		claims, perr := token.ParseAccess(bearer(r), keys)
+		if gerr != nil || perr != nil || claims.Issuer != issuer {
+			rel()
+			writeError(w, http.StatusUnauthorized, "not a packet credential this core issued")
+			return nil, false
+		}
+	}
+	return rel, true
+}
 
 // revokeDelivery is POST /v1/packets/{id}/deliveries/{delivery}/revoke: from the record on, every read, sample and receipt under
 // the delivery's credential is refused PK-REVOKED. The record is written before the answer; revoking a revoked delivery is the
@@ -343,8 +569,16 @@ func (s *Server) revokeDelivery(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	x := &s.rev
-	x.gate.Lock()
-	defer x.gate.Unlock()
+	if err := s.waitWarm(ctx, false); err != nil {
+		s.revocationUnreadable(w, r, err)
+		return
+	}
+	release, err := x.gate.Write(ctx)
+	if err != nil {
+		s.gateBusy(w)
+		return
+	}
+	defer release()
 	if err := s.freshRevocationsLocked(ctx); err != nil {
 		s.revocationUnreadable(w, r, err)
 		return
@@ -397,24 +631,15 @@ func (s *Server) revokeDelivery(w http.ResponseWriter, r *http.Request) {
 	seq, _ := gate.SeqInt(rec["seq"])
 	info := revInfo{at: pycompat.ISO(now), reason: req.Reason, seq: seq, hash: fmt.Sprint(rec["hash"])}
 	x.mu.Lock()
-	x.deliveries[did] = info // folded in before the lock is released: no later read in this process misses it
+	x.deliveries[did] = info // folded in before the gate is released: no later read in this process misses it
 	x.mu.Unlock()
 	writeJSON(w, http.StatusOK, DeliveryRevoked{ID: did, PacketID: id, Recipient: rcp, State: stateRevoked, Created: true,
 		RevokedAt: info.at, Reason: info.reason, Seq: seq, Hash: info.hash})
 }
 
-// freshRevocationsLocked is freshRevocations for a caller that already holds the gate for writing: it always reads the chain's
-// tail (a revoke decides on what the chain holds now, never on a cache).
-func (s *Server) freshRevocationsLocked(ctx context.Context) error {
-	x := &s.rev
-	x.refreshMu.Lock()
-	defer x.refreshMu.Unlock()
-	return s.refreshRevocations(ctx)
-}
-
 // revokeRecipientKey is POST /v1/assurance/recipients/{recipient}/keys/{kid}/revoke: a key a recipient registered is revoked as
 // of a time. From then a receipt signed with it is refused at submit; receipts already recorded stay, and `clearance verify` fails
-// one signed at or after the as-of time and prints the revocation on one signed before it.
+// one the core recorded at or after the as-of time and prints the revocation on one recorded before it.
 func (s *Server) revokeRecipientKey(w http.ResponseWriter, r *http.Request) {
 	sub, ok := s.subscriber(w, r)
 	if !ok {
@@ -436,10 +661,11 @@ func (s *Server) revokeRecipientKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req RecipientKeyRevokeRequest
-	if !decodeRevoke(w, r, &req, "{reason, as_of?}") || badReason(w, req.Reason) {
+	if !decodeRevoke(w, r, &req, "{reason, as_of?, backdate?}") || badReason(w, req.Reason) {
 		return
 	}
-	now := s.opt.Clock().UTC().Truncate(time.Second)
+	// The as-of time keeps the core's own precision for "now" (a receipt recorded in the same second before the revoke is not after it).
+	now := s.opt.Clock().UTC()
 	asOf := now
 	if req.AsOf != "" {
 		t, err := time.Parse(time.RFC3339, req.AsOf)
@@ -448,15 +674,23 @@ func (s *Server) revokeRecipientKey(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if t.After(now.Add(DefaultMaxClockSkew)) {
-			writeError(w, http.StatusBadRequest, "as_of is in the future: a revocation takes effect now or earlier")
+			writeError(w, http.StatusBadRequest, "as_of is more than the clock-skew allowance ("+DefaultMaxClockSkew.String()+") ahead of the core's clock: a revocation takes effect now or earlier")
 			return
 		}
 		asOf = t.UTC().Truncate(time.Second)
 	}
 	ctx := r.Context()
 	x := &s.rev
-	x.gate.Lock()
-	defer x.gate.Unlock()
+	if err := s.waitWarm(ctx, false); err != nil {
+		s.revocationUnreadable(w, r, err)
+		return
+	}
+	release, err := x.gate.Write(ctx)
+	if err != nil {
+		s.gateBusy(w)
+		return
+	}
+	defer release()
 	if err := s.freshRevocationsLocked(ctx); err != nil {
 		s.revocationUnreadable(w, r, err)
 		return
@@ -465,10 +699,28 @@ func (s *Server) revokeRecipientKey(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	x.mu.RLock()
 	have, revoked := x.keys[k]
+	first, hasFirst := x.firstDelivery[name]
+	affected := 0
+	for _, rr := range x.keyReceipts[k] {
+		if !rr.recorded.Before(asOf) || !rr.signed.Before(asOf) {
+			affected++
+		}
+	}
 	x.mu.RUnlock()
 	if revoked {
 		writeJSON(w, http.StatusOK, RecipientKeyRevoked{Recipient: name, KeyID: kid, State: stateRevoked, Created: false, AsOf: have.asOf,
 			RevokedAt: have.at, Reason: have.reason, Seq: have.seq, Hash: have.hash})
+		return
+	}
+	// The bounds on a back-dated as-of: more than a day back only when asked, and never before the core recorded the first delivery to this
+	// recipient (the core does not record when a key was registered: until a delivery, no credential of the recipient's existed).
+	if asOf.Before(now.Add(-BackdateAfter)) && !req.Backdate {
+		writeJSON(w, http.StatusConflict, BackdateRefusal{Error: "as_of is more than " + BackdateAfter.String() + " before now: send backdate: true to mean it. " +
+			strconv.Itoa(affected) + " receipt(s) already recorded with this key would fail verification", Rule: "PK-BACKDATE", AffectedReceipts: affected})
+		return
+	}
+	if hasFirst && asOf.Before(first.Truncate(time.Second)) {
+		writeJSON(w, http.StatusUnprocessableEntity, PacketError{Error: "as_of is before the first delivery the core recorded to " + name + " (" + pycompat.ISO(first) + "): the key cannot have been used through this core before then"})
 		return
 	}
 	var rec store.Record
@@ -479,7 +731,8 @@ func (s *Server) revokeRecipientKey(w http.ResponseWriter, r *http.Request) {
 			"target": "recipient:" + name, "args_sha256": nil, "boundary": "deployment",
 			"result":    fmt.Sprintf("key %s of recipient %s revoked as of %s: %s", kid, name, pycompat.ISO(asOf), req.Reason),
 			"initiator": initiator(sub), "delegate": viaString(sub.Via),
-			"revocation": map[string]any{"kind": "recipient-key", "recipient": name, "key_id": kid, "as_of": pycompat.ISO(asOf), "reason": req.Reason}},
+			"revocation": map[string]any{"kind": "recipient-key", "recipient": name, "key_id": kid, "as_of": pycompat.ISO(asOf),
+				"recorded_at": pycompat.ISO(now), "backdated": asOf.Before(now.Add(-BackdateAfter)), "reason": req.Reason}},
 			s.coreWriter(revocationVerified))
 		return err
 	})
@@ -500,9 +753,10 @@ func (s *Server) revokeRecipientKey(w http.ResponseWriter, r *http.Request) {
 // revokeTokenKey is POST /v1/keys/{kid}/revoke: a RETIRED token signing key is revoked. From the commit, GET /v1/keys no longer
 // lists it and no packet credential it signed verifies (the credential's check reads the key table on every request, so this is
 // immediate in every replica); a clearance token or grant feed it signed no longer verifies at a consumer that re-reads GET /v1/keys,
-// and the core re-signs them with the key in use (it does so at once here, and its minute loop does it anyway). The key in use cannot
-// be revoked (409: rotate first), and a revoked key is never used again (the core refuses to start with it). The record and the
-// key's flag commit together. Statement keys are a separate set and are not touched.
+// and the core re-signs them with the key in use (it does so at once here, and its minute loop does it anyway). A verification statement
+// it signed verifies as failed, and its key is no longer published as a statement key: the answer lists the statements that stood.
+// The key in use cannot be revoked (409: rotate first), and a revoked key is never used again (the core refuses to start with it).
+// The record and the key's flag commit together.
 func (s *Server) revokeTokenKey(w http.ResponseWriter, r *http.Request) {
 	sub, ok := s.subscriber(w, r)
 	if !ok {
@@ -533,7 +787,11 @@ func (s *Server) revokeTokenKey(w http.ResponseWriter, r *http.Request) {
 	now := s.opt.Clock().UTC().Truncate(time.Second)
 	var rec store.Record
 	var key store.SigningKey
-	x.gate.Lock() // in-flight reads under a credential finish (and are recorded) first; later ones read the key table without the key
+	release, err := x.gate.Write(ctx) // in-flight reads under a credential finish (and are recorded) first; later ones read the key table without the key
+	if err != nil {
+		s.gateBusy(w)
+		return
+	}
 	err = s.opt.Store.Atomic(ctx, func(tx store.Tx) error {
 		k, changed, err := tx.RevokeSigningKey(ctx, kid, now)
 		if err != nil {
@@ -551,7 +809,7 @@ func (s *Server) revokeTokenKey(w http.ResponseWriter, r *http.Request) {
 			"revocation": map[string]any{"kind": "token-key", "key_id": kid, "reason": req.Reason}}, s.coreWriter(revocationVerified))
 		return err
 	})
-	x.gate.Unlock()
+	release()
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		writeError(w, http.StatusNotFound, "no such key")
@@ -564,7 +822,8 @@ func (s *Server) revokeTokenKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "the revocation could not be recorded")
 		return
 	}
-	out := TokenKeyRevoked{KeyID: kid, State: stateRevoked, Created: rec != nil}
+	s.markStatementKeyRevoked(kid)
+	out := TokenKeyRevoked{KeyID: kid, State: stateRevoked, Created: rec != nil, Statements: []string{}}
 	if key.RevokedAt != nil {
 		out.RevokedAt = pycompat.ISO(*key.RevokedAt)
 	}
@@ -579,6 +838,12 @@ func (s *Server) revokeTokenKey(w http.ResponseWriter, r *http.Request) {
 		if _, err := s.opt.Gate.RefreshFeeds(ctx); err != nil {
 			s.log.WarnContext(ctx, "revocation: re-signing feeds after a key revocation failed", "error", err.Error())
 		}
+	}
+	if ids, err := s.standingStatementsOf(ctx, kid); err != nil {
+		s.log.WarnContext(ctx, "revocation: listing the statements of a revoked key failed", "key", kid, "error", err.Error())
+		out.StatementsError = "the statement index could not be read: list them with GET /v1/statements?key=" + kid
+	} else {
+		out.Statements = ids
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, out)
