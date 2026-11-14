@@ -53,6 +53,7 @@ spec:
                     properties:
                       rendered: {type: string, minLength: 1, maxLength: 80}
                       changed: {type: boolean, description: "In the diff this grant clears (display only; unchanged objects stay admitted)."}
+                      app: {type: string, maxLength: 253, description: "A merged grant only: the Application that owns the object (the incumbent when two claim one key). Display; admission does not read it."}
                 carried:
                   type: array
                   maxItems: 16
@@ -78,6 +79,7 @@ spec:
                           properties:
                             rendered: {type: string, minLength: 1, maxLength: 80}
                             changed: {type: boolean}
+                            app: {type: string, maxLength: 253}
                 expiresAt: {type: string, format: date-time, description: "The agent enforces it (status.valid); admission never reads it."}
                 clearance:
                   type: object

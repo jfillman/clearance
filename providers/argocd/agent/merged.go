@@ -27,9 +27,16 @@ import (
 // the per-change grants carry them: only objects whose hash differs, newest first, at most MaxCarried). A clearance
 // that belongs to an Application that is not protected, is not switched, or is not in the feed contributes nothing.
 //
+// THE RULE: a merged grant never contains an object, or a carried tree, that is not in the verified feed now. Everything
+// that keeps a grant (a conflict, an overflow, nothing to merge) keeps the held grant INTERSECTED with what is live: a
+// revoked clearance leaves the grant on the next pass, and when nothing is left the grant is written empty (it admits
+// nothing), stays active and valid, and the namespace stays labelled. The label comes off only through the opt-out.
+//
 // Keyed by group, kind and name (the namespace is the grant's own), valued by the rendered hash, which is what the
-// admission policy compares. Two Applications whose newest clearances list one object are a conflict, whatever the
-// hashes: the namespace gets no new merged grant, the last good one stays, and the core is told.
+// admission policy compares. Each object names its owner (`app`). Two Applications whose newest clearances list one key
+// are a conflict, whatever the hashes: the incumbent (the owner in the held grant) keeps the key at its own newest
+// hash and the newcomer's claim on it is left out; with no incumbent the key is left out for both. Every other key
+// merges, so one team's claim never stops another's deploys.
 
 // MergedGrantName is the name of a namespace's merged grant.
 const MergedGrantName = "clearance-merged"
@@ -37,13 +44,22 @@ const MergedGrantName = "clearance-merged"
 // maxGrantObjects is the CRD's maxProperties for spec.objects.
 const maxGrantObjects = 2000
 
+// How often a problem that lasts is reported again.
+const problemRepeat = 24 * time.Hour
+
+// mergeProblem is a conflict on some keys, or an overflow, in one namespace.
+type mergeProblem struct {
+	kind    string // "conflict" or "size"
+	keys    []string
+	apps    []string
+	detail  string
+	objects []token.Object // at least one
+}
+
 // mergeOutcome is what the merge of one namespace came to.
 type mergeOutcome struct {
-	grant   *Grant         // the merged grant to have (nil: none to write)
-	problem string         // why there is none, when there should be ("conflict", "size")
-	detail  string         // for the core's record
-	objects []token.Object // the objects the problem is about (at least one)
-	apps    []string       // the Applications involved
+	grant    *Grant // the merged grant to have (nil: none to write and none held)
+	problems []mergeProblem
 }
 
 type claimant struct {
@@ -85,9 +101,69 @@ func objectsIn(c *token.Claims, ns string) []token.Object {
 	return out
 }
 
-// mergeNamespace builds the merged grant of one namespace from the clearances of the Applications that target it.
-func (a *Agent) mergeNamespace(ns string, apps []appClass, claims []*token.Claims) mergeOutcome {
+// liveHeld is the held merged grant intersected with the verified feed: an object stays only if a clearance in the feed
+// (not past its expiry) lists it at that hash in this namespace, and a carried tree only if its change is in the feed,
+// with only the objects that change lists. The labels, the expiry and the rest are the held grant's, so an unchanged
+// intersection writes nothing.
+func (a *Agent) liveHeld(held Grant, ns string, claims []*token.Claims) Grant {
 	now := a.now()
+	type kh struct{ k, h string }
+	live := map[kh]bool{}
+	byChange := map[string]map[kh]bool{}
+	for _, c := range claims {
+		if !time.Unix(c.Expires, 0).After(now) {
+			continue
+		}
+		set := map[kh]bool{}
+		for _, o := range objectsIn(c, ns) {
+			set[kh{keyOf(o), o.Rendered}] = true
+			live[kh{keyOf(o), o.Rendered}] = true
+		}
+		byChange[c.Subject] = set
+	}
+	out := held
+	out.Labels = map[string]string{}
+	for k, v := range held.Labels {
+		out.Labels[k] = v
+	}
+	out.Spec.Objects = map[string]GrantObject{}
+	for k, o := range held.Spec.Objects {
+		if live[kh{k, o.Rendered}] {
+			out.Spec.Objects[k] = o
+		}
+	}
+	out.Spec.Carried = nil
+	for _, c := range held.Spec.Carried {
+		set, ok := byChange[c.Change]
+		if !ok {
+			continue
+		}
+		keep := map[string]GrantObject{}
+		for k, o := range c.Objects {
+			if set[kh{k, o.Rendered}] {
+				keep[k] = o
+			}
+		}
+		if len(keep) > 0 {
+			c.Objects = keep
+			out.Spec.Carried = append(out.Spec.Carried, c)
+		}
+	}
+	return out
+}
+
+// mergeNamespace builds the merged grant of one namespace from the clearances of the Applications that target it.
+// held is the grant already in the cluster (nil: none): it names the incumbents, and is what a conflict-free merge
+// cannot be built from (an overflow, nothing to merge) is kept as, intersected with the feed.
+func (a *Agent) mergeNamespace(ns string, apps []appClass, claims []*token.Claims, held *Grant) mergeOutcome {
+	now := a.now()
+	keep := func(p ...mergeProblem) mergeOutcome {
+		if held == nil {
+			return mergeOutcome{problems: p}
+		}
+		g := a.liveHeld(*held, ns, claims)
+		return mergeOutcome{grant: &g, problems: p}
+	}
 	var cl []claimant
 	for _, app := range apps {
 		var mine []*token.Claims
@@ -104,7 +180,7 @@ func (a *Agent) mergeNamespace(ns string, apps []appClass, claims []*token.Claim
 		cl = append(cl, claimant{app: app, newest: mine[0], older: mine[1:], objs: objectsIn(mine[0], ns)})
 	}
 	if len(cl) == 0 {
-		return mergeOutcome{}
+		return keep()
 	}
 	owners := map[string][]string{} // object key -> Applications whose newest clearance lists it
 	objByKey := map[string]token.Object{}
@@ -117,32 +193,57 @@ func (a *Agent) mergeNamespace(ns string, apps []appClass, claims []*token.Claim
 			objByKey[k] = o
 		}
 	}
+	winner := map[string]string{} // key -> the Application that has it ("" for a clash with no incumbent: nobody)
 	var clash []string
 	for k, who := range owners {
-		if len(who) > 1 {
-			clash = append(clash, k)
+		if len(who) == 1 {
+			winner[k] = who[0]
+			continue
 		}
+		clash = append(clash, k)
+		inc := ""
+		if held != nil {
+			if o, ok := held.Spec.Objects[k]; ok && contains(who, o.App) {
+				inc = o.App
+			}
+		}
+		winner[k] = inc
 	}
+	var problems []mergeProblem
 	if len(clash) > 0 {
 		sort.Strings(clash)
-		out := mergeOutcome{problem: "conflict"}
+		p := mergeProblem{kind: "conflict", keys: clash}
 		involved := map[string]bool{}
+		var lines []string
 		for i, k := range clash {
 			for _, w := range owners[k] {
 				involved[w] = true
 			}
-			o := objByKey[k]
+			var losers []string
+			for _, w := range owners[k] {
+				if w != winner[k] {
+					losers = append(losers, w)
+				}
+			}
+			if winner[k] != "" {
+				lines = append(lines, fmt.Sprintf("%s: %s keeps it, %s is left out", k, winner[k], strings.Join(losers, ", ")))
+			} else {
+				lines = append(lines, fmt.Sprintf("%s: no incumbent, left out for %s", k, strings.Join(losers, ", ")))
+			}
 			if i < 50 {
-				out.objects = append(out.objects, token.Object{APIVersion: o.APIVersion, Kind: o.Kind, Namespace: ns, Name: o.Name})
+				o := objByKey[k]
+				p.objects = append(p.objects, token.Object{APIVersion: o.APIVersion, Kind: o.Kind, Namespace: ns, Name: o.Name})
 			}
 		}
 		for w := range involved {
-			out.apps = append(out.apps, w)
+			p.apps = append(p.apps, w)
 		}
-		sort.Strings(out.apps)
-		out.detail = fmt.Sprintf("%d object(s) in %s are claimed by more than one protected Application (%s); the namespace keeps its last good merged grant",
-			len(clash), ns, strings.Join(out.apps, ", "))
-		return out
+		sort.Strings(p.apps)
+		if len(lines) > 20 {
+			lines = append(lines[:20], fmt.Sprintf("and %d more", len(lines)-20))
+		}
+		p.detail = fmt.Sprintf("in %s %d key(s) are claimed by more than one protected Application: %s; every other key merges", ns, len(clash), strings.Join(lines, "; "))
+		problems = append(problems, p)
 	}
 
 	g := Grant{Namespace: ns, Name: MergedGrantName, Labels: map[string]string{LabelManagedBy: ManagedBy, LabelMerged: "true", LabelActive: "true"}}
@@ -150,8 +251,17 @@ func (a *Agent) mergeNamespace(ns string, apps []appClass, claims []*token.Claim
 	var expires int64
 	var parts []string
 	for _, c := range cl {
+		mine := false
 		for _, o := range c.objs {
-			g.Spec.Objects[keyOf(o)] = GrantObject{Rendered: o.Rendered, Changed: o.Changed}
+			k := keyOf(o)
+			if winner[k] != c.app.key() {
+				continue
+			}
+			mine = true
+			g.Spec.Objects[k] = GrantObject{Rendered: o.Rendered, Changed: o.Changed, App: c.app.key()}
+		}
+		if !mine {
+			continue
 		}
 		if c.newest.Expires > expires {
 			expires = c.newest.Expires
@@ -161,14 +271,17 @@ func (a *Agent) mergeNamespace(ns string, apps []appClass, claims []*token.Claim
 		}
 		parts = append(parts, c.app.key()+"|"+c.newest.Subject+"|"+c.newest.Subjects.TreeRoot)
 	}
+	if len(g.Spec.Objects) == 0 {
+		return keep(problems...)
+	}
 	sort.Strings(parts)
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\n")))
 	g.Spec.Subject.Tree = hex.EncodeToString(sum[:])
 	g.Spec.ExpiresAt = time.Unix(expires, 0).UTC().Format(time.RFC3339)
 	g.Spec.Clearance.ID = "merged"
 
-	// The other live clearances of these Applications ride along as carried trees, minus any object another
-	// Application claims in its newest clearance: an older tree of one cannot admit what another owns.
+	// The other live clearances of these Applications ride along as carried trees, minus any key another Application
+	// has: an older tree of one cannot admit what another owns.
 	var others []carryCand
 	for _, c := range cl {
 		for _, o := range c.older {
@@ -178,10 +291,10 @@ func (a *Agent) mergeNamespace(ns string, apps []appClass, claims []*token.Claim
 			og.Spec.Objects = map[string]GrantObject{}
 			for _, x := range objectsIn(o, ns) {
 				k := keyOf(x)
-				if len(owners[k]) > 0 && owners[k][0] != c.app.key() {
+				if w, ok := winner[k]; ok && w != c.app.key() {
 					continue
 				}
-				og.Spec.Objects[k] = GrantObject{Rendered: x.Rendered, Changed: x.Changed}
+				og.Spec.Objects[k] = GrantObject{Rendered: x.Rendered, Changed: x.Changed, App: c.app.key()}
 			}
 			others = append(others, carryCand{og, o.Clearance.DecidedAt, o.IssuedAt})
 		}
@@ -189,15 +302,17 @@ func (a *Agent) mergeNamespace(ns string, apps []appClass, claims []*token.Claim
 	g.Spec.Carried = carriedTrees(g, others, now)
 
 	if len(g.Spec.Objects) > maxGrantObjects {
-		return mergeOutcome{problem: "size", objects: []token.Object{{APIVersion: "clearance.hangar.io/v1", Kind: "ClearanceGrant", Namespace: ns, Name: MergedGrantName}},
-			detail: fmt.Sprintf("the merged grant of %s would list %d objects, over the limit of %d: refused, the last good grant stays", ns, len(g.Spec.Objects), maxGrantObjects)}
+		return keep(append(problems, mergeProblem{kind: "size", keys: []string{ns},
+			objects: []token.Object{{APIVersion: "clearance.hangar.io/v1", Kind: "ClearanceGrant", Namespace: ns, Name: MergedGrantName}},
+			detail:  fmt.Sprintf("the merged grant of %s would list %d objects, over the limit of %d: refused, the held grant stays (only what is live)", ns, len(g.Spec.Objects), maxGrantObjects)})...)
 	}
 	raw, _ := json.Marshal(g.Spec)
 	if len(raw) > a.cfg.OptIn.MaxGrantBytes {
-		return mergeOutcome{problem: "size", objects: []token.Object{{APIVersion: "clearance.hangar.io/v1", Kind: "ClearanceGrant", Namespace: ns, Name: MergedGrantName}},
-			detail: fmt.Sprintf("the merged grant of %s would be %d bytes, over the limit of %d: refused, the last good grant stays", ns, len(raw), a.cfg.OptIn.MaxGrantBytes)}
+		return keep(append(problems, mergeProblem{kind: "size", keys: []string{ns},
+			objects: []token.Object{{APIVersion: "clearance.hangar.io/v1", Kind: "ClearanceGrant", Namespace: ns, Name: MergedGrantName}},
+			detail:  fmt.Sprintf("the merged grant of %s would be %d bytes, over the limit of %d: refused, the held grant stays (only what is live)", ns, len(raw), a.cfg.OptIn.MaxGrantBytes)})...)
 	}
-	return mergeOutcome{grant: &g}
+	return mergeOutcome{grant: &g, problems: problems}
 }
 
 func contains(l []string, s string) bool {
@@ -212,47 +327,44 @@ func contains(l []string, s string) bool {
 // applyMerged replaces, in the per-change grants the feed calls for, the namespaces a switched Application targets:
 //
 //   - a merged grant to write: it replaces every per-change grant of the namespace (one active grant per namespace);
-//   - a conflict or a grant too big, with a merged grant already in the cluster: that one stays exactly as it is (the
-//     last good), and the per-change grants of the namespace stay out;
-//   - a namespace labelled protected whose merged grant nothing replaces: the merged grant stays;
-//   - no merged grant, written or held (no clearance yet, or the first merge is refused): the namespace keeps the
-//     per-change grants it had. Never an empty or partial merged grant.
+//   - a refusal or nothing to merge, with a merged grant already in the cluster: that grant stays, intersected with the
+//     feed (liveHeld), and the per-change grants of the namespace stay out of the way;
+//   - a namespace labelled protected whose merged grant nothing else replaces: the grant stays, intersected with the
+//     feed, even when it is empty: it admits nothing and the label stays;
+//   - no merged grant, written or held: the namespace keeps the per-change grants it had.
 //
-// It also says which problems exist, so they are reported once each.
-func (a *Agent) applyMerged(want []Grant, have []Grant, v *optView, claims []*token.Claims, labelled map[string]map[string]string) (out []Grant, problems map[string]mergeOutcome) {
-	problems = map[string]mergeOutcome{}
+// It also returns the problems, so they are reported.
+func (a *Agent) applyMerged(want []Grant, have []Grant, v *optView, claims []*token.Claims, labelled map[string]map[string]string) (out []Grant, problems map[string][]mergeProblem) {
+	problems = map[string][]mergeProblem{}
 	held := map[string]Grant{}
 	for _, g := range have {
 		if g.Name == MergedGrantName {
 			held[g.Namespace] = g
 		}
 	}
-	replace := map[string]*Grant{} // namespace -> its grant (nil: the per-change grants stay)
+	replace := map[string]*Grant{} // namespace -> its grant
 	for ns, apps := range v.merged {
-		res := a.mergeNamespace(ns, apps, claims)
-		switch {
-		case res.grant != nil:
+		var h *Grant
+		if x, ok := held[ns]; ok {
+			h = &x
+		}
+		res := a.mergeNamespace(ns, apps, claims, h)
+		if len(res.problems) > 0 {
+			problems[ns] = res.problems
+		}
+		if res.grant != nil {
 			replace[ns] = res.grant
-		case res.problem != "":
-			problems[ns] = res
-			if h, ok := held[ns]; ok {
-				hh := h
-				replace[ns] = &hh
-			}
-		default: // no clearance for any of them yet
-			if h, ok := held[ns]; ok {
-				hh := h // the last good grant stays until it expires; the per-change grants stay out
-				replace[ns] = &hh
-			}
 		}
 	}
-	// A namespace the agent labelled is never left without its merged grant while the label is on: the grant stays as
-	// it is (it expires on its own clock) until the label is off, which is the order of every removal. Without this, the
-	// feed's per-change grants would take the namespace over while it is still labelled.
+	// A namespace the agent labelled is never left without its merged grant while the label is on: the grant stays
+	// (what is live of it) until the label is off, which is the order of every removal. Likewise one an operator labelled.
 	for ns, h := range held {
-		if _, ok := replace[ns]; !ok && labelled[ns][LabelProtected] == "true" && labelled[ns][LabelProtectedBy] == ProtectedByOptIn {
-			hh := h
-			replace[ns] = &hh
+		if _, ok := replace[ns]; ok {
+			continue
+		}
+		if labelled[ns][LabelProtected] == "true" && labelled[ns][LabelProtectedBy] == ProtectedByOptIn {
+			g := a.liveHeld(h, ns, claims)
+			replace[ns] = &g
 		}
 	}
 	wanted := map[string]bool{} // namespaces the per-change grants still call for
@@ -263,11 +375,10 @@ func (a *Agent) applyMerged(want []Grant, have []Grant, v *optView, claims []*to
 		wanted[g.Namespace] = true
 		out = append(out, g)
 	}
-	// Likewise a namespace an operator labelled: a merged grant nothing else replaces stays.
 	for ns, h := range held {
 		if _, ok := replace[ns]; !ok && !wanted[ns] && labelled[ns][LabelProtected] == "true" {
-			hh := h
-			replace[ns] = &hh
+			g := a.liveHeld(h, ns, claims)
+			replace[ns] = &g
 		}
 	}
 	names := make([]string, 0, len(replace))
@@ -282,29 +393,28 @@ func (a *Agent) applyMerged(want []Grant, have []Grant, v *optView, claims []*to
 	return out, problems
 }
 
-// reportMergeProblems posts, once each, the conflicts and the grants refused for size, through the exception path
-// (deploy.exception, out-of-band), and forgets a problem that has gone, so that it is reported again if it comes back.
-func (a *Agent) reportMergeProblems(ctx context.Context, problems map[string]mergeOutcome, v *optView) error {
+// reportMergeProblems tells the core, through the exception path (deploy.exception, out-of-band), about each conflict
+// and overflow: once when it starts, again every 24 hours while it lasts (saying for how long), and once when it
+// clears. What it needs to know (since when, and when last) is in the state ConfigMap, so a restart neither forgets a
+// problem nor reports it again at once.
+func (a *Agent) reportMergeProblems(ctx context.Context, problems map[string][]mergeProblem, v *optView) error {
 	var errs []error
-	current := map[string]bool{}
-	names := make([]string, 0, len(problems))
-	for ns := range problems {
-		names = append(names, ns)
+	type cur struct {
+		fp string
+		ns string
+		p  mergeProblem
 	}
-	sort.Strings(names)
-	for _, ns := range names {
-		p := problems[ns]
-		sum := sha256.Sum256([]byte(p.detail))
-		fp := "merge|" + ns + "|" + p.problem + "|" + hex.EncodeToString(sum[:8])
-		current[fp] = true
-		a.mu.Lock()
-		_, done := a.st.Exceptions[fp]
-		a.mu.Unlock()
-		if done {
-			continue
+	var now []cur
+	for ns, ps := range problems {
+		for _, p := range ps {
+			sum := sha256.Sum256([]byte(p.kind + "|" + strings.Join(p.keys, ",") + "|" + strings.Join(p.apps, ",")))
+			now = append(now, cur{"merge|" + ns + "|" + p.kind + "|" + hex.EncodeToString(sum[:8]), ns, p})
 		}
-		env := a.cfg.Environment
-		app := ns
+	}
+	sort.Slice(now, func(i, j int) bool { return now[i].fp < now[j].fp })
+	have := map[string]bool{}
+	post := func(ns, result string, p mergeProblem, detail string) error {
+		env, app := a.cfg.Environment, ns
 		if len(v.merged[ns]) > 0 {
 			env, app = v.merged[ns][0].env, v.merged[ns][0].gateApp
 		}
@@ -312,10 +422,9 @@ func (a *Agent) reportMergeProblems(ctx context.Context, problems map[string]mer
 		for _, o := range p.objects {
 			objs = append(objs, map[string]any{"apiVersion": o.APIVersion, "kind": o.Kind, "namespace": o.Namespace, "name": o.Name})
 		}
-		result := "two protected Applications claim one object"
 		principal := "Applications " + strings.Join(p.apps, ", ")
-		if p.problem == "size" {
-			result, principal = "merged grant over the size limit", "argocd-agent (merged grant)"
+		if p.kind == "size" {
+			principal = "argocd-agent (merged grant)"
 		}
 		req := &client.RecordRequest{Kind: "deploy.exception", Record: client.ProviderEvent{
 			Principal:   client.String(truncate(principal, 500)),
@@ -325,32 +434,82 @@ func (a *Agent) reportMergeProblems(ctx context.Context, problems map[string]mer
 			Destination: map[string]any{"cluster": a.cfg.Cluster, "environment": env, "namespace": ns},
 			Source:      map[string]any{"provider": a.Provider()},
 			Exception: map[string]any{"kind": "out-of-band", "objects": objs, "detected_at": a.now().UTC().Format(time.RFC3339),
-				"detail": truncate(p.detail, 1000)}}}
+				"detail": truncate(detail, 1000)}}}
 		ref, err := a.core.Record(ctx, req)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("posting deploy.exception for the merged grant of %s: %w", ns, err))
-			continue
+			return fmt.Errorf("posting deploy.exception for the merged grant of %s: %w", ns, err)
+		}
+		a.log.Warn("merged grant problem reported", "namespace", ns, "problem", p.kind, "result", result, "seq", ref.Seq)
+		return nil
+	}
+	title := func(p mergeProblem) string {
+		if p.kind == "size" {
+			return "merged grant over the size limit"
+		}
+		return "two protected Applications claim one object"
+	}
+	for _, c := range now {
+		have[c.fp] = true
+		a.mu.Lock()
+		st, known := a.st.Problems[c.fp]
+		a.mu.Unlock()
+		stamp := a.now().UTC().Format(time.RFC3339)
+		switch {
+		case !known:
+			if err := post(c.ns, title(c.p), c.p, c.p.detail); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			st = ProblemState{Namespace: c.ns, Kind: c.p.kind, Since: stamp, Last: stamp, Detail: truncate(c.p.detail, 300)}
+		default:
+			last, _ := time.Parse(time.RFC3339, st.Last)
+			if a.now().Sub(last) < problemRepeat {
+				continue
+			}
+			since, _ := time.Parse(time.RFC3339, st.Since)
+			lasted := a.now().Sub(since).Round(time.Minute)
+			if err := post(c.ns, title(c.p)+" (still unresolved, "+lasted.String()+")", c.p, fmt.Sprintf("has lasted %s since %s: %s", lasted, st.Since, c.p.detail)); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			st.Last = stamp
 		}
 		a.mu.Lock()
-		a.st.Exceptions[fp] = a.now().UTC().Format(time.RFC3339)
-		err = a.saveLocked(ctx)
+		a.st.Problems[c.fp] = st
+		err := a.saveLocked(ctx)
 		a.mu.Unlock()
 		if err != nil {
 			errs = append(errs, err)
 		}
-		a.log.Warn("merged grant problem reported", "namespace", ns, "problem", p.problem, "seq", ref.Seq)
 	}
+	// Problems that have gone: once each.
 	a.mu.Lock()
-	changed := false
-	for fp := range a.st.Exceptions {
-		if strings.HasPrefix(fp, "merge|") && !current[fp] {
-			delete(a.st.Exceptions, fp)
-			changed = true
+	var gone []string
+	for fp := range a.st.Problems {
+		if !have[fp] {
+			gone = append(gone, fp)
 		}
 	}
-	if changed {
-		errs = append(errs, a.saveLocked(ctx))
-	}
 	a.mu.Unlock()
+	sort.Strings(gone)
+	for _, fp := range gone {
+		a.mu.Lock()
+		st := a.st.Problems[fp]
+		a.mu.Unlock()
+		since, _ := time.Parse(time.RFC3339, st.Since)
+		lasted := a.now().Sub(since).Round(time.Minute)
+		p := mergeProblem{kind: st.Kind, apps: nil, objects: []token.Object{{APIVersion: "clearance.hangar.io/v1", Kind: "ClearanceGrant", Namespace: st.Namespace, Name: MergedGrantName}}}
+		if err := post(st.Namespace, "merged grant "+st.Kind+" cleared after "+lasted.String(), p, "cleared; it began "+st.Since+": "+st.Detail); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		a.mu.Lock()
+		delete(a.st.Problems, fp)
+		err := a.saveLocked(ctx)
+		a.mu.Unlock()
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
 	return errors.Join(errs...)
 }

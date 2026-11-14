@@ -2818,6 +2818,9 @@
           "reported_at": {
             "type": "string"
           },
+          "seq": {
+            "type": "integer"
+          },
           "stale": {
             "type": "boolean"
           }
@@ -2829,6 +2832,7 @@
           "digest",
           "pairs",
           "reported_at",
+          "seq",
           "stale"
         ],
         "type": "object"
@@ -2844,6 +2848,9 @@
           },
           "reason": {
             "type": "string"
+          },
+          "seq": {
+            "type": "integer"
           }
         },
         "required": [
@@ -2867,6 +2874,9 @@
           },
           "digest": {
             "type": "string"
+          },
+          "held_seq": {
+            "type": "integer"
           },
           "pairs": {
             "type": "integer"
@@ -2895,6 +2905,7 @@
           "changed",
           "cluster",
           "digest",
+          "held_seq",
           "pairs",
           "removed",
           "seq",
@@ -6692,6 +6703,16 @@
             },
             "description": "no such resource"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the request conflicts with what is recorded"
+          },
           "413": {
             "content": {
               "application/json": {
@@ -6701,6 +6722,16 @@
               }
             },
             "description": "the body is over the route's cap"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": ""
           },
           "503": {
             "content": {

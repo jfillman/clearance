@@ -51,6 +51,7 @@ spec:
             - --optin
             - --optin-plugin-name={{ .Values.optIn.pluginName }}
             - --optin-deny={{ join "," .Values.optIn.denyApplications }}
+            - --optin-namespaces={{ join "," .Values.protectedNamespaces }}
             - --optin-interval={{ .Values.optIn.interval }}
             - --optin-report-every={{ .Values.optIn.reportEvery }}
             - --optin-max-grant-bytes={{ .Values.optIn.maxGrantBytes | int64 }}

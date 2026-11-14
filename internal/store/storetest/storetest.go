@@ -644,6 +644,17 @@ func testProtection(t *testing.T, open Opener) {
 	if got[0].Digest != "d3" || string(got[0].Doc) != "[]" || !got[0].ChangedAt.After(first.ChangedAt) || got[1].Digest != "d2" {
 		t.Fatalf("replace is per cluster: %+v", got)
 	}
+	// The sequence number and the recording window are the caller's and are kept as given.
+	ws := time.Now().UTC().Truncate(time.Second)
+	withSeq := set("a", "d3", `[]`)
+	withSeq.Seq, withSeq.WindowStart, withSeq.WindowCount = 9, ws, 4
+	if err := put(withSeq); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.Protections(bg)
+	if got[0].Seq != 9 || got[0].WindowCount != 4 || !got[0].WindowStart.Equal(ws) {
+		t.Fatalf("seq and window: %+v", got[0])
+	}
 	if err := s.Atomic(bg, func(tx store.Tx) error {
 		if err := tx.PutProtection(bg, set("c", "d4", `[]`)); err != nil {
 			return err

@@ -19,6 +19,8 @@ type Core interface {
 	// ReportProtection reports the cluster's protected app/environment pairs (PUT /v1/protection/{cluster}); only the
 	// opt-in (Config.OptIn) calls it.
 	ReportProtection(ctx context.Context, cluster string, req *client.ProtectionRequest) (*client.ProtectionResult, error)
+	// ProtectionSeq is the sequence number of the last report the core took for the cluster (0: none).
+	ProtectionSeq(ctx context.Context, cluster string) (int64, error)
 }
 
 // Window is an open break-glass window (GET /v1/breakglass).
@@ -133,6 +135,8 @@ type Agent struct {
 	optS  *optState  // the opt-in's memory (the opt-in loop's own)
 	repMu sync.Mutex // rep
 	rep   report     // the last set of protected pairs the core took
+	// explained: the opt-outs the core has been told about (memory; a restart tells it once more, inside its hourly bound)
+	explained map[string]bool
 
 	protMu   sync.Mutex // the protected-namespace cache of handleApp
 	prot     map[string]map[string]string
@@ -164,6 +168,29 @@ type State struct {
 	Seq        int64             `json:"seq"`
 	Outcomes   map[string]string `json:"outcomes"`
 	Exceptions map[string]string `json:"exceptions"`
+	// The opt-in's (G-ARGO-10c) memory that must survive a restart: when each Application was last written (the
+	// three-writes-in-ten-minutes bound), the merged-grant problems being reported and since when, the pairs the core
+	// last took and the sequence number of the last report.
+	Writes    map[string][]string     `json:"writes,omitempty"`
+	Problems  map[string]ProblemState `json:"problems,omitempty"`
+	Reported  []Pair                  `json:"reported,omitempty"`
+	ReportSeq int64                   `json:"reportSeq,omitempty"`
+}
+
+// Pair is an app and environment.
+type Pair struct {
+	App string `json:"app"`
+	Env string `json:"env"`
+}
+
+// ProblemState is one merged-grant problem (a conflict, an overflow) that is being reported: since when, and when it
+// was last reported.
+type ProblemState struct {
+	Namespace string `json:"namespace"`
+	Kind      string `json:"kind"`
+	Since     string `json:"since"`
+	Last      string `json:"last"`
+	Detail    string `json:"detail"`
 }
 
 const stateKey = "state.json"
@@ -187,6 +214,12 @@ func (a *Agent) Load(ctx context.Context) error {
 	}
 	if a.st.Exceptions == nil {
 		a.st.Exceptions = map[string]string{}
+	}
+	if a.st.Writes == nil {
+		a.st.Writes = map[string][]string{}
+	}
+	if a.st.Problems == nil {
+		a.st.Problems = map[string]ProblemState{}
 	}
 	return nil
 }

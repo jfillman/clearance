@@ -360,6 +360,23 @@ func (a *Agent) reconcile(ctx context.Context, want, have []Grant) error {
 		if failed[w.Namespace] || !w.Active() || haveBy[gkey(w)].Active() {
 			continue
 		}
+		// A flip to or from a merged grant (the opt-in) activates the new grant first, then deactivates the old: for a
+		// moment both are active, and the policy needs an object to pass both, so only what BOTH list is admitted (the
+		// merged grant lists every object of its Applications' clearances, so what ran under the old keeps running)
+		// and never more than either lists. A flip between per-change grants is as it was: out, then in, with the gap the
+		// policy refuses (Argo CD retries).
+		overlap := w.Labels[LabelMerged] == "true"
+		for _, h := range have {
+			if h.Namespace == w.Namespace && h.Active() && h.Labels[LabelMerged] == "true" {
+				overlap = true
+			}
+		}
+		if overlap {
+			if !step("activating", w, a.kube.UpdateGrant(ctx, w, haveBy[gkey(w)])) {
+				continue
+			}
+			a.log.Info("grant activated", "grant", gkey(w))
+		}
 		for _, h := range have {
 			if h.Namespace != w.Namespace || !h.Active() || gkey(h) == gkey(w) {
 				continue
@@ -380,7 +397,7 @@ func (a *Agent) reconcile(ctx context.Context, want, have []Grant) error {
 				}
 			}
 		}
-		if failed[w.Namespace] {
+		if overlap || failed[w.Namespace] {
 			continue
 		}
 		if step("activating", w, a.kube.UpdateGrant(ctx, w, haveBy[gkey(w)])) {

@@ -465,6 +465,9 @@ type ProtectedPair struct {
 type ProtectionRequest struct {
 	Pairs  []ProtectedPair `json:"pairs"`
 	Reason string          `json:"reason,omitempty"`
+	// Seq is the report's number, which only goes up per cluster: the core refuses a lower or equal one that carries a
+	// different set (an old or replayed report cannot replace a newer one). 0: not numbered.
+	Seq int64 `json:"seq,omitempty"`
 }
 
 // ProtectionResult is what a report did: the digest of the set the core now holds, whether it differs from the last
@@ -476,6 +479,7 @@ type ProtectionResult struct {
 	Pairs         int             `json:"pairs"`
 	Changed       bool            `json:"changed"`
 	Seq           *int64          `json:"seq"`
+	HeldSeq       int64           `json:"held_seq"`
 	Added         []ProtectedPair `json:"added"`
 	Removed       []ProtectedPair `json:"removed"`
 	StaticRemoved []ProtectedPair `json:"static_removed"`

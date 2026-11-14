@@ -155,7 +155,7 @@ func Stored(r map[string]any) map[string]any
   (sha256 of its canonical JSON, sorted by app then env) and `result` says how many pairs, the digest it replaced, the pairs added
   and removed (a removed pair that `CLEARANCE_PROTECTED_ENVIRONMENTS` still protects is marked) and the agent's reason, which is
   claimed. Verified: `provider`, `ts`, `caller`, `tool`, `decision`, `target`, `args_sha256` and `result`, as for `targets.load`. It
-  records that an agent on that cluster said these pairs are protected, and that a pair was removed, never that the Application
+  also writes `protection.refused` (a report whose number is not above the held one and whose set differs: nothing applied), and a report that carries a reason is recorded even when its set did not change (`(unchanged)` in the result). It records that an agent on that cluster said these pairs are protected, and that a pair was removed, never that the Application
   is what the annotation says.
 - Errors: `ErrEnvelopeField` (an event set a reserved field), `ErrInvalid` (a value outside the schema),
   `ErrNotStorable` (a value Postgres jsonb would change).

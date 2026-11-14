@@ -40,6 +40,8 @@ type Kube interface {
 	// SetNamespaceProtected puts the protected label (with the agent's marker) on a namespace, or takes both off.
 	// One patch either way. Taking it off is refused (ErrNotOurs) when the namespace carries no marker.
 	SetNamespaceProtected(ctx context.Context, namespace string, protected bool) error
+	// GetNamespaceLabels reads one namespace's labels (ErrNotFound when it does not exist yet).
+	GetNamespaceLabels(ctx context.Context, namespace string) (map[string]string, error)
 	// ClusterScopes is the cluster's discovery: kind -> cluster-scoped, from every API resource it serves (a kind
 	// served in two groups with different scopes is left out: ambiguous).
 	ClusterScopes(ctx context.Context) (map[string]bool, error)

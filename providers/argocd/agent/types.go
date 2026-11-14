@@ -61,6 +61,9 @@ const ProviderName = "argocd-agent"
 type GrantObject struct {
 	Rendered string `json:"rendered"`
 	Changed  bool   `json:"changed"`
+	// App is the Application (<namespace>/<name>) that owns the object in a merged grant: the incumbent when two
+	// Applications claim one key. Absent on per-change grants.
+	App string `json:"app,omitempty"`
 }
 
 // GrantKey is how a grant keys an object: <group>/<kind>/<name> (the admission policy builds the same key from the
@@ -157,6 +160,8 @@ type Application struct {
 	UID               string
 	Project           string
 	DestNS            string
+	DestServer        string // spec.destination.server
+	DestName          string // spec.destination.name
 	SyncState         string
 	Health            string
 	Revisions         []string // status.sync.revisions (or revision)

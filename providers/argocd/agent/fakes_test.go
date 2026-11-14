@@ -64,13 +64,19 @@ type fakeKube struct {
 	failApp    map[string]error // UpdateApplicationSource of these Applications fails
 	failNS     map[string]error // SetNamespaceProtected of these namespaces fails
 	listAppErr error
+	nsReadErr  map[string]error // GetNamespaceLabels of these namespaces fails
+	reads      map[string]int
+	strict     bool
+	everActive map[string]bool
+	// live: the key=hash pairs of namespace ns that the verified feed lists now (nil: not checked)
+	live func(ns string) map[string]bool
 }
 
 func newKube(t *testing.T) *fakeKube {
 	return &fakeKube{t: t, ns: map[string]map[string]string{}, grants: map[string]agent.Grant{},
 		verbs: map[string]int{}, objs: map[string][]agent.ObjectDetail{}, data: map[string]map[string]string{},
 		appsets: map[string]agent.AppSet{}, scopes: map[string]bool{"Namespace": true, "Deployment": false}, failApp: map[string]error{},
-		failNS: map[string]error{}}
+		failNS: map[string]error{}, nsReadErr: map[string]error{}, reads: map[string]int{}, everActive: map[string]bool{}}
 }
 
 func (k *fakeKube) protect(ns string, labels map[string]string) {
@@ -101,11 +107,20 @@ func (k *fakeKube) checkActive() {
 		}
 	}
 	for ns, n := range active {
-		if n > 1 {
+		// Two active grants are allowed in one case: a flip to or from a merged grant activates the new one first, and
+		// the policy then needs an object to pass both (never more than either lists).
+		merged := 0
+		for _, g := range k.grants {
+			if g.Namespace == ns && g.Active() && g.Labels[agent.LabelMerged] == "true" {
+				merged++
+			}
+		}
+		if n > 2 || (n == 2 && merged == 0) {
 			k.t.Errorf("namespace %s holds %d active grants", ns, n)
 		}
 	}
 	k.checkLabelled("a grant write")
+	k.checkFeed("a grant write")
 }
 
 func (k *fakeKube) ProtectedNamespaces(context.Context) (map[string]map[string]string, error) {
@@ -182,6 +197,7 @@ func (k *fakeKube) SetGrantValid(_ context.Context, ns, name string, v bool, _ s
 	g.Valid = &v
 	k.grants[ns+"/"+name] = g
 	k.checkLabelled("a status write")
+	k.checkFeed("a status write")
 	return nil
 }
 func (k *fakeKube) DeleteGrant(_ context.Context, ns, name string) error {
@@ -192,6 +208,7 @@ func (k *fakeKube) DeleteGrant(_ context.Context, ns, name string) error {
 	delete(k.grants, ns+"/"+name)
 	k.log = append(k.log, "delete "+ns+"/"+name)
 	k.checkLabelled("a grant delete")
+	k.checkFeed("a grant delete")
 	return nil
 }
 func (k *fakeKube) ListApplications(context.Context) ([]agent.Application, string, error) {
@@ -252,6 +269,16 @@ type fakeCore struct {
 	held       []client.ProtectedPair
 	static     map[string]bool // app/env pairs CLEARANCE_PROTECTED_ENVIRONMENTS protects (named in static_removed)
 	reportDown bool
+	heldSeq    int64 // the number of the last report the "core" took
+}
+
+func (c *fakeCore) ProtectionSeq(context.Context, string) (int64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.reportDown || c.down {
+		return 0, errors.New("core unreachable")
+	}
+	return c.heldSeq, nil
 }
 
 func (c *fakeCore) ReportProtection(_ context.Context, cluster string, req *client.ProtectionRequest) (*client.ProtectionResult, error) {
@@ -273,8 +300,14 @@ func (c *fakeCore) ReportProtection(_ context.Context, cluster string, req *clie
 	if len(req.Reason) > 500 {
 		c.t.Errorf("reason over the core's 500 bytes: %d", len(req.Reason))
 	}
+	if req.Seq <= c.heldSeq && req.Seq != 0 && c.held != nil && !slices.Equal(c.held, req.Pairs) {
+		return nil, &client.APIError{Op: "reportProtection", Status: 409, Message: "not above the held report"}
+	}
+	if req.Seq > c.heldSeq {
+		c.heldSeq = req.Seq
+	}
 	c.reports = append(c.reports, *req)
-	res := &client.ProtectionResult{Cluster: cluster, Pairs: len(req.Pairs)}
+	res := &client.ProtectionResult{Cluster: cluster, Pairs: len(req.Pairs), HeldSeq: c.heldSeq}
 	for _, n := range req.Pairs {
 		if !slices.Contains(c.held, n) {
 			res.Added, res.Changed = append(res.Added, n), true
@@ -359,6 +392,8 @@ type fakeFeeds struct {
 	claims  []token.Claims
 	// raw overrides the body (a tampered or odd feed).
 	raw []byte
+	// published: the claims of the feed as last signed: what the agent has verified and may grant from.
+	published []token.Claims
 }
 
 func newFeeds(t *testing.T, c *clock) *fakeFeeds {
@@ -392,6 +427,7 @@ func (f *fakeFeeds) publish() []byte {
 
 func (f *fakeFeeds) publishAt(epoch string, seq int64, cluster string, s *token.KeySigner) []byte {
 	now := f.clock.now()
+	f.published = append([]token.Claims(nil), f.claims...)
 	feed := token.Feed{Type: token.FeedType, Issuer: "clearance", Cluster: cluster, Epoch: epoch, Seq: seq,
 		IssuedAt: now.Unix(), Expires: now.Add(5 * time.Minute).Unix(), RecordsSeq: 10}
 	var toks []map[string]any

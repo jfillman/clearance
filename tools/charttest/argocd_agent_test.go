@@ -150,7 +150,7 @@ func TestTheOptInsRBACIsTheNarrowestItNeeds(t *testing.T) {
 		as = append(as, fmt.Sprint(a))
 	}
 	for _, want := range []string{"--optin", "--optin-plugin-name=clearance", "--optin-deny=clearance,clearance-*,*-clearance",
-		"--optin-interval=30s", "--optin-report-every=5m", "--optin-max-grant-bytes=1500000"} {
+		"--optin-namespaces=app-web-prod,app-api-prod", "--optin-interval=30s", "--optin-report-every=5m", "--optin-max-grant-bytes=1500000"} {
 		if !slices.Contains(as, want) {
 			t.Errorf("args %v lack %s", as, want)
 		}

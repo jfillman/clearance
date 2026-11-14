@@ -74,6 +74,7 @@ func run() error {
 		optIn     = fs.Bool("optin", envBool("CLEARANCE_OPTIN"), "the annotation opt-in (G-ARGO-10c): switch Applications carrying clearance.hangar.io/protect: \"true\" to the plugin, merge their grants per namespace, label the namespaces and report the protected pairs. Off: the agent does what it did before")
 		optPlugin = fs.String("optin-plugin-name", env("CLEARANCE_OPTIN_PLUGIN_NAME", "clearance"), "the plugin name a switched Application gets (the CMP's)")
 		optDeny   = fs.String("optin-deny", env("CLEARANCE_OPTIN_DENY", strings.Join(agent.DefaultDenyApps, ",")), "globs on an Application's name or <namespace>/<name> that are never switched (Clearance's own Applications), comma-separated")
+		optNS     = fs.String("optin-namespaces", env("CLEARANCE_OPTIN_NAMESPACES", ""), "the destination namespaces the opt-in is configured for (globs, comma-separated): the chart's protectedNamespaces; an Application whose destination is not one of them is never switched")
 		optEvery  = fs.Duration("optin-interval", 30*time.Second, "how often the opt-in reconciles the Applications")
 		optReport = fs.Duration("optin-report-every", 5*time.Minute, "how often the protected pairs are reported again unchanged")
 		optBytes  = fs.Int("optin-max-grant-bytes", 1_500_000, "a merged grant over this many bytes is refused and reported")
@@ -113,7 +114,7 @@ func run() error {
 	a, err := agent.New(agent.Config{Cluster: *cluster, Environment: *environ, Issuer: *issuer, Version: version,
 		GrantInterval: *grantEvry, ScanInterval: *scanEvry, ArgoNamespace: *argoNS, Projects: list(*projects),
 		StateNS: *stateNS, RepostOnStart: *repost,
-		OptIn: agent.OptIn{Enabled: *optIn, PluginName: *optPlugin, DenyApps: list(*optDeny), Interval: *optEvery,
+		OptIn: agent.OptIn{Enabled: *optIn, PluginName: *optPlugin, DenyApps: list(*optDeny), Namespaces: list(*optNS), Interval: *optEvery,
 			ReportEvery: *optReport, MaxGrantBytes: *optBytes},
 		Wait: agent.WaitPin{Image: *waitImage, URL: *waitURL, HostAlias: *waitAlias}},
 		kube, &agent.HTTPFeeds{Base: *apiURL, Token: tok},

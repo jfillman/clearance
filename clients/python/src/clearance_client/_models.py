@@ -1723,6 +1723,7 @@ class ProtectionCluster(Model):
         Field("digest", "digest", ("str",), True),
         Field("pairs", "pairs", ("list", ("ref", "GateProtectedPair")), True),
         Field("reported_at", "reported_at", ("str",), True),
+        Field("seq", "seq", ("int",), True),
         Field("stale", "stale", ("bool",), True),
     )
 
@@ -1732,6 +1733,7 @@ class ProtectionCluster(Model):
     digest: str
     pairs: list[GateProtectedPair]
     reported_at: str
+    seq: int
     stale: bool
 
 
@@ -1743,10 +1745,12 @@ class ProtectionRequest(Model):
     _FIELDS: ClassVar[tuple[Field, ...]] = (
         Field("pairs", "pairs", ("list", ("ref", "GateProtectedPair")), True),
         Field("reason", "reason", ("str",), False),
+        Field("seq", "seq", ("int",), False),
     )
 
     pairs: list[GateProtectedPair]
     reason: str | None = None
+    seq: int | None = None
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -1759,6 +1763,7 @@ class ProtectionResult(Model):
         Field("changed", "changed", ("bool",), True),
         Field("cluster", "cluster", ("str",), True),
         Field("digest", "digest", ("str",), True),
+        Field("held_seq", "held_seq", ("int",), True),
         Field("pairs", "pairs", ("int",), True),
         Field("removed", "removed", ("list", ("ref", "GateProtectedPair")), True),
         Field("seq", "seq", ("nullable", ("int",)), True),
@@ -1769,6 +1774,7 @@ class ProtectionResult(Model):
     changed: bool
     cluster: str
     digest: str
+    held_seq: int
     pairs: int
     removed: list[GateProtectedPair]
     seq: int | None

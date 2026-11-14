@@ -1901,7 +1901,14 @@ and the merged grant goes. An Application without the annotation is read and nev
 | the CMP sidecar | as for 10b (the plugin, its credential and egress); the opt-in does not change it |
 
 The agent's flags (each also an environment variable): `--optin` (`CLEARANCE_OPTIN`), `--optin-plugin-name`, `--optin-deny`,
-`--optin-interval` (30 s), `--optin-report-every` (5 min), `--optin-max-grant-bytes` (1,500,000).
+`--optin-namespaces` (the chart's `protectedNamespaces`), `--optin-interval` (30 s), `--optin-report-every` (5 min),
+`--optin-max-grant-bytes` (1,500,000).
+
+**What persists across an agent restart** (the state ConfigMap, `state.json`, beside the feed's epoch and seq): the time of each
+Application write in the last ten minutes (the write bound); the merged-grant problems being reported and since when; the pairs the core
+last took and the number of the last report. Everything else is read again from the cluster: the incumbents are in the merged grants, the
+label marker is on the namespace, the original sources are in the Application. In memory only, and so lost: the failed-write backoff, the
+discovery answer, the "warned once" log lines, and which opt-outs the core was told about (a restart tells it once more).
 
 #### Who can set the annotation
 
@@ -1951,18 +1958,45 @@ The first git source carries the plugin because Argo CD hands the sidecar a chec
 cache on that source's revision. A chart from an HTTP or OCI repository cannot carry it: an Application whose every source is one
 is **not switched** (status `blocked`). `clusterScopedKinds` is the 10b audit made live: the agent reads the cluster's discovery
 (`/api`, `/apis`; a kind served with two scopes is left out) every ten minutes and passes the kinds the plugin's built-in rules
-(`internal/argosrc`) scope wrongly; nothing is switched until discovery has been read once, and a later failure keeps the last answer.
+(`internal/argosrc`) scope wrongly; nothing is switched until discovery has been read once, and a later failure keeps the last answer. **A change in the cluster's discovered
+cluster-scoped kinds (a new CRD) changes the `clusterScopedKinds` parameter of every switched Application: the agent rewrites each (one
+patch each), and Argo CD re-renders each.**
+
+**A 422 on the patch.** The write is a JSON patch guarded by a `test` of the resourceVersion. kube-apiserver answers a failed `test`, and an
+op on a path that is gone, with the same 422 (`reason: Invalid`, `message: "the server rejected our request due to an error in our request"`,
+no `details`: measured against kube-apiserver 1.36.2 with envtest, `providers/argocd/crd`'s harness): the agent reads that as "the object
+changed since it was read" and starts again from a fresh read. Any other 422 (a schema or validation refusal names its `causes`) is reported
+as invalid and not retried as a conflict.
 
 **Restoring.** The original sources are in the `sources` parameter, and the original shape is in the switched annotation, so
 an Application is put back with no other memory: `source` back to the original object, `sources` removed (or the reverse), the
 annotation removed, in one patch. The test compares the restored Application with the original object by value.
 
 **What is never switched** (status `blocked`, the Application untouched, the reason in the state ConfigMap's `optin.json` and the
-log): a source that already uses a plugin; an Application already on the plugin that the agent did not switch (no marker: the Airframe
-parameters of G-ARGO-4); no destination namespace; an app, environment or cluster name that is not a DNS label (the plugin
+log): a source that already uses a plugin; an Application already on the plugin that the agent did not switch (see "The marker has two
+halves" below); an Application outside the agent's `--projects` (never read into the opt-in at all); an Application whose
+`spec.destination` is not this cluster (a `server` other than `https://kubernetes.default.svc`, a `name` other than `in-cluster`);
+an Application whose destination namespace is not one the agent is configured for (`--optin-namespaces`, the chart's
+`protectedNamespaces`: it could never be labelled, and its unlabel could never be done); an Application whose `hangar.io/env` label
+disagrees with its namespace's `clearance.hangar.io/environment` label; no destination namespace; an app, environment or cluster name that is not a DNS label (the plugin
 requires one; the pair is left out of the report too, because the core would refuse the whole report); every source a chart from
 a repository; discovery never read; a parent that would fight (below). An Application that is `blocked` is still reported as a
-protected pair: protection is not withheld because the switch was.
+protected pair: protection is not withheld because the switch was (an Application whose environment is ambiguous cannot name a pair
+and is left out of the report).
+
+**The environment an Application is cleared under.** The Application's own `hangar.io/env` label is not trusted alone: whoever can
+label an Application could pick a laxer environment, and its tree would be cleared under that policy and merged into a namespace an
+operator labelled `prod`. For an opted-in Application the destination namespace's `clearance.hangar.io/environment` label decides;
+when only one side has a label that one is used; when neither has one, the agent's `--environment`. If the namespace's labels cannot be
+read (not "not found": a namespace Argo CD has not created yet has none) the environment is **unknown**, never the default: that Application
+is skipped for the pass (no parameter rewritten, no pair removed, no opt-out acted on), and the grant pass changes nothing until it can
+be read, so no claim is dropped. Nothing changes with the opt-in off: outcomes still read the Application's own label.
+
+**The marker has two halves.** The annotation `clearance.hangar.io/switched` can be written by anyone who can annotate; the plugin
+source's own `switched` parameter can only be written by editing the spec. The agent treats an Application as its own, and restores it,
+only when both are present and agree (`source` or `sources`). An Application on the plugin without both (set up by hand, by the
+Airframe parameters of G-ARGO-4, or with a forged annotation) is **left alone** and said so once in the status; otherwise an annotate-only
+user could take a hand-made plugin Application off the plugin.
 
 #### What the parent must say
 
@@ -1989,6 +2023,11 @@ spec:
 `RespectIgnoreDifferences=true` matters: `ignoreDifferences` alone only hides the difference from the comparison, and any sync of
 the parent would still write the original over the switched source. The annotation `clearance.hangar.io/switched` is not in git, so
 Argo CD leaves it alone; the `clearance.hangar.io/protect` annotation, if it is in git, is not ignored and stays what git says.
+
+**This check is a guard against fighting the app-of-apps, not a security boundary.** The tracking annotation and the instance label are
+written by whoever created the child, so a child can name a parent of its own making. The check prefers an owner reference to the labels,
+and refuses a parent that is itself tracked by the child (a cycle), but anyone who can create an Application can still build a parent that
+passes it. What protects a namespace is the grant and admission, not this check.
 
 **The agent does not edit the parent.** An app-of-apps is itself owned by git, so a live edit would be reverted by the Application
 above it or would start the fight the entry exists to prevent, and giving the agent `patch` on every Application and
@@ -2017,25 +2056,46 @@ For each namespace a switched Application targets, `clearance-merged` is built f
   most 16), minus any object another Application claims in its newest clearance;
 - nothing from a clearance of an Application that does not ask, is not switched, is in another environment, or is not in the feed.
 
-`expiresAt` is the latest expiry of the clearances in it; the agent rebuilds the grant every pass and a clearance that has left the feed
-leaves the grant. `subject.tree` is the sha256 of the included `<Application>|<change>|<tree>` lines (the CRD wants 64 digits);
-`clearance.id` is `merged`, `tier` the highest of the included.
+`expiresAt` is the latest expiry of the clearances in it; the agent rebuilds the grant every pass. `subject.tree` is the sha256 of the included
+`<Application>|<change>|<tree>` lines (the CRD wants 64 digits); `clearance.id` is `merged`, `tier` the highest of the included. Each object
+names its owner in `app` (display; admission does not read it).
 
-- **Two Applications, one object.** If two Applications' newest clearances list one object (same group, kind and name in the
-  namespace), whatever the hashes, nothing is merged for that namespace in that pass: **the last good merged grant stays exactly as
-  it is** (never a partial grant, never an empty one), the per-change grants of the namespace stay out of the way, and the agent
-  posts one `deploy.exception` (`out-of-band`, the existing path) naming the objects and the two Applications. It posts it once and
-  posts it again if the conflict goes and comes back. With no last good grant, the namespace keeps the per-change grants it had and
-  is not labelled.
+**The rule: a merged grant never holds an object or a carried tree that is not in the verified feed now.** Whenever a held grant is
+kept (a conflict, a size refusal, nothing to merge) it is kept **intersected with what is live**: an object stays only if a clearance in
+the feed lists it at that hash in the namespace, a carried tree only if its change is in the feed, and then only the objects that change
+lists. A clearance the core revoked, that expired, or whose change went to `exception` leaves the feed, and so leaves the grant on the
+next pass (`TestARevokedSoleClearance…`, `TestAChangeThatLeavesTheFeedForAnyReason…`, `TestARevokeDuringAConflict…`,
+`TestARevokeDuringASizeRefusal…`; the fake cluster fails any test in which an active merged grant holds a hash the published feed does not
+list). When nothing is left, **the grant is written empty, active and valid** (it admits nothing) **and the namespace keeps its label**:
+unlabelling would open the namespace, and a stale grant would admit a revoked hash. The label comes off only through the opt-out. The
+exception scan then reports an object still running at the revoked hash as out-of-band. This is stricter than the per-change path
+(which removes the grant and, in a labelled namespace, leaves the same effect: nothing admitted).
+
+- **Two Applications, one key.** If two Applications' newest clearances list one key (group, kind, name), whatever the hashes, the
+  **incumbent** (the owner of that key in the held grant, read from `app`) **keeps the key at its own newest live hash**, and the newcomer's
+  claim on it is left out; with no incumbent the key is left out for both. **Every other key merges normally**, so a team that claims an
+  object another team owns can neither freeze the namespace nor stop the owner's next deploy (`TestAConflictOnOneKey…`; the first Application
+  cleared to a key owns it). The agent posts a `deploy.exception` (`out-of-band`, the existing path) naming the key and both Applications:
+  **once when the conflict starts, again every 24 hours while it lasts (saying for how long), and once when it clears.** Since when,
+  and when last, are in the agent's state (key `problems`), so a restart neither forgets a problem nor reports it again at once. The
+  incumbent is in the grant itself, so a restart loses nothing; with no held grant (a first merge) there is no incumbent.
 - **Size.** A merged grant over 1,500,000 bytes of JSON (`--optin-max-grant-bytes`; etcd refuses a request near 1.5 MiB) or over the
-  CRD's 2000 `objects` is refused the same way: no write, the last good grant stays, one exception naming the limit. Nothing is
-  dropped to make it fit (leaving out `carried` would refuse the running tree's objects while a rollout is in progress).
+  CRD's 2000 `objects` is refused: the held grant stays, intersected with the feed as above, and the agent reports it the same way
+  (start, every 24 hours, clear). Nothing is dropped to make it fit (leaving out `carried` would refuse the running tree's objects while
+  a rollout is in progress). With no held grant the namespace keeps its per-change grants and is not labelled.
 - **Per-change grants.** A namespace with a switched Application and a merged grant has the merged grant and no per-change
-  grant (the policy reads one active grant). A namespace with no merged grant to write or hold keeps what it had, so a namespace an
-  operator already labelled is not left without a grant while the first clearance is awaited. When the merged grant first
-  appears the existing flip applies (the new grant is written and valid before the old one is deactivated).
-- A labelled namespace is never left without its merged grant: while the agent's label is on, a merged grant nothing else replaces
-  stays (it expires on its own clock).
+  grant. A namespace with no merged grant to write or hold keeps what it had, so a namespace an operator already labelled is not left
+  without a grant while the first clearance is awaited.
+- **The flip to or from a merged grant activates the new grant before it deactivates the old.** For a moment both are active; the policy
+  needs an object to pass *each* active grant (an intersection, not a union), so what is admitted in that moment is what both list, never
+  more than either, and nothing that ran under the old grant is refused, because the merged grant lists every object of its
+  Applications' clearances. Between per-change grants the existing flip (out, then in, with its gap) is unchanged. The test fake fails any
+  test in which a labelled namespace that has had an active grant has none at any step.
+- **What holds, exactly.** While the agent's label is on, a merged grant nothing else replaces stays (intersected with the feed). A grant
+  past its `expiresAt` is marked invalid by the agent and the policy then refuses every write in a labelled namespace: that is the intended
+  failure (fail closed), not a gap. What is **not** promised: that a labelled namespace has an active, valid grant at every instant (the
+  per-change flip has its gap, and an expired grant refuses), only that the agent never removes the grant of, or the active label from, a
+  namespace that is still labelled except by the flip above.
 
 Every Application that writes into a namespace a protected Application targets must be protected too: once the namespace is labelled the
 admission policy refuses an object no grant lists, whoever's Application it is.
@@ -2060,7 +2120,15 @@ nobody's annotation behaves as before, and the variable keeps working as an addi
   cluster of an entry the caller matches. An agent on cluster A that sends cluster B's path gets 403, and so does another provider
   that also lists B (a cluster belongs to the first provider that lists it).
 - **a report is a record**: a changed set is one `protection.report` in the evidence chain (who, the pairs added and removed,
-  the reason as claimed). An unchanged one records nothing and renews the report's time.
+  the reason as claimed). An unchanged one records nothing and renews the report's time, **unless it carries a reason**, which is an event:
+  opting out of one of two Applications that share a pair changes no set and is still recorded, with the other Application named. Deleting
+  an annotated Application is an opt-out too: the pair is left out of the next report with the reason `application deleted (<app>/<env>)`
+  (the pairs the core last took are in the agent's state, so this survives a restart).
+- **old or replayed reports cannot replace newer ones**: each report carries a number that only goes up per cluster (kept in the agent's
+  state; the same set again, the heartbeat, repeats the number). The core refuses a number not above the held one that carries another set
+  (409, recorded once as `protection.refused`; the "once" is memory, so a restart records a repeated refusal once more, inside the bound
+  below). After a state loss the agent starts from the core's last number (`GET /v1/protection` returns it). The core also bounds how often
+  a set change is recorded: 30 per cluster per hour (429 beyond), so a compromised agent cannot flood the ledger. A heartbeat is not a record.
 - **an agent that stops reporting changes nothing**: the last set stays in force. `GET /v1/protection` shows each cluster's
   `reported_at`, its age, and `stale` once it is over 15 minutes old. That is all staleness does; nothing is acted on it, and clearance-api
   and Tower do not show it yet.
@@ -2084,6 +2152,11 @@ The agent keeps nothing the cluster does not: a restart starts from the Applicat
 | a label that cannot come off | the Application is not put back and the grant is not removed | retries |
 | the core cannot be reached | no removal is acted on; additions go on; the core keeps the last set | reports, then removes |
 | the Application list cannot be read | nothing is written, reported or removed; the grant loop leaves the grants as they are | reads again |
+| a destination namespace's labels cannot be read | that Application skipped: no rewrite, no pair removed, no opt-out acted on; the grant pass changes nothing | reads again |
+| a clearance leaves the feed (revoked, expired, exception) | the next grant pass removes its objects from the merged grant; with none left the grant is empty and the label stays | nothing |
+| the Application is deleted | its pair is left out of the next report, reason `application deleted`; the namespace is unlabelled once the core has it, then the grant goes | label off, grant removed |
+| a refused unlabel of a namespace the agent is not configured for | not held against the opt-out: the Application is put back | puts it back |
+| a refused unlabel of a configured namespace | the Application is not put back, the grant stays | retries |
 
 Tests that pin these: `TestEveryCrashPointIsRepairedByTheNextPass`, `TestOptOutCrashPointsLeaveTheNamespaceProtectedOrUnenforcedNeverHalfway`,
 `TestIfTheLabelCannotComeOffTheGrantStays`, `TestAnOptOutWaitsForTheCoreAndAdditionsDoNot`, and the fake cluster, which fails any test in which a
@@ -2092,8 +2165,9 @@ namespace the agent labelled has no active, valid grant at any step.
 #### Not fighting
 
 A pass that finds nothing to change writes nothing (`TestASecondReconcileMakesNoWrites`: no Application, namespace or ConfigMap write and no
-report). A failed write backs off (1, 2, 4, 8, 16 intervals); an Application is written at most three times in ten minutes, however
-it got back to the original, so a parent, an ApplicationSet or a person that puts it back is met with a log line and a status
+report). A failed write backs off (1, 2, 4, 8, 16 intervals); an Application is written (attempted) at most three times in ten minutes,
+however it got back to the original, **counted in the agent's state, so a restart or a crash loop does not reset it** (the worst case is
+three writes per Application in any ten minutes, tested across a restart), so a parent, an ApplicationSet or a person that puts it back is met with a log line and a status
 (`held: written 3 times in 10 minutes: something keeps changing it back`) rather than a loop. The loop wakes on an Application change
 but waits at least five seconds between passes.
 
@@ -2106,6 +2180,12 @@ Only when `optIn.enabled`; the default render has none of it.
 | `applications.argoproj.io`, the Argo CD namespace | `patch` (added to get, list, watch) | the one JSON patch above | Kubernetes cannot restrict a patch to fields; the agent writes `spec.source`, `spec.sources` and its annotation only. No `update`, `create` or `delete` |
 | `applicationsets.argoproj.io`, the Argo CD namespace | `get` | the parent check | |
 | `namespaces` | `get`, `patch` | the protected label | `resourceNames`: the chart's `protectedNamespaces`, so it cannot label `kube-system` or a tenant it was not told. `patch` can still change any label of those namespaces; the agent changes only its two |
+
+**Blast radius, plainly.** Kubernetes cannot restrict a `patch` to a field, so a compromised agent can change **any field of any Application in
+the Argo CD namespace** (including pointing it at another repository) and **any label or annotation of the named namespaces** (including
+removing `clearance.hangar.io/protected` from them). It cannot touch a namespace not in `protectedNamespaces`, read a Secret, or write a
+ClearanceGrant except through the grant rules the agent already had. The grant-writer admission policy still names only the agent's service
+account as the writer of grants.
 
 No Secret, no wildcard, no new delete. Discovery needs no rule. Observe-k8s attributes writes by `rules.grantAgentSubject` to grants only:
 the agent's Application and Namespace writes are not yet a named rule there and will show as unattributed writes until one is added.
@@ -2124,15 +2204,24 @@ the agent's Application and Namespace writes are not yet a named rule there and 
 #### Rules chosen where the card left a choice
 
 1. The annotation value is exactly `true`. 2. The first git source carries the plugin; a shape is kept. 3. The agent never edits a parent;
-it checks and blocks. 4. A blocked Application is still a protected pair. 5. Nothing is switched until the cluster's discovery has been read once.
-6. A merged grant takes the **newest** live clearance of each Application and carries its older ones; a conflict is decided on newest
-clearances only. 7. Only objects in the Application's own destination namespace are granted. 8. Conflict and size: refuse, keep the last
-good grant, report once. No merged grant means the per-change grants stay. 9. The label is written only after the merged grant is read back
-active, valid and unexpired; removed before the grant. 10. Only a namespace with the agent's marker is ever unlabelled. 11. The core's
-pair protection is app and environment, added to the environment list; a report never removes what the list gives. 12. Cluster binding
-is `<principal glob>=<cluster>` in the provider entry; nothing else may report. 13. A report is a record only when it changes; a stale
-report is shown, never acted on. 14. An opt-out is recorded before it is acted on, and is not refused for a statically listed pair.
-15. At most three writes per Application in ten minutes, backoff on failure. 16. The deny list defaults to `clearance`, `clearance-*`, `*-clearance`.
+it checks and blocks, and the check is a guard, not a boundary. 4. A blocked Application is still a protected pair (unless its environment
+is ambiguous). 5. Nothing is switched until the cluster's discovery has been read once. 6. A merged grant takes the **newest** live
+clearance of each Application and carries its older ones. 7. Only objects in the Application's own destination namespace are granted.
+8. **A merged grant never holds anything the verified feed does not list now**; a kept grant is the held grant intersected with the feed;
+when nothing is left the grant is empty, active and valid and the label stays. 9. **A conflict freezes nothing**: the incumbent keeps
+its key at its newest hash, the newcomer's claim is left out, other keys merge; reported at the start, every 24 hours and at the end.
+Overflow keeps the held grant (intersected) and is reported the same way. 10. The label is written only after the merged grant is read back
+active, valid and unexpired; removed before the grant; only a namespace with the agent's marker is ever unlabelled. 11. The core's pair
+protection is app and environment, added to the environment list; a report never removes what the list gives. 12. Cluster binding is
+`<principal glob>=<cluster>` in the provider entry. 13. A report is a record when the set changes or it carries a reason; reports are
+numbered and an old one is refused (409), at most 30 records per cluster per hour (429); a stale report is shown, never acted on.
+14. An opt-out is recorded before it is acted on, and is not refused for a statically listed pair. 15. At most three writes per
+Application in ten minutes, kept in the state; backoff on failure. 16. The deny list defaults to `clearance`, `clearance-*`,
+`*-clearance`. 17. The environment an Application is cleared under is its namespace's label when there is one; a disagreeing Application is
+blocked; an unreadable namespace is unknown, never the default. 18. The marker is two halves, the annotation and the plugin source's own
+`switched` parameter. 19. Applications outside `--projects`, for another cluster, or for a namespace the agent is not configured for are
+never switched; a refused unlabel of an unconfigured namespace does not hold an opt-out. 20. The flip to or from a merged grant activates the
+new grant first (the overlap is an intersection).
 
 ### Wiring for the manager (hangar-prod to hangar-dev; D29)
 

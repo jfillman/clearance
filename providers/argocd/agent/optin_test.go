@@ -29,6 +29,26 @@ func newOptWorld(t *testing.T) *optWorld {
 	ow.a = ow.restart()
 	ow.kube.scopes = map[string]bool{"Namespace": true, "Deployment": false, "Composition": true, "Cluster": false}
 	ow.core.static = map[string]bool{}
+	ow.kube.strict = true
+	ow.kube.live = func(ns string) map[string]bool {
+		out := map[string]bool{}
+		for _, c := range ow.feeds.published {
+			if !time.Unix(c.Expires, 0).After(ow.clock.now()) {
+				continue
+			}
+			for _, o := range c.Objects {
+				if o.Namespace != ns {
+					continue
+				}
+				g := ""
+				if i := strings.Index(o.APIVersion, "/"); i >= 0 {
+					g = o.APIVersion[:i]
+				}
+				out[agent.GrantKey(g, o.Kind, o.Name)+"="+o.Rendered] = true
+			}
+		}
+		return out
+	}
 	return ow
 }
 
@@ -36,7 +56,7 @@ func newOptWorld(t *testing.T) *optWorld {
 func (w *optWorld) restart() *agent.Agent {
 	a, err := agent.New(agent.Config{Cluster: "hangar-prod", Environment: "prod", Version: "0.0.0-test", Wait: agent.TestWaitPin,
 		ArgoNamespace: "argocd-apps", Projects: []string{"tenants"}, StateNS: "clearance-system",
-		OptIn: agent.OptIn{Enabled: true, DenyApps: agent.DefaultDenyApps}},
+		OptIn: agent.OptIn{Enabled: true, DenyApps: agent.DefaultDenyApps, Namespaces: []string{"*"}}},
 		w.kube, w.feeds, w.core, w.clock.now, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		w.t.Fatal(err)
@@ -59,7 +79,7 @@ func (w *optWorld) mustReconcile() {
 
 // addApp puts an Application (the tenants project, argocd-apps) in the cluster.
 func (w *optWorld) addApp(name, destNS string, ann map[string]string, srcs ...string) *agent.Application {
-	a := agent.Application{Namespace: "argocd-apps", Name: name, Project: "tenants", DestNS: destNS, ResourceVersion: "1",
+	a := agent.Application{Namespace: "argocd-apps", Name: name, Project: "tenants", DestNS: destNS, DestServer: "https://kubernetes.default.svc", ResourceVersion: "1",
 		Labels:      map[string]string{agent.LabelAppName: strings.TrimSuffix(name, "-prod"), agent.LabelAppEnv: "prod"},
 		Annotations: ann}
 	if len(srcs) == 0 {

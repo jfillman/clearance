@@ -87,3 +87,26 @@ func (c *HTTPCore) Breakglass(ctx context.Context, cluster string) ([]Window, er
 	}
 	return l.Items, nil
 }
+
+// ProtectionSeq is GET /v1/protection: the sequence number of the last report the core took for cluster.
+func (c *HTTPCore) ProtectionSeq(ctx context.Context, cluster string) (int64, error) {
+	b, err := c.Feeds.get(ctx, c.Feeds.Base, "/v1/protection")
+	if err != nil {
+		return 0, err
+	}
+	var l struct {
+		Clusters []struct {
+			Cluster string `json:"cluster"`
+			Seq     int64  `json:"seq"`
+		} `json:"clusters"`
+	}
+	if err := json.Unmarshal(b, &l); err != nil {
+		return 0, err
+	}
+	for _, x := range l.Clusters {
+		if x.Cluster == cluster {
+			return x.Seq, nil
+		}
+	}
+	return 0, nil
+}

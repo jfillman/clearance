@@ -40,8 +40,15 @@ func TestKubeAPIOptIn(t *testing.T) {
 				`{"metadata":{"name":"multi","resourceVersion":"5"},"spec":{"sources":[{"repoURL":"a"},{"repoURL":"b","ref":"v"}]}}]}`))
 		case r.Method == "PATCH" && strings.Contains(p, "/applications/"):
 			if strings.Contains(p, "/stale") {
+				// What kube-apiserver 1.36.2 answers (measured with envtest) when a JSON patch's `test` fails, and when an op
+				// names a path that is not there: the same body for both, no details.
 				w.WriteHeader(422)
-				_, _ = w.Write([]byte(`{"message":"the server rejected our request due to an error in our request"}`))
+				_, _ = w.Write([]byte(`{"kind":"Status","apiVersion":"v1","metadata":{},"status":"Failure","message":"the server rejected our request due to an error in our request","reason":"Invalid","details":{},"code":422}`))
+				return
+			}
+			if strings.Contains(p, "/invalid") { // a schema validation refusal: it names its causes
+				w.WriteHeader(422)
+				_, _ = w.Write([]byte(`{"kind":"Status","apiVersion":"v1","metadata":{},"status":"Failure","message":"Application.argoproj.io \"invalid\" is invalid: spec.source: Invalid value","reason":"Invalid","details":{"name":"invalid","group":"argoproj.io","kind":"Application","causes":[{"reason":"FieldValueInvalid","message":"Invalid value","field":"spec.source"}]},"code":422}`))
 				return
 			}
 			_, _ = w.Write([]byte(`{}`))
@@ -139,6 +146,11 @@ func TestKubeAPIOptIn(t *testing.T) {
 	// A patch whose version test fails (the server's 422) is a conflict, not a retry loop.
 	if err := k.UpdateApplicationSource(bg, agent.Application{Name: "stale", ResourceVersion: "1"}, back); !errors.Is(err, agent.ErrConflict) {
 		t.Errorf("%v", err)
+	}
+
+	// A validation error is not a stale read: it is reported as invalid, not retried as a conflict.
+	if err := k.UpdateApplicationSource(bg, agent.Application{Name: "invalid", ResourceVersion: "1"}, back); !errors.Is(err, agent.ErrInvalid) || errors.Is(err, agent.ErrConflict) {
+		t.Errorf("a validation 422: %v", err)
 	}
 
 	set, err := k.GetApplicationSet(bg, "tenants")

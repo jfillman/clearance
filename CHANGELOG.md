@@ -34,6 +34,12 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
     `ReportProtection`.
   - chart: with `optIn.enabled` the agent also gets `patch` on Applications, `get` on ApplicationSets and `get`, `patch` on the
     `protectedNamespaces` Namespace objects only (`resourceNames`); `optIn.enabled` without `protectedNamespaces` is refused.
+  - Review fixes: a merged grant never holds an object or carried tree the verified feed does not list (a revoked clearance leaves it; with
+    nothing live it is written empty and the namespace stays labelled); a conflict on one key no longer freezes the namespace (the incumbent
+    keeps the key, the newcomer's claim is left out; reported at the start, every 24 hours, and at the end); the destination namespace's
+    environment label decides the environment and an unreadable namespace is unknown; the switched marker is two halves; Applications
+    outside the agent's projects, for another cluster or outside `--optin-namespaces` are never switched; the write bound is kept in the
+    state; reports are numbered (409 for an old one) and a set change is recorded at most 30 times per cluster per hour (429).
   - admission test: the merged grant of a namespace two Applications share, and the label-after-grant order, against a real kube-apiserver.
   - The plugin's cluster-scope rules moved to `internal/argosrc` so the agent and the plugin apply the same ones (no change in behaviour).
 

@@ -57,6 +57,9 @@ func (k *fakeArgo) UpdateApplicationSource(context.Context, agent.Application, a
 func (k *fakeArgo) GetApplicationSet(context.Context, string) (agent.AppSet, error) {
 	return agent.AppSet{}, errors.New("not used")
 }
+func (k *fakeArgo) GetNamespaceLabels(context.Context, string) (map[string]string, error) {
+	return nil, errors.New("not used")
+}
 func (k *fakeArgo) SetNamespaceProtected(context.Context, string, bool) error {
 	return errors.New("not used")
 }

@@ -68,6 +68,11 @@ type ProtectionSet struct {
 	Cluster, Digest       string
 	Doc                   json.RawMessage
 	ReportedAt, ChangedAt time.Time
+	// Seq is the number of the newest report taken (agents number their reports; it only goes up). WindowStart and
+	// WindowCount bound how many reports are recorded per hour: the count of records written since WindowStart.
+	Seq         int64
+	WindowStart time.Time
+	WindowCount int
 }
 
 // Token is one row of clearance_tokens: the clearance token issued for a cleared change (C-1), in both its

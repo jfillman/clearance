@@ -426,6 +426,8 @@ def run(deny):
             g["metadata"]["labels"]["clearance.hangar.io/merged"] = "true"
             g["metadata"]["labels"]["app.kubernetes.io/managed-by"] = "clearance-argocd-agent"
             g["spec"]["clearance"] = {"id": "merged", "tier": 1}
+            for key, o in g["spec"]["objects"].items():  # the owner of each object (display; admission does not read it)
+                o["app"] = "argocd/" + key.split("/")[-1]
             if carried:
                 g["spec"]["carried"] = carried
             return g

@@ -85,11 +85,51 @@ func (k *fakeKube) hasActiveValid(ns string) bool {
 	return false
 }
 
+func (k *fakeKube) hasAnyGrant(ns string) bool {
+	for _, g := range k.grants {
+		if g.Namespace == ns {
+			return true
+		}
+	}
+	return false
+}
+
+// checkFeed fails the test if an active merged grant holds an object, or carries a tree, whose hash the verified feed
+// does not list now (a revoked or expired clearance's hash stays admissible otherwise).
+func (k *fakeKube) checkFeed(when string) {
+	if k.live == nil {
+		return
+	}
+	for _, g := range k.grants {
+		if !g.Active() || g.Name != agent.MergedGrantName {
+			continue
+		}
+		live := k.live(g.Namespace)
+		for key, o := range g.Spec.Objects {
+			if !live[key+"="+o.Rendered] {
+				k.t.Errorf("after %s: the active merged grant of %s holds %s at %s.., which the feed does not list", when, g.Namespace, key, o.Rendered[:6])
+			}
+		}
+		for _, c := range g.Spec.Carried {
+			for key, o := range c.Objects {
+				if !live[key+"="+o.Rendered] {
+					k.t.Errorf("after %s: the active merged grant of %s carries %s at %s.., which the feed does not list", when, g.Namespace, key, o.Rendered[:6])
+				}
+			}
+		}
+	}
+}
+
 // checkLabelled fails the test if a namespace the agent labelled (marker) has no active, valid grant: admission would
 // refuse every write there.
 func (k *fakeKube) checkLabelled(when string) {
 	for ns, l := range k.ns {
-		if l[agent.LabelProtectedBy] == agent.ProtectedByOptIn && l[agent.LabelProtected] == "true" && !k.hasActiveValid(ns) {
+		if k.hasActiveValid(ns) {
+			k.everActive[ns] = true
+		}
+		// Every labelled namespace, not only the agent's: once a namespace has had an active, valid grant, no step may leave
+		// it labelled without one (the opt-in's tests only; the per-change rotation keeps its documented gap).
+		if k.strict && l[agent.LabelProtected] == "true" && !k.hasActiveValid(ns) && k.everActive[ns] {
 			k.t.Errorf("after %s: namespace %s is labelled protected and has no active, valid grant", when, ns)
 		}
 	}
@@ -161,7 +201,7 @@ func feedClaims(w *optWorld, app, ns, id string, hashes ...string) {
 func newAgentDeny(w *optWorld, deny ...string) (*agent.Agent, error) {
 	a, err := agent.New(agent.Config{Cluster: "hangar-prod", Environment: "prod", Version: "0.0.0-test", Wait: agent.TestWaitPin,
 		ArgoNamespace: "argocd-apps", Projects: []string{"tenants"}, StateNS: "clearance-system",
-		OptIn: agent.OptIn{Enabled: true, DenyApps: deny}},
+		OptIn: agent.OptIn{Enabled: true, DenyApps: deny, Namespaces: []string{"*"}}},
 		w.kube, w.feeds, w.core, w.clock.now, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		return nil, err
@@ -195,7 +235,7 @@ func (w *optWorld) labelled(ns string) bool { return w.kube.ns[ns][agent.LabelPr
 func mustAgent(t *testing.T, w *optWorld, edit func(*agent.Config)) *agent.Agent {
 	cfg := agent.Config{Cluster: "hangar-prod", Environment: "prod", Version: "0.0.0-test", Wait: agent.TestWaitPin,
 		ArgoNamespace: "argocd-apps", Projects: []string{"tenants"}, StateNS: "clearance-system",
-		OptIn: agent.OptIn{Enabled: true, DenyApps: agent.DefaultDenyApps}}
+		OptIn: agent.OptIn{Enabled: true, DenyApps: agent.DefaultDenyApps, Namespaces: []string{"*"}}}
 	edit(&cfg)
 	a, err := agent.New(cfg, w.kube, w.feeds, w.core, w.clock.now, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
@@ -205,4 +245,22 @@ func mustAgent(t *testing.T, w *optWorld, edit func(*agent.Config)) *agent.Agent
 		t.Fatal(err)
 	}
 	return a
+}
+
+func (k *fakeKube) GetNamespaceLabels(_ context.Context, ns string) (map[string]string, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.reads["nsget"]++
+	if err := k.nsReadErr[ns]; err != nil {
+		return nil, err
+	}
+	l, ok := k.ns[ns]
+	if !ok {
+		return nil, agent.ErrNotFound
+	}
+	out := map[string]string{}
+	for a, b := range l {
+		out[a] = b
+	}
+	return out, nil
 }

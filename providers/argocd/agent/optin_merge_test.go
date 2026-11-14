@@ -147,55 +147,6 @@ func exceptions(w *optWorld) []string {
 	return out
 }
 
-func TestTwoApplicationsClaimingOneObjectIsAnExceptionAndTheLastGoodGrantStays(t *testing.T) {
-	w := newOptWorld(t)
-	opt2(w)
-	feedObjs(w, "web", "app-a", ch1, t0, deploy("web", hex("a")))
-	feedObjs(w, "api", "app-a", ch2, t0, deploy("api", hex("c")))
-	w.publishSync()
-	good, _ := w.merged("app-a")
-	ops := len(w.kube.log)
-
-	// api's next clearance claims web's Deployment.
-	w.clock.add(time.Minute)
-	feedObjs(w, "api", "app-a", ch3, w.clock.now(), deploy("api", hex("d")), deploy("web", hex("e")))
-	w.publishSync()
-	now, _ := w.merged("app-a")
-	if objKeys(now) != objKeys(good) || len(w.kube.log) != ops {
-		t.Errorf("the last good grant changed (%s -> %s): %v", objKeys(good), objKeys(now), w.kube.log[ops:])
-	}
-	ex := exceptions(w)
-	if len(ex) != 1 || !strings.Contains(ex[0], "two protected Applications claim one object") || !strings.Contains(ex[0], "argocd-apps/api-prod") ||
-		!strings.Contains(ex[0], "argocd-apps/web-prod") {
-		t.Fatalf("exceptions: %v", ex)
-	}
-	// Reported once: the next passes post nothing.
-	w.publishSync()
-	w.publishSync()
-	if len(exceptions(w)) != 1 {
-		t.Errorf("reported again: %v", exceptions(w))
-	}
-	// A conflict is not a partial grant: api's other objects did not get in either.
-	if _, ok := now.Spec.Objects["apps/Deployment/api"]; ok && now.Spec.Objects["apps/Deployment/api"].Rendered != hex("c") {
-		t.Errorf("api's conflicting clearance was partly merged: %v", now.Spec.Objects)
-	}
-	// It resolves: the next clearance of api drops the object. The grant moves on, and the problem may be reported again later.
-	w.clock.add(time.Minute)
-	feedObjs(w, "api", "app-a", ch4, w.clock.now(), deploy("api", hex("f")))
-	w.publishSync()
-	fixed, _ := w.merged("app-a")
-	if objKeys(fixed) != "apps/Deployment/api=f,apps/Deployment/web=a" {
-		t.Errorf("after the fix: %s", objKeys(fixed))
-	}
-	// and a new conflict is reported again.
-	w.clock.add(time.Minute)
-	feedObjs(w, "api", "app-a", ch1[:len(ch1)-1]+"9", w.clock.now(), deploy("web", hex("9")))
-	w.publishSync()
-	if len(exceptions(w)) != 2 {
-		t.Errorf("a returning conflict is reported again: %v", exceptions(w))
-	}
-}
-
 func TestAConflictWithNoLastGoodGrantWritesNoMergedGrantAndNoLabel(t *testing.T) {
 	w := newOptWorld(t)
 	opt2(w)

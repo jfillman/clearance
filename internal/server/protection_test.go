@@ -273,3 +273,78 @@ func TestProtectionStalenessIsShown(t *testing.T) {
 		t.Fatalf("a reported pair: %v", s)
 	}
 }
+
+func withSeq(m map[string]any, n int) map[string]any { m["seq"] = n; return m }
+
+func TestAnOldOrReplayedReportCannotReplaceANewerOne(t *testing.T) {
+	seqBounds(t, protectionFixture(t, ""))
+}
+
+func TestAnOldOrReplayedReportCannotReplaceANewerOneOnPostgres(t *testing.T) {
+	seqBounds(t, protectionFixture(t, pgDSN(t)))
+}
+
+func seqBounds(t *testing.T, f *fixture) {
+	a := f.do("PUT", "/v1/protection/hangar-dev", agentDev, withSeq(pairs("web/dev"), 5)).want(t, 200, "")
+	if a.body["held_seq"] != float64(5) {
+		t.Fatalf("held_seq: %v", a.body)
+	}
+	f.do("PUT", "/v1/protection/hangar-dev", agentDev, withSeq(pairs("web/dev", "api/dev"), 6)).want(t, 200, "")
+	// An older report (a replay of seq 5's set, or an old set at 3) is refused, recorded once, and changes nothing.
+	n := len(protectionRecords(f))
+	f.do("PUT", "/v1/protection/hangar-dev", agentDev, withSeq(pairs("web/dev"), 5)).want(t, 409, "not above the held report")
+	f.do("PUT", "/v1/protection/hangar-dev", agentDev, withSeq(pairs("web/dev"), 5)).want(t, 409, "")
+	f.do("PUT", "/v1/protection/hangar-dev", agentDev, withSeq(pairs("other/dev"), 6)).want(t, 409, "") // equal number, another set
+	got, _ := f.core.Store.Protections(context.Background())
+	if len(got) != 1 || got[0].Seq != 6 || !strings.Contains(string(got[0].Doc), "api") {
+		t.Fatalf("held after the refusals: %+v", got)
+	}
+	var refused int
+	for _, r := range f.records() {
+		if r["tool"] == "protection.refused" {
+			refused++
+		}
+	}
+	if refused != 2 || len(protectionRecords(f)) != n {
+		t.Fatalf("a replay is recorded once: %d refusal records for 2 distinct replays", refused)
+	}
+	// The same set again with the same or a lower number is a heartbeat (nothing is replaced), and the number never goes down.
+	f.do("PUT", "/v1/protection/hangar-dev", agentDev, withSeq(pairs("web/dev", "api/dev"), 4)).want(t, 200, "")
+	got, _ = f.core.Store.Protections(context.Background())
+	if got[0].Seq != 6 {
+		t.Fatalf("seq went down: %d", got[0].Seq)
+	}
+	st := f.do("GET", "/v1/protection", noBinding, nil).want(t, 200, "")
+	if st.body["clusters"].([]any)[0].(map[string]any)["seq"] != float64(6) {
+		t.Fatalf("GET shows the held number: %v", st.body)
+	}
+}
+
+func TestSetChangesAreBoundedPerHour(t *testing.T) {
+	f := protectionFixture(t, "")
+	for i := 0; i < server.MaxProtectionRecordsPerHour; i++ {
+		f.do("PUT", "/v1/protection/hangar-dev", agentDev, withSeq(pairs(fmt.Sprintf("a%d/dev", i)), i+1)).want(t, 200, "")
+	}
+	f.do("PUT", "/v1/protection/hangar-dev", agentDev, withSeq(pairs("flood/dev"), 99)).want(t, 429, "at most")
+	if n := len(protectionRecords(f)); n != server.MaxProtectionRecordsPerHour {
+		t.Fatalf("%d records", n)
+	}
+	// An unchanged report (the heartbeat) is not a record and is never refused by the bound.
+	f.do("PUT", "/v1/protection/hangar-dev", agentDev, withSeq(pairs("a29/dev"), 30)).want(t, 200, "")
+	// Another cluster has its own bound.
+	f.do("PUT", "/v1/protection/hangar-x", agentOdd, pairs("x/dev")).want(t, 200, "")
+}
+
+// Opting out of one of two Applications that share a pair changes no set, and is still recorded when the agent says why.
+func TestAReasonIsRecordedEvenWhenTheSetDidNotChange(t *testing.T) {
+	f := protectionFixture(t, "")
+	f.do("PUT", "/v1/protection/hangar-dev", agentDev, pairs("web/dev")).want(t, 200, "")
+	r := pairs("web/dev")
+	r["reason"] = "argocd/web-b opted out (pair still protected by argocd/web-a)"
+	a := f.do("PUT", "/v1/protection/hangar-dev", agentDev, r).want(t, 200, "")
+	recs := protectionRecords(f)
+	if a.body["changed"] != false || len(recs) != 2 || !strings.Contains(fmt.Sprint(recs[1]["result"]), "unchanged") ||
+		!strings.Contains(fmt.Sprint(recs[1]["result"]), "web-b opted out") {
+		t.Fatalf("%v %v", a.body, recs)
+	}
+}

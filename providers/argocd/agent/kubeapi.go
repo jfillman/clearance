@@ -24,6 +24,9 @@ var ErrWatchGone = errors.New("agent: watch resourceVersion is too old")
 // Errors of the opt-in writes.
 var (
 	ErrConflict = errors.New("agent: the object changed since it was read")
+	// ErrInvalid: the API server refused a write as invalid (a schema or validation error, not a stale read): retrying
+	// the same patch cannot help, so it is reported and not treated as a conflict.
+	ErrInvalid  = errors.New("agent: the API server refused the write as invalid")
 	ErrNotFound = errors.New("agent: not found")
 	// ErrNotOurs: the namespace's protected label was not put there by this agent (it has no marker), so the agent
 	// does not remove it.
@@ -298,6 +301,8 @@ type appWire struct {
 		Project     string `json:"project"`
 		Destination struct {
 			Namespace string `json:"namespace"`
+			Server    string `json:"server"`
+			Name      string `json:"name"`
 		} `json:"destination"`
 		Source            json.RawMessage   `json:"source"`
 		Sources           []json.RawMessage `json:"sources"`
@@ -339,7 +344,7 @@ type appWire struct {
 
 func (w appWire) app() Application {
 	a := Application{Namespace: w.Metadata.Namespace, Name: w.Metadata.Name, Labels: w.Metadata.Labels, UID: w.Metadata.UID, Project: w.Spec.Project,
-		DestNS: w.Spec.Destination.Namespace, SyncState: w.Status.Sync.Status, Health: w.Status.Health.Status,
+		DestNS: w.Spec.Destination.Namespace, DestServer: w.Spec.Destination.Server, DestName: w.Spec.Destination.Name, SyncState: w.Status.Sync.Status, Health: w.Status.Health.Status,
 		Revisions: w.Status.Sync.Revisions}
 	if len(a.Revisions) == 0 && w.Status.Sync.Revision != "" {
 		a.Revisions = []string{w.Status.Sync.Revision}
@@ -567,13 +572,40 @@ func (a *API) UpdateApplicationSource(ctx context.Context, app Application, e So
 	field("/metadata/annotations/"+esc(AnnSwitched), hadAnn, e.Switched, e.Switched != "")
 	err := a.call(ctx, "PATCH", a.appsPath()+"/"+url.PathEscape(app.Name), "application/json-patch+json", ops, nil)
 	var se *StatusError
-	if errors.As(err, &se) && (se.Code == http.StatusUnprocessableEntity || se.Code == http.StatusConflict) {
+	if errors.As(err, &se) && se.Code == http.StatusConflict {
 		return fmt.Errorf("%w: %s", ErrConflict, se.Body)
+	}
+	if errors.As(err, &se) && se.Code == http.StatusUnprocessableEntity {
+		if patchNotApplied(se.Body) {
+			return fmt.Errorf("%w: %s", ErrConflict, se.Body)
+		}
+		return fmt.Errorf("%w: %s", ErrInvalid, se.Body)
 	}
 	if errors.As(err, &se) && se.Code == http.StatusNotFound {
 		return ErrNotFound
 	}
 	return err
+}
+
+// patchNotApplied says whether a 422 is the API server's answer to a JSON patch that did not apply: a failed `test`
+// (the object changed since it was read) or an op on a path that is no longer there. The server answers both the same
+// way, and has no details: {"reason":"Invalid","message":"the server rejected our request due to an error in our request",
+// "details":{},"code":422} (measured against kube-apiserver 1.36.2 with envtest, docs/gate.md). A validation error
+// (a CRD schema or admission refusal) names its causes or says what is invalid, and is not this.
+func patchNotApplied(body string) bool {
+	var st struct {
+		Reason  string `json:"reason"`
+		Message string `json:"message"`
+		Details struct {
+			Causes []json.RawMessage `json:"causes"`
+			Name   string            `json:"name"`
+		} `json:"details"`
+	}
+	if json.Unmarshal([]byte(body), &st) != nil {
+		return false // a body cut at 300 bytes still starts with the fields above; unparseable: not a stale read
+	}
+	return st.Reason == "Invalid" && len(st.Details.Causes) == 0 && st.Details.Name == "" &&
+		st.Message == "the server rejected our request due to an error in our request"
 }
 
 // GetApplicationSet implements Kube.
@@ -639,6 +671,23 @@ func (a *API) SetNamespaceProtected(ctx context.Context, ns string, protected bo
 		return fmt.Errorf("%w: %s", ErrConflict, se.Body)
 	}
 	return err
+}
+
+// GetNamespaceLabels implements Kube.
+func (a *API) GetNamespaceLabels(ctx context.Context, ns string) (map[string]string, error) {
+	var cur struct {
+		Metadata struct {
+			Labels map[string]string `json:"labels"`
+		} `json:"metadata"`
+	}
+	if err := a.call(ctx, "GET", "/api/v1/namespaces/"+url.PathEscape(ns), "", nil, &cur); err != nil {
+		var se *StatusError
+		if errors.As(err, &se) && se.Code == http.StatusNotFound {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return cur.Metadata.Labels, nil
 }
 
 // ClusterScopes implements Kube: /api and /apis discovery, one request per group version.

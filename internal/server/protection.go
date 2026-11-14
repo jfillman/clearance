@@ -39,6 +39,10 @@ var protectionClusterRx = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])
 // MaxProtectionBody is PUT /v1/protection/{cluster}'s body cap.
 const MaxProtectionBody = 1 << 20
 
+// MaxProtectionRecordsPerHour bounds how many protection.report records one cluster can write per hour, so that a
+// compromised agent cannot flood the ledger with set changes. Over it, a changing report is refused with 429.
+const MaxProtectionRecordsPerHour = 30
+
 // ProtectionStaleAfter is how old a cluster's last report may be before GET /v1/protection says stale (three missed
 // reports of the agent's five minutes). Staleness is shown, never acted on.
 const ProtectionStaleAfter = 15 * time.Minute
@@ -48,6 +52,8 @@ const ProtectionStaleAfter = 15 * time.Minute
 type ProtectionRequest struct {
 	Pairs  []gate.ProtectedPair `json:"pairs" contract:"required"`
 	Reason string               `json:"reason,omitempty"`
+	// Seq numbers the report; it only goes up per cluster. A lower or equal number carrying another set is refused 409.
+	Seq int64 `json:"seq,omitempty"`
 }
 
 // ProtectionResult is what a report did: the cluster, the digest of the set now held, how many pairs, whether it
@@ -59,6 +65,7 @@ type ProtectionResult struct {
 	Pairs         int                  `json:"pairs"`
 	Changed       bool                 `json:"changed"`
 	Seq           *int64               `json:"seq"`
+	HeldSeq       int64                `json:"held_seq"`
 	Added         []gate.ProtectedPair `json:"added"`
 	Removed       []gate.ProtectedPair `json:"removed"`
 	StaticRemoved []gate.ProtectedPair `json:"static_removed"`
@@ -68,6 +75,7 @@ type ProtectionResult struct {
 type ProtectionCluster struct {
 	Cluster    string               `json:"cluster"`
 	Digest     string               `json:"digest"`
+	Seq        int64                `json:"seq"`
 	Pairs      []gate.ProtectedPair `json:"pairs"`
 	ReportedAt string               `json:"reported_at"`
 	ChangedAt  string               `json:"changed_at"`
@@ -97,7 +105,7 @@ func init() {
 				"the report's time. Only a provider whose `protection` list pairs the caller's principal with this cluster; " +
 				"a missing report never removes a pair.",
 			Request:   ProtectionRequest{},
-			Responses: append([]Response{{200, "what was held, and whether it changed", ProtectionResult{}}}, errs(400, 401, 403, 404, 413, 503)...),
+			Responses: append([]Response{{200, "what was held, and whether it changed", ProtectionResult{}}}, errs(400, 401, 403, 404, 409, 413, 429, 503)...),
 			serve:     func(s *Server) http.HandlerFunc { return s.reportProtection },
 		},
 		Route{
@@ -195,26 +203,71 @@ func (s *Server) reportProtection(w http.ResponseWriter, r *http.Request) {
 	digest := hex.EncodeToString(sum[:])
 	out := ProtectionResult{Cluster: cluster, Digest: digest, Pairs: len(pairs), Added: []gate.ProtectedPair{},
 		Removed: []gate.ProtectedPair{}, StaticRemoved: []gate.ProtectedPair{}}
+	var status int // 0: accepted; 409: refused as older than the held report; 429: over the hourly bound
+	var why string
 	err = s.opt.Store.Atomic(r.Context(), func(tx store.Tx) error {
 		held, err := tx.Protections(r.Context())
 		if err != nil {
 			return err
 		}
+		var cur store.ProtectionSet
 		var was []gate.ProtectedPair
-		wasDigest := ""
 		for _, h := range held {
 			if h.Cluster == cluster {
-				wasDigest = h.Digest
+				cur = h
 				if err := json.Unmarshal(h.Doc, &was); err != nil {
 					return err
 				}
 			}
 		}
-		if err := tx.PutProtection(r.Context(), store.ProtectionSet{Cluster: cluster, Digest: digest, Doc: doc}); err != nil {
-			return err
+		now := s.opt.Clock()
+		next := store.ProtectionSet{Cluster: cluster, Digest: digest, Doc: doc, Seq: cur.Seq, WindowStart: cur.WindowStart, WindowCount: cur.WindowCount}
+		if next.WindowStart.IsZero() || now.Sub(next.WindowStart) >= time.Hour || now.Before(next.WindowStart) {
+			next.WindowStart, next.WindowCount = now, 0
 		}
-		if wasDigest == digest {
+		out.HeldSeq = cur.Seq
+		record := func(tool, target, result string) error {
+			rec, err := tx.Append(r.Context(), store.Event{"ts": evidence.ISO(now), "task_id": nil, "session": nil,
+				"parent": nil, "principal": "provider:" + prov.Name, "agent": nil, "tool": tool, "tier": nil,
+				"decision": "allow", "rule": nil, "target": target, "args_sha256": digest, "result": result,
+				"caller": callerField(prov, p)}, s.coreWriter(protectionVerified))
+			if err != nil {
+				return err
+			}
+			next.WindowCount++
+			seq, _ := gate.SeqInt(rec["seq"])
+			out.Changed, out.Seq = true, &seq
 			return nil
+		}
+		// An old or replayed report cannot replace a newer one: a number that is not above the held one, with a set that
+		// is not the held one, is refused (and recorded, once, while the hourly bound allows).
+		if body.Seq > 0 && cur.Digest != "" && body.Seq <= cur.Seq && digest != cur.Digest {
+			status, why = http.StatusConflict, fmt.Sprintf("report %d is not above the held report %d and carries another set", body.Seq, cur.Seq)
+			key := fmt.Sprint(cluster, "|", body.Seq, "|", digest)
+			if _, seen := s.protectionRefused.LoadOrStore(key, true); !seen && next.WindowCount < MaxProtectionRecordsPerHour {
+				if err := record("protection.refused", "protection:"+cluster, fmt.Sprintf("%s (principal %s); not applied", why, p.ID)); err != nil {
+					return err
+				}
+				out.Changed, out.Seq = false, nil
+				keep := cur // the held set stays; only the recording window moves
+				keep.WindowStart, keep.WindowCount = next.WindowStart, next.WindowCount
+				return tx.PutProtection(r.Context(), keep)
+			}
+			return nil
+		}
+		changed := cur.Digest != digest
+		if changed || body.Reason != "" { // a reason is an event (an opt-out of one of two Applications of a pair changes no set)
+			if next.WindowCount >= MaxProtectionRecordsPerHour {
+				status, why = http.StatusTooManyRequests, fmt.Sprintf("at most %d reports are recorded per hour for a cluster", MaxProtectionRecordsPerHour)
+				return nil
+			}
+		}
+		if body.Seq > next.Seq {
+			next.Seq = body.Seq
+		}
+		out.HeldSeq = next.Seq
+		if !changed && body.Reason == "" {
+			return tx.PutProtection(r.Context(), next)
 		}
 		for _, n := range pairs {
 			if !slices.Contains(was, n) {
@@ -230,8 +283,10 @@ func (s *Server) reportProtection(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		result := fmt.Sprintf("%d pairs sha256:%s", len(pairs), digest)
-		if wasDigest != "" {
-			result += " (was sha256:" + wasDigest + ")"
+		if cur.Digest != "" && changed {
+			result += " (was sha256:" + cur.Digest + ")"
+		} else if !changed {
+			result += " (unchanged)"
 		}
 		result += list("; added ", out.Added, nil) + list("; removed ", out.Removed, out.StaticRemoved)
 		if body.Reason != "" {
@@ -240,20 +295,21 @@ func (s *Server) reportProtection(w http.ResponseWriter, r *http.Request) {
 		if len(result) > MaxFieldText {
 			result = result[:MaxFieldText-3] + "..."
 		}
-		rec, err := tx.Append(r.Context(), store.Event{"ts": evidence.ISO(s.opt.Clock()), "task_id": nil, "session": nil,
-			"parent": nil, "principal": "provider:" + prov.Name, "agent": nil, "tool": "protection.report", "tier": nil,
-			"decision": "allow", "rule": nil, "target": "protection:" + cluster, "args_sha256": digest, "result": result,
-			"caller": callerField(prov, p)}, s.coreWriter(protectionVerified))
-		if err != nil {
+		if err := record("protection.report", "protection:"+cluster, result); err != nil {
 			return err
 		}
-		seq, _ := gate.SeqInt(rec["seq"])
-		out.Changed, out.Seq = true, &seq
-		return nil
+		if !changed { // only the reason was recorded: no set changed
+			out.Changed = false
+		}
+		return tx.PutProtection(r.Context(), next)
 	})
 	if err != nil {
 		s.log.ErrorContext(r.Context(), "protection: report failed", "cluster", cluster, "error", err.Error())
 		writeError(w, http.StatusServiceUnavailable, "the report could not be recorded")
+		return
+	}
+	if status != 0 {
+		writeError(w, status, why)
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -319,6 +375,6 @@ func protectionCluster(set store.ProtectionSet, now time.Time) (ProtectionCluste
 		return ProtectionCluster{}, err
 	}
 	age := now.Sub(set.ReportedAt)
-	return ProtectionCluster{Cluster: set.Cluster, Digest: set.Digest, Pairs: pairs, ReportedAt: evidence.ISO(set.ReportedAt),
+	return ProtectionCluster{Cluster: set.Cluster, Digest: set.Digest, Seq: set.Seq, Pairs: pairs, ReportedAt: evidence.ISO(set.ReportedAt),
 		ChangedAt: evidence.ISO(set.ChangedAt), AgeSeconds: int64(age / time.Second), Stale: age > ProtectionStaleAfter}, nil
 }

@@ -37,6 +37,10 @@ type OptIn struct {
 	// switched whatever it carries, and one that was switched is put back. Clearance's own Applications belong here, so
 	// the gate can always be repaired through Argo CD.
 	DenyApps []string
+	// Namespaces are the destination namespaces the agent is configured for (globs): the chart's protectedNamespaces.
+	// An Application whose destination is not one of them is never switched (its namespace can be neither labelled
+	// nor read), and a refused unlabel of a namespace outside the list is not held against an opt-out.
+	Namespaces []string
 	// Interval is how often the Applications are reconciled when nothing wakes the loop (default 30 s).
 	Interval time.Duration
 	// ReportEvery is how often the protected pairs are reported again unchanged (default 5 minutes): it is what tells
@@ -93,9 +97,14 @@ type appClass struct {
 	env      string
 	optedIn  bool // the annotation is exactly "true"
 	denied   bool
-	switched bool   // the agent switched it: the marker is there and spec.source (or sources[0]) is the plugin source
-	foreign  bool   // it uses the plugin without the agent's marker (set up outside the agent): never touched
+	switched bool   // the agent switched it: the annotation and the plugin source's own `switched` parameter agree
+	foreign  bool   // it is on the plugin and the agent did not put it there (no marker, or the two halves do not agree): never touched
+	isPlugin bool   // spec.source (or sources[0]) is the plugin source
 	marker   string // the switched annotation: the original shape
+	// envErr: the destination namespace's labels could not be read, so the environment is unknown: the Application is
+	// skipped for this pass (nothing rewritten, no pair removed, no claim dropped). blockedWhy: the labels disagree.
+	envErr     error
+	blockedWhy string
 }
 
 func (c appClass) key() string { return c.app.Namespace + "/" + c.app.Name }
@@ -104,20 +113,89 @@ func (c appClass) key() string { return c.app.Namespace + "/" + c.app.Name }
 func (c appClass) protectedIntent() bool { return c.optedIn && !c.denied }
 
 // pendingRestore is an Application the agent switched (it carries the marker) that no longer asks to be, or may not be.
-func (c appClass) pendingRestore() bool { return c.marker != "" && (!c.optedIn || c.denied) }
+func (c appClass) pendingRestore() bool {
+	return c.marker != "" && !c.foreign && (!c.optedIn || c.denied)
+}
+
+// configured says whether ns is one of the namespaces the agent is configured for.
+func (a *Agent) configured(ns string) bool {
+	return ns != "" && pycompat.MatchAny(ns, a.cfg.OptIn.Namespaces)
+}
+
+// inCluster says whether an Application's destination is the cluster the agent runs on.
+func inCluster(app Application) bool {
+	switch strings.TrimSuffix(app.DestServer, "/") {
+	case "https://kubernetes.default.svc", "https://kubernetes.default.svc.cluster.local":
+		return app.DestName == ""
+	case "":
+		return app.DestName == "in-cluster"
+	}
+	return false
+}
+
+type nsInfo struct {
+	labels map[string]string
+	err    error
+}
+
+// optEnvironment is the environment an Application's changes are registered and cleared under. The Application's own
+// label is not enough: whoever can label an Application could pick a laxer environment. When the destination
+// namespace carries clearance.hangar.io/environment it decides, and an Application whose label disagrees is blocked;
+// where only one side says, that one does; where neither does, the agent's --environment. A namespace that cannot be
+// read leaves the environment unknown (err) and never falls back. Only namespaces the agent is configured for are read.
+func (a *Agent) optEnvironment(ctx context.Context, app Application, cache map[string]nsInfo) (env string, why string, err error) {
+	appEnv := app.Labels[LabelAppEnv]
+	nsEnv := ""
+	if a.configured(app.DestNS) {
+		info, ok := cache[app.DestNS]
+		if !ok {
+			info.labels, info.err = a.kube.GetNamespaceLabels(ctx, app.DestNS)
+			if errors.Is(info.err, ErrNotFound) {
+				info.labels, info.err = nil, nil // not created yet (Argo CD creates it on a first sync)
+			}
+			cache[app.DestNS] = info
+		}
+		if info.err != nil {
+			return "", "", fmt.Errorf("the labels of namespace %s cannot be read: %w", app.DestNS, info.err)
+		}
+		nsEnv = info.labels[LabelEnvironment]
+	}
+	switch {
+	case nsEnv != "" && appEnv != "" && nsEnv != appEnv:
+		return "", fmt.Sprintf("its %s label %q disagrees with its namespace's %s label %q", LabelAppEnv, appEnv, LabelEnvironment, nsEnv), nil
+	case nsEnv != "":
+		return nsEnv, "", nil
+	case appEnv != "":
+		return appEnv, "", nil
+	}
+	return a.cfg.Environment, "", nil
+}
 
 func (a *Agent) denied(app Application) bool {
 	return pycompat.MatchAny(app.Name, a.cfg.OptIn.DenyApps) || pycompat.MatchAny(app.Namespace+"/"+app.Name, a.cfg.OptIn.DenyApps)
 }
 
-// classify reads each Application's opt-in state. It writes nothing.
+// classify reads each Application's opt-in state. It writes nothing. An Application outside the agent's projects is not
+// seen at all.
 func (a *Agent) classify(ctx context.Context, apps []Application) []appClass {
 	out := make([]appClass, 0, len(apps))
+	cache := map[string]nsInfo{}
 	for _, app := range apps {
-		c := appClass{app: app, gateApp: app.GateApp(), env: a.appEnvironment(ctx, app), optedIn: app.Annotations[AnnProtect] == "true",
+		if !a.protectedProject(app.Project) {
+			continue
+		}
+		c := appClass{app: app, gateApp: app.GateApp(), optedIn: app.Annotations[AnnProtect] == "true",
 			denied: a.denied(app), marker: app.Annotations[AnnSwitched]}
-		if _, _, ok := a.pluginSource(app); ok {
-			c.switched, c.foreign = c.marker != "", c.marker == ""
+		c.env, c.blockedWhy, c.envErr = a.optEnvironment(ctx, app, cache)
+		if _, params, ok := a.pluginSource(app); ok {
+			c.isPlugin = true
+			// The marker is two halves: the annotation, which anyone who can annotate can write, and the plugin source's
+			// own `switched` parameter, which only an edit of the spec can write. Only both, agreeing, are the agent's.
+			if (c.marker == "source" || c.marker == "sources") && params["switched"] == c.marker {
+				c.switched = true
+			} else {
+				c.foreign = true
+			}
 		}
 		out = append(out, c)
 	}
@@ -210,7 +288,7 @@ func carrier(srcs []json.RawMessage) (repo, rev, path string, err error) {
 }
 
 // desiredSource is the plugin source an Application is to have, from its original sources.
-func (a *Agent) desiredSource(c appClass, originals []json.RawMessage, scopes []string) (json.RawMessage, error) {
+func (a *Agent) desiredSource(c appClass, originals []json.RawMessage, scopes []string, shape string) (json.RawMessage, error) {
 	for _, p := range []struct{ name, v string }{{"app", c.gateApp}, {"env", c.env}, {"cluster", a.cfg.Cluster}} {
 		if !dnsLabel.MatchString(p.v) {
 			return nil, fmt.Errorf("%s %q is not a DNS label, which the plugin requires", p.name, p.v)
@@ -227,7 +305,7 @@ func (a *Agent) desiredSource(c appClass, originals []json.RawMessage, scopes []
 	var d pluginSourceDoc
 	d.RepoURL, d.TargetRevision, d.Path = repo, rev, path
 	d.Plugin.Name = a.cfg.OptIn.PluginName
-	d.Plugin.Parameters = []pluginParam{{"sources", string(srcJSON)}, {"app", c.gateApp}, {"env", c.env}, {"cluster", a.cfg.Cluster}}
+	d.Plugin.Parameters = []pluginParam{{"sources", string(srcJSON)}, {"app", c.gateApp}, {"env", c.env}, {"cluster", a.cfg.Cluster}, {"switched", shape}}
 	if len(scopes) > 0 {
 		d.Plugin.Parameters = append(d.Plugin.Parameters, pluginParam{"clusterScopedKinds", strings.Join(scopes, ",")})
 	}
@@ -263,12 +341,22 @@ func (a *Agent) parentCheck(ctx context.Context, apps []Application, child Appli
 		return true, ""
 	}
 	parent := parentName(child)
+	for _, o := range child.Owners { // an owner reference is the better evidence: the parent's controller set it
+		if o.Kind == "Application" {
+			parent = o.Name
+		}
+	}
 	if parent == "" || parent == child.Name {
 		return true, "" // nothing owns it
 	}
 	for _, p := range apps {
 		if p.Name != parent || p.Namespace != child.Namespace {
 			continue
+		}
+		// The tracking annotation and the instance label are written by whoever created the child, so a child could name
+		// a parent of its own making. A parent that is itself tracked to the child is a cycle, not an app-of-apps.
+		if parentName(p) == child.Name {
+			return false, fmt.Sprintf("the Application %s that tracks it is itself tracked by it: not an app-of-apps", p.Name)
 		}
 		if !ignoresSources(p.IgnoreDifferences, child, true) {
 			return false, fmt.Sprintf("the parent Application %s has no spec.ignoreDifferences entry for group argoproj.io, kind Application, jsonPointers /spec/source and /spec/sources: it would put the original back", p.Name)
@@ -322,21 +410,20 @@ func ignoresSources(entries []IgnoreDifference, child Application, resource bool
 
 // optState is what the opt-in keeps in memory (all of it can be lost: the Applications and the cluster are the state).
 type optState struct {
-	switches map[string][]time.Time // writes made to an Application, to bound how often one is written
-	fails    map[string]int         // consecutive failed writes
-	retry    map[string]time.Time   // not before
-	status   map[string]string      // last status per Application, as written to the state ConfigMap
-	written  string                 // the optin.json last written
-	loaded   bool                   // written has been read from the state ConfigMap
-	warned   map[string]string      // a warning already logged: key -> text
-	scopes   map[string]bool        // the cluster's discovery
+	fails    map[string]int       // consecutive failed writes
+	retry    map[string]time.Time // not before
+	status   map[string]string    // last status per Application, as written to the state ConfigMap
+	written  string               // the optin.json last written
+	loaded   bool                 // written has been read from the state ConfigMap
+	warned   map[string]string    // a warning already logged: key -> text
+	scopes   map[string]bool      // the cluster's discovery
 	scopesAt time.Time
 	scopesOK bool
 }
 
 func (a *Agent) opt() *optState {
 	if a.optS == nil {
-		a.optS = &optState{switches: map[string][]time.Time{}, fails: map[string]int{}, retry: map[string]time.Time{},
+		a.optS = &optState{fails: map[string]int{}, retry: map[string]time.Time{},
 			status: map[string]string{}, warned: map[string]string{}}
 	}
 	return a.optS
@@ -391,7 +478,15 @@ func (a *Agent) ReconcileOptIn(ctx context.Context) error {
 
 	// 2. Applications that no longer ask to be protected (or never may): the label first, then the Application.
 	for _, c := range classes {
+		if c.foreign && c.marker != "" {
+			a.opt().status[c.key()] = "left alone: it carries the switched annotation but is on the plugin without the agent's own parameter"
+			a.warnOnce(c.key(), "an Application carries the switched annotation and is on the plugin, but the plugin source has no matching switched parameter: it is not the agent's and is left alone")
+		}
 		if !c.pendingRestore() {
+			continue
+		}
+		if c.envErr != nil {
+			a.warnOnce(c.key(), "an opt-out waits: "+c.envErr.Error())
 			continue
 		}
 		if !reported {
@@ -411,6 +506,11 @@ func (a *Agent) ReconcileOptIn(ctx context.Context) error {
 		if !c.protectedIntent() {
 			continue
 		}
+		if c.envErr != nil {
+			a.opt().status[c.key()] = "skipped this pass: " + c.envErr.Error()
+			a.warnOnce(c.key(), "the Application is skipped this pass: "+c.envErr.Error())
+			continue
+		}
 		if !scoped {
 			scopes, scopeErr = a.scopeParameter(ctx)
 			scoped = true
@@ -425,37 +525,61 @@ func (a *Agent) ReconcileOptIn(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// writeWindow is how far back the write bound looks.
+const writeWindow = 10 * time.Minute
+
+func recentWrites(l []string, cut time.Time) []string {
+	var out []string
+	for _, x := range l {
+		if t, err := time.Parse(time.RFC3339Nano, x); err == nil && t.After(cut) {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+// throttled says whether an Application may not be written now: it failed lately and is backing off, or it has been
+// written MaxSwitchesPer10Min times in ten minutes (the writes are kept in the agent's state, so a restart or a crash
+// loop does not reset the count: the worst case is that many writes per Application per ten minutes whatever happens).
 func (a *Agent) throttled(key string) (string, bool) {
 	s := a.opt()
 	if t := s.retry[key]; a.now().Before(t) {
 		return "retrying after earlier failures", true
 	}
-	cut := a.now().Add(-10 * time.Minute)
-	recent := s.switches[key][:0:0]
-	for _, t := range s.switches[key] {
-		if t.After(cut) {
-			recent = append(recent, t)
-		}
-	}
-	s.switches[key] = recent
-	if len(recent) >= a.cfg.OptIn.MaxSwitchesPer10Min {
-		return fmt.Sprintf("written %d times in 10 minutes: something keeps changing it back, and the agent does not fight it", len(recent)), true
+	a.mu.Lock()
+	n := len(recentWrites(a.st.Writes[key], a.now().Add(-writeWindow)))
+	a.mu.Unlock()
+	if n >= a.cfg.OptIn.MaxSwitchesPer10Min {
+		return fmt.Sprintf("written %d times in 10 minutes: something keeps changing it back, and the agent does not fight it", n), true
 	}
 	return "", false
 }
 
-// wrote records a write to an Application (or its failure) for the throttle.
-func (a *Agent) wrote(key string, err error) {
+// wrote records an attempt to write an Application, failed or not, for the bound (persisted) and the backoff.
+func (a *Agent) wrote(ctx context.Context, key string, err error) {
 	s := a.opt()
 	if err != nil {
 		s.fails[key]++
 		back := a.cfg.OptIn.Interval << min(s.fails[key]-1, 4) // 1, 2, 4, 8, 16 intervals, then constant
 		s.retry[key] = a.now().Add(back)
-		return
+	} else {
+		delete(s.fails, key)
+		delete(s.retry, key)
 	}
-	delete(s.fails, key)
-	delete(s.retry, key)
-	s.switches[key] = append(s.switches[key], a.now())
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	cut := a.now().Add(-writeWindow)
+	for k, l := range a.st.Writes {
+		if r := recentWrites(l, cut); len(r) == 0 {
+			delete(a.st.Writes, k)
+		} else {
+			a.st.Writes[k] = r
+		}
+	}
+	a.st.Writes[key] = append(a.st.Writes[key], a.now().UTC().Format(time.RFC3339Nano))
+	if serr := a.saveLocked(ctx); serr != nil {
+		a.log.Warn("the write bound could not be saved", "err", serr)
+	}
 }
 
 // switchApp makes an Application that asks to be protected a plugin Application, or leaves it as it is and says why.
@@ -468,9 +592,15 @@ func (a *Agent) switchApp(ctx context.Context, apps []Application, c appClass, s
 	}
 	switch {
 	case c.foreign:
-		return block("it already uses the plugin and was not switched by the agent: left as it is")
+		return block("it is on the plugin and the agent did not put it there (no switched annotation, or the plugin source's own switched parameter does not agree with it): left as it is")
+	case c.blockedWhy != "":
+		return block(c.blockedWhy)
+	case !inCluster(c.app):
+		return block("its destination is not the cluster the agent runs on (spec.destination.server or name)")
 	case c.app.DestNS == "":
 		return block("it has no destination namespace")
+	case !a.configured(c.app.DestNS):
+		return block("its destination namespace " + c.app.DestNS + " is not one the agent is configured for (protectedNamespaces): it could never be labelled")
 	}
 	originals, err := a.originals(c.app)
 	if err != nil {
@@ -489,18 +619,15 @@ func (a *Agent) switchApp(ctx context.Context, apps []Application, c appClass, s
 	if scopeErr != nil {
 		return block(scopeErr.Error())
 	}
-	want, err := a.desiredSource(c, originals, scopes)
-	if err != nil {
-		return block(err.Error())
-	}
 	shape := "source"
 	if c.switched {
 		shape = c.marker
-		if shape != "source" && shape != "sources" {
-			return block("the switched annotation is " + fmt.Sprintf("%q", c.marker) + ", not source or sources: the original shape is unknown")
-		}
 	} else if len(c.app.Sources) > 0 {
 		shape = "sources"
+	}
+	want, err := a.desiredSource(c, originals, scopes, shape)
+	if err != nil {
+		return block(err.Error())
 	}
 	live := c.app.Source
 	if shape == "sources" && len(c.app.Sources) > 0 {
@@ -526,7 +653,7 @@ func (a *Agent) switchApp(ctx context.Context, apps []Application, c appClass, s
 		e.Sources = []json.RawMessage{want}
 	}
 	err = a.kube.UpdateApplicationSource(ctx, c.app, e)
-	a.wrote(key, err)
+	a.wrote(ctx, key, err)
 	if err != nil {
 		a.opt().status[key] = "blocked: the write failed"
 		return err
@@ -575,12 +702,15 @@ func (a *Agent) restore(ctx context.Context, classes []appClass, c appClass) err
 		e.Source, e.Sources = c.app.Source, c.app.Sources
 	}
 	err := a.kube.UpdateApplicationSource(ctx, c.app, e)
-	a.wrote(key, err)
+	a.wrote(ctx, key, err)
 	if err != nil {
 		return err
 	}
 	delete(a.opt().status, key)
 	delete(a.opt().warned, key)
+	a.repMu.Lock()
+	delete(a.explained, key)
+	a.repMu.Unlock()
 	a.log.Info("Application put back to its original sources", "application", key, "denied", c.denied, "annotated", c.optedIn)
 	return nil
 }
@@ -594,6 +724,8 @@ func (a *Agent) writeStatus(ctx context.Context, classes []appClass) error {
 		switch {
 		case c.optedIn && c.denied:
 			cur[c.key()] = StatusDenied + ": the deny list names it"
+		case c.foreign && c.marker != "":
+			cur[c.key()] = s.status[c.key()]
 		case c.protectedIntent():
 			st := s.status[c.key()]
 			if st == "" {
