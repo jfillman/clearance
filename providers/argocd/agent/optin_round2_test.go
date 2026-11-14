@@ -59,7 +59,10 @@ func TestAnOlderCRDStopsTheOptInAndIsReportedOnce(t *testing.T) {
 	w.addApp("web-prod", "app-a", protect())
 	before := w.writes()
 	w.mustReconcile()
-	feedObjs(w, "web", "app-a", ch1, t0, deploy("web", hex("a")))
+	w.clock.add(6 * time.Minute) // it must have failed for five minutes before it is reported
+	w.mustReconcile()
+	feedObjs(w, "web", "app-a", ch1, t0.Add(6*time.Minute), deploy("web", hex("a")))
+	w.feeds.claims[0].Expires = w.clock.now().Add(time.Hour).Unix()
 	w.publishSync()
 	w.noNewWrites(before, "an opt-in against a CRD that lacks its fields", "put", "create", "update", "valid") // the per-change grants go on
 	if w.isSwitched("web-prod") || len(w.core.reports) != 0 {
@@ -109,8 +112,15 @@ func TestAMergedGrantThatLooksPrunedIsRecheckedAndStopsTheOptIn(t *testing.T) {
 	w.clock.add(time.Minute)
 	feedObjs(w, "web", "app-a", ch2, w.clock.now(), deploy("web", hex("b")))
 	w.feeds.claims[0].Expires = w.clock.now().Add(time.Hour).Unix()
-	w.publishSync() // writes the new grant: pruned
-	w.publishSync() // sees a held grant with no owners: reads the CRD again
+	w.publishSync()              // writes the new grant: pruned
+	w.publishSync()              // sees a held grant with no owners: reads the CRD again
+	w.clock.add(6 * time.Minute) // it must have failed for five minutes before it is reported
+	w.mustReconcile()
+	w.feeds.claims[0].Expires = w.clock.now().Add(time.Hour).Unix()
+	w.feeds.claims[0].IssuedAt = w.clock.now().Add(-time.Second).Unix()
+	w.feeds.claims[1].Expires = w.clock.now().Add(time.Hour).Unix()
+	w.feeds.claims[1].IssuedAt = w.clock.now().Add(-time.Second).Unix()
+	w.publishSync()
 	if len(w.core.of("deploy.exception")) != 1 {
 		t.Fatalf("one exception: %v", exceptions(w))
 	}

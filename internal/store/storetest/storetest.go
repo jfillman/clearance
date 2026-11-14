@@ -647,12 +647,12 @@ func testProtection(t *testing.T, open Opener) {
 	// The sequence number and the recording window are the caller's and are kept as given.
 	ws := time.Now().UTC().Truncate(time.Second)
 	withSeq := set("a", "d3", `[]`)
-	withSeq.Seq, withSeq.WindowStart, withSeq.WindowCount = 9, ws, 4
+	withSeq.Seq, withSeq.WindowStart, withSeq.WindowCount, withSeq.AddCount = 9, ws, 4, 7
 	if err := put(withSeq); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = s.Protections(bg)
-	if got[0].Seq != 9 || got[0].WindowCount != 4 || !got[0].WindowStart.Equal(ws) {
+	if got[0].Seq != 9 || got[0].WindowCount != 4 || got[0].AddCount != 7 || !got[0].WindowStart.Equal(ws) {
 		t.Fatalf("seq and window: %+v", got[0])
 	}
 	if err := s.Atomic(bg, func(tx store.Tx) error {

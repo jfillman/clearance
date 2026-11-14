@@ -46,6 +46,14 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
     taken by the core before its Application is switched; an unlabelled configured namespace has the agent's environment and a different
     Application label is blocked; an opt-out whose original cannot be restored changes nothing; one unreadable namespace holds only itself; liveness
     is the owner's clearance; reports must carry `seq`; an Application that leaves `--projects` is put back.
+  - Third review round: a failing schema read leaves a held merged grant and its label exactly as they are (only revoked and expired objects leave it);
+    the failed-read retry backs off from the pass interval; the exception for a failing check waits five minutes and is posted at most daily; additions
+    of pairs have their own bound (300 per cluster per hour); `GET /v1/protection` is for the cluster's own agent and admins; an ownerless held object is not
+    live once a grant has owners; an addition beside an unexplained opt-out is sent at once.
+  - **Upgrade notes.** For installs with the opt-in OFF: the exception scan now counts objects in live carried trees of a grant as covered, so an object that matches a
+    carried tree is no longer reported out-of-band (it can only report fewer exceptions, and matches what admission admits). For every install: the core's decision for
+    a change to an environment that is not in `CLEARANCE_PROTECTED_ENVIRONMENTS` now reads the reported pairs from the store, and a failed read treats the change as
+    protected (never fail-open).
   - admission test: the merged grant of a namespace two Applications share, and the label-after-grant order, against a real kube-apiserver.
   - The plugin's cluster-scope rules moved to `internal/argosrc` so the agent and the plugin apply the same ones (no change in behaviour).
 

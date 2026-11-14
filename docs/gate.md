@@ -1914,6 +1914,15 @@ or labelled; per-change grants go on as before. The agent logs an error and post
 posts nothing more until the CRD is fixed (`TestAnOlderCRDStopsTheOptInAndIsReportedOnce`, `TestAMergedGrantThatLooksPruned…`). The chart gives
 the agent `get` on that one CRD for it.
 
+**A failing schema read does not tear anything down.** A schema that is read and lacks fields is an answer (the opt-in is off, the CRD is read again in
+five minutes). A read that fails (forbidden, a timeout, the API briefly down) is not: the opt-in keeps running on the last good answer of this
+process, or, with none yet, stays off and the read is retried at the ordinary pass interval with a backoff up to five minutes. While the opt-in is
+off, **a namespace that holds a `clearance-merged` grant is left exactly as it is**: no grant of it is deleted or deactivated, no per-change grant is
+written for it, no label changes, and the Applications stay on the plugin; the held merged grant still loses what the feed no longer lists and what has
+expired, and gains nothing (`TestAFailedSchemaReadKeepsTheHeldMergedGrant…`: forbidden, timing out, fields missing, an agent restart, zero other
+writes, recovery). The exception for a failing check is posted only once it has failed continuously for five minutes, and at most once per 24 hours for
+the same condition; it names the CRD from the configured group.
+
 **What persists across an agent restart** (the state ConfigMap, `state.json`, beside the feed's epoch and seq): the time of each
 Application write in the last ten minutes (the write bound); the merged-grant problems being reported and since when; the pairs the core
 last took and the number of the last report. Everything else is read again from the cluster: the incumbents are in the merged grants, the
@@ -2087,11 +2096,14 @@ names its owner in `app` (display; admission does not read it).
 **The rule: while the feed is readable, a merged grant never holds an object or a carried tree that is not in the verified feed.** Whenever a held grant is
 kept (a conflict, a size refusal, nothing to merge) it is kept **intersected with what is live**: an object stays only if a clearance in
 the feed lists it at that hash in the namespace, a carried tree only if its change is in the feed, and then only the objects that change
-lists. A clearance the core revoked, that expired, or whose change went to `exception` leaves the feed, and so leaves the grant on the
+lists. A clearance the core revoked, or whose change went to `exception`, leaves the feed, and so leaves the grant on the
 next pass (`TestARevokedSoleClearance…`, `TestAChangeThatLeavesTheFeedForAnyReason…`, `TestARevokeDuringAConflict…`,
 `TestARevokeDuringASizeRefusal…`; the fake cluster fails any test in which an active merged grant holds a hash the published feed does not
-list). When nothing is left, **the grant is written empty, active and valid** (it admits nothing) **and the namespace keeps its label**:
-unlabelling would open the namespace, and a stale grant would admit a revoked hash. The label comes off only through the opt-out. The
+list). When nothing is left after a **revoke with the feed readable**, **the grant is written empty, active and valid** (it admits nothing) **and the namespace keeps its label**:
+unlabelling would open the namespace, and a stale grant would admit a revoked hash. The label comes off only through the opt-out.
+**Expiry ends differently:** when every clearance in a protected namespace has *expired*, the grant's own expiry (the latest of its
+objects') passes, the agent marks the merged grant **inactive and invalid**, the namespace stays labelled, and the admission policy refuses
+every write there until a new clearance arrives. Both states refuse everything; they are two states, not one. The
 exception scan then reports an object still running at the revoked hash as out-of-band. This is stricter than the per-change path
 (which removes the grant and, in a labelled namespace, leaves the same effect: nothing admitted).
 
@@ -2162,7 +2174,8 @@ nobody's annotation behaves as before, and the variable keeps working as an addi
   an annotated Application is an opt-out too: the pair is left out of the next report with the reason `application deleted (<app>/<env>)`
   (the pairs the core last took are in the agent's state, so this survives a restart).
 - **a flipping tenant cannot delay another team's pair**: a report that only ADDS pairs is never refused by the hourly bound and is not counted
-  against it (additions are bounded by the pair cap, 5000); removals, mixed reports and reasons are bounded as below. The agent sends a pure
+  against it (additions have their own bound: 300 addition records per cluster per hour, 429 beyond; removals never spend it, so a legitimate addition is never refused
+  because of removals, and a compromised agent cannot write 5000 additions one by one); removals, mixed reports and reasons are bounded as below. The agent sends a pure
   addition at once, debounces a report that removes (changes within one minute are coalesced), and splits a report that both adds and removes
   so the additions go first on their own. It does not switch an Application until the core has taken its pair. A report the core has refused for more than
   10 minutes is in the agent's status and one exception is posted.
@@ -2175,7 +2188,8 @@ nobody's annotation behaves as before, and the variable keeps working as an addi
   refused-report memory is bounded (1000 entries, oldest forgotten). **Two agents for one cluster are not supported**: they number their reports
   independently, the one with the lower numbers gets 409s on every change, resets from the core's number and then races the other, and their
   sets overwrite each other. Run one agent per cluster (the chart runs one replica with the Recreate strategy).
-- **an agent that stops reporting changes nothing**: the last set stays in force. `GET /v1/protection` shows each cluster's
+- **an agent that stops reporting changes nothing**: the last set stays in force. `GET /v1/protection` (read by the agent that reports the cluster: it needs its last sequence number, and gets only its own cluster's entry and the static
+  list; an admin reads all; any other provider principal gets 403) shows each cluster's
   `reported_at`, its age, and `stale` once it is over 15 minutes old. That is all staleness does; nothing is acted on it, and clearance-api
   and Tower do not show it yet.
 - **removal is explicit**: a pair leaves only in a report that omits it. The agent never reports from an Application list that failed
@@ -2202,7 +2216,8 @@ The agent keeps nothing the cluster does not: a restart starts from the Applicat
 | an opt-out whose original cannot be restored | nothing changes: still on the plugin, protected, labelled; one exception | waits for a person |
 | the Application list cannot be read | nothing is written, reported or removed; the grant loop leaves the grants as they are | reads again |
 | a destination namespace's labels cannot be read | that Application skipped: no rewrite, no pair removed, no opt-out acted on; the grant pass changes nothing | reads again |
-| a clearance leaves the feed (revoked, expired, exception) | the next grant pass removes its objects from the merged grant; with none left the grant is empty and the label stays | nothing |
+| a clearance is revoked or goes to exception (feed readable) | the next grant pass removes its objects from the merged grant; with none left the grant is **empty, active and valid** and the label stays | nothing |
+| every clearance in the namespace has expired | each object goes at its own expiry; at the last one the grant is **inactive and invalid**, the label stays, every write is refused | a new clearance |
 | the Application is deleted | its pair is left out of the next report, reason `application deleted`; the namespace is unlabelled once the core has it, then the grant goes | label off, grant removed |
 | a refused unlabel of a namespace the agent is not configured for | not held against the opt-out: the Application is put back | puts it back |
 | a refused unlabel of a configured namespace | the Application is not put back, the grant stays | retries |
@@ -2258,7 +2273,7 @@ it checks and blocks, and the check is a guard, not a boundary. 4. A blocked App
 is ambiguous). 5. Nothing is switched until the cluster's discovery has been read once. 6. A merged grant takes the **newest** live
 clearance of each Application and carries its older ones. 7. Only objects in the Application's own destination namespace are granted.
 8. **A merged grant never holds anything the verified feed does not list now**; a kept grant is the held grant intersected with the feed;
-when nothing is left the grant is empty, active and valid and the label stays. 9. **A conflict freezes nothing**: the incumbent keeps
+when a revoke leaves nothing the grant is empty, active and valid and the label stays (when everything has expired it is inactive and invalid, the label stays). 9. **A conflict freezes nothing**: the incumbent keeps
 its key at its newest hash, the newcomer's claim is left out, other keys merge; reported at the start, every 24 hours and at the end.
 Overflow keeps the held grant (intersected) and is reported the same way. 10. The label is written only after the merged grant is read back
 active, valid and unexpired; removed before the grant; only a namespace with the agent's marker is ever unlabelled. 11. The core's pair

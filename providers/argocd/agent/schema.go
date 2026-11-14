@@ -19,20 +19,35 @@ import (
 // requiredGrantFields are the schema fields the opt-in needs.
 var requiredGrantFields = []string{"objects.app", "objects.expiresAt", "carried.app"}
 
-const schemaRecheck = 5 * time.Minute
+const (
+	schemaRecheck = 5 * time.Minute // when the schema was read and lacks fields
+	// schemaFailedFor is how long the check must fail continuously before it is reported, and schemaReportEvery how often the
+	// same condition is reported again.
+	schemaFailedFor    = 5 * time.Minute
+	schemaReportEvery  = 24 * time.Hour
+	schemaBackoffLimit = 5 * time.Minute
+)
 
 type schemaState struct {
-	checked bool
-	ok      bool
-	at      time.Time
+	checked  bool
+	ok       bool      // the opt-in may run
+	lastGood bool      // this process has read a schema that has every field
+	nextTry  time.Time // not before, while not ok
+	fails    int       // consecutive failed reads
+	badSince time.Time // when the check began failing, continuously
 }
 
 // optInSchemaOK says whether the opt-in may run. force reads the CRD again now.
+//
+// A schema that IS missing fields is an answer: the opt-in is off and the CRD is read again in five minutes. A read that
+// FAILED (forbidden, a timeout, the API briefly down) is not an answer about the schema: with a good answer already in this
+// process the opt-in keeps running on it; with none, the opt-in is off and the read is retried at the ordinary pass interval
+// with a backoff up to five minutes (not five minutes after the first failure).
 func (a *Agent) optInSchemaOK(ctx context.Context, force bool) bool {
 	a.schemaMu.Lock()
 	defer a.schemaMu.Unlock()
 	st := a.schema
-	if st.checked && !force && (st.ok || a.now().Sub(st.at) < schemaRecheck) {
+	if st.checked && !force && (st.ok || a.now().Before(st.nextTry)) {
 		return st.ok
 	}
 	fields, err := a.kube.GrantSchemaFields(ctx)
@@ -44,28 +59,52 @@ func (a *Agent) optInSchemaOK(ctx context.Context, force bool) bool {
 			}
 		}
 	}
-	a.schema = schemaState{checked: true, ok: err == nil && len(missing) == 0, at: a.now()}
-	const fp = "schema"
+	st.checked = true
 	switch {
-	case a.schema.ok:
-		a.forgetOnce(ctx, fp)
-	default:
-		why := "the ClearanceGrant CRD lacks the fields the opt-in writes: " + strings.Join(missing, ", ") +
-			" (apply the CRD first, then the agent, then optIn.enabled; docs/gate.md)"
-		if err != nil {
-			why = "the ClearanceGrant CRD cannot be read, so the opt-in is not run: " + truncate(err.Error(), 200)
+	case err == nil && len(missing) == 0:
+		st = schemaState{checked: true, ok: true, lastGood: true}
+	case err != nil:
+		st.fails++
+		back := a.cfg.GrantInterval << min(st.fails-1, 4)
+		if back > schemaBackoffLimit {
+			back = schemaBackoffLimit
 		}
-		a.log.Error("the opt-in is not running", "why", why)
-		if rerr := a.reportOnce(ctx, fp+"|"+strings.Join(missing, ","), "ClearanceGrant CRD missing opt-in fields", why,
-			[]map[string]any{{"apiVersion": "apiextensions.k8s.io/v1", "kind": "CustomResourceDefinition", "name": a.cfg.GrantCRDName()}}); rerr != nil {
+		st.nextTry = a.now().Add(back)
+		if st.lastGood { // the last good answer stands for this process
+			a.log.Warn("the ClearanceGrant CRD cannot be read; the last good answer stands", "err", err)
+			a.schema = st
+			return true
+		}
+		st.ok = false
+	default:
+		st.ok, st.lastGood, st.fails = false, false, 0
+		st.nextTry = a.now().Add(schemaRecheck)
+	}
+	if !st.ok && st.badSince.IsZero() {
+		st.badSince = a.now()
+	}
+	a.schema = st
+	if st.ok {
+		return true
+	}
+	why := "the ClearanceGrant CRD lacks the fields the opt-in writes: " + strings.Join(missing, ", ") +
+		" (apply the CRD first, then the agent, then optIn.enabled; docs/gate.md)"
+	fp := "schema|" + strings.Join(missing, ",")
+	if err != nil {
+		why = "the ClearanceGrant CRD cannot be read, so the opt-in is not run: " + truncate(err.Error(), 200)
+		fp = "schema|unreadable"
+	}
+	a.log.Error("the opt-in is not running", "why", why)
+	// Reported only once it has failed for five minutes without a good read between, and at most once a day for the same
+	// condition (a flapping API does not post one per flap).
+	if a.now().Sub(st.badSince) >= schemaFailedFor {
+		if rerr := a.reportEvery(ctx, fp, schemaReportEvery, "ClearanceGrant CRD missing opt-in fields", why,
+			[]map[string]any{{"apiVersion": "apiextensions.k8s.io/v1", "kind": "CustomResourceDefinition", "name": a.cfg.GrantCRD}}); rerr != nil {
 			a.log.Warn("the CRD problem could not be reported", "err", rerr)
 		}
 	}
-	return a.schema.ok
+	return false
 }
-
-// GrantCRDName is the CRD's name, for the report.
-func (c *Config) GrantCRDName() string { return "clearancegrants.clearance.hangar.io" }
 
 // suspectPruned says whether a held merged grant looks pruned: it has objects and none names an owner, which the agent
 // always writes.
@@ -134,4 +173,20 @@ func (a *Agent) forgetOnce(ctx context.Context, prefix string) {
 	if len(drop) > 0 {
 		_ = a.saveLocked(ctx)
 	}
+}
+
+// reportEvery is reportOnce with a repeat: the exception is posted again when it was last posted more than every ago.
+func (a *Agent) reportEvery(ctx context.Context, fp string, every time.Duration, result, detail string, objs []map[string]any) error {
+	a.mu.Lock()
+	last, ok := a.st.Once[fp]
+	a.mu.Unlock()
+	if ok {
+		if t, err := time.Parse(time.RFC3339, last); err == nil && a.now().Sub(t) < every {
+			return nil
+		}
+		a.mu.Lock()
+		delete(a.st.Once, fp)
+		a.mu.Unlock()
+	}
+	return a.reportOnce(ctx, fp, result, detail, objs)
 }

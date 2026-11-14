@@ -44,6 +44,10 @@ const MaxProtectionBody = 1 << 20
 // compromised agent cannot flood the ledger with set changes. Over it, a changing report is refused with 429.
 const MaxProtectionRecordsPerHour = 30
 
+// MaxProtectionAddsPerHour bounds, per cluster, the records of reports that only ADD pairs: removals never spend it, so a
+// legitimate addition is never refused because of removals, and a compromised agent cannot write 5000 additions one by one.
+const MaxProtectionAddsPerHour = 300
+
 // ProtectionStaleAfter is how old a cluster's last report may be before GET /v1/protection says stale (three missed
 // reports of the agent's five minutes). Staleness is shown, never acted on.
 const ProtectionStaleAfter = 15 * time.Minute
@@ -226,9 +230,9 @@ func (s *Server) reportProtection(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		now := s.opt.Clock()
-		next := store.ProtectionSet{Cluster: cluster, Digest: digest, Doc: doc, Seq: cur.Seq, WindowStart: cur.WindowStart, WindowCount: cur.WindowCount}
+		next := store.ProtectionSet{Cluster: cluster, Digest: digest, Doc: doc, Seq: cur.Seq, WindowStart: cur.WindowStart, WindowCount: cur.WindowCount, AddCount: cur.AddCount}
 		if next.WindowStart.IsZero() || now.Sub(next.WindowStart) >= time.Hour || now.Before(next.WindowStart) {
-			next.WindowStart, next.WindowCount = now, 0
+			next.WindowStart, next.WindowCount, next.AddCount = now, 0, 0
 		}
 		out.HeldSeq = cur.Seq
 		countIt := true
@@ -242,6 +246,8 @@ func (s *Server) reportProtection(w http.ResponseWriter, r *http.Request) {
 			}
 			if countIt {
 				next.WindowCount++
+			} else {
+				next.AddCount++
 			}
 			seq, _ := gate.SeqInt(rec["seq"])
 			out.Changed, out.Seq = true, &seq
@@ -259,7 +265,7 @@ func (s *Server) reportProtection(w http.ResponseWriter, r *http.Request) {
 				}
 				out.Changed, out.Seq = false, nil
 				keep := cur // the held set stays; only the recording window moves
-				keep.WindowStart, keep.WindowCount = next.WindowStart, next.WindowCount
+				keep.WindowStart, keep.WindowCount, keep.AddCount = next.WindowStart, next.WindowCount, next.AddCount
 				return tx.PutProtection(r.Context(), keep)
 			}
 			return nil
@@ -279,6 +285,10 @@ func (s *Server) reportProtection(w http.ResponseWriter, r *http.Request) {
 				status, why = http.StatusTooManyRequests, fmt.Sprintf("at most %d removals or explained reports are recorded per hour for a cluster", MaxProtectionRecordsPerHour)
 				return nil
 			}
+		}
+		if onlyAdds && next.AddCount >= MaxProtectionAddsPerHour {
+			status, why = http.StatusTooManyRequests, fmt.Sprintf("at most %d additions are recorded per hour for a cluster", MaxProtectionAddsPerHour)
+			return nil
 		}
 		countIt = !onlyAdds
 		if body.Seq > next.Seq {
@@ -357,8 +367,27 @@ func list(prefix string, pairs, static []gate.ProtectedPair) string {
 	return b.String()
 }
 
+// reportsFor says whether the principal is one a `protection` entry of the provider names.
+func (p *Provider) reportsFor(principal string) bool {
+	for _, e := range p.Protection {
+		if glob, _, ok := strings.Cut(e, "="); ok && pycompat.Match(principal, glob) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) getProtection(w http.ResponseWriter, r *http.Request) {
-	if _, _, ok := s.caller(w, r); !ok {
+	p, prov, ok := s.caller(w, r)
+	if !ok {
+		return
+	}
+	// What is read: an admin reads everything; the agent that reports a cluster reads that cluster's set (it needs its last
+	// sequence number) and the static list; any other provider needs none of it and gets 403. The static list is the
+	// deployment's protected-environment globs, which is not for every provider principal.
+	admin := s.opt.Gate != nil && pycompat.MatchAny(p.ID, s.opt.Gate.Config.Admins)
+	if !admin && !prov.reportsFor(p.ID) {
+		writeError(w, http.StatusForbidden, p.ID+" does not report protection and is not an admin: it may not read it")
 		return
 	}
 	if s.opt.Gate == nil {
@@ -375,6 +404,9 @@ func (s *Server) getProtection(w http.ResponseWriter, r *http.Request) {
 	out := ProtectionState{Static: append([]string{}, s.opt.Gate.Config.Protected...), StaleAfterSeconds: int64(ProtectionStaleAfter / time.Second),
 		Clusters: []ProtectionCluster{}}
 	for _, set := range sets {
+		if !admin && !prov.mayReportProtection(p.ID, set.Cluster) {
+			continue
+		}
 		c, err := protectionCluster(set, now)
 		if err != nil {
 			s.log.ErrorContext(r.Context(), "protection: a stored set is not a list of pairs", "cluster", set.Cluster)

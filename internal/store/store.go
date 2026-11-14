@@ -73,6 +73,8 @@ type ProtectionSet struct {
 	Seq         int64
 	WindowStart time.Time
 	WindowCount int
+	// AddCount counts, in the same window, the records of reports that only ADD pairs (their own, larger bound).
+	AddCount int
 }
 
 // Token is one row of clearance_tokens: the clearance token issued for a cleared change (C-1), in both its

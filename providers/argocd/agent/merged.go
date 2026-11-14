@@ -134,9 +134,18 @@ func (a *Agent) liveHeld(held Grant, ns string, claims []*token.Claims, classes 
 			byChange[c.Subject] = chg{cl.key(), set}
 		}
 	}
+	// A grant written before owners were recorded has none at all: for the single pass that upgrades it, an object is live if
+	// any of the Applications has it. Once a grant has owners, an object without one is not live (the schema check
+	// guarantees the owners are stored), so it cannot ride on another Application's clearance.
+	legacy := true
+	for _, o := range held.Spec.Objects {
+		if o.App != "" {
+			legacy = false
+		}
+	}
 	liveFor := func(app, k, h string) bool {
 		if app == "" {
-			return anyLive[kh{k, h}]
+			return legacy && anyLive[kh{k, h}]
 		}
 		return byApp[app][kh{k, h}]
 	}
@@ -543,4 +552,46 @@ func (a *Agent) reportMergeProblems(ctx context.Context, problems map[string][]m
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// reconcileFrozen is the per-change reconcile while the opt-in is off because the CRD check fails, with one difference:
+// a namespace that holds a merged grant is left exactly as it is. No grant of it is deleted or deactivated, no per-change
+// grant is written for it and no label changes: the Applications are still on the plugin and the namespace is still
+// labelled, and tearing the merged grant down would leave a labelled namespace with nothing admitted. The held merged grant
+// still loses what the feed no longer lists (and what has expired: expireGrants runs after this pass), and gains nothing.
+func (a *Agent) reconcileFrozen(ctx context.Context, v *verified, want, have []Grant) error {
+	heldNS := map[string]bool{}
+	for _, h := range have {
+		if h.Name == MergedGrantName {
+			heldNS[h.Namespace] = true
+		}
+	}
+	if len(heldNS) == 0 {
+		return a.reconcile(ctx, want, have)
+	}
+	view, verr := a.optInView(ctx) // read only
+	unknown := map[string]bool{}
+	if verr == nil {
+		for _, c := range view.classes {
+			if c.envErr != nil {
+				unknown[c.app.DestNS] = true
+			}
+		}
+	}
+	var out []Grant
+	for _, g := range want {
+		if !heldNS[g.Namespace] {
+			out = append(out, g)
+		}
+	}
+	for _, h := range have {
+		if !heldNS[h.Namespace] {
+			continue
+		}
+		if h.Name == MergedGrantName && verr == nil && !unknown[h.Namespace] {
+			h = a.liveHeld(h, h.Namespace, v.claims, view.classes)
+		}
+		out = append(out, h)
+	}
+	return a.reconcile(ctx, out, have)
 }

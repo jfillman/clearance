@@ -59,6 +59,8 @@ type Config struct {
 	PolicyMarkers []string
 	// OptIn is the annotation opt-in (G-ARGO-10c); the zero value is off, and an agent with it off behaves as it did.
 	OptIn OptIn
+	// GrantCRD is the ClearanceGrant CRD's name (<plural>.<group>), for the opt-in's schema check and its report.
+	GrantCRD string
 	// RepostOnStart posts each Application's last operation again on start. The core de-duplicates only records that
 	// carry source.event_id (O-1), which the agent does not send yet (docs/gate.md), so it is off; the state ConfigMap already stops a restart posting what was posted.
 	RepostOnStart bool
@@ -74,6 +76,9 @@ func (c *Config) Defaults() {
 	set(&c.GrantInterval, 30*time.Second)
 	set(&c.ScanInterval, time.Minute)
 	c.OptIn.defaults()
+	if c.GrantCRD == "" {
+		c.GrantCRD = DefaultGrantAPI.Plural + "." + DefaultGrantAPI.Group
+	}
 	set(&c.ResyncEvery, 2*time.Minute)
 	if c.Issuer == "" {
 		c.Issuer = "clearance"

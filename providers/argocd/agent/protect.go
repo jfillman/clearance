@@ -130,7 +130,8 @@ func (a *Agent) reportPairs(ctx context.Context, classes []appClass) bool {
 		}
 		return out
 	}
-	if len(removed) > 0 && len(added) > 0 { // the additions first, on their own
+	reason := optOutReason(classes, removed, cur, unexplained)
+	if (len(removed) > 0 || reason != "") && len(added) > 0 { // the additions first, on their own (also beside an opt-out's explanation)
 		union := append(append([]Pair(nil), prev...), added...)
 		sort.Slice(union, func(i, j int) bool {
 			if union[i].App != union[j].App {
@@ -147,7 +148,6 @@ func (a *Agent) reportPairs(ctx context.Context, classes []appClass) bool {
 		lastSend = a.lastSend
 		a.repMu.Unlock()
 	}
-	reason := optOutReason(classes, removed, cur, unexplained)
 	if (len(removed) > 0 || reason != "") && !lastSend.IsZero() && a.now().Sub(lastSend) < reportDebounce {
 		return false // coalesced into the next report
 	}

@@ -269,7 +269,7 @@ func TestProtectionStalenessIsShown(t *testing.T) {
 	f.do("GET", "/v1/protection", "", nil).want(t, 401, "")
 	f.do("GET", "/v1/protection", "someone/else", nil).want(t, 403, "not a registered provider")
 	f.do("PUT", "/v1/protection/hangar-dev", agentDev, pairs("web/dev")).want(t, 200, "")
-	st := f.do("GET", "/v1/protection", noBinding, nil).want(t, 200, "")
+	st := f.do("GET", "/v1/protection", agentDev, nil).want(t, 200, "")
 	cl := st.body["clusters"].([]any)
 	if len(cl) != 1 || cl[0].(map[string]any)["stale"] != false || st.body["stale_after_seconds"] != float64(900) ||
 		fmt.Sprint(st.body["static"]) != "[hangar-prod/prod]" {
@@ -321,7 +321,7 @@ func seqBounds(t *testing.T, f *fixture) {
 	if got[0].Seq != 6 {
 		t.Fatalf("seq went down: %d", got[0].Seq)
 	}
-	st := f.do("GET", "/v1/protection", noBinding, nil).want(t, 200, "")
+	st := f.do("GET", "/v1/protection", agentDev, nil).want(t, 200, "")
 	if st.body["clusters"].([]any)[0].(map[string]any)["seq"] != float64(6) {
 		t.Fatalf("GET shows the held number: %v", st.body)
 	}
@@ -390,4 +390,44 @@ func TestAReasonIsRecordedEvenWhenTheSetDidNotChange(t *testing.T) {
 		!strings.Contains(fmt.Sprint(recs[1]["result"]), "web-b opted out") {
 		t.Fatalf("%v %v", a.body, recs)
 	}
+}
+
+// Who reads GET /v1/protection: the agent that reports a cluster reads that cluster (its last number) and the static list;
+// another cluster's agent does not see it; a provider that reports nothing is refused.
+func TestOnlyAReportingAgentReadsItsOwnClusterAndTheStaticList(t *testing.T) {
+	f := protectionFixture(t, "")
+	f.do("PUT", "/v1/protection/hangar-dev", agentDev, pairs("web/dev")).want(t, 200, "")
+	f.do("PUT", "/v1/protection/hangar-prod", agentProd, pairs("gate/prod")).want(t, 200, "")
+	dev := f.do("GET", "/v1/protection", agentDev, nil).want(t, 200, "")
+	cl := dev.body["clusters"].([]any)
+	if len(cl) != 1 || cl[0].(map[string]any)["cluster"] != "hangar-dev" || cl[0].(map[string]any)["seq"] == nil || fmt.Sprint(dev.body["static"]) != "[hangar-prod/prod]" {
+		t.Fatalf("hangar-dev's agent: %v", dev.body)
+	}
+	prod := f.do("GET", "/v1/protection", agentProd, nil).want(t, 200, "")
+	if cl := prod.body["clusters"].([]any); len(cl) != 1 || cl[0].(map[string]any)["cluster"] != "hangar-prod" {
+		t.Fatalf("hangar-prod's agent: %v", prod.body)
+	}
+	f.do("GET", "/v1/protection", noBinding, nil).want(t, 403, "may not read")
+	f.do("GET", "/v1/protection", "someone/else", nil).want(t, 403, "not a registered provider")
+	f.do("GET", "/v1/protection", "", nil).want(t, 401, "")
+}
+
+func TestAdditionsHaveTheirOwnHourlyBoundAndRemovalsNeverSpendIt(t *testing.T) {
+	f := protectionFixture(t, "")
+	// Spend the removal budget.
+	for i := 0; i < server.MaxProtectionRecordsPerHour; i++ {
+		f.do("PUT", "/v1/protection/hangar-dev", agentDev, pairs("flip/dev")).want(t, 200, "")
+		f.do("PUT", "/v1/protection/hangar-dev", agentDev, pairs()).want(t, 200, "")
+	}
+	f.do("PUT", "/v1/protection/hangar-dev", agentDev, pairs("flip/dev")).want(t, 200, "") // an addition: not refused for the spent removals
+	// The additions used by the flipping count against the add bound too: 30 so far; add one at a time to the bound.
+	names := []string{"flip/dev"}
+	for i := 0; i < server.MaxProtectionAddsPerHour-server.MaxProtectionRecordsPerHour-1; i++ {
+		names = append(names, fmt.Sprintf("n%d/dev", i))
+		f.do("PUT", "/v1/protection/hangar-dev", agentDev, pairs(names...)).want(t, 200, "")
+	}
+	names = append(names, "over/dev")
+	f.do("PUT", "/v1/protection/hangar-dev", agentDev, pairs(names...)).want(t, 429, "additions")
+	// Another cluster has its own.
+	f.do("PUT", "/v1/protection/hangar-x", agentOdd, pairs("x/dev")).want(t, 200, "")
 }

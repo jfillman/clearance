@@ -111,7 +111,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	a, err := agent.New(agent.Config{Cluster: *cluster, Environment: *environ, Issuer: *issuer, Version: version,
+	a, err := agent.New(agent.Config{GrantCRD: grants.Plural + "." + grants.Group, Cluster: *cluster, Environment: *environ, Issuer: *issuer, Version: version,
 		GrantInterval: *grantEvry, ScanInterval: *scanEvry, ArgoNamespace: *argoNS, Projects: list(*projects),
 		StateNS: *stateNS, RepostOnStart: *repost,
 		OptIn: agent.OptIn{Enabled: *optIn, PluginName: *optPlugin, DenyApps: list(*optDeny), Namespaces: list(*optNS), Interval: *optEvery,
