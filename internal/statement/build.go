@@ -198,6 +198,11 @@ func Summarize(packetJSON, recordsJSONL []byte, profile string) (*Derived, error
 	for _, c := range p.Exceptions.ByClass {
 		stated[c.State] += c.Count
 	}
+	for c := range stated {
+		if !slices.Contains(ExceptionClasses, c) {
+			return nil, errors.New("the packet's exceptions by class name a class this statement does not know")
+		}
+	}
 	var unresolved []Unresolved
 	for _, c := range ExceptionClasses {
 		if stated[c] != tally[c] {

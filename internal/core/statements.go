@@ -35,7 +35,7 @@ func statementConfig(getenv func(string) string, led *ledger.Config) (string, se
 	var o server.StatementOptions
 	listen := getenv("CLEARANCE_VERIFY_LISTEN")
 	if listen == "" {
-		for _, k := range []string{"CLEARANCE_VERIFY_PUBLIC_URL", "CLEARANCE_VERIFY_RATE_PER_CLIENT", "CLEARANCE_VERIFY_BURST_PER_CLIENT",
+		for _, k := range []string{"CLEARANCE_STATEMENT_LOG_KEYS_FILE", "CLEARANCE_STATEMENT_WITNESS_POLICY_FILE", "CLEARANCE_STATEMENT_INDEPENDENT_WITNESSES", "CLEARANCE_VERIFY_PUBLIC_URL", "CLEARANCE_VERIFY_RATE_PER_CLIENT", "CLEARANCE_VERIFY_BURST_PER_CLIENT",
 			"CLEARANCE_VERIFY_RATE_GLOBAL", "CLEARANCE_VERIFY_BURST_GLOBAL", "CLEARANCE_VERIFY_TRUSTED_PROXY_HOPS", "CLEARANCE_VERIFY_MAX_CHECKS"} {
 			if getenv(k) != "" {
 				return "", o, fmt.Errorf("%s is set but CLEARANCE_VERIFY_LISTEN is not: the verify page is off, and is not enabled by its settings", k)

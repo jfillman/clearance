@@ -109,6 +109,10 @@ func TestAPacketThatDisagreesWithItselfOrHidesAStateIsNotCut(t *testing.T) {
 		"by-class is not the rows": func(p map[string]any) {
 			p["exceptions"].(map[string]any)["by_class"].([]any)[0].(map[string]any)["count"] = 1
 		},
+		"an unknown by-class entry": func(p map[string]any) {
+			e := p["exceptions"].(map[string]any)
+			e["by_class"] = append(e["by_class"].([]any), map[string]any{"state": "mystery", "count": 1})
+		},
 		"an unknown class": func(p map[string]any) {
 			p["exceptions"].(map[string]any)["rows"].([]any)[0].(map[string]any)["class"] = "mystery"
 		},
