@@ -10,6 +10,10 @@ metadata:
   name: clearancegrants.clearance.hangar.io
   labels:
     app.kubernetes.io/part-of: clearance
+  annotations:
+    # The schema's revision, for the opt-in agent (G-ARGO-10c): 2 adds objects[].app and objects[].expiresAt. The agent reads the
+    # schema itself and does not run the opt-in against a CRD that lacks them; the number is for people and for `kubectl get crd`.
+    clearance.hangar.io/schema-revision: "2"
 spec:
   group: clearance.hangar.io
   names: {kind: ClearanceGrant, listKind: ClearanceGrantList, plural: clearancegrants, singular: clearancegrant, shortNames: [cgrant]}
@@ -53,6 +57,8 @@ spec:
                     properties:
                       rendered: {type: string, minLength: 1, maxLength: 80}
                       changed: {type: boolean, description: "In the diff this grant clears (display only; unchanged objects stay admitted)."}
+                      expiresAt: {type: string, format: date-time, description: "A merged grant only: when the clearance this object came from expires; the agent drops the object then (admission never reads it)."}
+                      app: {type: string, maxLength: 253, description: "A merged grant only: the Application that owns the object (the incumbent when two claim one key). Display; admission does not read it."}
                 carried:
                   type: array
                   maxItems: 16
@@ -78,6 +84,8 @@ spec:
                           properties:
                             rendered: {type: string, minLength: 1, maxLength: 80}
                             changed: {type: boolean}
+                            app: {type: string, maxLength: 253}
+                            expiresAt: {type: string, format: date-time}
                 expiresAt: {type: string, format: date-time, description: "The agent enforces it (status.valid); admission never reads it."}
                 clearance:
                   type: object

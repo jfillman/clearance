@@ -148,6 +148,19 @@ func grantIndex(grants []Grant, ns string, now time.Time) (map[string]map[string
 			}
 			idx[k][trimSHA(o.Rendered)] = true
 		}
+		// The other live cleared trees the grant carries are as cleared as its own objects (the merged grant has no
+		// per-change grants beside it that would list them); the agent drops an entry at its own expiry.
+		for _, c := range g.Spec.Carried {
+			if !expiryAfter(c.ExpiresAt, now) {
+				continue
+			}
+			for k, o := range c.Objects {
+				if idx[k] == nil {
+					idx[k] = map[string]bool{}
+				}
+				idx[k][trimSHA(o.Rendered)] = true
+			}
+		}
 	}
 	return idx, app
 }

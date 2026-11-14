@@ -16,6 +16,11 @@ import (
 type Core interface {
 	Record(ctx context.Context, req *client.RecordRequest) (*client.RecordRef, error)
 	Breakglass(ctx context.Context, cluster string) ([]Window, error)
+	// ReportProtection reports the cluster's protected app/environment pairs (PUT /v1/protection/{cluster}); only the
+	// opt-in (Config.OptIn) calls it.
+	ReportProtection(ctx context.Context, cluster string, req *client.ProtectionRequest) (*client.ProtectionResult, error)
+	// ProtectionSeq is the sequence number of the last report the core took for the cluster (0: none).
+	ProtectionSeq(ctx context.Context, cluster string) (int64, error)
 }
 
 // Window is an open break-glass window (GET /v1/breakglass).
@@ -52,6 +57,10 @@ type Config struct {
 	Wait          WaitPin    // the gate's own PreSync wait Job, which the scan does not report
 	// PolicyMarkers are the texts that mark an Argo CD sync message as the admission policy's refusal.
 	PolicyMarkers []string
+	// OptIn is the annotation opt-in (G-ARGO-10c); the zero value is off, and an agent with it off behaves as it did.
+	OptIn OptIn
+	// GrantCRD is the ClearanceGrant CRD's name (<plural>.<group>), for the opt-in's schema check and its report.
+	GrantCRD string
 	// RepostOnStart posts each Application's last operation again on start. The core de-duplicates only records that
 	// carry source.event_id (O-1), which the agent does not send yet (docs/gate.md), so it is off; the state ConfigMap already stops a restart posting what was posted.
 	RepostOnStart bool
@@ -66,6 +75,10 @@ func (c *Config) Defaults() {
 	}
 	set(&c.GrantInterval, 30*time.Second)
 	set(&c.ScanInterval, time.Minute)
+	c.OptIn.defaults()
+	if c.GrantCRD == "" {
+		c.GrantCRD = DefaultGrantAPI.Plural + "." + DefaultGrantAPI.Group
+	}
 	set(&c.ResyncEvery, 2*time.Minute)
 	if c.Issuer == "" {
 		c.Issuer = "clearance"
@@ -124,6 +137,16 @@ type Agent struct {
 	st   State
 	keys keyCache
 
+	schemaMu sync.Mutex
+	schema   schemaState
+	optS     *optState  // the opt-in's memory (the opt-in loop's own)
+	repMu    sync.Mutex // rep
+	rep      report     // the last set of protected pairs the core took
+	// explained: the opt-outs the core has been told about (memory; a restart tells it once more, inside its hourly bound)
+	explained    map[string]bool
+	lastSend     time.Time // when the core last took a report
+	refusedSince time.Time // since when the core has been refusing the agent's reports
+
 	protMu   sync.Mutex // the protected-namespace cache of handleApp
 	prot     map[string]map[string]string
 	protUpTo time.Time
@@ -154,6 +177,31 @@ type State struct {
 	Seq        int64             `json:"seq"`
 	Outcomes   map[string]string `json:"outcomes"`
 	Exceptions map[string]string `json:"exceptions"`
+	// The opt-in's (G-ARGO-10c) memory that must survive a restart: when each Application was last written (the
+	// three-writes-in-ten-minutes bound), the merged-grant problems being reported and since when, the pairs the core
+	// last took and the sequence number of the last report.
+	Writes    map[string][]string     `json:"writes,omitempty"`
+	Problems  map[string]ProblemState `json:"problems,omitempty"`
+	Reported  []Pair                  `json:"reported,omitempty"`
+	ReportSeq int64                   `json:"reportSeq,omitempty"`
+	// Once: exceptions the opt-in reported once and will not report again until the condition has gone (fingerprint -> time).
+	Once map[string]string `json:"once,omitempty"`
+}
+
+// Pair is an app and environment.
+type Pair struct {
+	App string `json:"app"`
+	Env string `json:"env"`
+}
+
+// ProblemState is one merged-grant problem (a conflict, an overflow) that is being reported: since when, and when it
+// was last reported.
+type ProblemState struct {
+	Namespace string `json:"namespace"`
+	Kind      string `json:"kind"`
+	Since     string `json:"since"`
+	Last      string `json:"last"`
+	Detail    string `json:"detail"`
 }
 
 const stateKey = "state.json"
@@ -177,6 +225,15 @@ func (a *Agent) Load(ctx context.Context) error {
 	}
 	if a.st.Exceptions == nil {
 		a.st.Exceptions = map[string]string{}
+	}
+	if a.st.Writes == nil {
+		a.st.Writes = map[string][]string{}
+	}
+	if a.st.Once == nil {
+		a.st.Once = map[string]string{}
+	}
+	if a.st.Problems == nil {
+		a.st.Problems = map[string]ProblemState{}
 	}
 	return nil
 }
@@ -217,6 +274,10 @@ func (a *Agent) Run(ctx context.Context) error {
 	tick(a.cfg.ScanInterval, "exceptions", a.ScanExceptions)
 	wg.Add(1)
 	go func() { defer wg.Done(); a.RunOutcomes(ctx) }()
+	if a.cfg.OptIn.Enabled {
+		wg.Add(1)
+		go func() { defer wg.Done(); a.RunOptIn(ctx) }()
+	}
 	wg.Wait()
 	return ctx.Err()
 }

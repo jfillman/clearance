@@ -1,0 +1,10 @@
+# The annotation opt-in on (G-ARGO-10c). Example names only.
+cluster: cluster-a
+apiURL: https://clearance-api.example.test
+coreURL: https://clearance.example.test
+argocd:
+  namespace: argocd
+  projects: [tenants]
+protectedNamespaces: [app-web-prod, app-api-prod]
+optIn:
+  enabled: true

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -42,25 +43,44 @@ func (c *clock) add(d time.Duration) {
 // fakeKube is the protected cluster and its Argo CD: namespaces, grants, Applications and live objects, in memory.
 // It fails a test the moment a namespace holds two active grants (the admission policy needs exactly one).
 type fakeKube struct {
-	t        *testing.T
-	mu       sync.Mutex
-	ns       map[string]map[string]string
-	nsLists  int
-	grants   map[string]agent.Grant
-	apps     []agent.Application
-	objs     map[string][]agent.ObjectDetail // by namespace
-	data     map[string]map[string]string
-	grantOps int
-	workOps  int // anything that would touch a workload: must stay 0
-	failList bool
-	log      []string        // grant operations, in order
-	failName map[string]bool // writes of these grant names fail
-	verbs    map[string]int  // create, update, delete, valid, put: the writes the agent made
+	t             *testing.T
+	mu            sync.Mutex
+	ns            map[string]map[string]string
+	nsLists       int
+	grants        map[string]agent.Grant
+	apps          []agent.Application
+	objs          map[string][]agent.ObjectDetail // by namespace
+	data          map[string]map[string]string
+	grantOps      int
+	workOps       int // anything that would touch a workload: must stay 0
+	failList      bool
+	log           []string        // grant operations, in order
+	failName      map[string]bool // writes of these grant names fail
+	verbs         map[string]int  // create, update, delete, valid, put, app, ns: the writes the agent made
+	appsets       map[string]agent.AppSet
+	scopes        map[string]bool
+	scopeErr      error
+	rv            int              // the Applications' resourceVersion counter
+	failApp       map[string]error // UpdateApplicationSource of these Applications fails
+	failNS        map[string]error // SetNamespaceProtected of these namespaces fails
+	listAppErr    error
+	nsReadErr     map[string]error // GetNamespaceLabels of these namespaces fails
+	reads         map[string]int
+	schemaMissing []string // CRD schema fields that are not installed
+	schemaErr     error
+	liveExempt    map[string]bool
+	pruning       bool // the fake API server prunes fields the schema lacks
+	strict        bool
+	everActive    map[string]bool
+	// live: the key=hash pairs of namespace ns that the verified feed lists now (nil: not checked)
+	live func(ns string) map[string]bool
 }
 
 func newKube(t *testing.T) *fakeKube {
 	return &fakeKube{t: t, ns: map[string]map[string]string{}, grants: map[string]agent.Grant{},
-		verbs: map[string]int{}, objs: map[string][]agent.ObjectDetail{}, data: map[string]map[string]string{}}
+		verbs: map[string]int{}, objs: map[string][]agent.ObjectDetail{}, data: map[string]map[string]string{},
+		appsets: map[string]agent.AppSet{}, scopes: map[string]bool{"Namespace": true, "Deployment": false}, failApp: map[string]error{},
+		failNS: map[string]error{}, nsReadErr: map[string]error{}, reads: map[string]int{}, everActive: map[string]bool{}}
 }
 
 func (k *fakeKube) protect(ns string, labels map[string]string) {
@@ -91,17 +111,33 @@ func (k *fakeKube) checkActive() {
 		}
 	}
 	for ns, n := range active {
-		if n > 1 {
+		// Two active grants are allowed in one case: a flip to or from a merged grant activates the new one first, and
+		// the policy then needs an object to pass both (never more than either lists).
+		merged := 0
+		for _, g := range k.grants {
+			if g.Namespace == ns && g.Active() && g.Labels[agent.LabelMerged] == "true" {
+				merged++
+			}
+		}
+		if n > 2 || (n == 2 && merged == 0) {
 			k.t.Errorf("namespace %s holds %d active grants", ns, n)
 		}
 	}
+	k.checkLabelled("a grant write")
+	k.checkFeed("a grant write")
 }
 
 func (k *fakeKube) ProtectedNamespaces(context.Context) (map[string]map[string]string, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.nsLists++
-	return k.ns, nil
+	out := map[string]map[string]string{}
+	for ns, l := range k.ns {
+		if l[agent.LabelProtected] == "true" { // the API's label selector
+			out[ns] = l
+		}
+	}
+	return out, nil
 }
 func (k *fakeKube) ListGrants(context.Context) ([]agent.Grant, error) {
 	k.mu.Lock()
@@ -127,7 +163,7 @@ func (k *fakeKube) CreateGrant(_ context.Context, g agent.Grant) error {
 		return errors.New("already exists")
 	}
 	k.log = append(k.log, fmt.Sprintf("create %s/%s active=%v", g.Namespace, g.Name, g.Active()))
-	k.grants[key] = cp(g)
+	k.grants[key] = k.prune(cp(g))
 	k.checkActive()
 	return nil
 }
@@ -146,7 +182,7 @@ func (k *fakeKube) UpdateGrant(_ context.Context, g, _ agent.Grant) error {
 		return errors.New("not found")
 	}
 	k.log = append(k.log, fmt.Sprintf("update %s/%s active=%v", g.Namespace, g.Name, g.Active()))
-	n := cp(g)
+	n := k.prune(cp(g))
 	n.Valid = old.Valid // spec and labels are replaced; status is not touched
 	k.grants[key] = n
 	k.checkActive()
@@ -164,6 +200,8 @@ func (k *fakeKube) SetGrantValid(_ context.Context, ns, name string, v bool, _ s
 	}
 	g.Valid = &v
 	k.grants[ns+"/"+name] = g
+	k.checkLabelled("a status write")
+	k.checkFeed("a status write")
 	return nil
 }
 func (k *fakeKube) DeleteGrant(_ context.Context, ns, name string) error {
@@ -172,11 +210,17 @@ func (k *fakeKube) DeleteGrant(_ context.Context, ns, name string) error {
 	k.grantOps++
 	k.verbs["delete"]++
 	delete(k.grants, ns+"/"+name)
+	k.log = append(k.log, "delete "+ns+"/"+name)
+	k.checkLabelled("a grant delete")
+	k.checkFeed("a grant delete")
 	return nil
 }
 func (k *fakeKube) ListApplications(context.Context) ([]agent.Application, string, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	if k.listAppErr != nil {
+		return nil, "", k.listAppErr
+	}
 	return append([]agent.Application(nil), k.apps...), "1", nil
 }
 func (k *fakeKube) WatchApplications(ctx context.Context, _ string, _ func(agent.Application)) error {
@@ -206,7 +250,14 @@ func (k *fakeKube) PutData(_ context.Context, ns, name string, d map[string]stri
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.verbs["put"]++
-	k.data[ns+"/"+name] = d
+	cur := map[string]string{}
+	for a, b := range k.data[ns+"/"+name] { // a merge patch of data: other keys stay
+		cur[a] = b
+	}
+	for a, b := range d {
+		cur[a] = b
+	}
+	k.data[ns+"/"+name] = cur
 	return nil
 }
 
@@ -217,6 +268,71 @@ type fakeCore struct {
 	records []client.RecordRequest
 	down    bool
 	windows []agent.Window
+	// protection: what ReportProtection saw (every call), the set held, and what the "core" says about static pairs.
+	reports    []client.ProtectionRequest
+	held       []client.ProtectedPair
+	static     map[string]bool // app/env pairs CLEARANCE_PROTECTED_ENVIRONMENTS protects (named in static_removed)
+	reportDown bool
+	heldSeq    int64                                     // the number of the last report the "core" took
+	refuse     func(req *client.ProtectionRequest) error // a refusal for some reports (a 4xx)
+}
+
+func (c *fakeCore) ProtectionSeq(context.Context, string) (int64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.reportDown || c.down {
+		return 0, errors.New("core unreachable")
+	}
+	return c.heldSeq, nil
+}
+
+func (c *fakeCore) ReportProtection(_ context.Context, cluster string, req *client.ProtectionRequest) (*client.ProtectionResult, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.reportDown || c.down {
+		return nil, errors.New("core unreachable")
+	}
+	if c.refuse != nil {
+		if err := c.refuse(req); err != nil {
+			return nil, err
+		}
+	}
+	if cluster != "hangar-prod" {
+		c.t.Errorf("a report for cluster %s: the agent reports its own", cluster)
+	}
+	pairs := make([]gate.ProtectedPair, 0, len(req.Pairs))
+	for _, p := range req.Pairs {
+		pairs = append(pairs, gate.ProtectedPair{App: p.App, Env: p.Env})
+	}
+	if _, err := gate.NormalizePairs(pairs); err != nil {
+		c.t.Errorf("the core would refuse the report: %v", err)
+	}
+	if len(req.Reason) > 500 {
+		c.t.Errorf("reason over the core's 500 bytes: %d", len(req.Reason))
+	}
+	if req.Seq <= c.heldSeq && req.Seq != 0 && c.held != nil && !slices.Equal(c.held, req.Pairs) {
+		return nil, &client.APIError{Op: "reportProtection", Status: 409, Message: "not above the held report"}
+	}
+	if req.Seq > c.heldSeq {
+		c.heldSeq = req.Seq
+	}
+	c.reports = append(c.reports, *req)
+	res := &client.ProtectionResult{Cluster: cluster, Pairs: len(req.Pairs), HeldSeq: c.heldSeq}
+	for _, n := range req.Pairs {
+		if !slices.Contains(c.held, n) {
+			res.Added, res.Changed = append(res.Added, n), true
+		}
+	}
+	for _, o := range c.held {
+		if !slices.Contains(req.Pairs, o) {
+			res.Removed, res.Changed = append(res.Removed, o), true
+			if c.static[o.App+"/"+o.Env] {
+				res.StaticRemoved = append(res.StaticRemoved, o)
+			}
+		}
+	}
+	c.held = append([]client.ProtectedPair(nil), req.Pairs...)
+	return res, nil
 }
 
 func (c *fakeCore) Record(_ context.Context, req *client.RecordRequest) (*client.RecordRef, error) {
@@ -286,6 +402,8 @@ type fakeFeeds struct {
 	claims  []token.Claims
 	// raw overrides the body (a tampered or odd feed).
 	raw []byte
+	// published: the claims of the feed as last signed: what the agent has verified and may grant from.
+	published []token.Claims
 }
 
 func newFeeds(t *testing.T, c *clock) *fakeFeeds {
@@ -319,6 +437,7 @@ func (f *fakeFeeds) publish() []byte {
 
 func (f *fakeFeeds) publishAt(epoch string, seq int64, cluster string, s *token.KeySigner) []byte {
 	now := f.clock.now()
+	f.published = append([]token.Claims(nil), f.claims...)
 	feed := token.Feed{Type: token.FeedType, Issuer: "clearance", Cluster: cluster, Epoch: epoch, Seq: seq,
 		IssuedAt: now.Unix(), Expires: now.Add(5 * time.Minute).Unix(), RecordsSeq: 10}
 	var toks []map[string]any

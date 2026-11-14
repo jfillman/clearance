@@ -452,6 +452,39 @@ type TargetsResult struct {
 	Seq     *int64 `json:"seq"`
 }
 
+// -- PUT /v1/protection/{cluster} ---------------------------------------------------------------------------------
+
+// ProtectedPair is one app and environment an agent reports as protected.
+type ProtectedPair struct {
+	App string `json:"app"`
+	Env string `json:"env"`
+}
+
+// ProtectionRequest is a cluster agent's whole set of protected pairs. Pairs nil is sent as [] (withdraw every pair).
+// Reason is free text the core records as claimed (an opt-out says which Application).
+type ProtectionRequest struct {
+	Pairs  []ProtectedPair `json:"pairs"`
+	Reason string          `json:"reason,omitempty"`
+	// Seq is the report's number, which only goes up per cluster: the core refuses a lower or equal one that carries a
+	// different set (an old or replayed report cannot replace a newer one). 0: not numbered.
+	Seq int64 `json:"seq,omitempty"`
+}
+
+// ProtectionResult is what a report did: the digest of the set the core now holds, whether it differs from the last
+// (a change is one protection.report record, whose seq is Seq), the pairs it added and removed, and which removed pairs
+// CLEARANCE_PROTECTED_ENVIRONMENTS still protects.
+type ProtectionResult struct {
+	Cluster       string          `json:"cluster"`
+	Digest        string          `json:"digest"`
+	Pairs         int             `json:"pairs"`
+	Changed       bool            `json:"changed"`
+	Seq           *int64          `json:"seq"`
+	HeldSeq       int64           `json:"held_seq"`
+	Added         []ProtectedPair `json:"added"`
+	Removed       []ProtectedPair `json:"removed"`
+	StaticRemoved []ProtectedPair `json:"static_removed"`
+}
+
 // -- PUT /v1/definitions -------------------------------------------------------------------------------------------
 
 // DefinitionsRequest is the provider's whole set of cluster-pinned agent definitions. Provider empty is
