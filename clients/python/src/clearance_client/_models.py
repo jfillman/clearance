@@ -18,7 +18,7 @@ CONTRACT_VERSION = "1.0.0"
 
 RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "run.finish", "human.answer", "session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome", "deploy.exception", "deploy.degraded", "federated.decision", "observation", "assessment", "resolution", "observation.health", "observation.verification")
 
-__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateBulkResolutionFailed", "GateBulkResolutionRecorded", "GateBulkResolutionRequest", "GateBulkResolutionResult", "GateBulkResolutionSkipped", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateReason", "GateRequirement", "GateResolutionRecorded", "GateResolutionRequest", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProvidedDefinition", "ProviderEvent", "Ready", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "TargetsGate", "TargetsObserver", "TargetsRequest", "TargetsResult", "TargetsTarget", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
+__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Delivery", "DeliveryRequest", "DeliveryWindow", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateBulkResolutionFailed", "GateBulkResolutionRecorded", "GateBulkResolutionRequest", "GateBulkResolutionResult", "GateBulkResolutionSkipped", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateReason", "GateRequirement", "GateResolutionRecorded", "GateResolutionRequest", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PacketBundle", "PacketCheckpointRef", "PacketError", "PacketLinks", "PacketMeta", "PacketPublished", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProvidedDefinition", "ProviderEvent", "Ready", "ReceiptRecorded", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "TargetsGate", "TargetsObserver", "TargetsRequest", "TargetsResult", "TargetsTarget", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -319,6 +319,68 @@ class DefinitionsSourceView(Model):
     repo: str | None = None
     version: str | None = None
     xr: str | None = None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class Delivery(Model):
+    """Contract schema Delivery."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("credential", "credential", ("str",), True),
+        Field("engagement", "engagement", ("str",), False),
+        Field("fetch", "fetch", ("str",), True),
+        Field("hash", "hash", ("str",), True),
+        Field("id", "id", ("str",), True),
+        Field("packet_id", "packet_id", ("str",), True),
+        Field("recipient", "recipient", ("str",), True),
+        Field("scope", "scope", ("list", ("str",)), True),
+        Field("seq", "seq", ("int",), True),
+        Field("window", "window", ("ref", "DeliveryWindow"), True),
+    )
+
+    credential: str
+    engagement: str | None = None
+    fetch: str
+    hash: str
+    id: str
+    packet_id: str
+    recipient: str
+    scope: list[str]
+    seq: int
+    window: DeliveryWindow
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class DeliveryRequest(Model):
+    """Contract schema DeliveryRequest (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("engagement", "engagement", ("str",), False),
+        Field("recipient", "recipient", ("str",), True),
+        Field("scope", "scope", ("list", ("str",)), False),
+        Field("window", "window", ("ref", "DeliveryWindow"), True),
+    )
+
+    engagement: str | None = None
+    recipient: str
+    scope: list[str] | None = None
+    window: DeliveryWindow
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class DeliveryWindow(Model):
+    """Contract schema DeliveryWindow (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("from", "from_", ("str",), False),
+        Field("to", "to", ("str",), True),
+    )
+
+    from_: str | None = None
+    to: str
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -1432,6 +1494,122 @@ class OutcomeRequest(Model):
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
+class PacketBundle(Model):
+    """Contract schema PacketBundle."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("files", "files", ("map", ("str",)), True),
+        Field("schema", "schema", ("str",), True),
+    )
+
+    files: dict[str, str]
+    schema: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class PacketCheckpointRef(Model):
+    """Contract schema PacketCheckpointRef."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("origin", "origin", ("str",), True),
+        Field("root", "root", ("str",), True),
+        Field("size", "size", ("int",), True),
+    )
+
+    origin: str
+    root: str
+    size: int
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class PacketError(Model):
+    """Contract schema PacketError."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("error", "error", ("str",), True),
+        Field("rule", "rule", ("str",), False),
+    )
+
+    error: str
+    rule: str | None = None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class PacketLinks(Model):
+    """Contract schema PacketLinks."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("deliveries", "deliveries", ("str",), True),
+        Field("fetch", "fetch", ("str",), True),
+    )
+
+    deliveries: str
+    fetch: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class PacketMeta(Model):
+    """Contract schema PacketMeta."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("assertions", "assertions", ("list", ("str",)), True),
+        Field("chain_count", "chain_count", ("int",), True),
+        Field("chain_head", "chain_head", ("str",), True),
+        Field("checkpoint", "checkpoint", ("nullable", ("ref", "PacketCheckpointRef")), False),
+        Field("controls", "controls", ("list", ("str",)), True),
+        Field("from", "from_", ("str",), True),
+        Field("mappings", "mappings", ("list", ("str",)), True),
+        Field("receipts", "receipts", ("int",), True),
+        Field("title", "title", ("str",), False),
+        Field("to", "to", ("str",), True),
+        Field("view", "view", ("str",), True),
+    )
+
+    assertions: list[str]
+    chain_count: int
+    chain_head: str
+    checkpoint: PacketCheckpointRef | None = None
+    controls: list[str]
+    from_: str
+    mappings: list[str]
+    receipts: int
+    title: str | None = None
+    to: str
+    view: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class PacketPublished(Model):
+    """Contract schema PacketPublished."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("created", "created", ("bool",), True),
+        Field("digest", "digest", ("str",), True),
+        Field("hash", "hash", ("str",), False),
+        Field("id", "id", ("str",), True),
+        Field("links", "links", ("ref", "PacketLinks"), True),
+        Field("packet", "packet", ("ref", "PacketMeta"), True),
+        Field("seq", "seq", ("nullable", ("int",)), True),
+        Field("size", "size", ("int",), True),
+    )
+
+    created: bool
+    digest: str
+    hash: str | None = None
+    id: str
+    links: PacketLinks
+    packet: PacketMeta
+    seq: int | None
+    size: int
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
 class PinSource(Model):
     """Contract schema PinSource (a request type: unknown keys are refused by the core)."""
 
@@ -1757,6 +1935,30 @@ class Ready(Model):
     ledger: LedgerStatus | None = None
     ok: bool
     policy: PolicyRef
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class ReceiptRecorded(Model):
+    """Contract schema ReceiptRecorded."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("created", "created", ("bool",), True),
+        Field("hash", "hash", ("str",), True),
+        Field("packet_id", "packet_id", ("str",), True),
+        Field("payload_sha256", "payload_sha256", ("str",), True),
+        Field("recipient", "recipient", ("str",), True),
+        Field("seq", "seq", ("int",), True),
+        Field("verdict", "verdict", ("str",), True),
+    )
+
+    created: bool
+    hash: str
+    packet_id: str
+    payload_sha256: str
+    recipient: str
+    seq: int
+    verdict: str
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -2284,6 +2486,9 @@ MODELS: dict[str, type[Model]] = {
     "DefinitionsRequest": DefinitionsRequest,
     "DefinitionsResult": DefinitionsResult,
     "DefinitionsSourceView": DefinitionsSourceView,
+    "Delivery": Delivery,
+    "DeliveryRequest": DeliveryRequest,
+    "DeliveryWindow": DeliveryWindow,
     "Effect": Effect,
     "ErrorResponse": ErrorResponse,
     "EvaluationRequest": EvaluationRequest,
@@ -2328,6 +2533,12 @@ MODELS: dict[str, type[Model]] = {
     "Limits": Limits,
     "Models": Models,
     "OutcomeRequest": OutcomeRequest,
+    "PacketBundle": PacketBundle,
+    "PacketCheckpointRef": PacketCheckpointRef,
+    "PacketError": PacketError,
+    "PacketLinks": PacketLinks,
+    "PacketMeta": PacketMeta,
+    "PacketPublished": PacketPublished,
     "PinSource": PinSource,
     "PinnedDefinition": PinnedDefinition,
     "PolicyRef": PolicyRef,
@@ -2341,6 +2552,7 @@ MODELS: dict[str, type[Model]] = {
     "ProvidedDefinition": ProvidedDefinition,
     "ProviderEvent": ProviderEvent,
     "Ready": Ready,
+    "ReceiptRecorded": ReceiptRecorded,
     "RecordRef": RecordRef,
     "RecordRequest": RecordRequest,
     "Refusal": Refusal,
@@ -2390,6 +2602,10 @@ OPERATIONS: dict[str, Operation] = {
     "getKeys": Operation("GET", "/v1/keys", "none", 65536, None, TokenJWKS),
     "setObservationResolutions": Operation("POST", "/v1/observations/resolutions", "bearer", 65536, GateBulkResolutionRequest, GateBulkResolutionResult),
     "setObservationResolution": Operation("POST", "/v1/observations/{seq}/resolution", "bearer", 16384, GateResolutionRequest, GateResolutionRecorded),
+    "publishPacket": Operation("POST", "/v1/packets", "bearer", 67112960, None, PacketPublished),
+    "getPacket": Operation("GET", "/v1/packets/{id}", "packet-credential", 65536, None, PacketBundle),
+    "deliverPacket": Operation("POST", "/v1/packets/{id}/deliveries", "bearer", 8192, DeliveryRequest, Delivery),
+    "acceptReceipt": Operation("POST", "/v1/packets/{id}/receipts", "recipient-signature", 262144, None, ReceiptRecorded),
     "verifyProvenance": Operation("POST", "/v1/provenance", "bearer", 4194304, None, ProvenanceVerdict),
     "appendRecord": Operation("POST", "/v1/records", "provider", 262144, RecordRequest, RecordRef),
     "publishTargets": Operation("PUT", "/v1/targets/{source}", "provider", 4194304, TargetsRequest, TargetsResult),

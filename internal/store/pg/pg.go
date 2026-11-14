@@ -153,6 +153,14 @@ CREATE TABLE IF NOT EXISTS clearance_ledger_checkpoints (
 CREATE INDEX IF NOT EXISTS clearance_evidence_change ON clearance_evidence ((record->'change'->>'id'), seq)
   WHERE record->>'tool' LIKE 'deploy.%';
 CREATE INDEX IF NOT EXISTS clearance_attestations_seq ON clearance_attestations (record_seq DESC);
+CREATE TABLE IF NOT EXISTS clearance_packets (
+  id         text        PRIMARY KEY,
+  digest     text        NOT NULL,
+  size       bigint      NOT NULL,
+  meta       jsonb       NOT NULL,
+  bundle     bytea       NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
 `
 
 // Options tune a store; the zero value is the defaults.
@@ -671,6 +679,21 @@ func (t *tx) PutAttestation(ctx context.Context, a store.Attestation) error {
 	return nil
 }
 
+func (t *tx) PutPacket(ctx context.Context, p store.Packet) error {
+	ctx = t.ctx // detached and bounded: see Store.Atomic
+	if err := t.lock(); err != nil {
+		return err
+	}
+	defer t.mu.Unlock()
+	ctx, cancel := deadline(ctx, t.s.opt)
+	defer cancel()
+	if _, err := t.tx.Exec(ctx, "INSERT INTO clearance_packets (id, digest, size, meta, bundle) VALUES ($1, $2, $3, $4, $5) "+
+		"ON CONFLICT (id) DO NOTHING", p.ID, p.Digest, int64(len(p.Bundle)), string(p.Meta), p.Bundle); err != nil {
+		return fmt.Errorf("pg: put packet: %w", err)
+	}
+	return nil
+}
+
 func (t *tx) PutFeed(ctx context.Context, f store.Feed) error {
 	ctx = t.ctx // detached and bounded: see Store.Atomic
 	if err := t.lock(); err != nil {
@@ -990,6 +1013,37 @@ func (t *tx) Attestation(ctx context.Context, changeID string) (store.Attestatio
 	}
 	defer done()
 	return attestationOne(ctx, q, t.s.opt, changeID)
+}
+
+func (r *Reader) Packet(ctx context.Context, id string) (store.Packet, error) {
+	return packetOne(ctx, r.pool, r.opt, id)
+}
+
+func (t *tx) Packet(ctx context.Context, id string) (store.Packet, error) {
+	ctx = t.ctx // detached and bounded: see Store.Atomic
+	q, done, err := t.q()
+	if err != nil {
+		return store.Packet{}, err
+	}
+	defer done()
+	return packetOne(ctx, q, t.s.opt, id)
+}
+
+func packetOne(ctx context.Context, q querier, opt Options, id string) (store.Packet, error) {
+	ctx, cancel := deadline(ctx, opt)
+	defer cancel()
+	var p store.Packet
+	var meta string
+	err := q.QueryRow(ctx, "SELECT id, digest, size, meta::text, bundle, created_at FROM clearance_packets WHERE id = $1", id).
+		Scan(&p.ID, &p.Digest, &p.Size, &meta, &p.Bundle, &p.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.Packet{}, store.ErrNotFound
+	}
+	if err != nil {
+		return store.Packet{}, fmt.Errorf("pg: %w", err)
+	}
+	p.Meta, p.CreatedAt = []byte(meta), p.CreatedAt.UTC()
+	return p, nil
 }
 
 func (r *Reader) Feed(ctx context.Context, cluster string) (store.Feed, error) {

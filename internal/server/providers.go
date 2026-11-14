@@ -12,6 +12,7 @@ import (
 	"github.com/jfillman/clearance/internal/evidence"
 	"github.com/jfillman/clearance/internal/observe"
 	"github.com/jfillman/clearance/internal/pycompat"
+	"github.com/jfillman/clearance/internal/token"
 )
 
 // Provider is one entry of CLEARANCE_PROVIDERS: a registered provider, the principals it authenticates as, and
@@ -48,6 +49,52 @@ type Provider struct {
 	// the Map's registry): ["hangar-prod"], or ["*"]. A publish replaces only its own source's set, so several
 	// providers may publish (each its own sources); a source belongs to the first provider that lists it.
 	Targets []string `json:"targets,omitempty"`
+	// Class is "" (or "enforcement"): an enforcement point that asks first and reports what happened, or "assurance"
+	// (P-1): a recipient of evidence packets (an audit firm, a GRC hub, a customer's reviewer). An assurance provider
+	// is not a caller: it has no principals, writes no records through POST /v1/records, and is never a Clearance
+	// account. It reads the one packet a subscriber opened to it, under a time-boxed credential, and signs receipts
+	// with one of Keys.
+	Class string `json:"class,omitempty"`
+	// Keys are an assurance provider's registered public keys: ECDSA P-256, PKIX PEM (`openssl ec -pubout`). A receipt
+	// is accepted only when one of them signed it. At least one, at most MaxRecipientKeys.
+	Keys []string `json:"keys,omitempty"`
+}
+
+// The provider classes.
+const (
+	ClassEnforcement = "enforcement"
+	ClassAssurance   = "assurance"
+)
+
+// MaxRecipientKeys is how many keys an assurance provider registers (a key in use and the ones being rotated).
+const MaxRecipientKeys = 8
+
+// Assurance reports whether the provider is an assurance provider (a recipient of packets).
+func (p *Provider) Assurance() bool { return p.Class == ClassAssurance }
+
+// RecipientKeys is the assurance provider's registered keys by key id (the RFC 7638 thumbprint).
+func (p *Provider) RecipientKeys() (token.KeySet, error) {
+	ks := token.KeySet{}
+	for _, k := range p.Keys {
+		one, err := token.ParsePublicKeys([]byte(k))
+		if err != nil {
+			return nil, err
+		}
+		for id, pub := range one {
+			ks[id] = pub
+		}
+	}
+	return ks, nil
+}
+
+// recipient is the registered assurance provider named name, or nil.
+func recipient(ps []Provider, name string) *Provider {
+	for i := range ps {
+		if ps[i].Name == name && ps[i].Assurance() {
+			return &ps[i]
+		}
+	}
+	return nil
 }
 
 var providerName = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,62}$`)
@@ -81,6 +128,16 @@ func ParseProviders(v string) ([]Provider, error) {
 			return nil, fmt.Errorf("CLEARANCE_PROVIDERS: %q is listed twice", p.Name)
 		case p.Version == "" || len(p.Version) > 64:
 			return nil, fmt.Errorf("CLEARANCE_PROVIDERS[%d]: version is 1 to 64 characters", i)
+		case p.Class != "" && p.Class != ClassEnforcement && p.Class != ClassAssurance:
+			return nil, fmt.Errorf("CLEARANCE_PROVIDERS[%d]: class is %q or %q", i, ClassEnforcement, ClassAssurance)
+		case p.Assurance():
+			if err := checkAssurance(i, p); err != nil {
+				return nil, err
+			}
+			seen[p.Name] = true
+			continue
+		case len(p.Keys) > 0:
+			return nil, fmt.Errorf("CLEARANCE_PROVIDERS[%d]: keys are an assurance provider's (class %q)", i, ClassAssurance)
 		case len(p.Principals) == 0:
 			return nil, fmt.Errorf("CLEARANCE_PROVIDERS[%d]: principals names no principal glob", i)
 		case p.IntentCapture != "" && !slices.Contains(evidence.IntentCapture, p.IntentCapture):
@@ -120,6 +177,23 @@ func ParseProviders(v string) ([]Provider, error) {
 	return ps, nil
 }
 
+// checkAssurance holds an assurance provider to what it is: a name and keys, and nothing an enforcement point has.
+func checkAssurance(i int, p *Provider) error {
+	switch {
+	case len(p.Principals) > 0:
+		return fmt.Errorf("CLEARANCE_PROVIDERS[%d]: an assurance provider has no principals: it is not an account, and "+
+			"it reads a packet under the credential a subscriber gave it", i)
+	case p.Kinds != nil || p.Definitions || len(p.Targets) > 0 || p.IntentCapture != "" || p.Conformance != "":
+		return fmt.Errorf("CLEARANCE_PROVIDERS[%d]: an assurance provider takes name, version and keys only", i)
+	case len(p.Keys) == 0 || len(p.Keys) > MaxRecipientKeys:
+		return fmt.Errorf("CLEARANCE_PROVIDERS[%d]: an assurance provider registers 1 to %d keys (ECDSA P-256 public keys, PEM)", i, MaxRecipientKeys)
+	}
+	if _, err := p.RecipientKeys(); err != nil {
+		return fmt.Errorf("CLEARANCE_PROVIDERS[%d]: keys: %v", i, err)
+	}
+	return nil
+}
+
 // Writer is how this provider's own records are sealed: its name and version, and only provider verified.
 func (p *Provider) Writer() evidence.Writer {
 	return evidence.Writer{Provider: p.provider(), IntentCapture: p.IntentCapture, Verified: evidence.ProviderVerified}
@@ -132,9 +206,14 @@ func (p *Provider) provider() evidence.Provider {
 // mayPublishTargets says whether the provider may publish the source's declared targets.
 func (p *Provider) mayPublishTargets(source string) bool { return pycompat.MatchAny(source, p.Targets) }
 
-func (p *Provider) matches(principal string) bool { return pycompat.MatchAny(principal, p.Principals) }
+func (p *Provider) matches(principal string) bool {
+	return !p.Assurance() && pycompat.MatchAny(principal, p.Principals)
+}
 
 func (p *Provider) mayWrite(kind string) bool {
+	if p.Assurance() {
+		return false
+	}
 	if p.Kinds == nil {
 		return !observe.Is(kind)
 	}

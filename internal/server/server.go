@@ -80,6 +80,9 @@ type Options struct {
 	}
 	// MaxClockSkew bounds |context.now - Clock()| on an evaluation; 0 is DefaultMaxClockSkew, negative is off.
 	MaxClockSkew time.Duration
+	// PacketReadsPerHour caps the allowed reads of one packet delivery an hour (each is a record and a read of up to 64
+	// MiB): 0 is DefaultPacketReadsPerHour, negative is unlimited. Past it a read is 429 and writes no record.
+	PacketReadsPerHour int
 	// DevRecords serves GET /v1/dev/records (DevRecordsPath): the chain, for another package's tests to read what
 	// the core recorded. `clearance core --memory --insecure-dev-auth` only; not in the contract (clearance-api is
 	// the reader of a kept chain).
@@ -112,6 +115,16 @@ type Server struct {
 	// eventMu serializes the records that name the provider's own event (source.event_id), so the has-it-already
 	// check and the write it guards are one step (O-1: POST /v1/records de-duplicates).
 	eventMu sync.Mutex
+
+	// refused limits how many refusals of one packet delivery are written to the chain an hour (P-1).
+	refused hourly
+	reads   hourly
+	bundles bundles
+
+	// receiptMu serializes receipt submissions and guards receipts, the index of receipts already recorded (by packet id
+	// and payload digest), so a resubmitted receipt writes nothing.
+	receiptMu sync.Mutex
+	receipts  map[string]ReceiptRecorded
 
 	// targetsMu serializes target publishes: the held-digest check and the write it guards are one step.
 	targetsMu sync.Mutex
@@ -174,6 +187,13 @@ func unauthenticated(r *http.Request) bool {
 		return true // the payload's HMAC signature authenticates it (githubapp.App.Accept)
 	case r.Method == http.MethodPost && r.URL.Path == hcprun.Path:
 		return true // the payload's HMAC signature authenticates it (hcprun.Service.Accept)
+	}
+	// The recipient's two packet routes: the credential the delivery minted, or the receipt's own signature, is what
+	// authenticates them (assurance.go); no bearer token of the authenticator's is asked of a recipient.
+	for _, rt := range Routes() {
+		if (rt.Auth == AuthCredential || rt.Auth == AuthRecipientKey) && rt.Method == r.Method && rt.matches(r.URL.Path) {
+			return true
+		}
 	}
 	return false
 }

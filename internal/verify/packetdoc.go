@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+
+	"github.com/jfillman/clearance/internal/receipt"
+	"github.com/jfillman/clearance/internal/token"
 )
 
 // packetDoc is the part of packet.json the verifier reads. It is its own small copy of the shape (the verifier does
@@ -76,6 +79,27 @@ type packetDoc struct {
 			Bundle string `json:"bundle"`
 		} `json:"attestation"`
 	} `json:"changes"`
+	Acceptances struct {
+		Status   string `json:"status"`
+		Receipts []struct {
+			Seq           int64               `json:"seq"`
+			RecordHash    string              `json:"record_hash"`
+			PacketID      string              `json:"packet_id"`
+			PacketDigest  string              `json:"packet_digest"`
+			Delivery      string              `json:"delivery"`
+			Recipient     string              `json:"recipient"`
+			Engagement    string              `json:"engagement"`
+			Mappings      []string            `json:"framework_mapping_versions"`
+			Checkpoint    *receipt.Checkpoint `json:"checkpoint"`
+			Verdict       string              `json:"verdict"`
+			Notes         map[string]string   `json:"control_notes"`
+			SignedAt      string              `json:"signed_at"`
+			KeyID         string              `json:"key_id"`
+			Key           *token.JWK          `json:"key"`
+			PayloadSHA256 string              `json:"payload_sha256"`
+			Envelope      json.RawMessage     `json:"envelope"`
+		} `json:"receipts"`
+	} `json:"acceptances"`
 	Verification struct {
 		Statement string `json:"statement"`
 		Proofs    string `json:"proofs_file"`

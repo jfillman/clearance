@@ -333,6 +333,9 @@ core:
   # CLEARANCE_MAX_CLOCK_SKEW: how far an evaluation's context.now may be from the core's clock, a Go duration ("": the
   # core's default, 5m; at most 24h). The core refuses 0 (off) here: off is for `clearance core --memory` test cores.
   maxClockSkew: ""
+  # CLEARANCE_PACKET_READS_PER_HOUR: how many allowed reads of one packet delivery the core serves and records an hour
+  # ("": 60; 1 to 100000). Past it a read is 429 and writes no record.
+  packetReadsPerHour: ""
   resources:
     requests: {cpu: 50m, memory: 64Mi}
     limits: {memory: 256Mi}

@@ -12,6 +12,7 @@ import (
 	"github.com/jfillman/clearance/internal/evidence"
 	"github.com/jfillman/clearance/internal/gate"
 	"github.com/jfillman/clearance/internal/observe"
+	"github.com/jfillman/clearance/internal/receipt"
 	"github.com/jfillman/clearance/internal/store"
 	"github.com/jfillman/clearance/internal/token"
 )
@@ -763,16 +764,68 @@ func (b *builder) policySection(pk *Packet) {
 
 // ---- acceptances -----------------------------------------------------------------------------------------------
 
-// NoReceipts is what the Acceptances section says until package P-1 records receipts.
+// NoReceipts is what the Acceptances section says while the chain holds no receipt.
 const NoReceipts = "No acceptance receipts have been recorded for this packet or for earlier ones. Receipts are the signed " +
-	"acceptances assurance recipients return (package P-1); none exist yet, and nothing here is inferred from the chain."
+	"acceptances assurance recipients return; none is in the chain this packet was read from, and nothing here is inferred."
 
+// ToolReceipt is the chain record the core writes when it accepts a recipient's receipt (P-1).
+const ToolReceipt = "packet.receipt"
+
+// acceptances carries every receipt the chain holds, in record order, each exactly as the core recorded it. A receipt
+// whose record cannot be read back (a hand-edited store) is left out: the verifier would fail it, and the chain
+// verification that opened this job already refused a chain whose records do not hash.
 func (b *builder) acceptances(pk *Packet) {
 	pk.Acceptances = Acceptances{Status: "none-recorded", Statement: NoReceipts, Receipts: []Receipt{}}
-	if len(b.p.Receipts) > 0 {
-		pk.Acceptances = Acceptances{Status: "recorded", Receipts: b.p.Receipts,
-			Statement: fmt.Sprintf("%d acceptance receipts recorded for earlier packets.", len(b.p.Receipts))}
+	seen := map[string]bool{}
+	for _, r := range b.c.records {
+		if str(r, "tool") != ToolReceipt {
+			continue
+		}
+		rc, ok := receiptOf(r)
+		if !ok || seen[rc.PayloadSHA256] {
+			continue
+		}
+		seen[rc.PayloadSHA256] = true
+		pk.Acceptances.Receipts = append(pk.Acceptances.Receipts, rc)
+		b.extra[rc.Seq] = true
 	}
+	if n := len(pk.Acceptances.Receipts); n > 0 {
+		pk.Acceptances.Status = "recorded"
+		pk.Acceptances.Statement = fmt.Sprintf("%d acceptance receipt(s) recorded for earlier packets, each signed by the recipient's own key and recorded in the chain; "+
+			"`clearance verify` checks each signature again offline.", n)
+	}
+}
+
+// receiptOf reads a packet.receipt record into the section's row. The printed fields come from the signed payload.
+func receiptOf(r Record) (Receipt, bool) {
+	rec := obj(r, "receipt")
+	env := rec["envelope"]
+	if env == nil {
+		return Receipt{}, false
+	}
+	raw, err := json.Marshal(env)
+	if err != nil {
+		return Receipt{}, false
+	}
+	pl, err := receipt.Read(raw)
+	if err != nil {
+		return Receipt{}, false
+	}
+	out := Receipt{Seq: seqOf(r), RecordHash: str(r, "hash"), PacketID: pl.PacketID, PacketDigest: pl.PacketDigest, Delivery: pl.Delivery,
+		Recipient: pl.Recipient, Engagement: pl.Engagement, Mappings: pl.Mappings, Checkpoint: pl.Checkpoint, Verdict: pl.Verdict,
+		Notes: pl.ControlNotes, SignedAt: pl.SignedAt, KeyID: str(rec, "key_id"), PayloadSHA256: str(rec, "payload_sha256"), Envelope: raw}
+	if k := obj(rec, "key"); k != nil {
+		if kr, err := json.Marshal(k); err == nil {
+			var jwk token.JWK
+			if json.Unmarshal(kr, &jwk) == nil {
+				out.Key = &jwk
+			}
+		}
+	}
+	if out.Notes == nil {
+		out.Notes = map[string]string{}
+	}
+	return out, true
 }
 
 // trim drops the sections a view does not carry (the coverage statement and the verification never go).

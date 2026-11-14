@@ -246,10 +246,10 @@ func PDF(pk *Packet) []byte {
 	d.para(pk.Acceptances.Statement)
 	rows = nil
 	for _, rc := range pk.Acceptances.Receipts {
-		rows = append(rows, []string{rc.PacketID, rc.Engagement, strings.Join(rc.Mappings, " "), rc.Verdict})
+		rows = append(rows, []string{rc.PacketID, rc.Recipient, rc.Engagement, strings.Join(rc.Mappings, " "), rc.Verdict})
 	}
 	if len(rows) > 0 {
-		d.table([]string{"packet", "engagement", "mappings", "verdict"}, []int{24, 24, 30, 0}, rows)
+		d.table([]string{"packet", "recipient", "engagement", "mappings", "verdict"}, []int{36, 16, 20, 20, 0}, rows)
 	}
 	return d.bytes()
 }

@@ -45,6 +45,14 @@ type Options struct {
 	// Identity and Issuer pin a keyless attestation's signer. Empty: the signer's own certificate is read and the
 	// report says the identity was taken from the attestation.
 	Identity, Issuer string
+	// RecipientKeys are the public keys of the assurance recipients whose acceptance receipts the packet carries (PEM, or
+	// a JWKS), as the verifier's user got them from the recipients: what a receipt's signature is checked with. Empty:
+	// each receipt's own carried copy of the recipient's key is used and reported as taken from the packet.
+	// It is by recipient name: a receipt that names recipient A is checked only under keys supplied for A, so a key
+	// supplied for B never vouches for a receipt that claims A. A recipient with no entry falls back to the receipt's
+	// own carried key (SELF-VOUCHED).
+	RecipientKeys    map[string][]byte
+	RecipientKeysSrc map[string]string
 	// SeenFile is the local note of checkpoints seen (the weak-witness behaviour). Empty: none is kept.
 	SeenFile string
 	Now      func() time.Time
@@ -85,6 +93,7 @@ func Verify(dir string, opts Options) *Report {
 	c.ledgerCheck()
 	c.figuresCheck()
 	c.statementsCheck()
+	c.acceptancesCheck()
 	c.attestationsCheck()
 	c.seenCheck()
 	return c.rep
@@ -130,6 +139,15 @@ func (c *ctx) inputs() {
 	c.rep.Inputs = []Input{
 		{"log keys", src(len(o.LogKeys) > 0, o.LogKeysSrc, fileLogKeys, c.exists(fileLogKeys))},
 		{"witness policy", src(len(o.WitnessPolicy) > 0, o.WitnessPolicySrc, filePolicy, c.exists(filePolicy))},
+	}
+	if c.receiptCount() > 0 || len(o.RecipientKeys) > 0 {
+		names := sortedKeys(o.RecipientKeys)
+		for _, n := range names {
+			c.rep.Inputs = append(c.rep.Inputs, Input{"recipient keys: " + n, "supplied by you (" + o.RecipientKeysSrc[n] + ")"})
+		}
+		if c.receiptCount() > 0 {
+			c.rep.Inputs = append(c.rep.Inputs, Input{"recipient keys: any other recipient", src(false, "", "the receipts' own key copies", true)})
+		}
 	}
 	tr := "none (keyless attestations are not checked)"
 	if len(o.TrustRoot) > 0 {

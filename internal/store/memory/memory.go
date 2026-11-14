@@ -37,6 +37,7 @@ type Store struct {
 	keys    map[string]store.SigningKey
 	feeds   map[string]store.Feed
 	atts    map[string]store.Attestation
+	packets map[string]store.Packet
 	glass   map[string]store.Breakglass
 	ledger  *store.LedgerCheckpoint // the latest witnessed checkpoint (C-3), nil when none
 	closed  bool
@@ -53,7 +54,7 @@ var ErrTxDone = errors.New("memory: transaction is finished")
 // New returns an empty store.
 func New() *Store {
 	return &Store{head: evidence.Start, changes: map[string]store.Change{}, targets: map[string]store.TargetSet{}, tokens: map[string]store.Token{},
-		keys: map[string]store.SigningKey{}, feeds: map[string]store.Feed{}, atts: map[string]store.Attestation{}, glass: map[string]store.Breakglass{}}
+		keys: map[string]store.SigningKey{}, feeds: map[string]store.Feed{}, atts: map[string]store.Attestation{}, packets: map[string]store.Packet{}, glass: map[string]store.Breakglass{}}
 }
 
 // Load returns a store holding an existing chain, verified from genesis like store/pg's Open.
@@ -95,7 +96,7 @@ func (s *Store) Atomic(ctx context.Context, fn func(tx store.Tx) error) (err err
 		return ErrClosed
 	}
 	t := &tx{s: s, head: head, changes: map[string]store.Change{}, tokens: map[string]store.Token{},
-		feeds: map[string]store.Feed{}, atts: map[string]store.Attestation{}, glass: map[string]store.Breakglass{}}
+		feeds: map[string]store.Feed{}, atts: map[string]store.Attestation{}, packets: map[string]store.Packet{}, glass: map[string]store.Breakglass{}}
 	defer func() {
 		t.mu.Lock()
 		t.done = true
@@ -127,6 +128,11 @@ func (s *Store) Atomic(ctx context.Context, fn func(tx store.Tx) error) (err err
 	for id, a := range t.atts {
 		s.atts[id] = a
 	}
+	for id, pk := range t.packets {
+		if _, ok := s.packets[id]; !ok {
+			s.packets[id] = pk
+		}
+	}
 	for id, b := range t.glass {
 		s.glass[id] = b
 	}
@@ -149,6 +155,7 @@ type tx struct {
 	tokens  map[string]store.Token
 	feeds   map[string]store.Feed
 	atts    map[string]store.Attestation
+	packets map[string]store.Packet
 	keys    map[string]store.SigningKey // nil: unchanged
 	glass   map[string]store.Breakglass
 }
@@ -341,6 +348,7 @@ type view struct {
 	keys    map[string]store.SigningKey
 	feeds   map[string]store.Feed
 	atts    map[string]store.Attestation
+	packets map[string]store.Packet
 	glass   map[string]store.Breakglass
 	ledger  *store.LedgerCheckpoint
 }
@@ -371,7 +379,11 @@ func (s *Store) view() (view, error) {
 	for k, v := range s.targets {
 		targets[k] = v
 	}
-	return view{ledger: s.ledger, targets: targets, head: s.head, records: s.records[:len(s.records):len(s.records)], changes: maps(s.changes), defs: s.defs,
+	packets := make(map[string]store.Packet, len(s.packets))
+	for k, v := range s.packets {
+		packets[k] = v
+	}
+	return view{packets: packets, ledger: s.ledger, targets: targets, head: s.head, records: s.records[:len(s.records):len(s.records)], changes: maps(s.changes), defs: s.defs,
 		tokens: tokens, keys: s.keys, feeds: feeds, atts: atts, glass: glass}, nil
 }
 
@@ -411,6 +423,11 @@ func (t *tx) view() (view, error) {
 	}
 	for id, a := range t.atts {
 		v.atts[id] = a
+	}
+	for id, pk := range t.packets {
+		if _, ok := v.packets[id]; !ok {
+			v.packets[id] = pk
+		}
 	}
 	for id, b := range t.glass {
 		v.glass[id] = b
@@ -1099,4 +1116,46 @@ func (s *Store) PutLedgerCheckpoint(ctx context.Context, cp store.LedgerCheckpoi
 	c := cp
 	s.ledger = &c
 	return nil
+}
+
+func (t *tx) PutPacket(ctx context.Context, p store.Packet) error {
+	if err := t.lock(); err != nil {
+		return err
+	}
+	defer t.mu.Unlock()
+	if p.ID == "" || p.Digest == "" || len(p.Bundle) == 0 || !json.Valid(p.Meta) {
+		return errors.New("memory: a packet needs an id, a digest, a bundle and JSON meta")
+	}
+	if _, ok := t.packets[p.ID]; ok {
+		return nil
+	}
+	p.Bundle, p.Meta = bytes.Clone(p.Bundle), bytes.Clone(p.Meta)
+	p.Size = int64(len(p.Bundle))
+	p.CreatedAt = time.Now().UTC()
+	t.packets[p.ID] = p
+	return nil
+}
+
+func (s *Store) Packet(ctx context.Context, id string) (store.Packet, error) {
+	v, err := s.view()
+	if err != nil {
+		return store.Packet{}, err
+	}
+	return v.packet(id)
+}
+
+func (t *tx) Packet(ctx context.Context, id string) (store.Packet, error) {
+	v, err := t.view()
+	if err != nil {
+		return store.Packet{}, err
+	}
+	return v.packet(id)
+}
+
+func (v view) packet(id string) (store.Packet, error) {
+	p, ok := v.packets[id]
+	if !ok {
+		return store.Packet{}, store.ErrNotFound
+	}
+	return p, nil
 }

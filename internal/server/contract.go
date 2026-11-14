@@ -39,6 +39,9 @@ func Contract() ([]byte, error) {
 		op := map[string]any{"operationId": rt.OperationID, "summary": rt.Summary,
 			"x-clearance-auth": rt.Auth, "x-clearance-max-body": rt.MaxBody}
 		switch rt.Auth {
+		case AuthCredential:
+			op["security"] = []any{map[string]any{"bearer": []any{}}}
+			op["x-clearance-credential"] = "a packet access credential, minted by POST /v1/packets/{id}/deliveries (not an authenticator token)"
 		case AuthBearer, AuthProvider:
 			op["security"] = []any{map[string]any{"bearer": []any{}}}
 		default:

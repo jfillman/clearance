@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/jfillman/clearance/internal/observe"
+	"github.com/jfillman/clearance/internal/receipt"
+	"github.com/jfillman/clearance/internal/token"
 )
 
 // Schema names the packet's JSON shape.
@@ -49,8 +51,6 @@ type Params struct {
 	Filtered []FilteredRule
 	// LogKeys and WitnessPolicy are the ledger's public verification material, when the job was given it: the
 	// checkpoint's signatures are checked with them and they are copied into the packet for the offline verifier.
-	// Receipts are the prior acceptance receipts to carry (P-1 supplies them; none until it exists).
-	Receipts      []Receipt
 	LogKeys       []string // vkeys, the key in use first
 	WitnessPolicy []byte
 }
@@ -443,27 +443,42 @@ type PolicyEvent struct {
 	Detail  string `json:"detail,omitempty"`
 }
 
-// Acceptances is the signed acceptance receipts assurance recipients returned for earlier packets (package P-1:
-// packet id, engagement, framework and mapping versions, checkpoint, verdict, per-control notes). P-1 does not exist
-// yet, so Receipts is empty and the section says no receipt has been recorded; nothing is inferred from the chain.
-// Later packets carry prior receipts here.
+// Acceptances is the signed acceptance receipts assurance recipients returned for earlier packets (package P-1: packet
+// id, engagement, framework and mapping versions, checkpoint, verdict, per-control notes). The packet reads them from
+// the chain, where the core recorded each one (`packet.receipt`) after checking the signature against the key the
+// recipient registered; a later packet carries every prior receipt as signed, with the key it was checked under, and
+// `clearance verify` checks each one again offline.
 type Acceptances struct {
-	// Status is "none-recorded" while there are no receipts, else "recorded".
+	// Status is "none-recorded" while the chain holds no receipt, else "recorded".
 	Status    string    `json:"status"`
 	Statement string    `json:"statement"`
 	Receipts  []Receipt `json:"receipts"`
 }
 
-// Receipt is one recipient's signed acceptance of a packet (the shape P-1 will fix; held as raw fields so a receipt is
-// carried exactly as signed).
+// Receipt is one recipient's signed acceptance of an earlier packet. The fields printed are the signed payload's own
+// (decoded from Envelope), so the presentation cannot differ from what the recipient signed; Envelope is the DSSE
+// envelope exactly as the core received it.
 type Receipt struct {
-	PacketID   string            `json:"packet_id"`
-	Engagement string            `json:"engagement"`
-	Mappings   []string          `json:"framework_mapping_versions"`
-	Checkpoint string            `json:"checkpoint"`
-	Verdict    string            `json:"verdict"`
-	Notes      map[string]string `json:"control_notes,omitempty"` // by control
-	Signed     json.RawMessage   `json:"signed,omitempty"`        // the signed receipt as received
+	// Seq and RecordHash are the chain record (`packet.receipt`) the core wrote when it accepted the receipt.
+	Seq        int64  `json:"seq"`
+	RecordHash string `json:"record_hash"`
+	PacketID   string `json:"packet_id"`
+	// PacketDigest is the SHA-256 of the receipted packet's MANIFEST.json (its id is derived from it).
+	PacketDigest string              `json:"packet_digest"`
+	Delivery     string              `json:"delivery"`
+	Recipient    string              `json:"recipient"`
+	Engagement   string              `json:"engagement"`
+	Mappings     []string            `json:"framework_mapping_versions"`
+	Checkpoint   *receipt.Checkpoint `json:"checkpoint"`
+	Verdict      string              `json:"verdict"`
+	Notes        map[string]string   `json:"control_notes"`
+	SignedAt     string              `json:"signed_at"`
+	// KeyID and Key are the recipient's registered key the core checked the signature with when it recorded the receipt
+	// (a verifier trusts its own copy of the recipient's key before this one).
+	KeyID         string          `json:"key_id"`
+	Key           *token.JWK      `json:"key"`
+	PayloadSHA256 string          `json:"payload_sha256"`
+	Envelope      json.RawMessage `json:"envelope"`
 }
 
 // Verification says what an offline verifier (C-4) will find in the packet, and what it will not.

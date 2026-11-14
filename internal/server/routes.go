@@ -9,6 +9,7 @@ import (
 	"github.com/jfillman/clearance/internal/githubapp"
 	"github.com/jfillman/clearance/internal/hcprun"
 	"github.com/jfillman/clearance/internal/provenance"
+	"github.com/jfillman/clearance/internal/receipt"
 	"github.com/jfillman/clearance/internal/review"
 	"github.com/jfillman/clearance/internal/token"
 )
@@ -357,6 +358,55 @@ var routeTable = []Route{
 			"recorded; the caller is a verifier. Recorded as provenance.verify.",
 		RequestNote: "provenance.Request: {repo, pr, head, paths, author?, trailers?, coauthors?: [{commit, trailer}], merged?, mergedBy?, mergedByBot?}",
 		Responses:   append([]Response{{200, "the verdicts", provenance.Verdict{}}}, errs(400, 401, 403, 413)...),
+	},
+	{
+		Method: "POST", Path: "/v1/packets", OperationID: "publishPacket", Auth: AuthBearer, MaxBody: MaxPacketBody,
+		Summary: "An admin (CLEARANCE_ADMINS, or a delegate naming one) publishes an evidence packet the packet job wrote, as a " +
+			"bundle (the packet directory as one JSON document). The core checks every file against the manifest, that the packet " +
+			"was read from this chain (its head is the hash the core holds at that count), and keeps it. The packet's id is " +
+			"the content's address (pk- and the first 32 hex digits of the SHA-256 of MANIFEST.json): the same packet again is the " +
+			"same id and records nothing; a new one is one packet.publish record.",
+		RequestNote: "packet.Bundle: {schema: clearance.packet-bundle/v1, files: {path: base64}} (`clearance packet publish` makes it)",
+		Responses: append([]Response{{200, "the packet's id and digest, and whether it was new", PacketPublished{}}},
+			errs(400, 401, 403, 404, 409, 413, 503)...),
+		serve: func(s *Server) http.HandlerFunc { return s.publishPacket },
+	},
+	{
+		Method: "POST", Path: "/v1/packets/{id}/deliveries", OperationID: "deliverPacket", Auth: AuthBearer, MaxBody: MaxDeliveryBody,
+		Summary: "An admin opens a published packet to one registered assurance provider (a recipient) for a window, scoped to " +
+			"parts of it (summary, evidence). The delivery is a packet.deliver record naming the person, the recipient, the scope and the " +
+			"window; the answer carries the time-boxed credential the recipient presents to GET /v1/packets/{id}: once, never stored. " +
+			"The subscriber hands it over; Clearance submits nothing to anyone.",
+		Request:   DeliveryRequest{},
+		Responses: append([]Response{{200, "the delivery and its credential", Delivery{}}}, errs(400, 401, 403, 404, 413, 503)...),
+		serve:     func(s *Server) http.HandlerFunc { return s.deliverPacket },
+	},
+	{
+		Method: "GET", Path: "/v1/packets/{id}", OperationID: "getPacket", Auth: AuthCredential, MaxBody: DefaultMaxBody,
+		Summary: "The recipient reads the packet (the bundle) under the credential its delivery returned, in the bearer header. " +
+			"No Clearance account. The credential is checked for its signature (anything the core did not sign is a bare 401); " +
+			"then every answer is a packet.fetch record, written before the answer: an allowed read before a byte is served, and a " +
+			"refusal (PK-EXPIRED, PK-NOT-YET, PK-SCOPE for another packet or a part outside its scope, PK-RECIPIENT, PK-GONE) with its rule.",
+		Query: []QueryParam{{Name: "part", Description: "read one part of the packet (summary or evidence); it must be in the credential's scope"}},
+		Responses: []Response{{200, "the bundle (cut to the credential's scope)", PacketBundle{}},
+			{400, "an unknown query parameter or part", ErrorResponse{}},
+			{401, "no credential, one the core did not issue, or an expired one (PK-EXPIRED)", PacketError{}},
+			{403, "another packet, a part outside the scope, not yet good, or a recipient no longer registered", PacketError{}},
+			{404, "the core does not hold the packet", PacketError{}},
+			{429, "this delivery has been refused too often this hour (the refusals past the cap are not recorded)", PacketError{}},
+			errs(503)[0]},
+		serve: func(s *Server) http.HandlerFunc { return s.getPacket },
+	},
+	{
+		Method: "POST", Path: "/v1/packets/{id}/receipts", OperationID: "acceptReceipt", Auth: AuthRecipientKey, MaxBody: receipt.MaxEnvelopeBytes,
+		Summary: "The recipient's acceptance receipt: a DSSE envelope (application/vnd.clearance.acceptance-receipt.v1+json) signed " +
+			"with a key the recipient registered, naming the packet, the delivery, the engagement, the framework and mapping versions, " +
+			"the checkpoint, the verdict (accepted, accepted-with-notes, questioned, rejected) and control notes keyed to the mapping's " +
+			"rows. The signature is the authentication. The core checks the key, the delivery and that the receipt binds this packet's " +
+			"digest, mappings and checkpoint, then records it (packet.receipt). A later packet carries it in its Acceptances section.",
+		RequestNote: "a DSSE envelope: {payloadType, payload (base64 of the receipt), signatures: [{keyid, sig}]} (`clearance receipt sign` makes it)",
+		Responses:   append([]Response{{200, "the record", ReceiptRecorded{}}}, errs(400, 403, 404, 413, 503)...),
+		serve:       func(s *Server) http.HandlerFunc { return s.acceptReceipt },
 	},
 	{
 		Method: "POST", Path: "/v1/github/webhook", OperationID: "githubWebhook", Auth: AuthSignature,

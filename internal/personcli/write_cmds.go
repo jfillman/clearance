@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/jfillman/clearance/internal/packet"
 	"io"
 	"net/url"
 	"os"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jfillman/clearance/internal/observe"
 )
@@ -644,6 +646,85 @@ func (e *Env) BreakglassList(ctx context.Context, args []string) int {
 			tr = append(tr, []string{str(w, "id"), str(w, "cluster") + "/" + str(w, "env"), str(w, "app"), str(w, "person"), str(w, "expires_at"), clean(str(w, "reason"))})
 		}
 		table(e.Stdout, []string{"ID", "SCOPE", "APP", "OPENED BY", "EXPIRES", "REASON"}, tr)
+		return nil
+	}())
+}
+
+// -- packets (P-1) ----------------------------------------------------------------------------------------------------
+
+// PacketPublish is `clearance packet publish <dir>`: an admin publishes the packet `clearance packet` wrote to the core.
+func (e *Env) PacketPublish(ctx context.Context, args []string) int {
+	s, pos, ee := e.begin("packet publish", "<packet-dir>", args, func(fs *flag.FlagSet) {})
+	if ee != nil {
+		return e.finish("packet publish", ee)
+	}
+	if len(pos) != 1 {
+		return e.finish("packet publish", s.usageErr())
+	}
+	return e.finish("packet publish", func() error {
+		b, err := packet.PackDir(pos[0])
+		if err != nil {
+			return err
+		}
+		core, err := s.coreClient()
+		if err != nil {
+			return err
+		}
+		var raw json.RawMessage
+		if err := core.Post(ctx, "/v1/packets", json.RawMessage(b.JSON), viaHeaders, &raw); err != nil {
+			return err
+		}
+		if wrote, err := emit(e.Stdout, s.format, raw, ""); wrote || err != nil {
+			return err
+		}
+		var out map[string]any
+		_ = json.Unmarshal(raw, &out)
+		fmt.Fprintf(e.Stdout, "packet %s (digest %s), new: %v\nopen it to a recipient with `%s packet deliver %s --recipient NAME --for 168h`\n",
+			str(out, "id"), str(out, "digest"), out["created"], e.prog(), str(out, "id"))
+		return nil
+	}())
+}
+
+// PacketDeliver is `clearance packet deliver <packet-id>`: an admin opens a packet to a registered recipient. The
+// credential in the answer is shown once; hand it to the recipient yourself.
+func (e *Env) PacketDeliver(ctx context.Context, args []string) int {
+	var recipient, forD, engagement, scope string
+	s, pos, ee := e.begin("packet deliver", "<packet-id> --recipient NAME --for 168h [--scope summary,evidence] [--engagement E]", args, func(fs *flag.FlagSet) {
+		fs.StringVar(&recipient, "recipient", "", "a registered assurance provider")
+		fs.StringVar(&forD, "for", "", "how long the credential is good, a Go duration (1m to 720h)")
+		fs.StringVar(&scope, "scope", "", "parts the recipient may read: summary, evidence (default both)")
+		fs.StringVar(&engagement, "engagement", "", "the engagement the receipt must name (optional)")
+	})
+	if ee != nil {
+		return e.finish("packet deliver", ee)
+	}
+	d, derr := time.ParseDuration(forD)
+	if len(pos) != 1 || recipient == "" || derr != nil {
+		return e.finish("packet deliver", s.usageErr())
+	}
+	return e.finish("packet deliver", func() error {
+		core, err := s.coreClient()
+		if err != nil {
+			return err
+		}
+		body := map[string]any{"recipient": recipient, "window": map[string]any{"to": time.Now().Add(d).UTC().Format(time.RFC3339)}}
+		if scope != "" {
+			body["scope"] = strings.Split(scope, ",")
+		}
+		if engagement != "" {
+			body["engagement"] = engagement
+		}
+		var raw json.RawMessage
+		if err := core.Post(ctx, "/v1/packets/"+url.PathEscape(pos[0])+"/deliveries", body, viaHeaders, &raw); err != nil {
+			return err
+		}
+		if wrote, err := emit(e.Stdout, s.format, raw, ""); wrote || err != nil {
+			return err
+		}
+		var out map[string]any
+		_ = json.Unmarshal(raw, &out)
+		fmt.Fprintf(e.Stdout, "delivery %s to %s, good until %v. The credential is shown once; give it and the delivery id to the recipient:\n%s\n",
+			str(out, "id"), recipient, out["window"].(map[string]any)["to"], str(out, "credential"))
 		return nil
 	}())
 }

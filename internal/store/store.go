@@ -93,6 +93,19 @@ type Attestation struct {
 	Bundle                           json.RawMessage
 }
 
+// Packet is one row of clearance_packets (P-1): an evidence packet published to the core so a recipient can be given
+// it. ID is "pk-" and the first 32 hex digits of Digest, the SHA-256 of the packet's MANIFEST.json (the packet's
+// content address: the manifest lists the SHA-256 of every other file). Bundle is the packet directory as one JSON
+// document (packet.Bundle), exactly as it was published and as it is served; Meta is what the core read of the
+// packet's packet.json to place it. A packet is immutable: the same id is the same bytes.
+type Packet struct {
+	ID, Digest string
+	Size       int64
+	Meta       json.RawMessage
+	Bundle     []byte
+	CreatedAt  time.Time
+}
+
 // Breakglass is one row of clearance_breakglass (C-6): a break-glass window an admin opened. Record is the gate's
 // view of it (gate.Breakglass) as jsonb; the other fields are its indexed columns. State is open or closed.
 type Breakglass struct {
@@ -142,6 +155,9 @@ type Tx interface {
 	PutBreakglass(ctx context.Context, b Breakglass) error
 	// PutAttestation writes the change's attestation (an upsert by change id).
 	PutAttestation(ctx context.Context, a Attestation) error
+	// PutPacket keeps a published packet (an insert by id: the id is the content's address, so a second put of the
+	// same id leaves the first row).
+	PutPacket(ctx context.Context, p Packet) error
 }
 
 // Reader is what both a Tx and the store outside a transaction can read.
@@ -187,6 +203,8 @@ type Reader interface {
 	Feed(ctx context.Context, cluster string) (Feed, error)
 	// Attestation is the change's attestation (ErrNotFound when it has none).
 	Attestation(ctx context.Context, changeID string) (Attestation, error)
+	// Packet is a published packet (ErrNotFound when there is none).
+	Packet(ctx context.Context, id string) (Packet, error)
 	// Breakglass is one break-glass window (ErrNotFound when there is none).
 	Breakglass(ctx context.Context, id string) (Breakglass, error)
 	// BreakglassOpen are the windows still open (not yet reconciled), soonest expiry first.
