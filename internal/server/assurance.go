@@ -521,6 +521,9 @@ func (s *Server) accessKeys(r *http.Request) (token.KeySet, error) {
 	}
 	ks := token.KeySet{}
 	for _, k := range rows {
+		if k.RevokedAt != nil {
+			continue // a revoked key verifies nothing: its credentials are an unknown key, a bare 401
+		}
 		var j token.JWK
 		if json.Unmarshal(k.JWK, &j) != nil {
 			continue
@@ -630,12 +633,19 @@ func (s *Server) getPacket(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("id")
 	now := s.opt.Clock()
+	rv, revoked, err := s.deliveryRevocation(ctx, claims.Subject)
+	if err != nil {
+		s.revocationUnreadable(w, r, err)
+		return
+	}
 	rule, msg, status := "", "", 0
 	switch {
 	case id != claims.Packet:
 		rule, msg, status = RulePacketScope, "this credential opens packet "+claims.Packet+", not "+id, http.StatusForbidden
 	case part != "" && !slices.Contains(claims.Scope, part):
 		rule, msg, status = RulePacketScope, "this credential's scope is "+strings.Join(claims.Scope, ", ")+": it does not open the "+part+" part", http.StatusForbidden
+	case revoked:
+		rule, msg, status = RulePacketRevoked, "this delivery was revoked at "+rv.at+": ask the subscriber for a new delivery", http.StatusForbidden
 	case now.Before(time.Unix(claims.NotBefore, 0)):
 		rule, msg, status = RulePacketNotYet, "this credential is not good until "+pycompat.ISO(time.Unix(claims.NotBefore, 0)), http.StatusForbidden
 	case !now.Before(time.Unix(claims.Expires, 0)):
@@ -668,6 +678,26 @@ func (s *Server) getPacket(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "the stored packet could not be read")
 		return
 	}
+	// The slow part is done. From the re-check of the credential's key and of the delivery's revocation until the fetch record is written,
+	// no revoke can commit (revocation.go): a read is recorded before a revocation, or refused.
+	release, ok := s.commitGate(w, r, true)
+	if !ok {
+		return
+	}
+	defer release()
+	if rv, revoked, err := s.deliveryRevocation(ctx, claims.Subject); err != nil {
+		s.revocationUnreadable(w, r, err)
+		return
+	} else if revoked {
+		s.refusePacketRead(w, r, claims, id, part, RulePacketRevoked, "this delivery was revoked at "+rv.at+": ask the subscriber for a new delivery", http.StatusForbidden, now)
+		return
+	}
+	// The window is checked again under the gate with a fresh reading of the clock: a credential that expired while this read waited is refused.
+	now = s.opt.Clock()
+	if rule, msg, status := credentialWindowRule(claims, now); rule != "" {
+		s.refusePacketRead(w, r, claims, id, part, rule, msg, status, now)
+		return
+	}
 	// Recorded before a byte is served: a read that could not be recorded is not made.
 	err = s.opt.Store.Atomic(ctx, func(tx store.Tx) error {
 		_, err := tx.Append(ctx, s.fetchEvent(claims, id, part, scope, "allow", "", fmt.Sprintf("packet %s read by %s (%s, %d bytes)", id, claims.Recipient, strings.Join(scope, "+"), len(body)), now, len(body)), s.coreWriter(packetVerified))
@@ -678,12 +708,24 @@ func (s *Server) getPacket(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "the read could not be recorded, so it was not served")
 		return
 	}
+	release() // the read is committed (recorded): a revoke may now be written, and it follows this record
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Clearance-Packet-Digest", b.Digest)
 	w.Header().Set("X-Clearance-Packet-Scope", strings.Join(scope, ","))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
+}
+
+// credentialWindowRule is the refusal for a credential outside its window at now ("" when it is inside).
+func credentialWindowRule(c *token.AccessClaims, now time.Time) (rule, msg string, status int) {
+	switch {
+	case now.Before(time.Unix(c.NotBefore, 0)):
+		return RulePacketNotYet, "this credential is not good until " + pycompat.ISO(time.Unix(c.NotBefore, 0)), http.StatusForbidden
+	case !now.Before(time.Unix(c.Expires, 0)):
+		return RulePacketExpired, "this credential expired at " + pycompat.ISO(time.Unix(c.Expires, 0)) + ": ask the subscriber for a new delivery", http.StatusUnauthorized
+	}
+	return "", "", 0
 }
 
 func (s *Server) fetchEvent(c *token.AccessClaims, id, part string, scope []string, decision, rule, result string, now time.Time, n int) store.Event {
@@ -794,7 +836,7 @@ func (s *Server) acceptReceipt(w http.ResponseWriter, r *http.Request) {
 	}
 	d, _ := dl["delivery"].(map[string]any)
 	dp, _ := dl["packet"].(map[string]any)
-	if dl == nil || dl["tool"] != ToolPacketDeliver || fmt.Sprint(dl["seq"]) != strconv.FormatInt(dseq, 10) ||
+	if dl == nil || dl["tool"] != ToolPacketDeliver || fmt.Sprint(dl["seq"]) != strconv.FormatInt(dseq, 10) || !coreRecordWith(dl, "delivery") ||
 		fmt.Sprint(dp["id"]) != id || fmt.Sprint(d["recipient"]) != vp.Recipient {
 		writeError(w, http.StatusBadRequest, vp.Delivery+" is not a delivery of this packet to "+vp.Recipient)
 		return
@@ -816,16 +858,42 @@ func (s *Server) acceptReceipt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Idempotent on the signed payload: the same receipt again is the record already written, and writes nothing.
-	s.receiptMu.Lock()
-	defer s.receiptMu.Unlock()
-	idx, err := s.receiptIndex(ctx)
-	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "the store could not be read")
+	// The indexes are read in the background from start: until they are, 503 with Retry-After, never a scan inside the request.
+	if err := s.waitWarm(ctx, true); err != nil {
+		s.revocationUnreadable(w, r, err)
 		return
 	}
+	if err := s.receiptMu.Lock(ctx); err != nil {
+		s.gateBusy(w)
+		return
+	}
+	defer s.receiptMu.Unlock()
+	idx := s.receipts
 	if have, ok := idx[id+"|"+v.PayloadSHA256]; ok {
 		have.Created = false
 		writeJSON(w, http.StatusOK, have)
+		return
+	}
+	// The revocation gate is taken for the check and the record only (revocation.go): a revoke cannot commit between them.
+	release, ok := s.commitGate(w, r, false)
+	if !ok {
+		return
+	}
+	defer release()
+	// A receipt already recorded stays (above). A new one under a revoked delivery, or signed with a revoked key, is refused:
+	// not recorded (the signature attributes it, but a refusal is not a ledger fact worth a write per attempt).
+	if info, revoked, err := s.deliveryRevocation(ctx, vp.Delivery); err != nil {
+		s.revocationUnreadable(w, r, err)
+		return
+	} else if revoked {
+		writeJSON(w, http.StatusForbidden, PacketError{Error: "delivery " + vp.Delivery + " was revoked at " + info.at + ": the subscriber must open a new delivery, and a receipt answers that one", Rule: RulePacketRevoked})
+		return
+	}
+	if info, revoked, err := s.recipientKeyRevocation(ctx, vp.Recipient, v.KeyID); err != nil {
+		s.revocationUnreadable(w, r, err)
+		return
+	} else if revoked {
+		writeJSON(w, http.StatusForbidden, PacketError{Error: "the key " + v.KeyID + " of " + vp.Recipient + " was revoked (as of " + info.asOf + "): sign the receipt with a key that is registered and not revoked", Rule: RuleRecipientKeyGone})
 		return
 	}
 	var out ReceiptRecorded
@@ -887,15 +955,44 @@ func checkReceiptBinding(pl *receipt.Payload, pk store.Packet, meta packet.Meta,
 	return ""
 }
 
+// receiptPageSize is how many records one read of the chain takes when the receipt index is built (a variable so a test can make it short).
+var receiptPageSize = 5000
+
+// receiptWarm is closed once the receipt index has been read.
+func (s *Server) receiptWarm() chan struct{} {
+	s.receiptsReadyOnce.Do(func() { s.receiptsReady = make(chan struct{}) })
+	return s.receiptsReady
+}
+
+// warmReceipts reads the receipt index (once, in the background from start); a read that fails leaves it unread and is tried again.
+func (s *Server) warmReceipts(ctx context.Context) error {
+	if err := s.receiptMu.Lock(ctx); err != nil {
+		return err
+	}
+	defer s.receiptMu.Unlock()
+	if s.receipts != nil {
+		return nil
+	}
+	if _, err := s.receiptIndex(ctx); err != nil {
+		return err
+	}
+	close(s.receiptWarm())
+	return nil
+}
+
 // receiptIndex is the receipts the chain holds, by packet id and payload digest, read once and then kept by the one
 // writer (the caller holds receiptMu).
 func (s *Server) receiptIndex(ctx context.Context) (map[string]ReceiptRecorded, error) {
 	if s.receipts != nil {
 		return s.receipts, nil
 	}
-	idx := map[string]ReceiptRecorded{}
-	const page = 5000
-	for from := int64(0); ; {
+	// A scan that fails part-way keeps what it read (receiptsPart) and resumes at receiptsNext: it never restarts from seq 0.
+	if s.receiptsPart == nil {
+		s.receiptsPart = map[string]ReceiptRecorded{}
+	}
+	idx := s.receiptsPart
+	page := receiptPageSize
+	for from := s.receiptsNext; ; {
 		recs, err := s.opt.Store.Records(ctx, from, page)
 		if err != nil {
 			return nil, err
@@ -919,6 +1016,7 @@ func (s *Server) receiptIndex(ctx context.Context) (map[string]ReceiptRecorded, 
 		}
 		last, _ := gate.SeqInt(recs[len(recs)-1]["seq"])
 		from = last + 1
+		s.receiptsNext = from
 	}
 	s.receipts = idx
 	return idx, nil

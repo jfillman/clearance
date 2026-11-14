@@ -453,6 +453,22 @@ type Acceptances struct {
 	Status    string    `json:"status"`
 	Statement string    `json:"statement"`
 	Receipts  []Receipt `json:"receipts"`
+	// KeyRevocations are the revocations (`assurance.key.revoke` records) of the keys the carried receipts were signed with,
+	// each with its chain record carried beside the receipts: how an offline verifier learns a key was revoked, and as of when,
+	// from signed material and not a live call. Absent when no such key was revoked. A revocation recorded after the packet's
+	// chain head is not in it: cut a new packet.
+	KeyRevocations []KeyRevocation `json:"key_revocations,omitempty"`
+}
+
+// KeyRevocation is one revoked recipient key, from the chain record the core wrote (`assurance.key.revoke`).
+type KeyRevocation struct {
+	Seq        int64  `json:"seq"`
+	RecordHash string `json:"record_hash"`
+	Recipient  string `json:"recipient"`
+	KeyID      string `json:"key_id"`
+	// AsOf is the time the key is revoked as of: a receipt signed at or after it is not trusted. RevokedAt is when the core recorded it.
+	AsOf      string `json:"as_of"`
+	RevokedAt string `json:"revoked_at"`
 }
 
 // Receipt is one recipient's signed acceptance of an earlier packet. The fields printed are the signed payload's own

@@ -45,8 +45,11 @@ The contract is [`contract/clearance-core.json`](https://github.com/jfillman/cle
 | `GET /v1/clearances/{change_id}/wait` | the same callers | Long-poll (C-10): the same answer plus `changed`, as soon as the change's state is not `state` (default: its state when the call arrived), or after `timeout` seconds (1 to 60, default 30) with `changed: false`. Subject-kind neutral: the Terraform run task (G-TF-2) and the PreSync hook (G-ARGO-5) wait on it. The gate is the one writer, so an in-process notifier wakes the call on the commit itself; nothing polls the database. At most 512 waits open at once (503 past it); this route alone gets a deadline past the server's write timeout. Go client `Wait`. |
 | `POST /v1/breakglass`, `POST /v1/breakglass/{id}/close` | an admin (`CLEARANCE_ADMINS`), or a delegate naming one | Open (or close early) a break-glass window on one protected environment, recorded before the answer; reconciled at its TTL ([gate.md](gate.md#break-glass)). |
 | `GET /v1/breakglass` | a registered provider, or an admin | The break-glass windows open now (`?cluster=`). |
-| `GET /v1/keys` | anyone (no token) | The token verification keys, a JWKS: the key in use and keys retired in the last 24 hours. |
+| `GET /v1/keys` | anyone (no token) | The token verification keys, a JWKS: the key in use and keys retired in the last 24 hours, never a revoked one. |
+| `POST /v1/keys/{kid}/revoke` | an admin (or a delegate naming one) | Revoke a **retired** token signing key: `token.key.revoke`, written with the key's revoked flag before the answer. The key in use is 409 (rotate first). [assurance.md](assurance.md#one-of-the-cores-token-keys). |
 | `POST /v1/packets`, `POST /v1/packets/{id}/deliveries` | an admin (or a delegate naming one) | P-1: publish an evidence packet (a bundle of the `clearance packet` directory, id = content address of its manifest) and open it to a registered assurance provider for a window; the answer carries the time-boxed credential, once. `packet.publish` and `packet.deliver` records. [assurance.md](assurance.md). |
+| `POST /v1/packets/{id}/deliveries/{delivery}/revoke` | an admin (or a delegate naming one) | Revoke a delivery: `packet.revoke`, written before the answer; every later read, sample and new receipt under it is refused `PK-REVOKED`. Idempotent; never undone. [assurance.md](assurance.md#revocation). |
+| `POST /v1/assurance/recipients/{recipient}/keys/{kid}/revoke` | an admin (or a delegate naming one) | Revoke a key a recipient registered, as of a time: `assurance.key.revoke`; a receipt signed with it is refused at submit, and `clearance verify` fails one signed at or after the as-of time. |
 | `GET /v1/packets/{id}` | the packet credential the delivery minted (not an authenticator token; always credentialed, never public) | P-1: the recipient reads the packet (or one part). Every answer is a `packet.fetch` record, written before the answer; an expired, not-yet-good or wrong-scope credential is refused with its rule and the refusal is a record. |
 | `GET /v1/packets/{id}/sample` | the same packet credential, with both parts in its scope | P-2: a sample of the packet's cleared changes (`n`, required `seed`, `stratify`), each with its clearing record and an inclusion proof against the packet's checkpoint, and the population it was drawn from. Reproducible from the seed. Recorded as `packet.sample` before the answer; the same request again writes nothing; 20 distinct samples per delivery. [sampling.md](sampling.md). |
 | `POST /v1/packets/{id}/receipts` | a recipient's signature (a key registered for it) | P-1: the recipient's signed acceptance receipt (DSSE), checked against the registered key and the packet's digest, mappings and checkpoint, recorded as `packet.receipt`. Carried by the next packet's Acceptances section. |
@@ -56,7 +59,7 @@ The contract is [`contract/clearance-core.json`](https://github.com/jfillman/cle
 | `POST /v1/definitions/review` | a verifier, a person, or a delegate naming one | Would Clearance load this agent definition, and how much more may its agent do (the definition-change tier). Stateless, unrecorded. |
 | `POST /v1/provenance` | a verifier | The agent-identity and agent-scope verdicts for a pull request, recorded as `provenance.verify`. |
 | `POST /v1/github/webhook` | GitHub (HMAC signature, no bearer token) | The Clearance GitHub App ([provenance-app.md](provenance-app.md)). |
-| `GET /healthz`, `GET /readyz` | anyone | Up; the store answers and the policy is loaded. |
+| `GET /healthz`, `GET /readyz` | anyone | Up; the store answers and the policy is loaded. `/readyz` also reports `indexes` `{warm, revocations, receipts, failed_attempts}`: the packet routes answer 503 until the indexes they rely on are read, but the core stays ready ([assurance.md](assurance.md#revocation)). |
 
 Every request has a body cap per route (`Content-Length` checked first, then `MaxBytesReader`; 8 MiB for an
 evaluation, 64 KiB by default). The core's own routes decode JSON strictly (unknown fields and trailing data are
@@ -453,6 +456,9 @@ uneven. The signature code is the standard library's (`crypto/ecdsa`); there is 
   flight.
 - **Rotation**: replace the Secret's key and restart the core. Its first refresh re-signs every live token with the
   new key; verifiers that cache keys refetch on an unknown `kid`.
+- **Revoking a retired key** (a key that leaked, not a routine rotation): `clearance keys revoke <kid> --reason R` (`POST /v1/keys/{kid}/revoke`, an
+  admin). Rotate first: the key in use is refused. `GET /v1/keys` then omits the key, packet credentials it signed stop verifying, and the core refuses
+  to start with it again ([assurance.md](assurance.md#one-of-the-cores-token-keys)).
 - **KMS**: `signing.kms` (`CLEARANCE_SIGNING_KMS`) is the chart's reference for a KMS-held key. The KMS signer is
   not built: the core refuses to start with it set. The interface it implements is `token.Signer` (`KeyID()`,
   `Public()`, `Sign(ctx, sha256 digest) -> DER`), which is what the KMS signing APIs above take and return; the

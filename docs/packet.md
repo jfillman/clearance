@@ -155,7 +155,8 @@ what that does and does not show.
 **Acceptances.** The signed acceptance receipts assurance recipients returned for earlier packets ([assurance.md](assurance.md), package P-1):
 packet id, engagement, framework and mapping versions, checkpoint, verdict and per-control notes, each exactly as the recipient
 signed it, with the registered key the core checked it with and the chain record (`packet.receipt`) that holds it. The packet reads
-them from the chain; nothing is inferred. `acceptances` in the JSON is `{status, statement, receipts[]}` (`status` is
+them from the chain; nothing is inferred. `acceptances` in the JSON is `{status, statement, receipts[], key_revocations?[]}` (`key_revocations` lists the
+revocations of keys the carried receipts were signed with, each with its chain record, [assurance.md](assurance.md#revocation); `status` is
 `none-recorded` until a receipt exists), `csv/acceptances.csv` has one row a receipt, and `clearance verify` checks each signature
 offline. A `ratified` or `declared-break-glass` resolution and each break-glass window are
 **Exceptions** rows (the resolution column, and the `break-glass` class). An observation row shows its **newest**

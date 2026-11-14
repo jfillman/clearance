@@ -473,12 +473,19 @@ func (s *Server) getSample(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := s.opt.Clock()
+	rv, revoked, err := s.deliveryRevocation(ctx, claims.Subject)
+	if err != nil {
+		s.revocationUnreadable(w, r, err)
+		return
+	}
 	rule, msg, status := "", "", 0
 	switch {
 	case id != claims.Packet:
 		rule, msg, status = RulePacketScope, "this credential opens packet "+claims.Packet+", not "+id, http.StatusForbidden
 	case !slices.Contains(claims.Scope, packet.PartSummary) || !slices.Contains(claims.Scope, packet.PartEvidence):
 		rule, msg, status = RulePacketScope, "a sample needs both parts of the packet (the population is in the summary, the records and proofs in the evidence); this credential's scope is "+strings.Join(claims.Scope, ", "), http.StatusForbidden
+	case revoked:
+		rule, msg, status = RulePacketRevoked, "this delivery was revoked at "+rv.at+": ask the subscriber for a new delivery", http.StatusForbidden
 	case now.Before(time.Unix(claims.NotBefore, 0)):
 		rule, msg, status = RulePacketNotYet, "this credential is not good until "+pycompat.ISO(time.Unix(claims.NotBefore, 0)), http.StatusForbidden
 	case !now.Before(time.Unix(claims.Expires, 0)):
@@ -518,6 +525,32 @@ func (s *Server) getSample(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("this sample would be over %d bytes (the most `clearance verify --sample` reads): ask for a smaller n", s.sampleMaxBytes()))
 		return
 	}
+	// The slow part is done (the packet, the frame, the draw). The gate covers the re-check and the record only (see getPacket). The sampling
+	// index is read before it, so the gate is never held across a scan of the chain.
+	s.sampleMu.Lock()
+	_, ierr := s.sampleIdx(ctx)
+	s.sampleMu.Unlock()
+	if ierr != nil {
+		writeError(w, http.StatusServiceUnavailable, "the store could not be read")
+		return
+	}
+	release, ok := s.commitGate(w, r, true)
+	if !ok {
+		return
+	}
+	defer release()
+	if rv, revoked, err := s.deliveryRevocation(ctx, claims.Subject); err != nil {
+		s.revocationUnreadable(w, r, err)
+		return
+	} else if revoked {
+		s.refuseSample(w, r, claims, id, RulePacketRevoked, "this delivery was revoked at "+rv.at+": ask the subscriber for a new delivery", http.StatusForbidden, now)
+		return
+	}
+	now = s.opt.Clock() // the window is checked again under the gate, with a fresh reading of the clock
+	if rule, msg, status := credentialWindowRule(claims, now); rule != "" {
+		s.refuseSample(w, r, claims, id, rule, msg, status, now)
+		return
+	}
 	rec, created, status, msg, rule := s.recordSampling(ctx, claims, id, doc, params, now)
 	if status != 0 {
 		if status == http.StatusTooManyRequests {
@@ -529,6 +562,7 @@ func (s *Server) getSample(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	doc.Recorded = rec
+	release() // the sampling is committed (recorded, or was already): a revoke may now be written
 	s.serveSample(w, doc, created)
 }
 

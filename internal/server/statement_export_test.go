@@ -193,6 +193,7 @@ func (s *Server) StatementsSeenForTest() bool { return s.stmtSeen.Load() }
 // CountStoreCallsForTest counts the reads of the chain's head and records and of the signing keys from now on.
 func (s *Server) CountStoreCallsForTest() func() int {
 	c := &callCounter{}
+	s.waitWarmForTest() // the background warm-up of the revocation and receipt indexes has read the store and is done with s.opt.Store
 	s.pauseStatementLoop(func() { c.Store = s.opt.Store; s.opt.Store = c })
 	return func() int { c.mu.Lock(); defer c.mu.Unlock(); return c.n }
 }
@@ -296,4 +297,26 @@ func (c *countingReads) Records(ctx context.Context, from int64, limit int) ([]s
 	c.n++
 	c.mu.Unlock()
 	return c.Store.Records(ctx, from, limit)
+}
+
+// waitWarmForTest waits for the background read of the revocation and receipt indexes that New starts.
+func (s *Server) waitWarmForTest() {
+	for _, ch := range []chan struct{}{s.rev.warmChan(), s.receiptWarm()} {
+		select {
+		case <-ch:
+		case <-time.After(10 * time.Second):
+		}
+	}
+}
+
+// SyncRevokedStatementKeysForTest is one tick of the statement loop's re-read of the signing keys' revoked flags.
+func (s *Server) SyncRevokedStatementKeysForTest(ctx context.Context) error {
+	return s.syncRevokedStatementKeys(ctx)
+}
+
+// SetReceiptPageSizeForTest makes the receipt index's pages n records long; the returned func restores it.
+func SetReceiptPageSizeForTest(n int) func() {
+	old := receiptPageSize
+	receiptPageSize = n
+	return func() { receiptPageSize = old }
 }

@@ -99,6 +99,14 @@ type packetDoc struct {
 			PayloadSHA256 string              `json:"payload_sha256"`
 			Envelope      json.RawMessage     `json:"envelope"`
 		} `json:"receipts"`
+		KeyRevocations []struct {
+			Seq        int64  `json:"seq"`
+			RecordHash string `json:"record_hash"`
+			Recipient  string `json:"recipient"`
+			KeyID      string `json:"key_id"`
+			AsOf       string `json:"as_of"`
+			RevokedAt  string `json:"revoked_at"`
+		} `json:"key_revocations"`
 	} `json:"acceptances"`
 	Verification struct {
 		Statement string `json:"statement"`

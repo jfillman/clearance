@@ -18,7 +18,7 @@ CONTRACT_VERSION = "1.0.0"
 
 RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "run.finish", "human.answer", "session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome", "deploy.exception", "deploy.degraded", "federated.decision", "observation", "assessment", "resolution", "observation.health", "observation.verification", "grc.push", "grc.report")
 
-__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Delivery", "DeliveryRequest", "DeliveryWindow", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateBulkResolutionFailed", "GateBulkResolutionRecorded", "GateBulkResolutionRequest", "GateBulkResolutionResult", "GateBulkResolutionSkipped", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateProtectedPair", "GateReason", "GateRequirement", "GateResolutionRecorded", "GateResolutionRequest", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PacketBundle", "PacketCheckpointRef", "PacketError", "PacketLinks", "PacketMeta", "PacketPublished", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProtectionCluster", "ProtectionRequest", "ProtectionResult", "ProtectionState", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProvidedDefinition", "ProviderEvent", "Ready", "ReceiptRecorded", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "SamplingCheckpoint", "SamplingDocument", "SamplingItem", "SamplingPacketRef", "SamplingParams", "SamplingPopulationDoc", "SamplingProof", "SamplingRecorded", "SamplingRow", "SamplingStratum", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "StatementIssued", "StatementLinks", "StatementList", "StatementListItem", "StatementRequest", "StatementRevokeRequest", "StatementRevoked", "Subject", "SubjectProperties", "TargetsGate", "TargetsObserver", "TargetsRequest", "TargetsResult", "TargetsTarget", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
+__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BackdateRefusal", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Delivery", "DeliveryRequest", "DeliveryRevoked", "DeliveryWindow", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateBulkResolutionFailed", "GateBulkResolutionRecorded", "GateBulkResolutionRequest", "GateBulkResolutionResult", "GateBulkResolutionSkipped", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateProtectedPair", "GateReason", "GateRequirement", "GateResolutionRecorded", "GateResolutionRequest", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "IndexStatus", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PacketBundle", "PacketCheckpointRef", "PacketError", "PacketLinks", "PacketMeta", "PacketPublished", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProtectionCluster", "ProtectionRequest", "ProtectionResult", "ProtectionState", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProvidedDefinition", "ProviderEvent", "Ready", "ReceiptRecorded", "RecipientKeyRevokeRequest", "RecipientKeyRevoked", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "RevokeRequest", "SamplingCheckpoint", "SamplingDocument", "SamplingItem", "SamplingPacketRef", "SamplingParams", "SamplingPopulationDoc", "SamplingProof", "SamplingRecorded", "SamplingRow", "SamplingStratum", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "StatementIssued", "StatementLinks", "StatementList", "StatementListItem", "StatementRequest", "StatementRevokeRequest", "StatementRevoked", "Subject", "SubjectProperties", "TargetsGate", "TargetsObserver", "TargetsRequest", "TargetsResult", "TargetsTarget", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenKeyRevoked", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -93,6 +93,22 @@ class Attestation(Model):
     backend: str | None = None
     detail: str | None = None
     enabled: bool
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class BackdateRefusal(Model):
+    """Contract schema BackdateRefusal."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("affected_receipts", "affected_receipts", ("int",), True),
+        Field("error", "error", ("str",), True),
+        Field("rule", "rule", ("str",), False),
+    )
+
+    affected_receipts: int
+    error: str
+    rule: str | None = None
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -367,6 +383,34 @@ class DeliveryRequest(Model):
     recipient: str
     scope: list[str] | None = None
     window: DeliveryWindow
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class DeliveryRevoked(Model):
+    """Contract schema DeliveryRevoked."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("created", "created", ("bool",), True),
+        Field("hash", "hash", ("str",), True),
+        Field("id", "id", ("str",), True),
+        Field("packet_id", "packet_id", ("str",), True),
+        Field("reason", "reason", ("str",), True),
+        Field("recipient", "recipient", ("str",), True),
+        Field("revoked_at", "revoked_at", ("str",), True),
+        Field("seq", "seq", ("int",), True),
+        Field("state", "state", ("str",), True),
+    )
+
+    created: bool
+    hash: str
+    id: str
+    packet_id: str
+    reason: str
+    recipient: str
+    revoked_at: str
+    seq: int
+    state: str
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -1394,6 +1438,24 @@ class Hold(Model):
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
+class IndexStatus(Model):
+    """Contract schema IndexStatus."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("failed_attempts", "failed_attempts", ("int",), True),
+        Field("receipts", "receipts", ("bool",), True),
+        Field("revocations", "revocations", ("bool",), True),
+        Field("warm", "warm", ("bool",), True),
+    )
+
+    failed_attempts: int
+    receipts: bool
+    revocations: bool
+    warm: bool
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
 class LedgerStatus(Model):
     """Contract schema LedgerStatus."""
 
@@ -2023,6 +2085,7 @@ class Ready(Model):
         Field("degraded", "degraded", ("list", ("str",)), False),
         Field("error", "error", ("str",), False),
         Field("head", "head", ("int",), True),
+        Field("indexes", "indexes", ("nullable", ("ref", "IndexStatus")), False),
         Field("ledger", "ledger", ("nullable", ("ref", "LedgerStatus")), False),
         Field("ok", "ok", ("bool",), True),
         Field("policy", "policy", ("ref", "PolicyRef"), True),
@@ -2032,6 +2095,7 @@ class Ready(Model):
     degraded: list[str] | None = None
     error: str | None = None
     head: int
+    indexes: IndexStatus | None = None
     ledger: LedgerStatus | None = None
     ok: bool
     policy: PolicyRef
@@ -2059,6 +2123,50 @@ class ReceiptRecorded(Model):
     recipient: str
     seq: int
     verdict: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class RecipientKeyRevokeRequest(Model):
+    """Contract schema RecipientKeyRevokeRequest (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("as_of", "as_of", ("str",), False),
+        Field("backdate", "backdate", ("bool",), False),
+        Field("reason", "reason", ("str",), True),
+    )
+
+    as_of: str | None = None
+    backdate: bool | None = None
+    reason: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class RecipientKeyRevoked(Model):
+    """Contract schema RecipientKeyRevoked."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("as_of", "as_of", ("str",), True),
+        Field("created", "created", ("bool",), True),
+        Field("hash", "hash", ("str",), True),
+        Field("key_id", "key_id", ("str",), True),
+        Field("reason", "reason", ("str",), True),
+        Field("recipient", "recipient", ("str",), True),
+        Field("revoked_at", "revoked_at", ("str",), True),
+        Field("seq", "seq", ("int",), True),
+        Field("state", "state", ("str",), True),
+    )
+
+    as_of: str
+    created: bool
+    hash: str
+    key_id: str
+    reason: str
+    recipient: str
+    revoked_at: str
+    seq: int
+    state: str
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -2187,6 +2295,18 @@ class ReviewResult(Model):
     ok: bool
     problems: list[ReviewProblem]
     tier: int | None = None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class RevokeRequest(Model):
+    """Contract schema RevokeRequest (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("reason", "reason", ("str",), True),
+    )
+
+    reason: str
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -2836,6 +2956,32 @@ class TokenJWKS(Model):
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
+class TokenKeyRevoked(Model):
+    """Contract schema TokenKeyRevoked."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("created", "created", ("bool",), True),
+        Field("hash", "hash", ("str",), False),
+        Field("key_id", "key_id", ("str",), True),
+        Field("revoked_at", "revoked_at", ("str",), True),
+        Field("seq", "seq", ("nullable", ("int",)), True),
+        Field("state", "state", ("str",), True),
+        Field("statements", "statements", ("list", ("str",)), True),
+        Field("statements_error", "statements_error", ("str",), False),
+    )
+
+    created: bool
+    hash: str | None = None
+    key_id: str
+    revoked_at: str
+    seq: int | None
+    state: str
+    statements: list[str]
+    statements_error: str | None = None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
 class TokenSignature(Model):
     """Contract schema TokenSignature."""
 
@@ -2928,6 +3074,7 @@ MODELS: dict[str, type[Model]] = {
     "ActionProperties": ActionProperties,
     "AgentDef": AgentDef,
     "Attestation": Attestation,
+    "BackdateRefusal": BackdateRefusal,
     "BreakglassList": BreakglassList,
     "Budgets": Budgets,
     "BundleRef": BundleRef,
@@ -2940,6 +3087,7 @@ MODELS: dict[str, type[Model]] = {
     "DefinitionsSourceView": DefinitionsSourceView,
     "Delivery": Delivery,
     "DeliveryRequest": DeliveryRequest,
+    "DeliveryRevoked": DeliveryRevoked,
     "DeliveryWindow": DeliveryWindow,
     "Effect": Effect,
     "ErrorResponse": ErrorResponse,
@@ -2981,6 +3129,7 @@ MODELS: dict[str, type[Model]] = {
     "HcprunAnswer": HcprunAnswer,
     "Health": Health,
     "Hold": Hold,
+    "IndexStatus": IndexStatus,
     "LedgerStatus": LedgerStatus,
     "LedgerWitnessStatus": LedgerWitnessStatus,
     "Limits": Limits,
@@ -3010,6 +3159,8 @@ MODELS: dict[str, type[Model]] = {
     "ProviderEvent": ProviderEvent,
     "Ready": Ready,
     "ReceiptRecorded": ReceiptRecorded,
+    "RecipientKeyRevokeRequest": RecipientKeyRevokeRequest,
+    "RecipientKeyRevoked": RecipientKeyRevoked,
     "RecordRef": RecordRef,
     "RecordRequest": RecordRequest,
     "Refusal": Refusal,
@@ -3018,6 +3169,7 @@ MODELS: dict[str, type[Model]] = {
     "ReviewChange": ReviewChange,
     "ReviewProblem": ReviewProblem,
     "ReviewResult": ReviewResult,
+    "RevokeRequest": RevokeRequest,
     "SamplingCheckpoint": SamplingCheckpoint,
     "SamplingDocument": SamplingDocument,
     "SamplingItem": SamplingItem,
@@ -3050,6 +3202,7 @@ MODELS: dict[str, type[Model]] = {
     "TokenEnvelope": TokenEnvelope,
     "TokenJWK": TokenJWK,
     "TokenJWKS": TokenJWKS,
+    "TokenKeyRevoked": TokenKeyRevoked,
     "TokenSignature": TokenSignature,
     "Usage": Usage,
     "WaitAnswer": WaitAnswer,
@@ -3060,6 +3213,7 @@ OPERATIONS: dict[str, Operation] = {
     "evaluate": Operation("POST", "/access/v1/evaluation", "provider", 8388608, EvaluationRequest, EvaluationResult),
     "healthz": Operation("GET", "/healthz", "none", 65536, None, Health),
     "readyz": Operation("GET", "/readyz", "none", 65536, None, Ready),
+    "revokeRecipientKey": Operation("POST", "/v1/assurance/recipients/{recipient}/keys/{kid}/revoke", "bearer", 4096, RecipientKeyRevokeRequest, RecipientKeyRevoked),
     "listBreakglass": Operation("GET", "/v1/breakglass", "bearer", 65536, None, BreakglassList),
     "openBreakglass": Operation("POST", "/v1/breakglass", "bearer", 16384, GateBreakglassRequest, GateBreakglass),
     "closeBreakglass": Operation("POST", "/v1/breakglass/{id}/close", "bearer", 65536, None, GateBreakglass),
@@ -3074,11 +3228,13 @@ OPERATIONS: dict[str, Operation] = {
     "reviewDefinition": Operation("POST", "/v1/definitions/review", "bearer", 65536, None, ReviewResult),
     "githubWebhook": Operation("POST", "/v1/github/webhook", "github-signature", 26214400, None, WebhookAnswer),
     "getKeys": Operation("GET", "/v1/keys", "none", 65536, None, TokenJWKS),
+    "revokeKey": Operation("POST", "/v1/keys/{kid}/revoke", "bearer", 4096, RevokeRequest, TokenKeyRevoked),
     "setObservationResolutions": Operation("POST", "/v1/observations/resolutions", "bearer", 65536, GateBulkResolutionRequest, GateBulkResolutionResult),
     "setObservationResolution": Operation("POST", "/v1/observations/{seq}/resolution", "bearer", 16384, GateResolutionRequest, GateResolutionRecorded),
     "publishPacket": Operation("POST", "/v1/packets", "bearer", 67112960, None, PacketPublished),
     "getPacket": Operation("GET", "/v1/packets/{id}", "packet-credential", 65536, None, PacketBundle),
     "deliverPacket": Operation("POST", "/v1/packets/{id}/deliveries", "bearer", 8192, DeliveryRequest, Delivery),
+    "revokeDelivery": Operation("POST", "/v1/packets/{id}/deliveries/{delivery}/revoke", "bearer", 4096, RevokeRequest, DeliveryRevoked),
     "acceptReceipt": Operation("POST", "/v1/packets/{id}/receipts", "recipient-signature", 262144, None, ReceiptRecorded),
     "getPacketSample": Operation("GET", "/v1/packets/{id}/sample", "packet-credential", 65536, None, SamplingDocument),
     "getProtection": Operation("GET", "/v1/protection", "provider", 65536, None, ProtectionState),

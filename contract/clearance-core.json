@@ -18,6 +18,24 @@
         ],
         "type": "object"
       },
+      "BackdateRefusal": {
+        "properties": {
+          "affected_receipts": {
+            "type": "integer"
+          },
+          "error": {
+            "type": "string"
+          },
+          "rule": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "affected_receipts",
+          "error"
+        ],
+        "type": "object"
+      },
       "BreakglassList": {
         "properties": {
           "items": {
@@ -954,6 +972,49 @@
         "required": [
           "recipient",
           "window"
+        ],
+        "type": "object"
+      },
+      "DeliveryRevoked": {
+        "properties": {
+          "created": {
+            "type": "boolean"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "packet_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "recipient": {
+            "type": "string"
+          },
+          "revoked_at": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "created",
+          "hash",
+          "id",
+          "packet_id",
+          "reason",
+          "recipient",
+          "revoked_at",
+          "seq",
+          "state"
         ],
         "type": "object"
       },
@@ -2420,6 +2481,29 @@
         ],
         "type": "object"
       },
+      "IndexStatus": {
+        "properties": {
+          "failed_attempts": {
+            "type": "integer"
+          },
+          "receipts": {
+            "type": "boolean"
+          },
+          "revocations": {
+            "type": "boolean"
+          },
+          "warm": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "failed_attempts",
+          "receipts",
+          "revocations",
+          "warm"
+        ],
+        "type": "object"
+      },
       "LedgerStatus": {
         "properties": {
           "chain": {
@@ -3352,6 +3436,16 @@
           "head": {
             "type": "integer"
           },
+          "indexes": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/IndexStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "ledger": {
             "oneOf": [
               {
@@ -3409,6 +3503,67 @@
           "recipient",
           "seq",
           "verdict"
+        ],
+        "type": "object"
+      },
+      "RecipientKeyRevokeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "as_of": {
+            "type": "string"
+          },
+          "backdate": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "type": "object"
+      },
+      "RecipientKeyRevoked": {
+        "properties": {
+          "as_of": {
+            "type": "string"
+          },
+          "created": {
+            "type": "boolean"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "key_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "recipient": {
+            "type": "string"
+          },
+          "revoked_at": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "as_of",
+          "created",
+          "hash",
+          "key_id",
+          "reason",
+          "recipient",
+          "revoked_at",
+          "seq",
+          "state"
         ],
         "type": "object"
       },
@@ -3555,6 +3710,18 @@
         "required": [
           "ok",
           "problems"
+        ],
+        "type": "object"
+      },
+      "RevokeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
         ],
         "type": "object"
       },
@@ -4272,6 +4439,49 @@
         ],
         "type": "object"
       },
+      "TokenKeyRevoked": {
+        "properties": {
+          "created": {
+            "type": "boolean"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "key_id": {
+            "type": "string"
+          },
+          "revoked_at": {
+            "type": "string"
+          },
+          "seq": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "statements": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "statements_error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "created",
+          "key_id",
+          "revoked_at",
+          "seq",
+          "state",
+          "statements"
+        ],
+        "type": "object"
+      },
       "TokenSignature": {
         "properties": {
           "keyid": {
@@ -4567,6 +4777,139 @@
         "summary": "The store answers and the policy is loaded.",
         "x-clearance-auth": "none",
         "x-clearance-max-body": 65536
+      }
+    },
+    "/v1/assurance/recipients/{recipient}/keys/{kid}/revoke": {
+      "post": {
+        "operationId": "revokeRecipientKey",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "recipient",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecipientKeyRevokeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipientKeyRevoked"
+                }
+              }
+            },
+            "description": "the revocation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is not valid (strict decoding, or a field the route refuses)"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no bearer token, or one the authenticator refused"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackdateRefusal"
+                }
+              }
+            },
+            "description": "an as_of more than 24 hours back without backdate: true; says how many recorded receipts it would fail"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is over the route's cap"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PacketError"
+                }
+              }
+            },
+            "description": "an as_of before the first delivery the core recorded to the recipient"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the store could not record it: treat as unreachable (fail closed)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "An admin revokes a key a recipient registered (CLEARANCE_PROVIDERS), as of a time (default now; a past time says it was compromised since then; at most the clock-skew allowance ahead of the core's clock; never before the first delivery the core recorded to the recipient (422); more than 24 hours back only with backdate: true, else 409 saying how many recorded receipts it would fail). An assurance.key.revoke record carrying both as_of and the core's own time, written before the answer. From then a receipt signed with the key is refused PK-KEY-REVOKED at submit; receipts already recorded stay recorded. The next packet carries the revocation beside the receipts the key signed, and `clearance verify` fails a receipt the core recorded at or after the as-of time and prints the revocation on one recorded before it. Revoking a revoked key is the same answer and records nothing; removing the key from the configuration does not undo it.",
+        "x-clearance-auth": "bearer",
+        "x-clearance-max-body": 4096
       }
     },
     "/v1/breakglass": {
@@ -5828,9 +6171,124 @@
           }
         },
         "security": [],
-        "summary": "The clearance token verification keys, a JWKS (EC P-256, ES256, kid = the RFC 7638 thumbprint): the key in use and keys retired within the last 24 hours. Public: a verifier checks tokens offline with it.",
+        "summary": "The clearance token verification keys, a JWKS (EC P-256, ES256, kid = the RFC 7638 thumbprint): the key in use and keys retired within the last 24 hours, never a revoked one (POST /v1/keys/{kid}/revoke). Public: a verifier checks tokens offline with it.",
         "x-clearance-auth": "none",
         "x-clearance-max-body": 65536
+      }
+    },
+    "/v1/keys/{kid}/revoke": {
+      "post": {
+        "operationId": "revokeKey",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenKeyRevoked"
+                }
+              }
+            },
+            "description": "the revocation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is not valid (strict decoding, or a field the route refuses)"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no bearer token, or one the authenticator refused"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the request conflicts with what is recorded"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is over the route's cap"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the store could not record it: treat as unreachable (fail closed)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "An admin revokes a retired token signing key. A token.key.revoke record and the key's revoked flag commit together before the answer. From then GET /v1/keys no longer lists the key (a verifier that does not find a kid refuses what it signed), no packet credential it signed verifies (a bare 401: the check reads the key table on every request), and the core re-signs the clearance tokens and grant feeds it signed with the key in use. The key in use is refused (409: rotate first). A revoked key is never used again: the core refuses to start with it. A revoked key is revoked for verification statements too: it leaves GET /v1/statement-keys, a statement it signed verifies as failed (signing key revoked; the issuer must reissue), and the answer lists the ids of the statements that stood so the admin can revoke and reissue them. Revoking a revoked key is the same answer and records nothing.",
+        "x-clearance-auth": "bearer",
+        "x-clearance-max-body": 4096
       }
     },
     "/v1/observations/resolutions": {
@@ -6218,7 +6676,7 @@
             "bearer": []
           }
         ],
-        "summary": "The recipient reads the packet (the bundle) under the credential its delivery returned, in the bearer header. No Clearance account. The credential is checked for its signature (anything the core did not sign is a bare 401); then every answer is a packet.fetch record, written before the answer: an allowed read before a byte is served, and a refusal (PK-EXPIRED, PK-NOT-YET, PK-SCOPE for another packet or a part outside its scope, PK-RECIPIENT, PK-GONE) with its rule.",
+        "summary": "The recipient reads the packet (the bundle) under the credential its delivery returned, in the bearer header. No Clearance account. The credential is checked for its signature (anything the core did not sign is a bare 401); then every answer is a packet.fetch record, written before the answer: an allowed read before a byte is served, and a refusal (PK-EXPIRED, PK-NOT-YET, PK-SCOPE for another packet or a part outside its scope, PK-REVOKED for a revoked delivery, PK-RECIPIENT, PK-GONE) with its rule. A revocation state that cannot be read refuses the read (503).",
         "x-clearance-auth": "packet-credential",
         "x-clearance-credential": "a packet access credential, minted by POST /v1/packets/{id}/deliveries (not an authenticator token)",
         "x-clearance-max-body": 65536
@@ -6327,6 +6785,119 @@
         "summary": "An admin opens a published packet to one registered assurance provider (a recipient) for a window, scoped to parts of it (summary, evidence). The delivery is a packet.deliver record naming the person, the recipient, the scope and the window; the answer carries the time-boxed credential the recipient presents to GET /v1/packets/{id}: once, never stored. The subscriber hands it over; Clearance submits nothing to anyone.",
         "x-clearance-auth": "bearer",
         "x-clearance-max-body": 8192
+      }
+    },
+    "/v1/packets/{id}/deliveries/{delivery}/revoke": {
+      "post": {
+        "operationId": "revokeDelivery",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "delivery",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveryRevoked"
+                }
+              }
+            },
+            "description": "the revocation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is not valid (strict decoding, or a field the route refuses)"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no bearer token, or one the authenticator refused"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such resource"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is over the route's cap"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the store could not record it: treat as unreachable (fail closed)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "An admin revokes a delivery: from the record on, every read of the packet and every sample under the delivery's credential is refused PK-REVOKED (and the refusal is a record, capped per delivery per hour like every refusal), and a receipt for the delivery that was not recorded yet is refused PK-REVOKED; receipts already recorded stay. A packet.revoke record, written before the answer; effective at once in the process that took it and within one second plus a store read in any other replica (an unreadable state refuses the request, 503). Revoking a revoked delivery is the same answer and records nothing. A revoked delivery is never un-revoked: open a new one. A recipient that already downloaded the packet still has it.",
+        "x-clearance-auth": "bearer",
+        "x-clearance-max-body": 4096
       }
     },
     "/v1/packets/{id}/receipts": {

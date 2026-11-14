@@ -657,6 +657,9 @@ func (s *Server) getKeys(w http.ResponseWriter, r *http.Request, _ *Viewer) {
 	}
 	out := token.JWKS{Keys: []token.JWK{}}
 	for _, k := range rows {
+		if k.RevokedAt != nil {
+			continue // revoked keys are left out (the core's GET /v1/keys does the same)
+		}
 		var j token.JWK
 		if json.Unmarshal(k.JWK, &j) == nil {
 			out.Keys = append(out.Keys, j)

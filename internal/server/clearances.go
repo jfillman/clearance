@@ -170,6 +170,11 @@ func (s *Server) keys(w http.ResponseWriter, r *http.Request) {
 	}
 	out := token.JWKS{Keys: []token.JWK{}}
 	for _, k := range rows {
+		if k.RevokedAt != nil {
+			// A revoked key is left out, not flagged: a verifier that does not know a flag would go on trusting it, one that
+			// does not find the kid refuses what it signed.
+			continue
+		}
 		var j token.JWK
 		if err := json.Unmarshal(k.JWK, &j); err != nil {
 			continue

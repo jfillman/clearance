@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/jfillman/clearance/internal/definitions"
 	"github.com/jfillman/clearance/internal/profile"
+	"github.com/jfillman/clearance/internal/pycompat"
 )
 
 // FuzzProviderBodies feeds the outcome and record bodies' decoding and validation: never a panic, and an accepted
@@ -68,6 +72,38 @@ func FuzzDefinitionsBody(f *testing.F) {
 		for _, r := range rejected {
 			if r.Reason == "" {
 				t.Fatal("a rejection without a reason")
+			}
+		}
+	})
+}
+
+// FuzzRevokeBodies feeds the revoke routes' bodies to the decoding and validation the handlers use: never a panic; an accepted reason
+// is valid UTF-8 with no control character and within the bound (checked here without cleanText); an accepted as_of survives the
+// time the handler records (truncated to the second, as pycompat.ISO writes it) and reads back as the same instant.
+func FuzzRevokeBodies(f *testing.F) {
+	f.Add([]byte(`{"reason":"credential leaked"}`))
+	f.Add([]byte(`{"reason":"lost","as_of":"2026-11-13T10:00:00Z"}`))
+	f.Add([]byte(`{"reason":"` + strings.Repeat("x", 300) + `"}`))
+	f.Add([]byte(`{"reason":"a\u0000b","extra":1}`))
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		var a RevokeRequest
+		if strictDecode(bytes.NewReader(raw), &a) == nil && cleanTextStrict(a.Reason, MaxRevokeReason) {
+			if !utf8.ValidString(a.Reason) || utf8.RuneCountInString(a.Reason) > MaxRevokeReason {
+				t.Fatalf("an accepted reason is not valid or too long: %q", a.Reason)
+			}
+			for _, r := range a.Reason {
+				if unicode.IsControl(r) {
+					t.Fatalf("an accepted reason holds a control character: %q", a.Reason)
+				}
+			}
+		}
+		var b RecipientKeyRevokeRequest
+		if strictDecode(bytes.NewReader(raw), &b) == nil && b.AsOf != "" {
+			if at, err := time.Parse(time.RFC3339, b.AsOf); err == nil {
+				at = at.UTC().Truncate(time.Second)
+				if back, err := time.Parse(time.RFC3339, pycompat.ISO(at)); err != nil || !back.Equal(at) {
+					t.Fatalf("an accepted as_of does not round-trip: %q", b.AsOf)
+				}
 			}
 		}
 	})

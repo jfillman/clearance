@@ -789,11 +789,63 @@ func (b *builder) acceptances(pk *Packet) {
 		pk.Acceptances.Receipts = append(pk.Acceptances.Receipts, rc)
 		b.extra[rc.Seq] = true
 	}
+	pk.Acceptances.KeyRevocations = b.keyRevocations(pk.Acceptances.Receipts)
 	if n := len(pk.Acceptances.Receipts); n > 0 {
 		pk.Acceptances.Status = "recorded"
 		pk.Acceptances.Statement = fmt.Sprintf("%d acceptance receipt(s) recorded for earlier packets, each signed by the recipient's own key and recorded in the chain; "+
 			"`clearance verify` checks each signature again offline.", n)
 	}
+}
+
+// ToolKeyRevoke is the chain record the core writes when an admin revokes a key a recipient registered.
+const ToolKeyRevoke = "assurance.key.revoke"
+
+// keyRevocations carries the revocations of the keys the receipts were signed with, in record order, the first revocation of a key
+// only (the core records a key's revocation once). Only records the core wrote itself count (its provider, boundary deployment, the tool
+// and the revocation marked as fields it verified). The records are carried too, so they are bound by the chain checks and the proofs.
+func (b *builder) keyRevocations(rcs []Receipt) []KeyRevocation {
+	used := map[string]bool{}
+	for _, r := range rcs {
+		used[r.Recipient+"\x00"+r.KeyID] = true
+	}
+	var out []KeyRevocation
+	seen := map[string]bool{}
+	for _, r := range b.c.records {
+		if str(r, "tool") != ToolKeyRevoke || str(r, "decision") != "allow" || !coreRevocation(r) {
+			continue
+		}
+		rv := obj(r, "revocation")
+		rc, kid, asOf := str(rv, "recipient"), str(rv, "key_id"), str(rv, "as_of")
+		k := rc + "\x00" + kid
+		if str(rv, "kind") != "recipient-key" || !used[k] || seen[k] || asOf == "" {
+			continue
+		}
+		if _, err := time.Parse(time.RFC3339, asOf); err != nil {
+			continue
+		}
+		seen[k] = true
+		out = append(out, KeyRevocation{Seq: seqOf(r), RecordHash: str(r, "hash"), Recipient: rc, KeyID: kid, AsOf: asOf, RevokedAt: str(r, "ts")})
+		b.extra[seqOf(r)] = true
+	}
+	return out
+}
+
+// coreRevocation is true for a record the core wrote as a revocation record (see server.coreRecordWith).
+func coreRevocation(r Record) bool {
+	if str(obj(r, "provider"), "name") != evidence.CoreProviderName || str(r, "boundary") != "deployment" {
+		return false
+	}
+	vs, _ := r["verified"].([]any)
+	tool, f := false, false
+	for _, v := range vs {
+		switch v {
+		case "tool":
+			tool = true
+		case "revocation":
+			f = true
+		}
+	}
+	return tool && f
 }
 
 // receiptOf reads a packet.receipt record into the section's row. The printed fields come from the signed payload.

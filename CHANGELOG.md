@@ -11,6 +11,26 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ### Added
 
+- **Revocation of the W6 assurance surface** ([docs/assurance.md](docs/assurance.md#revocation)); the Cloud spec's access-grant revoke now has its core half.
+  `POST /v1/packets/{id}/deliveries/{delivery}/revoke` (admin; `packet.revoke` record before the answer, idempotent): every read and sample under the delivery's credential is
+  refused `PK-REVOKED` and the refusal is a record under the existing per-delivery cap; a new receipt for it is refused, receipts already recorded stay. Immediate in the
+  process that took the revoke and within one second plus a store read in any other replica; a revocation state that cannot be read refuses the read (503).
+  `POST /v1/assurance/recipients/{recipient}/keys/{kid}/revoke` (`assurance.key.revoke`, as of a time): a receipt signed with the key is refused at submit; the next packet carries
+  the revocation (`acceptances.key_revocations` with its record) and `clearance verify` fails a receipt signed at or after it and prints the revocation on one signed before.
+  `POST /v1/keys/{kid}/revoke` (`token.key.revoke`): a retired token signing key is revoked: `GET /v1/keys` omits it, credentials it signed are a bare 401, the key in use is refused (409),
+  and the core will not start with it again (`clearance_signing_keys.revoked_at`, a nullable column added with `ADD COLUMN IF NOT EXISTS`). Statement keys are untouched.
+  CLI: `clearance packet revoke`, `packet revoke-key`, `keys revoke`. Python client regenerated.
+  Review round: a read's slow work now runs outside the revocation gate (it covers one re-check and one append) and every wait on it ends with the request's context;
+  the revocation and receipt indexes are read in the background from start (credentialed and revoke routes answer 503 with Retry-After until then); a recipient-key `as_of`
+  more than 24 hours back needs `backdate: true` (409 says how many recorded receipts it would fail), may not precede the first delivery to the recipient (422), and the record
+  carries `recorded_at`; `clearance verify` also reads revocations from the carried records, fails a packet that omits one it carries, and judges a receipt by the core's record
+  time, not `signed_at`; a revoked token key is revoked for verification statements too (`/v1/statement-keys`, the hosted page, the revoke answer lists the statements to reissue);
+  revoke reasons refuse control, format and separator characters.
+  Second review round: another process serving the verify page learns of a token-key revocation from the statement loop's once-a-minute re-read of the signing keys' revoked flags;
+  `/readyz` reports `indexes` (warm, failed attempts) and a warm-up failing for over a minute is logged at error level, the receipt index resuming where it stopped; a carried receipt record
+  with no readable time fails the receipt in `clearance verify`; a credential's window is checked again under the revocation gate with a fresh clock; `as_of` is whole seconds, the affected count
+  is by record time, and a back-dated revoke for a recipient with no recorded delivery is refused.
+
 - G-ARGO-10c: **annotation opt-in for the Argo CD gate** ([docs/gate.md](docs/gate.md#annotation-opt-in-g-argo-10c-built)). **Off by default**: with it off the agent
   and the default render of `charts/clearance-argocd-agent` are exactly what they were (a golden render from `main` is in `tools/charttest`).
   - argocd-agent (`--optin`, chart `optIn.enabled`): an Application annotated `clearance.hangar.io/protect: "true"` (exactly that

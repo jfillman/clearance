@@ -162,8 +162,9 @@ The caps are per delivery. Whoever holds a delivery's credential can spend its 2
 hourly refusal-recording budget, and so lock the real recipient out of that delivery until the budgets reset (the hourly ones) or for
 good (the 20 samples). It cannot read more than the recipient could, and it cannot make the ledger grow past the caps. **Remedy:**
 the subscriber creates a new delivery for the same recipient and packet (`clearance packet deliver`), which has fresh caps; keep
-windows short. There is no revocation of the leaked credential (P-1); `TestP2ANewDeliveryHasFreshCaps` shows a new delivery
-drawing normally after the old one's caps are spent.
+windows short. Better still, [revoke the delivery](assurance.md#revocation) (`clearance packet revoke`): its sample route is then refused
+`PK-REVOKED` like the read route, the refusal is a `packet.sample` record under the same refusal cap, and a sample already drawn stays in
+the chain. `TestP2ANewDeliveryHasFreshCaps` shows a new delivery drawing normally after the old one's caps are spent.
 
 ## Known limits
 

@@ -251,6 +251,14 @@ func PDF(pk *Packet) []byte {
 	if len(rows) > 0 {
 		d.table([]string{"packet", "recipient", "engagement", "mappings", "verdict"}, []int{36, 16, 20, 20, 0}, rows)
 	}
+	if kr := pk.Acceptances.KeyRevocations; len(kr) > 0 {
+		d.para("Revoked recipient keys (a receipt signed with one at or after its as-of time is not trusted):")
+		rows = nil
+		for _, k := range kr {
+			rows = append(rows, []string{k.Recipient, k.KeyID, k.AsOf, fmt.Sprint(k.Seq)})
+		}
+		d.table([]string{"recipient", "key", "revoked as of", "record"}, []int{16, 48, 24, 0}, rows)
+	}
 	return d.bytes()
 }
 

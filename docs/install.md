@@ -232,7 +232,8 @@ chart's `signing.key`). Then set `signing.existingSecret: clearance-signing-key`
 start and publishes the public half at `GET /v1/keys` (the core and clearance-api).
 
 - **Rotation**: replace the key in the Secret and restart the core. The live tokens are re-signed with the new key at
-  once; the old public key stays in `GET /v1/keys` for 24 hours.
+  once; the old public key stays in `GET /v1/keys` for 24 hours. If the old key leaked, revoke it after the rotation
+  (`clearance keys revoke <kid> --reason R`): it leaves `GET /v1/keys` at once.
 - **KMS**: `signing.kms` is reserved for a KMS-held key (the core refuses it until the KMS signer is built).
 
 ## Upgrade

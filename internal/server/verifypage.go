@@ -214,11 +214,14 @@ func (s *Server) runStatementChecks(ctx context.Context, e *stmtEntry) (*verify.
 	}
 	// A statement is verified with the one key that signed it, taken from the statement keys, which are not the token keys.
 	ks := token.KeySet{}
+	keyRevoked := false
 	if j, ok, err := s.statementKeyFor(ctx, e.kid); err != nil {
 		return nil, nil, err
 	} else if ok {
-		if pub, err := j.Public(); err == nil {
-			ks[j.Kid] = pub
+		if keyRevoked = s.statementKeyRevokedNow(e.kid); !keyRevoked {
+			if pub, err := j.Public(); err == nil {
+				ks[j.Kid] = pub
+			}
 		}
 	}
 	so := s.statementVerifyOptions(nil)
@@ -251,6 +254,10 @@ func (s *Server) runStatementChecks(ctx context.Context, e *stmtEntry) (*verify.
 	}
 	so.Live = &verify.Live{State: statement.StateValid, AsOf: s.opt.Clock()}
 	rep := verify.VerifyStatement(envelope, e.id, so)
+	if keyRevoked && len(rep.Checks) == 7 {
+		// The key that signed it was revoked: never a pass. The signature check fails, with the reason a reader needs.
+		rep.Checks[1].Status, rep.Checks[1].Detail, rep.Checks[1].Findings = verify.Fail, signingKeyRevokedReason, nil
+	}
 	var doc *statement.Document
 	if len(rep.Checks) == 7 && rep.Checks[0].Status == verify.Pass && rep.Checks[1].Status == verify.Pass {
 		var env struct {
@@ -442,13 +449,21 @@ func (v *verifyPage) keysJSON(w http.ResponseWriter, r *http.Request, e *stmtEnt
 		v.plain(w, http.StatusServiceUnavailable, "The statement's key could not be read. Try again shortly.\n")
 		return
 	}
-	raw, err := json.Marshal(token.JWKS{Keys: []token.JWK{j}})
+	keys := []token.JWK{j}
+	if v.s.statementKeyRevokedNow(e.kid) {
+		keys = []token.JWK{} // a revoked key is not published: a verifier given this fails the statement
+	}
+	raw, err := json.Marshal(token.JWKS{Keys: keys})
 	if err != nil {
 		v.plain(w, http.StatusServiceUnavailable, "The statement's key could not be read.\n")
 		return
 	}
 	setSecurity(w)
-	w.Header().Set("Cache-Control", "public, max-age=300") // the key that signed a statement never changes
+	if len(keys) == 0 {
+		w.Header().Set("Cache-Control", "no-store")
+	} else {
+		w.Header().Set("Cache-Control", "public, max-age=300") // the key that signed a statement never changes (until it is revoked)
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_, _ = w.Write(raw)
 }
@@ -564,6 +579,9 @@ var checkWhat = [7]string{
 	"The issuer's current state, read when this page was made: neither revoked nor replaced by a correction.",
 }
 
+// signingKeyRevokedReason is what a statement whose signing key was revoked fails with, on the page and in the report.
+const signingKeyRevokedReason = "signing key revoked; the issuer must reissue this statement"
+
 var statusSays = map[verify.Status]string{
 	verify.Pass:            "Checked and passed.",
 	verify.Fail:            "Checked and FAILED.",
@@ -617,6 +635,9 @@ func (v *verifyPage) page(w http.ResponseWriter, r *http.Request, live stmtLive)
 		says := statusSays[c.Status]
 		if i == 6 {
 			says = c.Detail // check 7's words are the verifier's own and carry no name
+		}
+		if i == 1 && c.Status == verify.Fail && c.Detail == signingKeyRevokedReason {
+			says = signingKeyRevokedReason // the one reason the page gives for a failed signature: a fixed sentence, nothing the request or the statement chose
 		}
 		d.Checks = append(d.Checks, checkRow{N: i + 1, Name: strings.TrimPrefix(c.Name, fmt.Sprintf("%d. ", i+1)), Status: string(c.Status), Class: statusClass(c.Status), Says: says, What: checkWhat[i]})
 		if i == 3 {

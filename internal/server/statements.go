@@ -175,6 +175,9 @@ type stmtIndex struct {
 // statementPageSize is how many records one read of the chain takes (a variable so a test can make a short chain long).
 var statementPageSize = 2000
 
+// statementKeyEvery is how often the statement loop re-reads the signing keys' revoked flags.
+const statementKeyEvery = time.Minute
+
 var (
 	errStatementsCold  = errors.New("the statement index is not warm yet")
 	errStatementsStale = errors.New("the statement index is older than it may be served")
@@ -413,11 +416,21 @@ func (s *Server) statementLoop(lctx context.Context) {
 			s.StartStatements()
 		}
 	}()
-	var lastLog time.Time
+	var lastLog, lastKeys time.Time
 	for {
 		rctx, c := context.WithTimeout(lctx, statementRefreshTimeout)
 		err := s.refreshForWrite(rctx)
 		c()
+		// Once a minute, the revoked flags of the signing keys: a key revoked by another process stops verifying statements here too.
+		if now := time.Now(); now.Sub(lastKeys) >= statementKeyEvery && lctx.Err() == nil {
+			kctx, kc := context.WithTimeout(lctx, statementRefreshTimeout)
+			if kerr := s.syncRevokedStatementKeys(kctx); kerr != nil {
+				s.log.Warn("statements: the signing keys' revoked flags could not be read; trying again", "error", kerr.Error())
+			} else {
+				lastKeys = now
+			}
+			kc()
+		}
 		wait := statementTailEvery
 		if err != nil && lctx.Err() == nil {
 			wait = 2 * time.Second
@@ -467,6 +480,10 @@ func (s *Server) statementKeyRows(ctx context.Context) ([]store.SigningKey, erro
 	}
 	out := rows[:0:0]
 	for _, k := range rows {
+		// A revoked token key is revoked for statements too: it is not published, so an offline verifier fails closed on a statement it signed.
+		if k.RevokedAt != nil || s.statementKeyRevokedNow(k.KeyID) {
+			continue
+		}
 		if k.RetiredAt == nil || live[k.KeyID] {
 			out = append(out, k)
 		}
@@ -491,6 +508,12 @@ func (s *Server) statementKeyFor(ctx context.Context, kid string) (token.JWK, bo
 		}
 		for _, k := range rows {
 			s.kidKeys[k.KeyID] = k.JWK
+			if k.RevokedAt != nil {
+				if s.revokedKids == nil {
+					s.revokedKids = map[string]bool{}
+				}
+				s.revokedKids[k.KeyID] = true
+			}
 		}
 		raw, ok = s.kidKeys[kid]
 		s.keyMu.Unlock()
@@ -503,6 +526,74 @@ func (s *Server) statementKeyFor(ctx context.Context, kid string) (token.JWK, bo
 		return token.JWK{}, false, nil
 	}
 	return j, true, nil
+}
+
+// markStatementKeyRevoked records that a token key was revoked, for the statement paths of this process, and drops the checks run so far (a statement
+// the key signed must fail from the next read, not when its cached result ages out).
+func (s *Server) markStatementKeyRevoked(kid string) {
+	s.keyMu.Lock()
+	if s.revokedKids == nil {
+		s.revokedKids = map[string]bool{}
+	}
+	s.revokedKids[kid] = true
+	s.keyMu.Unlock()
+	c := &s.stmtRes
+	c.mu.Lock()
+	clear(c.by)
+	c.order = nil
+	c.mu.Unlock()
+}
+
+// syncRevokedStatementKeys re-reads the signing-key table's revoked flags and marks every key revoked since the last read, as this process's own
+// revocation does (and drops the cached checks). It is how a process that serves the verify page but did not take the revoke learns of it:
+// the statement loop calls it about once a minute (never a request), so another process sees a key revocation within one loop tick plus the
+// 5-minute max-age of /s/<id>/keys.json.
+func (s *Server) syncRevokedStatementKeys(ctx context.Context) error {
+	rows, err := s.opt.Store.SigningKeys(ctx, time.Time{})
+	if err != nil {
+		return err
+	}
+	for _, k := range rows {
+		if k.RevokedAt != nil && !s.statementKeyRevokedNow(k.KeyID) {
+			s.markStatementKeyRevoked(k.KeyID)
+		}
+	}
+	return nil
+}
+
+func (s *Server) statementKeyRevokedNow(kid string) bool {
+	s.keyMu.Lock()
+	defer s.keyMu.Unlock()
+	return s.revokedKids[kid]
+}
+
+// statementKeyRevoked says whether the token key with this id was revoked. The state is read from the key table with the key's JWK (once) and
+// kept; a revocation taken by this process updates it at once.
+func (s *Server) statementKeyRevoked(ctx context.Context, kid string) (bool, error) {
+	if _, _, err := s.statementKeyFor(ctx, kid); err != nil {
+		return false, err
+	}
+	return s.statementKeyRevokedNow(kid), nil
+}
+
+// standingStatementsOf are the ids of the statements signed by the key that stand: not revoked and not superseded. What a revoked key leaves
+// the admin to revoke and issue again.
+func (s *Server) standingStatementsOf(ctx context.Context, kid string) ([]string, error) {
+	s.StartStatements()
+	if err := s.refreshForWrite(ctx); err != nil {
+		return nil, err
+	}
+	x := &s.stmts
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	ids := []string{}
+	for _, e := range x.byID {
+		if e.kid == kid && !e.revoked && e.supersededBy == "" {
+			ids = append(ids, e.id)
+		}
+	}
+	slices.Sort(ids)
+	return ids, nil
 }
 
 // statementKeys is GET /v1/statement-keys: the statement verification keys (a JWKS), public like /v1/keys. It is anonymous and starts
@@ -833,6 +924,16 @@ func (s *Server) issueStatement(w http.ResponseWriter, r *http.Request) {
 			e := x.byID[id]
 			if e.revoked {
 				writeError(w, http.StatusConflict, "this request was answered by statement "+e.id+", which was revoked: a revoked statement is not answered as if it stood. To issue the same content again as a new statement, send reissue: "+e.id)
+				return true
+			}
+			revoked, kerr := s.statementKeyRevoked(ctx, e.kid)
+			if kerr != nil {
+				// Fail closed: a statement is not answered as standing on a key whose state could not be read.
+				writeError(w, http.StatusServiceUnavailable, "the signing keys could not be read")
+				return true
+			}
+			if revoked {
+				writeError(w, http.StatusConflict, "this request was answered by statement "+e.id+", which was signed by a revoked key and no longer verifies: revoke it (POST /v1/statements/"+e.id+"/revoke), then send the same request with reissue: "+e.id)
 				return true
 			}
 			w.Header().Set("Cache-Control", "no-store")

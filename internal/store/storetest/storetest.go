@@ -944,6 +944,51 @@ func testSigningKeys(t *testing.T, open Opener) {
 	if got := names(s.SigningKeys(bg, t0.Add(3*time.Hour))); got != "k2@4h0m0s k1@- " {
 		t.Fatalf("roll back: %q", got)
 	}
+	// Revocation: only a retired key; the key in use is refused; repeating changes nothing; a revoked key is never used again.
+	revoke := func(kid string, at time.Time) (store.SigningKey, bool, error) {
+		var k store.SigningKey
+		var changed bool
+		err := s.Atomic(bg, func(tx store.Tx) (err error) {
+			k, changed, err = tx.RevokeSigningKey(bg, kid, at)
+			return err
+		})
+		return k, changed, err
+	}
+	if _, _, err := revoke("k1", t0.Add(5*time.Hour)); !errors.Is(err, store.ErrKeyInUse) {
+		t.Fatalf("revoking the key in use: %v", err)
+	}
+	if _, _, err := revoke("nope", t0.Add(5*time.Hour)); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("revoking an unknown key: %v", err)
+	}
+	k, changed, err := revoke("k2", t0.Add(5*time.Hour))
+	if err != nil || !changed || k.RevokedAt == nil || !k.RevokedAt.Equal(t0.Add(5*time.Hour)) {
+		t.Fatalf("revoke k2: %+v %v %v", k, changed, err)
+	}
+	k, changed, err = revoke("k2", t0.Add(6*time.Hour))
+	if err != nil || changed || k.RevokedAt == nil || !k.RevokedAt.Equal(t0.Add(5*time.Hour)) {
+		t.Fatalf("revoking again must change nothing: %+v %v %v", k, changed, err)
+	}
+	var revoked []string
+	ks, err := s.SigningKeys(bg, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range ks {
+		if k.RevokedAt != nil {
+			revoked = append(revoked, k.KeyID)
+		}
+	}
+	if len(revoked) != 1 || revoked[0] != "k2" {
+		t.Fatalf("SigningKeys must report the revoked row (statement keys read it): %v", revoked)
+	}
+	if err := s.Atomic(bg, func(tx store.Tx) error {
+		return tx.UseSigningKey(bg, store.SigningKey{KeyID: "k2", JWK: json.RawMessage(`{"kid":"k2"}`)}, t0.Add(7*time.Hour))
+	}); !errors.Is(err, store.ErrKeyRevoked) {
+		t.Fatalf("using a revoked key: %v", err)
+	}
+	if got := names(s.SigningKeys(bg, t0.Add(3*time.Hour))); got != "k2@4h0m0s k1@- " {
+		t.Fatalf("a refused use changed the keys: %q", got)
+	}
 }
 
 func testFeeds(t *testing.T, open Opener) {

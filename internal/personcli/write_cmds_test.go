@@ -436,3 +436,62 @@ func TestBreakglassCloseAndList(t *testing.T) {
 		t.Fatalf("%d %q", code, out)
 	}
 }
+
+func TestRevokeCommands(t *testing.T) {
+	core, coreURL := serveCore(t, map[string]func(http.ResponseWriter, *http.Request, map[string]any){
+		"POST /v1/packets/pk-00000000000000000000000000000000/deliveries/dl-7/revoke": answer(200, map[string]any{"id": "dl-7", "recipient": "firm", "state": "revoked",
+			"created": true, "revoked_at": "2026-11-14T10:00:00Z", "reason": "leaked", "seq": 9}),
+		"POST /v1/assurance/recipients/firm/keys/kid1/revoke": answer(200, map[string]any{"recipient": "firm", "key_id": "kid1", "state": "revoked", "created": true,
+			"as_of": "2026-11-13T10:00:00Z", "revoked_at": "2026-11-14T10:00:00Z", "reason": "lost", "seq": 10}),
+		"POST /v1/keys/kid2/revoke": answer(200, map[string]any{"key_id": "kid2", "state": "revoked", "created": true, "revoked_at": "2026-11-14T10:00:00Z", "seq": 11})})
+	h := newHarness(t, "https://api.invalid")
+	h.setenv("CLEARANCE_URL", coreURL)
+	h.env.IsTTY = true
+	if code, out, errs := h.run((*Env).PacketRevoke, "pk-00000000000000000000000000000000", "dl-7", "--reason", "leaked", "--yes"); code != 0 ||
+		!strings.Contains(out, "dl-7 to firm is revoked") || core.reqs[0].Body["reason"] != "leaked" {
+		t.Fatalf("%d %q %q", code, out, errs)
+	}
+	if code, out, errs := h.run((*Env).PacketRevokeKey, "firm", "kid1", "--reason", "lost", "--as-of", "2026-11-13T10:00:00Z", "--yes"); code != 0 ||
+		!strings.Contains(out, "key kid1 of firm is revoked as of 2026-11-13T10:00:00Z") || core.reqs[1].Body["as_of"] != "2026-11-13T10:00:00Z" {
+		t.Fatalf("%d %q %q", code, out, errs)
+	}
+	if code, out, errs := h.run((*Env).KeyRevoke, "kid2", "--reason", "exposed", "--yes"); code != 0 || !strings.Contains(out, "key kid2 is revoked") {
+		t.Fatalf("%d %q %q", code, out, errs)
+	}
+	// A reason is required, and nothing is sent without one.
+	n := core.n()
+	if code, _, _ := h.run((*Env).PacketRevoke, "pk-00000000000000000000000000000000", "dl-7", "--yes"); code != ExitUsage {
+		t.Fatal(code)
+	}
+	if code, _, _ := h.run((*Env).KeyRevoke, "kid2", "--yes"); code != ExitUsage {
+		t.Fatal(code)
+	}
+	if core.n() != n {
+		t.Fatal("a revoke without a reason was sent")
+	}
+}
+
+func TestRevokeKeyBackdateAsksAndSaysHowManyReceiptsItWouldFail(t *testing.T) {
+	core, coreURL := serveCore(t, map[string]func(http.ResponseWriter, *http.Request, map[string]any){
+		"POST /v1/assurance/recipients/firm/keys/kid1/revoke": func(w http.ResponseWriter, r *http.Request, body map[string]any) {
+			w.Header().Set("Content-Type", "application/json")
+			if body["backdate"] != true {
+				w.WriteHeader(409)
+				_, _ = w.Write([]byte(`{"error":"as_of is more than 24h0m0s before now: send backdate: true to mean it. 3 receipt(s) already recorded with this key would fail verification","rule":"PK-BACKDATE","affected_receipts":3}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"recipient":"firm","key_id":"kid1","state":"revoked","created":true,"as_of":"2026-11-01T10:00:00Z","revoked_at":"2026-11-14T10:00:00Z","reason":"lost","seq":10}`))
+		}})
+	h := newHarness(t, "https://api.invalid")
+	h.setenv("CLEARANCE_URL", coreURL)
+	h.env.IsTTY = true
+	args := []string{"firm", "kid1", "--reason", "lost", "--as-of", "2026-11-01T10:00:00Z", "--yes"}
+	// Without --backdate the refusal is shown with what to add; nothing more is sent.
+	if code, _, errs := h.run((*Env).PacketRevokeKey, args...); code == 0 || !strings.Contains(errs, "--backdate") || core.n() != 1 {
+		t.Fatalf("%d %q %d", code, errs, core.n())
+	}
+	// With it, the second request carries backdate: true.
+	if code, out, errs := h.run((*Env).PacketRevokeKey, append(args, "--backdate")...); code != 0 || !strings.Contains(out, "revoked as of 2026-11-01T10:00:00Z") || core.n() != 3 || core.reqs[2].Body["backdate"] != true {
+		t.Fatalf("%d %q %q %d", code, out, errs, core.n())
+	}
+}
