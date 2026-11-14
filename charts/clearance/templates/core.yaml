@@ -60,7 +60,12 @@ spec:
                 secretKeyRef:
                   name: {{ include "clearance.dbSecretName" . }}
                   key: {{ include "clearance.dbSecretKey" . }}
-            {{- with .Values.providers }}
+            {{- $providers := .Values.providers | default list }}
+            {{- if .Values.grc.enabled }}
+            {{- /* clearance-grc registers itself for its own two record kinds and nothing else (docs/grc-push.md). */}}
+            {{- $providers = append $providers (dict "name" .Values.grc.providerName "version" .Chart.AppVersion "principals" (list (include "clearance.grcPrincipal" .)) "kinds" (list "grc.push" "grc.report")) }}
+            {{- end }}
+            {{- with $providers }}
             - name: CLEARANCE_PROVIDERS
               value: {{ toJson . | quote }}
             {{- end }}

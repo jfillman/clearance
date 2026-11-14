@@ -646,7 +646,7 @@ and `POST /v1/clearances/{id}/deny` `{reason}` are people's, through the delegat
 `DG-APPROVER-AUTOMATION` 403 and `DG-APPROVER-SAME` 409 (the approver is automation, or the same subject as another approval: [gate.md](gate.md#tier-3-approvers-are-people-c-14-built)), `DG-UNKNOWN` 404, `DG-OFF` 404; `DG-POLICY` and `DG-PROVENANCE` deny the change by policy).
 
 Reads here: `GET /v1/clearances` (filters `app`, `env`, `state` holding|cleared|denied|expired|superseded, `repo`, `pr`,
-`tier`, `since`; cursor `updated_at`), `GET /v1/clearances/counts?by=state|tier|app|env|cleared_by`,
+`tier`, `since`; cursor `<updated_at>,<id>`: the list's order is updated_at then id, so changes that share a second are all paged through; a bare `updated_at` cursor from an older client still means strictly older), `GET /v1/clearances/counts?by=state|tier|app|env|cleared_by`,
 `GET /v1/clearances/{id}` (objects, paths, every reason, requirement, approvals, checks), `GET /v1/clearance-policy`
 (the baseline a repo's `clearance.yaml` may only tighten). A person sees changes on apps they own and changes whose
 owner group or outside group is one of theirs: the people who may clear them. Every step is evidence in the

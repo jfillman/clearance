@@ -6115,6 +6115,8 @@
     "assessment",
     "resolution",
     "observation.health",
-    "observation.verification"
+    "observation.verification",
+    "grc.push",
+    "grc.report"
   ]
 }

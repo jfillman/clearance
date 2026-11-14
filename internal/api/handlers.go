@@ -468,11 +468,8 @@ func (s *Server) listClearances(w http.ResponseWriter, r *http.Request, v *Viewe
 	}
 	page := ChangePage{Items: items}
 	if len(items) == limit && limit > 0 {
-		var last struct {
-			UpdatedAt *string `json:"updated_at"`
-		}
-		if json.Unmarshal(items[len(items)-1], &last) == nil {
-			page.Next = last.UpdatedAt
+		if c, ok := cursorAfter(items[len(items)-1]); ok {
+			page.Next = &c
 		}
 	}
 	writeJSON(w, 200, page)

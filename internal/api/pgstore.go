@@ -449,10 +449,16 @@ func (s *PG) Changes(ctx context.Context, f ChangeFilter, v *Viewer, limit int, 
 	b.changeScope(v)
 	b.changeFilter(f, true)
 	if after != "" {
-		b.add("c.record->>'updated_at' < " + b.arg(after))
+		ts, id := splitCursor(after)
+		if id == "" { // the older cursor: strictly older than a time
+			b.add("c.record->>'updated_at' < " + b.arg(ts))
+		} else {
+			tsArg, idArg := b.arg(ts), b.arg(id)
+			b.add("(c.record->>'updated_at' < " + tsArg + " OR (c.record->>'updated_at' = " + tsArg + " AND c.id < " + idArg + "))")
+		}
 	}
 	return s.raws(ctx, "SELECT c.record::text FROM clearance_changes c WHERE "+b.sql()+
-		" ORDER BY c.record->>'updated_at' DESC LIMIT "+b.arg(limit), b.args)
+		" ORDER BY c.record->>'updated_at' DESC, c.id DESC LIMIT "+b.arg(limit), b.args)
 }
 
 func (s *PG) Change(ctx context.Context, id string) (json.RawMessage, error) {
