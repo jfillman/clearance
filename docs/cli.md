@@ -180,6 +180,7 @@ URLs.
 | `packet deliver <pk-id> --recipient R --for 168h` | `POST /v1/packets/{id}/deliveries` (admin): prints the recipient's credential once |
 | `receipt pull`, `receipt sign`, `receipt submit` | the recipient's side, no account: read a packet under a credential, sign a receipt with your own key, send it |
 | `receipt sample --packet pk-.. --seed S [--n --stratify] --out F` | the recipient's side: `GET /v1/packets/{id}/sample`, a sample of the packet's cleared changes with an inclusion proof per record ([sampling.md](sampling.md)); check it with `clearance verify --sample F --packet <dir> --sample-record R` |
+| `verify --statement F --statement-keys K --statement-issuer I --log-keys L --witness-policy W --independent-witness N --packet DIR --status S` | check a [verification statement](statement.md) offline: the seven checks, exit 0 only when every one ran and passed (a revoked or superseded statement exits 1; a missing input is NOT CHECKED, exit 2) |
 | `breakglass open --cluster C --env E [--app A] --ttl 30m --reason R` | `POST /v1/breakglass` (admin) |
 | `breakglass close <id> [--yes]`, `breakglass list` | close a window early; the windows open now (admin) |
 

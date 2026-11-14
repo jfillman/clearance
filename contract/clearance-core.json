@@ -3734,6 +3734,136 @@
         ],
         "type": "object"
       },
+      "StatementIssued": {
+        "properties": {
+          "created": {
+            "type": "boolean"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "links": {
+            "$ref": "#/components/schemas/StatementLinks"
+          },
+          "packet": {
+            "type": "string"
+          },
+          "profile": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          },
+          "supersedes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "created",
+          "digest",
+          "hash",
+          "id",
+          "links",
+          "packet",
+          "profile",
+          "seq",
+          "state"
+        ],
+        "type": "object"
+      },
+      "StatementLinks": {
+        "properties": {
+          "page": {
+            "type": "string"
+          },
+          "statement": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "page",
+          "statement",
+          "status"
+        ],
+        "type": "object"
+      },
+      "StatementRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "packet": {
+            "type": "string"
+          },
+          "policy_version": {
+            "type": "string"
+          },
+          "profile": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "supersedes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "packet",
+          "policy_version",
+          "scope"
+        ],
+        "type": "object"
+      },
+      "StatementRevokeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "type": "object"
+      },
+      "StatementRevoked": {
+        "properties": {
+          "created": {
+            "type": "boolean"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "created",
+          "hash",
+          "id",
+          "seq",
+          "state"
+        ],
+        "type": "object"
+      },
       "TargetsGate": {
         "additionalProperties": false,
         "properties": {
@@ -6390,6 +6520,216 @@
         "summary": "A registered provider's own record (one of RecordKinds), sealed with that provider's name and version; only provider and ts are verified.",
         "x-clearance-auth": "provider",
         "x-clearance-max-body": 262144
+      }
+    },
+    "/v1/statements": {
+      "post": {
+        "operationId": "issueStatement",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatementRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatementIssued"
+                }
+              }
+            },
+            "description": "the statement's id, state, digest and links"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is not valid (strict decoding, or a field the route refuses)"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no bearer token, or one the authenticator refused"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the request conflicts with what is recorded"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is over the route's cap"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the store could not record it: treat as unreachable (fail closed)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "An admin cuts a verification statement (P-3) from a published packet of the packet view: an immutable, signed summary (period, scope as printed, policy version, counts by every coverage state, exceptions by class, observation health with its blind windows, the verification result, the receipts attached, a questionnaire-mapping block; profile insurer adds the five insurer figures) with no recipient-specific detail in it. The statement is a statement.issue record, written before the answer; the same request again is the same statement (created false) and records nothing. supersedes names the statement this one corrects, which then verifies as superseded. The public page is on the separate verify listener (CLEARANCE_VERIFY_LISTEN, off unless set).",
+        "x-clearance-auth": "bearer",
+        "x-clearance-max-body": 4096
+      }
+    },
+    "/v1/statements/{id}/revoke": {
+      "post": {
+        "operationId": "revokeStatement",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatementRevokeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatementRevoked"
+                }
+              }
+            },
+            "description": "the revocation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is not valid (strict decoding, or a field the route refuses)"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no bearer token, or one the authenticator refused"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such resource"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is over the route's cap"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the store could not record it: treat as unreachable (fail closed)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "An admin revokes a statement: from the next read it verifies as revoked on the public page and in its signed status. A statement.revoke record, written before the answer; revoking a revoked statement is the same answer and records nothing. The reason is recorded and never published.",
+        "x-clearance-auth": "bearer",
+        "x-clearance-max-body": 4096
       }
     },
     "/v1/targets/{source}": {

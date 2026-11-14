@@ -601,6 +601,42 @@ grc:
   priorityClassName: ""
   extraEnv: []
 
+# -- The hosted verify page (P-3) --------------------------------------------------------------------------------
+# A PUBLIC, unauthenticated, read-only page that runs a verification statement's seven checks (docs/statement.md). OFF:
+# with enabled false nothing renders for it: no container port, no Service, no HTTPRoute, no NetworkPolicy rule, and the
+# core has no listener for it. DO NOT ENABLE IT until the security review pass of docs/statement.md has signed it off.
+# Enabling is this one value (plus the hostname and the route's parents, which have no default: nothing here is a lab value).
+verifyPage:
+  enabled: false
+  # CLEARANCE_VERIFY_LISTEN's port: its own listener, separate from the API's 8080.
+  port: 8081
+  # The public https base URL printed in the page's verify command, with no path ("": the command shows a placeholder).
+  publicURL: ""
+  # The Gateway API route for the page. parentRefs and hostnames are required when verifyPage.enabled: the production hostname
+  # is never rendered from a default.
+  httpRoute:
+    parentRefs: []
+    hostnames: []
+  # NetworkPolicyPeers allowed to reach the verify port: your Gateway's pods or namespace. Required when networkPolicy.enabled
+  # (an empty list would leave the page unreachable, which is not a deployment).
+  networkPolicy:
+    from: []
+  # The page's trust inputs: the log's public keys (signed-note vkeys, the key in use first), which the page's checks 3 and 4 verify
+  # the checkpoint with. Empty: those checks are NOT CHECKED. The witness policy is the ledger's own (ledger.witnessPolicy).
+  logKeys: ""
+  # The names of the log's witnesses you assert you do NOT run (the cosignature names). Empty: no statement can say it is
+  # independently witnessed, and check 4 prints "not yet independently witnessed".
+  independentWitnesses: []
+  # Limits: requests a minute and the burst, for one client and for the whole listener; the proxy hops in front of the listener
+  # (0: the connection's address); how many verifications may run at once.
+  limits:
+    clientPerMinute: 30
+    clientBurst: 10
+    globalPerMinute: 600
+    globalBurst: 100
+    trustedProxyHops: 0
+    maxChecks: 2
+
 service:
   type: ClusterIP
   port: 8080

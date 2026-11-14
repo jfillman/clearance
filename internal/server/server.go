@@ -99,6 +99,9 @@ type Options struct {
 	App        *githubapp.App
 	// RunTask is the HCP Terraform run task adapter (G-TF-6); nil answers the route 404.
 	RunTask *hcprun.Service
+	// Statements are the verification statement's settings (P-3): the independent witnesses, the trust inputs of the page's
+	// checks and the public listener's limits. The zero value is the safe default: no witness independent.
+	Statements StatementOptions
 }
 
 // Server is the HTTP API. Build it with New.
@@ -133,6 +136,11 @@ type Server struct {
 	samplers samplers
 	// sampleMax caps the encoded sample (0: sampling.MaxDocument); a test lowers it.
 	sampleMax int
+
+	// stmts is the statement records of the chain (P-3), stmtRes the kept result of each statement's checks 1 to 6. The index's
+	// mutex serializes issue and revoke.
+	stmts   stmtIndex
+	stmtRes stmtResults
 
 	// targetsMu serializes target publishes: the held-digest check and the write it guards are one step.
 	targetsMu sync.Mutex

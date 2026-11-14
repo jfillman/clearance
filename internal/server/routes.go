@@ -383,6 +383,27 @@ var routeTable = []Route{
 		serve:     func(s *Server) http.HandlerFunc { return s.deliverPacket },
 	},
 	{
+		Method: "POST", Path: "/v1/statements", OperationID: "issueStatement", Auth: AuthBearer, MaxBody: MaxStatementBody,
+		Summary: "An admin cuts a verification statement (P-3) from a published packet of the packet view: an immutable, signed summary " +
+			"(period, scope as printed, policy version, counts by every coverage state, exceptions by class, observation health with its blind " +
+			"windows, the verification result, the receipts attached, a questionnaire-mapping block; profile insurer adds the five insurer " +
+			"figures) with no recipient-specific detail in it. The statement is a statement.issue record, written before the answer; the same " +
+			"request again is the same statement (created false) and records nothing. supersedes names the statement this one corrects, which " +
+			"then verifies as superseded. The public page is on the separate verify listener (CLEARANCE_VERIFY_LISTEN, off unless set).",
+		Request:   StatementRequest{},
+		Responses: append([]Response{{200, "the statement's id, state, digest and links", StatementIssued{}}}, errs(400, 401, 403, 404, 409, 413, 503)...),
+		serve:     func(s *Server) http.HandlerFunc { return s.issueStatement },
+	},
+	{
+		Method: "POST", Path: "/v1/statements/{id}/revoke", OperationID: "revokeStatement", Auth: AuthBearer, MaxBody: MaxStatementBody,
+		Summary: "An admin revokes a statement: from the next read it verifies as revoked on the public page and in its signed status. A " +
+			"statement.revoke record, written before the answer; revoking a revoked statement is the same answer and records nothing. The " +
+			"reason is recorded and never published.",
+		Request:   StatementRevokeRequest{},
+		Responses: append([]Response{{200, "the revocation", StatementRevoked{}}}, errs(400, 401, 403, 404, 413, 503)...),
+		serve:     func(s *Server) http.HandlerFunc { return s.revokeStatement },
+	},
+	{
 		Method: "GET", Path: "/v1/packets/{id}", OperationID: "getPacket", Auth: AuthCredential, MaxBody: DefaultMaxBody,
 		Summary: "The recipient reads the packet (the bundle) under the credential its delivery returned, in the bearer header. " +
 			"No Clearance account. The credential is checked for its signature (anything the core did not sign is a bare 401); " +

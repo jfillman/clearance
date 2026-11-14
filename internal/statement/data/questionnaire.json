@@ -1,0 +1,18 @@
+{
+  "version": "questionnaire/1",
+  "note": "Each line says what a statement is evidence for. It is evidence toward the objective named, not a claim that the objective is met: the assessor or the questionnaire's owner decides that.",
+  "standard": [
+    {"framework": "SOC 2", "ref": "CC8.1", "objective": "Changes to infrastructure, data, software and procedures are authorized, designed, tested, approved and implemented.", "evidence": "How many changes in the period were cleared before they went live, by coverage state, and which were not, with the exceptions counted by class."},
+    {"framework": "SOC 2", "ref": "CC6", "objective": "Logical access: changes to the systems that grant or restrict access are controlled.", "evidence": "Changes cleared by policy or by a recorded approval, and the privileged-change exceptions in the period."},
+    {"framework": "ISO/IEC 27001:2022", "ref": "A.8.32", "objective": "Change management: changes to information processing facilities and systems are subject to change management procedures.", "evidence": "Every change in scope counted by coverage state, with the observation feeds' health and any period they could not be seen."},
+    {"framework": "NIST SP 800-53 Rev. 5", "ref": "CM-3", "objective": "Configuration change control: changes are reviewed and approved before implementation and the decisions are documented.", "evidence": "Cleared changes and the recorded decision behind each, counted; changes attempted and refused."},
+    {"framework": "NIST SP 800-53 Rev. 5", "ref": "CM-5", "objective": "Access restrictions for change: only qualified, authorized individuals may make changes.", "evidence": "Changes made outside the gate (out-of-band) and break-glass use in the period, with how each was resolved."},
+    {"framework": "SIG", "ref": "Change control", "objective": "The organization controls changes to production systems.", "evidence": "The period's changes by coverage state, the exceptions by class, and the blind windows."},
+    {"framework": "SIG", "ref": "AI", "objective": "The organization governs AI systems that act on its infrastructure.", "evidence": "Agent-proposed changes are cleared by the same gate and recorded in the same chain as every other change."}
+  ],
+  "insurer": [
+    {"framework": "Carrier questionnaire", "ref": "Privileged change", "objective": "Changes that grant or use privilege are controlled and recorded.", "evidence": "The share of critical changes in the period cleared by two independent people."},
+    {"framework": "Carrier questionnaire", "ref": "Separation of duties", "objective": "The person who makes a change is not the only person who approves it.", "evidence": "Critical changes with two distinct approvers, each a person and not automation."},
+    {"framework": "Carrier questionnaire", "ref": "Unauthorized-change detection", "objective": "Changes made outside the approved path are detected and followed up.", "evidence": "Telemetry coverage of each scope as a share of the period, and each unresolved exception with its recorded disposition."}
+  ]
+}

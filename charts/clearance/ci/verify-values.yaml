@@ -1,0 +1,19 @@
+# The hosted verify page (P-3) on: the smallest values that enable it (render tests and kubeconform). example.com names are
+# placeholders, never a real hostname.
+database:
+  existingSecret: clearance-db
+oidc:
+  issuer: https://dex.example.com/dex
+  audience: clearance
+  allowedUsers: ["*@example.com"]
+verifyPage:
+  enabled: true
+  publicURL: https://verify.example.com
+  logKeys: "example-log+00000000+AAAA"
+  independentWitnesses: [example-independent-witness]
+  httpRoute:
+    parentRefs: [{name: gateway, namespace: gateway-system}]
+    hostnames: [verify.example.com]
+  networkPolicy:
+    from:
+      - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: gateway-system}}

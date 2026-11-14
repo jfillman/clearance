@@ -17,6 +17,18 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ### Added
 
+- P-3: **the verification statement and the hosted verify page** ([docs/statement.md](docs/statement.md)). `POST /v1/statements` (an admin cuts an immutable, signed statement from a
+  published packet: period, the scope as printed, policy version, counts by every coverage state, exceptions by every class, observation health with its blind windows, the
+  verification result, the receipts attached, a questionnaire-mapping block as data; `profile: insurer` adds the five insurer figures; `supersedes` for a correction),
+  `POST /v1/statements/{id}/revoke`; both are `statement.issue` / `statement.revoke` records written before the answer, idempotent, admin-only. The seven checks (signed by the
+  issuer's identity; signature; every cited record under a checkpoint; a witness Clearance does not run; counts recompute; exceptions and health present and matching;
+  not superseded or revoked) are `internal/verify`'s own code, run by `clearance verify --statement` (with `--statement-keys`, `--statement-issuer`, `--independent-witness`,
+  `--packet`, `--status`; exit 0 only when every check ran and passed, 1 on a failure or a revoked statement, 2 when something could not be established) and by the page.
+  Check 4 prints **"not yet independently witnessed"** when the only witnesses are ones the issuer runs: never a pass. The page is a **separate, off-by-default listener**
+  (`CLEARANCE_VERIFY_LISTEN`; chart `verifyPage.enabled: false`, its own Service, HTTPRoute and NetworkPolicy, no default hostname): server-rendered with `html/template`, no
+  JavaScript, a strict CSP, `no-store`, a 128-bit random id, one `404` for every id that is not a statement, no parameters, per-client and global rate limits with `429`, no
+  record or cookie written by any anonymous request, no recipient detail. **Not to be enabled until its security review pass signs it off.** JSON schema
+  `schemas/statement.schema.json`; fuzz targets for the verifier, the parser and the page's request handling.
 - P-1: **assurance providers, acceptance receipts and recipient access** ([docs/assurance.md](docs/assurance.md)). A new provider class
   (`class: "assurance"` in `CLEARANCE_PROVIDERS`: a name and registered ECDSA P-256 keys, no principals: never an account).
   `POST /v1/packets` (an admin publishes a `clearance packet` directory as a bundle; the id is the content address of its manifest),
