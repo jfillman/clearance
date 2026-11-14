@@ -90,8 +90,8 @@ func init() {
 		Route{
 			Method: "PUT", Path: "/v1/protection/{cluster}", OperationID: "reportProtection", Auth: AuthProvider,
 			MaxBody: MaxProtectionBody,
-			Summary: "The app and environment pairs one cluster's agent reports as protected (an Application opted in with " +
-				"clearance.hangar.io/protect). The set replaces the one the core holds for that cluster and adds to " +
+			Summary: "The app and environment pairs one cluster's agent reports as protected (an Application that opted " +
+				"in). The set replaces the one the core holds for that cluster and adds to " +
 				"CLEARANCE_PROTECTED_ENVIRONMENTS: the core protects a pair if the list or the report does. A changed set is one " +
 				"protection.report record naming the pairs added and removed; an unchanged one records nothing and renews " +
 				"the report's time. Only a provider whose `protection` list pairs the caller's principal with this cluster; " +

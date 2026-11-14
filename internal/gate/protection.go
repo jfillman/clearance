@@ -10,7 +10,7 @@ import (
 )
 
 // Protected pairs reported by a cluster's agent (G-ARGO-10c). CLEARANCE_PROTECTED_ENVIRONMENTS protects an
-// environment; an agent that opts one Application in (clearance.hangar.io/protect: "true") reports the app and
+// environment; an agent that opts one Application in reports the app and
 // environment as a pair, and the core protects that pair as well. The two sources add up: a pair the list does not
 // name is protected when its cluster's agent says so, and the list never shrinks because an agent says less. A
 // report that goes missing changes nothing (the last one stands); staleness is shown, never acted on.

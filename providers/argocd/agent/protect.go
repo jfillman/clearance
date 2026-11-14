@@ -79,7 +79,11 @@ func (a *Agent) reportPairs(ctx context.Context, classes []appClass) bool {
 	a.rep = report{digest: digest, at: a.now()}
 	a.repMu.Unlock()
 	if res.Changed {
-		a.log.Info("protected pairs reported", "pairs", len(pairs), "added", len(res.Added), "removed", len(res.Removed), "seq", res.Seq)
+		var seq int64 = -1
+		if res.Seq != nil {
+			seq = *res.Seq
+		}
+		a.log.Info("protected pairs reported", "pairs", len(pairs), "added", len(res.Added), "removed", len(res.Removed), "seq", seq)
 	}
 	for _, p := range res.StaticRemoved {
 		a.log.Warn("a pair left the report and the core's CLEARANCE_PROTECTED_ENVIRONMENTS still protects it", "app", p.App, "env", p.Env)
