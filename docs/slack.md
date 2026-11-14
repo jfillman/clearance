@@ -72,6 +72,8 @@ nothing is decided in Slack. Slack outage, a stopped service or a revoked token 
 ## Setting it up (the owner's steps)
 
 Nothing here is done by the service or the chart; the secrets are yours to create and are never generated or stored by Clearance.
+A deployment that renders its own manifests can do steps 4 and 5 for you (below); for Hangar, Apron's
+[docs/clearance-slack.md](https://github.com/jfillman/apron/blob/main/docs/clearance-slack.md) is the whole walkthrough from `cluster.yaml`.
 
 1. **Create the Slack app** from the manifest below (Slack: *Create New App > From a manifest*). Replace `<publicUrl>`. Install it to the workspace.
    Invite the bot to each channel it posts in (or add the `chat:write.public` scope).
@@ -83,8 +85,13 @@ Nothing here is done by the service or the chart; the secrets are yours to creat
    The issuer, user claim and allowlist are the chart's `oidc.*`, the same the core trusts. Slack's redirect URL is `<publicUrl>/link/slack` (in the manifest).
    `<publicUrl>` must be **https** and reachable from people's browsers (Slack accepts no other redirect for Sign in with Slack; this is a hard Slack requirement, also in a lab).
 4. **A database role** for the service: its own role and database (or schema) on the cluster's Postgres, with no grant on the
-   evidence tables; it creates its three `clearance_slack_*` tables on start. Put its DSN in Infisical.
-5. **The Secret** `slack.existingSecret` (through an ExternalSecret from those Infisical entries), with the keys below.
+   evidence tables; it creates its three `clearance_slack_*` tables on start. Its DSN is a Postgres URI
+   (`postgresql://<role>:<password>@<host>:5432/<database>`) and **can come from the deployment**: a role whose password the
+   cluster generates (for example a CloudNativePG managed role with a generated password) gives you the DSN without anyone
+   making or storing it; if you have no such mechanism, put the DSN in your secret store.
+5. **The Secret** `slack.existingSecret`, with the keys in the table below (exactly these names; each is mounted as a file).
+   Build it from your secret store with an ExternalSecret or equivalent; the DSN key may be filled from the generated
+   credential above instead of a stored value, so there need be no hand-made DSN secret.
 6. **Routes** (`slack.routes` in the chart, or `CLEARANCE_SLACK_ROUTES_FILE`): channel ids (`C...`), not names.
 7. **Enable it**: `slack.enabled: true` with `slack.publicUrl`, `slack.slackClientId`, `slack.idpClientId`, `slack.webUrl`, and a route
    to the service for the link pages (`httpRoutes.slack`, with `networkPolicy.slack.from` naming the gateway and `networkPolicy.slack.extraEgress` the IdP).
@@ -102,7 +109,7 @@ Nothing here is done by the service or the chart; the secrets are yours to creat
 | Slack signing secret | `signing-secret` | the Events transport's request signatures |
 | Sign in with Slack client secret | `client-secret` | the link flow's first proof |
 | IdP client secret (only if confidential) | `idp-client-secret` | the link flow's second proof |
-| The service's Postgres DSN | `dsn` | links, message ids, the stream cursor |
+| The service's Postgres DSN (from the secret store, or from the database credential the deployment generates) | `dsn` | links, message ids, the stream cursor |
 
 ### The app manifest
 
@@ -123,7 +130,7 @@ features:
       should_escape: false
 oauth_config:
   redirect_urls:
-    - https://<publicUrl>/link/slack
+    - <publicUrl>/link/slack
   scopes:
     bot:
       - chat:write          # post and update messages, ephemeral replies, permalinks
@@ -141,9 +148,9 @@ settings:
   token_rotation_enabled: false
 ```
 
-For the Events transport set `socket_mode_enabled: false` and add `request_url: https://<publicUrl>/slack/events` under
-`event_subscriptions`, `request_url: https://<publicUrl>/slack/interactive` under `interactivity` and
-`url: https://<publicUrl>/slack/command` on the slash command. Sign in with Slack asks for the `openid` scope when it sends the person to Slack; nothing is declared for it.
+For the Events transport set `socket_mode_enabled: false` and add `request_url: <publicUrl>/slack/events` under
+`event_subscriptions`, `request_url: <publicUrl>/slack/interactive` under `interactivity` and
+`url: <publicUrl>/slack/command` on the slash command. Sign in with Slack asks for the `openid` scope when it sends the person to Slack; nothing is declared for it.
 
 ## Routes
 
