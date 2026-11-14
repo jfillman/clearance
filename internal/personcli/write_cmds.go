@@ -679,7 +679,7 @@ func (e *Env) PacketPublish(ctx context.Context, args []string) int {
 		}
 		var out map[string]any
 		_ = json.Unmarshal(raw, &out)
-		fmt.Fprintf(e.Stdout, "packet %s (digest %s), new: %v\nopen it to a recipient with `%s packet deliver %s --recipient NAME --for 7d`\n",
+		fmt.Fprintf(e.Stdout, "packet %s (digest %s), new: %v\nopen it to a recipient with `%s packet deliver %s --recipient NAME --for 168h`\n",
 			str(out, "id"), str(out, "digest"), out["created"], e.prog(), str(out, "id"))
 		return nil
 	}())
@@ -689,7 +689,7 @@ func (e *Env) PacketPublish(ctx context.Context, args []string) int {
 // credential in the answer is shown once; hand it to the recipient yourself.
 func (e *Env) PacketDeliver(ctx context.Context, args []string) int {
 	var recipient, forD, engagement, scope string
-	s, pos, ee := e.begin("packet deliver", "<packet-id> --recipient NAME --for 7d [--scope summary,evidence] [--engagement E]", args, func(fs *flag.FlagSet) {
+	s, pos, ee := e.begin("packet deliver", "<packet-id> --recipient NAME --for 168h [--scope summary,evidence] [--engagement E]", args, func(fs *flag.FlagSet) {
 		fs.StringVar(&recipient, "recipient", "", "a registered assurance provider")
 		fs.StringVar(&forD, "for", "", "how long the credential is good, a Go duration (1m to 720h)")
 		fs.StringVar(&scope, "scope", "", "parts the recipient may read: summary, evidence (default both)")
