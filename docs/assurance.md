@@ -158,4 +158,4 @@ record's seq and hash; the records themselves are carried too, so they have incl
 - Not a review: a receipt shows a recipient signed a statement about a packet with a registered key, not that the review was right.
 - No OIDC recipient identity yet: a recipient is a registered key. An external OIDC identity (keyless signing, or a hosted
   login in front of the credential) is a later step; the receipt format does not change.
-- No credential revocation, and no push of a packet to a recipient's system: the subscriber hands the credential over.
+- No credential revocation, and no push of a packet to a recipient's system: the subscriber hands the credential over. (What Clearance does push, a summary and a link and never the packet, is the [GRC push](grc-push.md).)

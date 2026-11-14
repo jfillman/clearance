@@ -65,7 +65,7 @@ spec:
             - name: CLEARANCE_API_AUDITORS
               value: {{ include "clearance.csv" . | quote }}
             {{- end }}
-            {{- $notifiers := include "clearance.withSlack" (dict "ctx" $ "list" .Values.api.notifiers) }}
+            {{- $notifiers := include "clearance.withGRC" (dict "ctx" $ "list" (splitList "," (include "clearance.withSlack" (dict "ctx" $ "list" .Values.api.notifiers)))) | trimAll "," }}
             {{- if $notifiers }}
             - name: CLEARANCE_API_NOTIFIERS
               value: {{ $notifiers | quote }}

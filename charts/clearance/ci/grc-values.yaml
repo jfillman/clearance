@@ -1,0 +1,18 @@
+# clearance-grc on: the smallest values that enable it (render tests and kubeconform).
+database:
+  existingSecret: clearance-db
+oidc:
+  issuer: https://dex.example.com/dex
+  audience: clearance
+  allowedUsers: ["*@example.com"]
+api:
+  enabled: true
+  notifiers: ["tower/backstage"]
+grc:
+  enabled: true
+  existingSecret: clearance-grc
+  linkBase: https://clearance.example.com
+  vanta:
+    clientId: vanta-client-id
+    evidenceResourceId: res-evidence
+    reportResourceId: res-report

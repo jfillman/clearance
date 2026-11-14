@@ -536,6 +536,62 @@ slack:
   hostAliases: []
   extraEnv: []
 
+# -- clearance-grc (optional; docs/grc-push.md) -----------------------------------------------------------------
+# The GRC push (P-4): a summary of each cleared change of grc.envs, and a daily coverage report, pushed to a GRC hub (Vanta)
+# as evidence items that link back to Clearance. Counts, hashes, links and names only: docs/grc-push.md lists every field.
+# A separate Deployment and image (one replica, no state of its own), a notifier of this release's api and a provider of
+# its core for the two record kinds grc.push and grc.report only; the chart adds its service account to api.notifiers
+# and to the core's providers. Never on the decision path: the core does not call it and waits for nothing from it.
+# Off by default; nothing is sent until this is enabled and configured.
+grc:
+  enabled: false
+  image:
+    repository: ghcr.io/jfillman/clearance-grc
+    # Default: "v" + the chart's appVersion.
+    tag: ""
+    digest: ""
+  # The name its records carry (the provider registered in the core).
+  providerName: clearance-grc
+  # A Secret you manage (Infisical via ExternalSecrets, as for the rest) with one key: client-secret (the Vanta
+  # application's client secret). Mounted as a file; nothing is put in env, and it is read again at every token mint.
+  existingSecret: ""
+  # The https URL of the Clearance UI: an evidence item links to <linkBase>/changes/<id>. From here only, never built from
+  # anything a request carries.
+  linkBase: ""
+  vanta:
+    # Vanta's API origin (https://api.vanta.com; https://api.vanta-gov.com for Vanta Gov).
+    baseUrl: https://api.vanta.com
+    # The private integration's client id (a Vanta developer console application), and the Resource ids of its two custom
+    # resources (the developer console's Resources tab). reportResourceId empty: no coverage report.
+    clientId: ""
+    evidenceResourceId: ""
+    reportResourceId: ""
+  # The environments whose changes are sent, and the control mappings the items name (packet mappings: soc2/2017).
+  envs: [prod]
+  mappings: [soc2/2017]
+  # Go durations and counts ("": the defaults: 5m, 24h, 2160h (90 days), 5000 items, 5 attempts, 2s, 2m).
+  interval: ""
+  reportInterval: ""
+  window: ""
+  maxItems: ""
+  maxAttempts: ""
+  backoffBase: ""
+  backoffMax: ""
+  resources:
+    requests: {cpu: 25m, memory: 32Mi}
+    limits: {memory: 128Mi}
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  priorityClassName: ""
+  extraEnv: []
+
 service:
   type: ClusterIP
   port: 8080
@@ -591,6 +647,11 @@ networkPolicy:
   # Further egress rules (NetworkPolicyEgressRule) for the core and the api: the OIDC JWKS, Backstage, the GitHub
   # API, a foreign cluster's JWKS.
   extraEgress: []
+  grc:
+    # The hub's API is on the internet: 443 to anywhere outside the private ranges. Narrow it where the cluster has an
+    # egress proxy or FQDN policy: set this to false and use extraEgress.
+    internet: true
+    extraEgress: []
   slack:
     # NetworkPolicyPeers allowed to reach the link pages (and /slack/* on the events transport): the Gateway's namespace.
     from: []

@@ -31,7 +31,19 @@ import (
 var RecordKinds = []string{"session.open", "run.launch", "run.delete", "run.finish", "human.answer",
 	"session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome",
 	"deploy.exception", "deploy.degraded", FederatedKind,
-	evidence.KindObservation, evidence.KindAssessment, evidence.KindResolution, evidence.KindHealth, evidence.KindVerification}
+	evidence.KindObservation, evidence.KindAssessment, evidence.KindResolution, evidence.KindHealth, evidence.KindVerification,
+	KindGRCPush, KindGRCReport}
+
+// The GRC push's records (P-4, internal/grc, docs/grc-push.md): what clearance-grc did with a change or a report it
+// sent to a GRC hub. Written only by a provider that names them in its kinds (like the observation kinds), claimed
+// but for provider and ts: they say what the pusher reports it sent, never that the hub holds it.
+const (
+	KindGRCPush   = "grc.push"
+	KindGRCReport = "grc.report"
+)
+
+// isGRCKind is a kind only a provider that names it may write.
+func isGRCKind(k string) bool { return k == KindGRCPush || k == KindGRCReport }
 
 // OutageKind is the record of a T0 read the provider allowed while the core was unreachable. Its tool is the tool
 // that was called (record.tool), its coverage is CoverageUnavailable, and everything in it is claimed: the core
@@ -79,6 +91,9 @@ var recordKinds = map[string]kindSpec{
 	evidence.KindResolution:   {[]string{"scope", "about", "resolution"}, "deployment"},
 	evidence.KindHealth:       {[]string{"scope", "source", "health"}, "deployment"},
 	evidence.KindVerification: {[]string{"scope", "source", "about", "verification"}, "deployment"},
+	// P-4: target is the hub ("vanta"), result is pushed or failed.
+	KindGRCPush:   {[]string{"target", "result"}, "deployment"},
+	KindGRCReport: {[]string{"target", "result"}, "deployment"},
 }
 
 // RecordRequest is POST /v1/records's body. provider must be the provider the caller authenticates as; kind is the

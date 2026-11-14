@@ -26,6 +26,18 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   `clearance verify --recipient-keys <recipient>=<file>` binds keys to recipients.
   Gate evidence: `go test ./internal/server -run TestP1` (a fake assurance provider end to end, including the GRC-lead-forwards-unchanged case).
 
+- P-4: **GRC push, Vanta first** ([docs/grc-push.md](docs/grc-push.md)). `clearance-grc` (`cmd/clearance-grc`, its own image `ghcr.io/jfillman/clearance-grc`)
+  sends a summary of each cleared production change, and a daily coverage report, to Vanta as custom-resource evidence items that link back to the
+  change in Clearance; the signed record stays in Clearance and the hub holds a pointer. Off unless `CLEARANCE_GRC_TARGET` is set. Only the documented
+  fields leave (origin, tier, approver kind and count, a digest of the approvers, the cleared digest, policy version, control ids, the link; counts for the
+  report), held by a test on the outbound bodies. Idempotent (a stable item id; the hub replaces its set; the ledger record carries an event id the core
+  de-duplicates), bounded retries with backoff and `Retry-After`, a failure is a `grc.push` record and never blocks the decision path, https and
+  config-only URLs, capped response bodies, no token or secret in records, logs or errors. Behind a `Target` interface so a second hub is a new
+  implementation. New record kinds `grc.push` and `grc.report`, written only by a provider that names them. Chart: `grc.enabled` (off by default), a
+  Deployment, service account and NetworkPolicy; adds the service account to `api.notifiers` and registers it as the provider of those two kinds.
+  Gate evidence against fakes: `go test ./internal/server -run TestP4GRCPush`. Written against Vanta's public documentation and not yet run against a tenant
+  (the assumptions and the owner's sandbox steps are in the doc).
+
 ## [0.47.1] - 2026-11-13
 
 ### Added

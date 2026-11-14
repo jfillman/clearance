@@ -1,0 +1,117 @@
+{{- if .Values.grc.enabled }}
+{{- $g := .Values.grc }}
+{{- $_ := required "grc.existingSecret is required (a Secret with the hub's client-secret: docs/grc-push.md)" $g.existingSecret }}
+{{- $_ := required "grc.linkBase is required (the https URL of the Clearance UI the evidence links back to)" $g.linkBase }}
+{{- $_ := required "grc.vanta.clientId is required" $g.vanta.clientId }}
+{{- $_ := required "grc.vanta.evidenceResourceId is required" $g.vanta.evidenceResourceId }}
+{{- if not .Values.api.enabled }}{{ fail "grc.enabled needs api.enabled: the push reads the changes from clearance-api" }}{{ end }}
+{{- if not (hasPrefix "https://" $g.linkBase) }}{{ fail "grc.linkBase is an https URL" }}{{ end }}
+{{- if not (hasPrefix "https://" $g.vanta.baseUrl) }}{{ fail "grc.vanta.baseUrl is an https URL" }}{{ end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "clearance.grcName" . }}
+  labels:
+    {{- include "clearance.labels" . | nindent 4 }}
+    app.kubernetes.io/component: grc
+spec:
+  # One replica: the push is idempotent, but one sender keeps the hub's single token per application from being revoked
+  # by a second replica minting its own.
+  replicas: 1
+  strategy:
+    type: Recreate
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      {{- include "clearance.selector" (dict "ctx" . "component" "grc") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "clearance.selector" (dict "ctx" . "component" "grc") | nindent 8 }}
+        {{- with $g.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
+      annotations:
+        {{- with $g.podAnnotations }}{{ toYaml . | nindent 8 }}{{ end }}
+    spec:
+      serviceAccountName: {{ include "clearance.grcSA" . }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 30
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $g.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext:
+        {{- include "clearance.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: grc
+          image: {{ include "clearance.grcImage" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - {name: http, containerPort: 8080, protocol: TCP}
+          env:
+            - {name: CLEARANCE_GRC_TARGET, value: vanta}
+            - {name: CLEARANCE_GRC_LISTEN, value: ":8080"}
+            - {name: CLEARANCE_GRC_PROVIDER, value: {{ $g.providerName | quote }}}
+            - {name: CLEARANCE_GRC_LINK_BASE, value: {{ $g.linkBase | quote }}}
+            - {name: CLEARANCE_GRC_VANTA_BASE_URL, value: {{ $g.vanta.baseUrl | quote }}}
+            - {name: CLEARANCE_GRC_VANTA_CLIENT_ID, value: {{ $g.vanta.clientId | quote }}}
+            - {name: CLEARANCE_GRC_VANTA_CLIENT_SECRET_FILE, value: /etc/clearance-grc/secrets/client-secret}
+            - {name: CLEARANCE_GRC_VANTA_EVIDENCE_RESOURCE_ID, value: {{ $g.vanta.evidenceResourceId | quote }}}
+            {{- with $g.vanta.reportResourceId }}
+            - {name: CLEARANCE_GRC_VANTA_REPORT_RESOURCE_ID, value: {{ . | quote }}}
+            {{- end }}
+            - {name: CLEARANCE_API_URL, value: {{ printf "http://%s.%s.svc:%v" (include "clearance.apiName" .) .Release.Namespace .Values.service.port | quote }}}
+            - {name: CLEARANCE_URL, value: {{ printf "http://%s.%s.svc:%v" (include "clearance.coreName" .) .Release.Namespace .Values.service.port | quote }}}
+            - {name: CLEARANCE_GRC_SA_TOKEN_FILE, value: /var/run/secrets/tokens/clearance}
+            - {name: CLEARANCE_GRC_ENVS, value: {{ include "clearance.csv" $g.envs | quote }}}
+            - {name: CLEARANCE_GRC_MAPPINGS, value: {{ include "clearance.csv" $g.mappings | quote }}}
+            {{- range $k, $env := dict "interval" "CLEARANCE_GRC_INTERVAL" "reportInterval" "CLEARANCE_GRC_REPORT_INTERVAL" "window" "CLEARANCE_GRC_WINDOW" "maxItems" "CLEARANCE_GRC_MAX_ITEMS" "maxAttempts" "CLEARANCE_GRC_MAX_ATTEMPTS" "backoffBase" "CLEARANCE_GRC_BACKOFF_BASE" "backoffMax" "CLEARANCE_GRC_BACKOFF_MAX" }}
+            {{- with index $g $k }}
+            - {name: {{ $env }}, value: {{ . | quote }}}
+            {{- end }}
+            {{- end }}
+            {{- with $g.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml $g.resources | nindent 12 }}
+          securityContext:
+            {{- include "clearance.securityContext" . | nindent 12 }}
+          volumeMounts:
+            - {name: secrets, mountPath: /etc/clearance-grc/secrets, readOnly: true}
+            - {name: clearance-token, mountPath: /var/run/secrets/tokens, readOnly: true}
+      volumes:
+        - name: secrets
+          secret:
+            secretName: {{ $g.existingSecret }}
+            defaultMode: 0440
+        # The service's own credential at the core and the api: a projected service-account token of the audience
+        # they check, read on every call and never held.
+        - name: clearance-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: clearance
+                  audience: {{ .Values.audience | quote }}
+                  expirationSeconds: 3600
+      {{- with $g.nodeSelector }}
+      nodeSelector: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $g.tolerations }}
+      tolerations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $g.affinity }}
+      affinity: {{ toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
