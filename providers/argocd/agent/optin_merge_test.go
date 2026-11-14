@@ -240,6 +240,7 @@ func TestTheLabelComesAfterTheGrantAndGoesBeforeItOnRemoval(t *testing.T) {
 	w.kube.log = nil
 	// The opt-out: the label first, then the Application, then the grant.
 	w.setAnn("web-prod", agent.AnnProtect, nil)
+	w.clock.add(70 * time.Second) // past the report debounce
 	w.mustReconcile()
 	w.feeds.publish()
 	if err := w.sync(); err != nil {
@@ -275,6 +276,7 @@ func TestANamespaceAnOperatorLabelledIsNeverUnlabelled(t *testing.T) {
 		t.Error("the agent put its marker on an operator's label")
 	}
 	w.setAnn("web-prod", agent.AnnProtect, nil)
+	w.clock.add(70 * time.Second) // past the report debounce
 	w.mustReconcile()
 	w.publishSync()
 	if !w.labelled("app-a") {
@@ -292,6 +294,7 @@ func TestANamespaceStaysLabelledWhileAnotherProtectedApplicationTargetsIt(t *tes
 	feedObjs(w, "api", "app-a", ch2, t0, deploy("api", hex("c")))
 	w.publishSync()
 	w.setAnn("web-prod", agent.AnnProtect, nil)
+	w.clock.add(70 * time.Second) // past the report debounce
 	w.mustReconcile()
 	w.publishSync()
 	if !w.labelled("app-a") {
@@ -310,6 +313,7 @@ func TestIfTheLabelCannotComeOffTheGrantStays(t *testing.T) {
 	feedObjs(w, "web", "app-a", ch1, t0, deploy("web", hex("a")))
 	w.publishSync()
 	w.setAnn("web-prod", agent.AnnProtect, nil)
+	w.clock.add(70 * time.Second) // past the report debounce
 	w.kube.failNS["app-a"] = errBoom
 	_ = w.reconcile()
 	_ = w.sync()
@@ -402,6 +406,7 @@ func TestOptOutCrashPointsLeaveTheNamespaceProtectedOrUnenforcedNeverHalfway(t *
 			t.Fatal("setup")
 		}
 		w.setAnn("web-prod", agent.AnnProtect, nil)
+		w.clock.add(70 * time.Second) // past the report debounce
 		return w
 	}
 	t.Run("the Application write fails after the label came off", func(t *testing.T) {

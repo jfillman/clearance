@@ -40,6 +40,12 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
     environment label decides the environment and an unreadable namespace is unknown; the switched marker is two halves; Applications
     outside the agent's projects, for another cluster or outside `--optin-namespaces` are never switched; the write bound is kept in the
     state; reports are numbered (409 for an old one) and a set change is recorded at most 30 times per cluster per hour (429).
+  - Second review round: every object in a merged grant has its own expiry (`objects[].expiresAt`) that the agent enforces on its own clock, feed or no feed
+    (admission has no clock); the agent reads the CRD's schema and does not run the opt-in against one that lacks `app` or `expiresAt`
+    (**upgrade order: CRD, then the agent, then `optIn.enabled`**); additions of pairs are not counted against the hourly bound and a pair is
+    taken by the core before its Application is switched; an unlabelled configured namespace has the agent's environment and a different
+    Application label is blocked; an opt-out whose original cannot be restored changes nothing; one unreadable namespace holds only itself; liveness
+    is the owner's clearance; reports must carry `seq`; an Application that leaves `--projects` is put back.
   - admission test: the merged grant of a namespace two Applications share, and the label-after-grant order, against a real kube-apiserver.
   - The plugin's cluster-scope rules moved to `internal/argosrc` so the agent and the plugin apply the same ones (no change in behaviour).
 

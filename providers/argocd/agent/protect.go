@@ -65,6 +65,11 @@ func pairsOf(classes []appClass) ([]client.ProtectedPair, string) {
 // is still a record), or when the last report is older than ReportEvery. It says whether the core holds the current
 // set; a pass that removes anything (a label, an Application's switch) goes on only when it does.
 //
+// A pure addition is sent at once. A report that removes a pair, or explains an opt-out, is debounced: changes within one
+// minute of the last one are coalesced into the next, so one tenant flipping its annotation does not make a report each
+// time. A report that both adds and removes is split: the additions go first on their own, so a removal that is refused
+// or waiting never holds up another team's pair.
+//
 // Each report carries a number that only goes up and is kept in the state, so an old or replayed report cannot replace
 // a newer one; after a state loss the agent starts from the core's last number. The pairs the core last took are kept
 // in the state too, so that a pair that has no Application any more (deleted) is reported removed with that reason.
@@ -83,10 +88,15 @@ func (a *Agent) reportPairs(ctx context.Context, classes []appClass) bool {
 	a.mu.Lock()
 	prev, seq := a.st.Reported, a.st.ReportSeq
 	a.mu.Unlock()
-	var removed []Pair
+	var removed, added []Pair
 	for _, p := range prev {
 		if !slices.Contains(cur, p) {
 			removed = append(removed, p)
+		}
+	}
+	for _, p := range cur {
+		if !slices.Contains(prev, p) {
+			added = append(added, p)
 		}
 	}
 	a.repMu.Lock()
@@ -97,6 +107,7 @@ func (a *Agent) reportPairs(ctx context.Context, classes []appClass) bool {
 		}
 	}
 	fresh := a.rep.digest == digest && a.now().Sub(a.rep.at) < a.cfg.OptIn.ReportEvery && len(unexplained) == 0 && len(removed) == 0
+	lastSend := a.lastSend
 	a.repMu.Unlock()
 	if fresh {
 		return true
@@ -112,25 +123,41 @@ func (a *Agent) reportPairs(ctx context.Context, classes []appClass) bool {
 		}
 		seq = held
 	}
-	reason := optOutReason(classes, removed, cur, unexplained)
-	next := seq + 1
-	if seq > 0 && reason == "" && slices.Equal(prev, cur) {
-		next = seq // the same set again (the heartbeat): the same number, so nothing changes at the core or in the state
-	}
-	req := &client.ProtectionRequest{Pairs: pairs, Reason: reason, Seq: next}
-	res, err := a.core.ReportProtection(ctx, a.cfg.Cluster, req)
-	if err != nil {
-		var ae *client.APIError
-		if errors.As(err, &ae) && ae.Status == 409 { // the core holds a newer number than ours: read it again
-			a.mu.Lock()
-			a.st.ReportSeq = 0
-			_ = a.saveLocked(ctx)
-			a.mu.Unlock()
+	toPairs := func(l []Pair) []client.ProtectedPair {
+		out := make([]client.ProtectedPair, len(l))
+		for i, p := range l {
+			out[i] = client.ProtectedPair{App: p.App, Env: p.Env}
 		}
-		a.warnOnce("core/protection", "the protected pairs could not be reported to the core (removals wait; the core keeps the last set): "+truncate(err.Error(), 200))
+		return out
+	}
+	if len(removed) > 0 && len(added) > 0 { // the additions first, on their own
+		union := append(append([]Pair(nil), prev...), added...)
+		sort.Slice(union, func(i, j int) bool {
+			if union[i].App != union[j].App {
+				return union[i].App < union[j].App
+			}
+			return union[i].Env < union[j].Env
+		})
+		next, ok := a.sendReport(ctx, toPairs(union), union, "", seq+1, false)
+		if !ok {
+			return false
+		}
+		prev, seq = union, next
+		a.repMu.Lock()
+		lastSend = a.lastSend
+		a.repMu.Unlock()
+	}
+	reason := optOutReason(classes, removed, cur, unexplained)
+	if (len(removed) > 0 || reason != "") && !lastSend.IsZero() && a.now().Sub(lastSend) < reportDebounce {
+		return false // coalesced into the next report
+	}
+	nextSeq := seq + 1
+	if seq > 0 && reason == "" && slices.Equal(prev, cur) {
+		nextSeq = seq // the same set again (the heartbeat): the same number, so nothing changes at the core or in the state
+	}
+	if _, ok := a.sendReport(ctx, pairs, cur, reason, nextSeq, true); !ok {
 		return false
 	}
-	delete(a.opt().warned, "core/protection")
 	a.repMu.Lock()
 	a.rep = report{digest: digest, at: a.now()}
 	if a.explained == nil {
@@ -140,6 +167,42 @@ func (a *Agent) reportPairs(ctx context.Context, classes []appClass) bool {
 		a.explained[c.key()] = true
 	}
 	a.repMu.Unlock()
+	return true
+}
+
+// reportDebounce is how long a set change that removes something waits after the last report, to be coalesced.
+const reportDebounce = time.Minute
+
+// refusedFor is how long the core may refuse the agent's reports before the agent says so in its status and posts an exception.
+const refusedFor = 10 * time.Minute
+
+// sendReport sends one report and, when the core takes it, keeps the number and the pairs in the state. It returns the
+// number the core now holds. A report the core refuses (4xx) is remembered: after refusedFor the status says so and
+// one exception is posted.
+func (a *Agent) sendReport(ctx context.Context, pairs []client.ProtectedPair, cur []Pair, reason string, seq int64, final bool) (int64, bool) {
+	req := &client.ProtectionRequest{Pairs: pairs, Reason: reason, Seq: seq}
+	res, err := a.core.ReportProtection(ctx, a.cfg.Cluster, req)
+	if err != nil {
+		var ae *client.APIError
+		if errors.As(err, &ae) {
+			if ae.Status == 409 { // the core holds a newer number than ours: read it again
+				a.mu.Lock()
+				a.st.ReportSeq = 0
+				_ = a.saveLocked(ctx)
+				a.mu.Unlock()
+			}
+			a.noteRefused(ctx, err)
+		}
+		a.warnOnce("core/protection", "the protected pairs could not be reported to the core (removals wait; the core keeps the last set): "+truncate(err.Error(), 200))
+		return 0, false
+	}
+	a.opt().status["core/protection"] = ""
+	a.repMu.Lock()
+	a.refusedSince = time.Time{}
+	a.lastSend = a.now()
+	a.repMu.Unlock()
+	a.forgetOnce(ctx, "report-refused")
+	delete(a.opt().warned, "core/protection")
 	a.mu.Lock()
 	newSeq := max(req.Seq, res.HeldSeq)
 	if newSeq != a.st.ReportSeq || !slices.Equal(a.st.Reported, cur) {
@@ -160,7 +223,26 @@ func (a *Agent) reportPairs(ctx context.Context, classes []appClass) bool {
 	for _, p := range res.StaticRemoved {
 		a.log.Warn("a pair left the report and the core's CLEARANCE_PROTECTED_ENVIRONMENTS still protects it", "app", p.App, "env", p.Env)
 	}
-	return true
+	return newSeq, true
+}
+
+// noteRefused records that the core refused a report; after refusedFor it says so in the status and posts one exception.
+func (a *Agent) noteRefused(ctx context.Context, err error) {
+	a.repMu.Lock()
+	if a.refusedSince.IsZero() {
+		a.refusedSince = a.now()
+	}
+	since := a.refusedSince
+	a.repMu.Unlock()
+	if a.now().Sub(since) < refusedFor {
+		return
+	}
+	why := fmt.Sprintf("the core has refused the agent's protected-pair reports since %s: %s", since.UTC().Format(time.RFC3339), truncate(err.Error(), 200))
+	a.opt().status["core/protection"] = why
+	if rerr := a.reportOnce(ctx, "report-refused", "protected-pair reports refused", why,
+		[]map[string]any{{"apiVersion": "clearance.hangar.io/v1", "kind": "ClearanceGrant", "name": "protected-pairs"}}); rerr != nil {
+		a.log.Warn("the refusal could not be reported", "err", rerr)
+	}
 }
 
 // optOutReason says why the pairs changed, for the core's record: the Applications that no longer ask for protection
@@ -175,6 +257,9 @@ func optOutReason(classes []appClass, removed, cur []Pair, unexplained []appClas
 		how := "opted out"
 		if c.denied {
 			how = "denied"
+		}
+		if c.left {
+			how = "left the agent's projects"
 		}
 		note := ""
 		if slices.Contains(cur, p) {
@@ -222,6 +307,7 @@ type optView struct {
 	classes []appClass
 	intent  map[string][]appClass // namespace -> the Applications that ask for protection and target it
 	merged  map[string][]appClass // the same, the ones the agent has switched: their cleared trees make the merged grant
+	skip    map[string]bool       // namespaces left as they are this pass (an Application there has an unknown environment)
 }
 
 func (a *Agent) optInView(ctx context.Context) (*optView, error) {
@@ -352,11 +438,17 @@ func (a *Agent) reconcileMerged(ctx context.Context, v *verified, want, have []G
 	if err != nil {
 		return fmt.Errorf("listing the Applications (the grants stay as they are): %w", err)
 	}
+	// An Application whose destination namespace cannot be read has an unknown environment: its clearances cannot be matched,
+	// and dropping them would drop its grant. Only ITS namespace is left as it is this pass; every other namespace's grant
+	// is reconciled, so a revocation elsewhere does not wait.
+	var envErrs []error
 	for _, c := range view.classes {
 		if c.protectedIntent() && c.envErr != nil {
-			// The Application's environment is unknown: its clearances cannot be matched, and dropping them would drop its
-			// grant. Nothing is changed this pass.
-			return fmt.Errorf("the environment of %s is unknown (%v): the grants stay as they are", c.key(), c.envErr)
+			if view.skip == nil {
+				view.skip = map[string]bool{}
+			}
+			view.skip[c.app.DestNS] = true
+			envErrs = append(envErrs, fmt.Errorf("the environment of %s is unknown (%v): the grant of namespace %s stays as it is this pass", c.key(), c.envErr, c.app.DestNS))
 		}
 	}
 	labelled, err := a.kube.ProtectedNamespaces(ctx)
@@ -375,7 +467,7 @@ func (a *Agent) reconcileMerged(ctx context.Context, v *verified, want, have []G
 		delete(after, ns)
 	}
 	merged, problems := a.applyMerged(want, have, view, v.claims, after)
-	var errs []error
+	errs := append([]error(nil), envErrs...)
 	if err := a.reconcile(ctx, merged, have); err != nil {
 		errs = append(errs, err)
 	}

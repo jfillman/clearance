@@ -102,24 +102,43 @@ func objectsIn(c *token.Claims, ns string) []token.Object {
 }
 
 // liveHeld is the held merged grant intersected with the verified feed: an object stays only if a clearance in the feed
-// (not past its expiry) lists it at that hash in this namespace, and a carried tree only if its change is in the feed,
-// with only the objects that change lists. The labels, the expiry and the rest are the held grant's, so an unchanged
-// intersection writes nothing.
-func (a *Agent) liveHeld(held Grant, ns string, claims []*token.Claims) Grant {
+// (not past its expiry) of the Application that owns it (`app`), for that Application's environment and this cluster,
+// lists it at that hash in this namespace; an object past its own expiry goes too. A carried tree stays only if its
+// change is such a clearance of the owner, with only the objects that change lists. The labels, the expiry and the rest
+// are the held grant's, so an unchanged intersection writes nothing. classes are the Applications that can own objects
+// here. An object with no owner (a grant from before the owner was recorded) is live if any of them has it.
+func (a *Agent) liveHeld(held Grant, ns string, claims []*token.Claims, classes []appClass) Grant {
 	now := a.now()
 	type kh struct{ k, h string }
-	live := map[kh]bool{}
-	byChange := map[string]map[kh]bool{}
-	for _, c := range claims {
-		if !time.Unix(c.Expires, 0).After(now) {
-			continue
+	byApp := map[string]map[kh]bool{}
+	anyLive := map[kh]bool{}
+	type chg struct {
+		app string
+		set map[kh]bool
+	}
+	byChange := map[string]chg{}
+	for _, cl := range classes {
+		for _, c := range claims {
+			if c.Target.App != cl.gateApp || c.Target.Env != cl.env || c.Target.Cluster != a.cfg.Cluster || !time.Unix(c.Expires, 0).After(now) {
+				continue
+			}
+			if byApp[cl.key()] == nil {
+				byApp[cl.key()] = map[kh]bool{}
+			}
+			set := map[kh]bool{}
+			for _, o := range objectsIn(c, ns) {
+				set[kh{keyOf(o), o.Rendered}] = true
+				byApp[cl.key()][kh{keyOf(o), o.Rendered}] = true
+				anyLive[kh{keyOf(o), o.Rendered}] = true
+			}
+			byChange[c.Subject] = chg{cl.key(), set}
 		}
-		set := map[kh]bool{}
-		for _, o := range objectsIn(c, ns) {
-			set[kh{keyOf(o), o.Rendered}] = true
-			live[kh{keyOf(o), o.Rendered}] = true
+	}
+	liveFor := func(app, k, h string) bool {
+		if app == "" {
+			return anyLive[kh{k, h}]
 		}
-		byChange[c.Subject] = set
+		return byApp[app][kh{k, h}]
 	}
 	out := held
 	out.Labels = map[string]string{}
@@ -128,19 +147,22 @@ func (a *Agent) liveHeld(held Grant, ns string, claims []*token.Claims) Grant {
 	}
 	out.Spec.Objects = map[string]GrantObject{}
 	for k, o := range held.Spec.Objects {
-		if live[kh{k, o.Rendered}] {
+		if o.ExpiresAt != "" && !expiryAfter(o.ExpiresAt, now) {
+			continue
+		}
+		if liveFor(o.App, k, o.Rendered) {
 			out.Spec.Objects[k] = o
 		}
 	}
 	out.Spec.Carried = nil
 	for _, c := range held.Spec.Carried {
-		set, ok := byChange[c.Change]
+		ch, ok := byChange[c.Change]
 		if !ok {
 			continue
 		}
 		keep := map[string]GrantObject{}
 		for k, o := range c.Objects {
-			if set[kh{k, o.Rendered}] {
+			if (o.App == "" || o.App == ch.app) && ch.set[kh{k, o.Rendered}] {
 				keep[k] = o
 			}
 		}
@@ -161,7 +183,7 @@ func (a *Agent) mergeNamespace(ns string, apps []appClass, claims []*token.Claim
 		if held == nil {
 			return mergeOutcome{problems: p}
 		}
-		g := a.liveHeld(*held, ns, claims)
+		g := a.liveHeld(*held, ns, claims, apps)
 		return mergeOutcome{grant: &g, problems: p}
 	}
 	var cl []claimant
@@ -258,7 +280,7 @@ func (a *Agent) mergeNamespace(ns string, apps []appClass, claims []*token.Claim
 				continue
 			}
 			mine = true
-			g.Spec.Objects[k] = GrantObject{Rendered: o.Rendered, Changed: o.Changed, App: c.app.key()}
+			g.Spec.Objects[k] = GrantObject{Rendered: o.Rendered, Changed: o.Changed, App: c.app.key(), ExpiresAt: time.Unix(c.newest.Expires, 0).UTC().Format(time.RFC3339)}
 		}
 		if !mine {
 			continue
@@ -294,7 +316,7 @@ func (a *Agent) mergeNamespace(ns string, apps []appClass, claims []*token.Claim
 				if w, ok := winner[k]; ok && w != c.app.key() {
 					continue
 				}
-				og.Spec.Objects[k] = GrantObject{Rendered: x.Rendered, Changed: x.Changed, App: c.app.key()}
+				og.Spec.Objects[k] = GrantObject{Rendered: x.Rendered, Changed: x.Changed, App: c.app.key(), ExpiresAt: time.Unix(o.Expires, 0).UTC().Format(time.RFC3339)}
 			}
 			others = append(others, carryCand{og, o.Clearance.DecidedAt, o.IssuedAt})
 		}
@@ -343,7 +365,16 @@ func (a *Agent) applyMerged(want []Grant, have []Grant, v *optView, claims []*to
 		}
 	}
 	replace := map[string]*Grant{} // namespace -> its grant
+	for ns := range v.skip {       // left exactly as it is: the held merged grant, else the per-change grants
+		if h, ok := held[ns]; ok {
+			hh := h
+			replace[ns] = &hh
+		}
+	}
 	for ns, apps := range v.merged {
+		if v.skip[ns] {
+			continue
+		}
 		var h *Grant
 		if x, ok := held[ns]; ok {
 			h = &x
@@ -359,11 +390,11 @@ func (a *Agent) applyMerged(want []Grant, have []Grant, v *optView, claims []*to
 	// A namespace the agent labelled is never left without its merged grant while the label is on: the grant stays
 	// (what is live of it) until the label is off, which is the order of every removal. Likewise one an operator labelled.
 	for ns, h := range held {
-		if _, ok := replace[ns]; ok {
+		if _, ok := replace[ns]; ok || v.skip[ns] {
 			continue
 		}
 		if labelled[ns][LabelProtected] == "true" && labelled[ns][LabelProtectedBy] == ProtectedByOptIn {
-			g := a.liveHeld(h, ns, claims)
+			g := a.liveHeld(h, ns, claims, v.classes)
 			replace[ns] = &g
 		}
 	}
@@ -377,7 +408,7 @@ func (a *Agent) applyMerged(want []Grant, have []Grant, v *optView, claims []*to
 	}
 	for ns, h := range held {
 		if _, ok := replace[ns]; !ok && !wanted[ns] && labelled[ns][LabelProtected] == "true" {
-			g := a.liveHeld(h, ns, claims)
+			g := a.liveHeld(h, ns, claims, v.classes)
 			replace[ns] = &g
 		}
 	}

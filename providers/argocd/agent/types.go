@@ -64,6 +64,9 @@ type GrantObject struct {
 	// App is the Application (<namespace>/<name>) that owns the object in a merged grant: the incumbent when two
 	// Applications claim one key. Absent on per-change grants.
 	App string `json:"app,omitempty"`
+	// ExpiresAt is, in a merged grant, the expiry of the clearance the object came from: the agent drops the object at
+	// that time on its own clock (admission has no clock). Absent: the grant's own expiry.
+	ExpiresAt string `json:"expiresAt,omitempty"`
 }
 
 // GrantKey is how a grant keys an object: <group>/<kind>/<name> (the admission policy builds the same key from the

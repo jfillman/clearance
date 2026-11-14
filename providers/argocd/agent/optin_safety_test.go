@@ -338,7 +338,7 @@ func TestAnAnnotationEditByAPersonIsPickedUpAtOnce(t *testing.T) {
 
 // -- the core is down -----------------------------------------------------------------------------------------------
 
-func TestAnOptOutWaitsForTheCoreAndAdditionsDoNot(t *testing.T) {
+func TestAnOptOutAndANewSwitchBothWaitForTheCore(t *testing.T) {
 	w := newOptWorld(t)
 	w.addApp("web-prod", "app-web-prod", protect())
 	w.mustReconcile()
@@ -351,13 +351,14 @@ func TestAnOptOutWaitsForTheCoreAndAdditionsDoNot(t *testing.T) {
 	}
 	w.core.reportDown = true
 	w.setAnn("web-prod", agent.AnnProtect, nil)
+	w.clock.add(70 * time.Second) // past the report debounce
 	w.addApp("api-prod", "app-api-prod", protect())
 	_ = w.reconcile()
 	if !w.isSwitched("web-prod") || w.kube.ns["app-web-prod"][agent.LabelProtected] != "true" {
 		t.Fatal("an opt-out the core has not recorded was acted on: protection dropped silently")
 	}
-	if !w.isSwitched("api-prod") {
-		t.Fatal("a new opt-in waits for the core too")
+	if w.isSwitched("api-prod") {
+		t.Fatal("a new opt-in was switched before the core took its pair")
 	}
 	if err := w.sync(); err != nil { // the grant loop does not unlabel either
 		t.Fatal(err)
@@ -366,9 +367,15 @@ func TestAnOptOutWaitsForTheCoreAndAdditionsDoNot(t *testing.T) {
 		t.Fatalf("the grant loop removed protection while the core could not record it: %v", w.kube.log)
 	}
 	w.core.reportDown = false
+	w.mustReconcile() // the addition goes first, on its own; the removal is coalesced into the next report
+	w.clock.add(70 * time.Second)
 	w.mustReconcile()
 	if w.isSwitched("web-prod") {
 		t.Fatal("not restored once the core took the removal")
+	}
+	w.mustReconcile()
+	if !w.isSwitched("api-prod") {
+		t.Fatal("not switched once the core took its pair")
 	}
 }
 
@@ -396,6 +403,7 @@ func TestARemovedPairThatTheCoreStillProtectsIsLoggedAndRestored(t *testing.T) {
 	w.addApp("web-prod", "app-web-prod", protect())
 	w.mustReconcile()
 	w.setAnn("web-prod", agent.AnnProtect, nil)
+	w.clock.add(70 * time.Second) // past the report debounce
 	w.mustReconcile()
 	if w.isSwitched("web-prod") {
 		t.Fatal("restored when the core says the pair is still protected: the removal is recorded, the Application returns to its original")

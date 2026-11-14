@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jfillman/clearance/internal/evidence"
@@ -193,6 +194,10 @@ func (s *Server) reportProtection(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "pairs is required (an empty list withdraws every pair)")
 		return
 	}
+	if body.Seq < 1 {
+		writeError(w, http.StatusBadRequest, "seq is required (1 or more): a report carries a number that only goes up per cluster, so an old report cannot replace a newer one")
+		return
+	}
 	pairs, err := gate.NormalizePairs(body.Pairs)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -226,6 +231,7 @@ func (s *Server) reportProtection(w http.ResponseWriter, r *http.Request) {
 			next.WindowStart, next.WindowCount = now, 0
 		}
 		out.HeldSeq = cur.Seq
+		countIt := true
 		record := func(tool, target, result string) error {
 			rec, err := tx.Append(r.Context(), store.Event{"ts": evidence.ISO(now), "task_id": nil, "session": nil,
 				"parent": nil, "principal": "provider:" + prov.Name, "agent": nil, "tool": tool, "tier": nil,
@@ -234,7 +240,9 @@ func (s *Server) reportProtection(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return err
 			}
-			next.WindowCount++
+			if countIt {
+				next.WindowCount++
+			}
 			seq, _ := gate.SeqInt(rec["seq"])
 			out.Changed, out.Seq = true, &seq
 			return nil
@@ -244,7 +252,8 @@ func (s *Server) reportProtection(w http.ResponseWriter, r *http.Request) {
 		if body.Seq > 0 && cur.Digest != "" && body.Seq <= cur.Seq && digest != cur.Digest {
 			status, why = http.StatusConflict, fmt.Sprintf("report %d is not above the held report %d and carries another set", body.Seq, cur.Seq)
 			key := fmt.Sprint(cluster, "|", body.Seq, "|", digest)
-			if _, seen := s.protectionRefused.LoadOrStore(key, true); !seen && next.WindowCount < MaxProtectionRecordsPerHour {
+			if !s.protectionRefused.has(key) && next.WindowCount < MaxProtectionRecordsPerHour {
+				s.protectionRefused.add(key)
 				if err := record("protection.refused", "protection:"+cluster, fmt.Sprintf("%s (principal %s); not applied", why, p.ID)); err != nil {
 					return err
 				}
@@ -256,12 +265,22 @@ func (s *Server) reportProtection(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 		changed := cur.Digest != digest
-		if changed || body.Reason != "" { // a reason is an event (an opt-out of one of two Applications of a pair changes no set)
+		// A report that only ADDS pairs is never refused by the hourly bound and is not counted against it: the bound is
+		// there to stop a flood of removals and re-additions, and one tenant flipping its annotation must not keep another
+		// team's pair out. Additions are bounded by the pair cap (MaxProtectedPairs).
+		onlyAdds := changed
+		for _, o := range was {
+			if !slices.Contains(pairs, o) {
+				onlyAdds = false
+			}
+		}
+		if (changed && !onlyAdds) || (!changed && body.Reason != "") { // removals, mixed reports and reasons are bounded
 			if next.WindowCount >= MaxProtectionRecordsPerHour {
-				status, why = http.StatusTooManyRequests, fmt.Sprintf("at most %d reports are recorded per hour for a cluster", MaxProtectionRecordsPerHour)
+				status, why = http.StatusTooManyRequests, fmt.Sprintf("at most %d removals or explained reports are recorded per hour for a cluster", MaxProtectionRecordsPerHour)
 				return nil
 			}
 		}
+		countIt = !onlyAdds
 		if body.Seq > next.Seq {
 			next.Seq = body.Seq
 		}
@@ -377,4 +396,37 @@ func protectionCluster(set store.ProtectionSet, now time.Time) (ProtectionCluste
 	age := now.Sub(set.ReportedAt)
 	return ProtectionCluster{Cluster: set.Cluster, Digest: set.Digest, Seq: set.Seq, Pairs: pairs, ReportedAt: evidence.ISO(set.ReportedAt),
 		ChangedAt: evidence.ISO(set.ChangedAt), AgeSeconds: int64(age / time.Second), Stale: age > ProtectionStaleAfter}, nil
+}
+
+// refusedSet remembers the refused reports already recorded (cluster, number, digest), so a replay is recorded once. It is
+// bounded (the oldest is forgotten past maxRefusedKeys) and only a refusal that is recorded is added to it.
+type refusedSet struct {
+	mu    sync.Mutex
+	m     map[string]bool
+	order []string
+}
+
+const maxRefusedKeys = 1000
+
+func (r *refusedSet) has(k string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.m[k]
+}
+
+func (r *refusedSet) add(k string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.m == nil {
+		r.m = map[string]bool{}
+	}
+	if r.m[k] {
+		return
+	}
+	r.m[k] = true
+	r.order = append(r.order, k)
+	for len(r.order) > maxRefusedKeys {
+		delete(r.m, r.order[0])
+		r.order = r.order[1:]
+	}
 }

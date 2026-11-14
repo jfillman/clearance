@@ -290,6 +290,7 @@ func TestDeAnnotatingRestoresTheOriginalExactly(t *testing.T) {
 				t.Fatal("not switched")
 			}
 			w.setAnn("web-prod", agent.AnnProtect, nil)
+			w.clock.add(70 * time.Second) // past the report debounce
 			w.mustReconcile()
 			got := w.app("web-prod")
 			if w.isSwitched("web-prod") || got.Annotations[agent.AnnSwitched] != "" {

@@ -105,12 +105,20 @@ type appClass struct {
 	// skipped for this pass (nothing rewritten, no pair removed, no claim dropped). blockedWhy: the labels disagree.
 	envErr     error
 	blockedWhy string
+	// left: the Application the agent switched has left the agent's projects; it is put back like an opt-out.
+	left bool
+	// restoreBad: why the original sources in the plugin parameter cannot be put back (present and well formed is required
+	// BEFORE anything is unlabelled or reported removed). Such an Application stays protected.
+	restoreBad string
 }
 
 func (c appClass) key() string { return c.app.Namespace + "/" + c.app.Name }
 
 // protectedIntent is whether the Application asks for protection and may have it.
-func (c appClass) protectedIntent() bool { return c.optedIn && !c.denied }
+func (c appClass) protectedIntent() bool { return (c.optedIn && !c.denied) || c.restoreBad != "" }
+
+// wantsSwitch is whether the Application asks to be on the plugin and may be.
+func (c appClass) wantsSwitch() bool { return c.optedIn && !c.denied }
 
 // pendingRestore is an Application the agent switched (it carries the marker) that no longer asks to be, or may not be.
 func (c appClass) pendingRestore() bool {
@@ -160,15 +168,23 @@ func (a *Agent) optEnvironment(ctx context.Context, app Application, cache map[s
 		}
 		nsEnv = info.labels[LabelEnvironment]
 	}
-	switch {
-	case nsEnv != "" && appEnv != "" && nsEnv != appEnv:
-		return "", fmt.Sprintf("its %s label %q disagrees with its namespace's %s label %q", LabelAppEnv, appEnv, LabelEnvironment, nsEnv), nil
-	case nsEnv != "":
-		return nsEnv, "", nil
-	case appEnv != "":
-		return appEnv, "", nil
+	if !a.configured(app.DestNS) { // blocked anyway: the label or the default, never read from a namespace
+		if appEnv != "" {
+			return appEnv, "", nil
+		}
+		return a.cfg.Environment, "", nil
 	}
-	return a.cfg.Environment, "", nil
+	// A configured namespace's environment is its label, else the agent's --environment: the Application's own label can
+	// agree with that and can never pick another.
+	eff := nsEnv
+	if eff == "" {
+		eff = a.cfg.Environment
+	}
+	if appEnv != "" && appEnv != eff {
+		return "", fmt.Sprintf("its %s label %q differs from the environment of its namespace (%s: %q; label the namespace %s, else the agent's --environment %q)",
+			LabelAppEnv, appEnv, LabelEnvironment, eff, LabelEnvironment, a.cfg.Environment), nil
+	}
+	return eff, "", nil
 }
 
 func (a *Agent) denied(app Application) bool {
@@ -181,11 +197,15 @@ func (a *Agent) classify(ctx context.Context, apps []Application) []appClass {
 	out := make([]appClass, 0, len(apps))
 	cache := map[string]nsInfo{}
 	for _, app := range apps {
-		if !a.protectedProject(app.Project) {
+		outside := !a.protectedProject(app.Project)
+		if outside && app.Annotations[AnnSwitched] == "" {
 			continue
 		}
 		c := appClass{app: app, gateApp: app.GateApp(), optedIn: app.Annotations[AnnProtect] == "true",
 			denied: a.denied(app), marker: app.Annotations[AnnSwitched]}
+		if outside { // one the agent switched has left the agent's projects: it is put back like an opt-out, and never switched
+			c.left, c.optedIn = true, false
+		}
 		c.env, c.blockedWhy, c.envErr = a.optEnvironment(ctx, app, cache)
 		if _, params, ok := a.pluginSource(app); ok {
 			c.isPlugin = true
@@ -197,10 +217,34 @@ func (a *Agent) classify(ctx context.Context, apps []Application) []appClass {
 				c.foreign = true
 			}
 		}
+		if c.switched && !c.optedIn || c.switched && c.denied {
+			if err := a.restorable(c); err != nil {
+				c.restoreBad = err.Error()
+			}
+		}
 		out = append(out, c)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].key() < out[j].key() })
 	return out
+}
+
+// restorable checks that the original source in the plugin parameter is present and well formed, in the shape the marker
+// names, so that an opt-out can be undone before anything is unlabelled or reported removed.
+func (a *Agent) restorable(c appClass) error {
+	originals, err := a.originals(c.app)
+	if err != nil {
+		return err
+	}
+	for _, raw := range originals {
+		var o map[string]any
+		if json.Unmarshal(raw, &o) != nil || o == nil {
+			return errors.New("an original source in the plugin's sources parameter is not a JSON object")
+		}
+	}
+	if c.marker == "source" && len(originals) != 1 {
+		return errors.New("the original was one source and the parameter holds more")
+	}
+	return nil
 }
 
 // pluginSource is the Application's plugin source when it is this agent's (plugin name matches), with its parameters.
@@ -465,6 +509,9 @@ func (a *Agent) ReconcileOptIn(ctx context.Context) error {
 	if !a.cfg.OptIn.Enabled {
 		return nil
 	}
+	if !a.optInSchemaOK(ctx, false) {
+		return nil // the CRD lacks what the opt-in writes: nothing here runs, and the problem is reported once
+	}
 	apps, _, err := a.kube.ListApplications(ctx)
 	if err != nil {
 		return fmt.Errorf("listing the Applications (nothing is changed): %w", err)
@@ -478,6 +525,15 @@ func (a *Agent) ReconcileOptIn(ctx context.Context) error {
 
 	// 2. Applications that no longer ask to be protected (or never may): the label first, then the Application.
 	for _, c := range classes {
+		if c.restoreBad != "" {
+			a.opt().status[c.key()] = "blocked: cannot be put back, so it stays protected: " + c.restoreBad
+			a.warnOnce(c.key(), "an opt-out cannot be done: the original sources cannot be read back, so the Application stays on the plugin and protected: "+c.restoreBad)
+			if err := a.reportOnce(ctx, "restore|"+c.key(), "opt-out blocked: the original cannot be restored",
+				c.key()+": "+c.restoreBad, []map[string]any{{"apiVersion": "argoproj.io/v1alpha1", "kind": "Application", "namespace": c.app.Namespace, "name": c.app.Name}}); err != nil {
+				a.log.Warn("the blocked opt-out could not be reported", "err", err)
+			}
+			continue
+		}
 		if c.foreign && c.marker != "" {
 			a.opt().status[c.key()] = "left alone: it carries the switched annotation but is on the plugin without the agent's own parameter"
 			a.warnOnce(c.key(), "an Application carries the switched annotation and is on the plugin, but the plugin source has no matching switched parameter: it is not the agent's and is left alone")
@@ -503,12 +559,18 @@ func (a *Agent) ReconcileOptIn(ctx context.Context) error {
 	var scopeErr error
 	scoped := false
 	for _, c := range classes {
-		if !c.protectedIntent() {
+		if !c.wantsSwitch() {
 			continue
 		}
 		if c.envErr != nil {
 			a.opt().status[c.key()] = "skipped this pass: " + c.envErr.Error()
 			a.warnOnce(c.key(), "the Application is skipped this pass: "+c.envErr.Error())
+			continue
+		}
+		// A pair is added at the core before its Application is switched: not until the core has taken it.
+		if !c.switched && c.blockedWhy == "" && !a.pairAccepted(c) {
+			a.opt().status[c.key()] = "waiting for the core to take its pair"
+			a.warnOnce(c.key(), "the Application is not switched yet: the core has not taken its protected pair")
 			continue
 		}
 		if !scoped {
@@ -666,6 +728,13 @@ func (a *Agent) switchApp(ctx context.Context, apps []Application, c appClass, s
 
 // restore puts an Application the agent switched back exactly as it was: the label off first (a protected namespace
 // refuses what the original, unstamped, would write), then the original sources, and the marker off, in one patch.
+// pairAccepted is whether the core has taken the Application's pair (it is in the set the core last took).
+func (a *Agent) pairAccepted(c appClass) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Contains(a.st.Reported, Pair{c.gateApp, c.env})
+}
+
 func (a *Agent) restore(ctx context.Context, classes []appClass, c appClass) error {
 	key := c.key()
 	if why, stop := a.throttled(key); stop {
@@ -724,6 +793,8 @@ func (a *Agent) writeStatus(ctx context.Context, classes []appClass) error {
 		switch {
 		case c.optedIn && c.denied:
 			cur[c.key()] = StatusDenied + ": the deny list names it"
+		case c.restoreBad != "":
+			cur[c.key()] = s.status[c.key()]
 		case c.foreign && c.marker != "":
 			cur[c.key()] = s.status[c.key()]
 		case c.protectedIntent():
@@ -739,6 +810,9 @@ func (a *Agent) writeStatus(ctx context.Context, classes []appClass) error {
 			}
 			cur[c.key()] = st
 		}
+	}
+	if st := s.status["core/protection"]; st != "" {
+		cur["core/protection"] = st
 	}
 	raw, err := json.Marshal(cur)
 	if err != nil {

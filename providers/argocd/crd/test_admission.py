@@ -428,6 +428,7 @@ def run(deny):
             g["spec"]["clearance"] = {"id": "merged", "tier": 1}
             for key, o in g["spec"]["objects"].items():  # the owner of each object (display; admission does not read it)
                 o["app"] = "argocd/" + key.split("/")[-1]
+                o["expiresAt"] = "2099-01-01T00:00:00Z"  # the agent drops the object at this time; admission has no clock
             if carried:
                 g["spec"]["carried"] = carried
             return g

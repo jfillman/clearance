@@ -156,7 +156,7 @@ type Server struct {
 	// targetsMu serializes target publishes: the held-digest check and the write it guards are one step.
 	targetsMu sync.Mutex
 	// protectionRefused remembers the refused protection reports already recorded (protection.go), per server.
-	protectionRefused sync.Map
+	protectionRefused refusedSet
 }
 
 // New builds the server and its outcome index (one pass over the chain).

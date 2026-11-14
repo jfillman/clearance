@@ -176,6 +176,19 @@ func TestTheOptInsRBACIsTheNarrowestItNeeds(t *testing.T) {
 			t.Errorf("namespaces rule: verbs %v names %v; want get and patch on the two named namespaces only", v, names)
 		}
 	}
+	// And the one CRD it reads, get only.
+	crd := 0
+	for _, r := range rulesOf(cr) {
+		if res, _ := get(r, "resources").([]any); slices.Contains(res, any("customresourcedefinitions")) {
+			crd++
+			if fmt.Sprint(verbsOf(r)) != "[get]" || fmt.Sprint(get(r, "resourceNames")) != "[clearancegrants.clearance.hangar.io]" {
+				t.Errorf("the CRD rule: %v", r)
+			}
+		}
+	}
+	if crd != 1 {
+		t.Errorf("%d CRD rules", crd)
+	}
 	if nsRules != 2 {
 		t.Errorf("%d namespaces rules, want the existing list and the named get/patch", nsRules)
 	}

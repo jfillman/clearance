@@ -132,11 +132,15 @@ type Agent struct {
 	st   State
 	keys keyCache
 
-	optS  *optState  // the opt-in's memory (the opt-in loop's own)
-	repMu sync.Mutex // rep
-	rep   report     // the last set of protected pairs the core took
+	schemaMu sync.Mutex
+	schema   schemaState
+	optS     *optState  // the opt-in's memory (the opt-in loop's own)
+	repMu    sync.Mutex // rep
+	rep      report     // the last set of protected pairs the core took
 	// explained: the opt-outs the core has been told about (memory; a restart tells it once more, inside its hourly bound)
-	explained map[string]bool
+	explained    map[string]bool
+	lastSend     time.Time // when the core last took a report
+	refusedSince time.Time // since when the core has been refusing the agent's reports
 
 	protMu   sync.Mutex // the protected-namespace cache of handleApp
 	prot     map[string]map[string]string
@@ -175,6 +179,8 @@ type State struct {
 	Problems  map[string]ProblemState `json:"problems,omitempty"`
 	Reported  []Pair                  `json:"reported,omitempty"`
 	ReportSeq int64                   `json:"reportSeq,omitempty"`
+	// Once: exceptions the opt-in reported once and will not report again until the condition has gone (fingerprint -> time).
+	Once map[string]string `json:"once,omitempty"`
 }
 
 // Pair is an app and environment.
@@ -217,6 +223,9 @@ func (a *Agent) Load(ctx context.Context) error {
 	}
 	if a.st.Writes == nil {
 		a.st.Writes = map[string][]string{}
+	}
+	if a.st.Once == nil {
+		a.st.Once = map[string]string{}
 	}
 	if a.st.Problems == nil {
 		a.st.Problems = map[string]ProblemState{}

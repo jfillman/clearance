@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -101,8 +102,8 @@ func (k *fakeKube) checkFeed(when string) {
 		return
 	}
 	for _, g := range k.grants {
-		if !g.Active() || g.Name != agent.MergedGrantName {
-			continue
+		if !g.Active() || g.Name != agent.MergedGrantName || k.liveExempt[g.Namespace] || g.Valid == nil || !*g.Valid {
+			continue // (an invalid grant admits nothing)
 		}
 		live := k.live(g.Namespace)
 		for key, o := range g.Spec.Objects {
@@ -264,3 +265,46 @@ func (k *fakeKube) GetNamespaceLabels(_ context.Context, ns string) (map[string]
 	}
 	return out, nil
 }
+
+func (k *fakeKube) GrantSchemaFields(context.Context) (map[string]bool, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.reads["schema"]++
+	if k.schemaErr != nil {
+		return nil, k.schemaErr
+	}
+	out := map[string]bool{"objects.app": true, "objects.expiresAt": true, "carried.app": true, "objects.rendered": true}
+	for _, f := range k.schemaMissing {
+		delete(out, f)
+	}
+	return out, nil
+}
+
+// prune is what an API server does with a field the CRD's schema lacks: it drops it from what it stores.
+func (k *fakeKube) prune(g agent.Grant) agent.Grant {
+	if len(k.schemaMissing) == 0 || !k.pruning {
+		return g
+	}
+	strip := func(m map[string]agent.GrantObject) map[string]agent.GrantObject {
+		out := map[string]agent.GrantObject{}
+		for key, o := range m {
+			for _, f := range k.schemaMissing {
+				switch f {
+				case "objects.app", "carried.app":
+					o.App = ""
+				case "objects.expiresAt":
+					o.ExpiresAt = ""
+				}
+			}
+			out[key] = o
+		}
+		return out
+	}
+	g.Spec.Objects = strip(g.Spec.Objects)
+	for i := range g.Spec.Carried {
+		g.Spec.Carried[i].Objects = strip(g.Spec.Carried[i].Objects)
+	}
+	return g
+}
+
+func jsonUnmarshal(s string, v any) error { return json.Unmarshal([]byte(s), v) }

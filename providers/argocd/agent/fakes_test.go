@@ -43,31 +43,35 @@ func (c *clock) add(d time.Duration) {
 // fakeKube is the protected cluster and its Argo CD: namespaces, grants, Applications and live objects, in memory.
 // It fails a test the moment a namespace holds two active grants (the admission policy needs exactly one).
 type fakeKube struct {
-	t          *testing.T
-	mu         sync.Mutex
-	ns         map[string]map[string]string
-	nsLists    int
-	grants     map[string]agent.Grant
-	apps       []agent.Application
-	objs       map[string][]agent.ObjectDetail // by namespace
-	data       map[string]map[string]string
-	grantOps   int
-	workOps    int // anything that would touch a workload: must stay 0
-	failList   bool
-	log        []string        // grant operations, in order
-	failName   map[string]bool // writes of these grant names fail
-	verbs      map[string]int  // create, update, delete, valid, put, app, ns: the writes the agent made
-	appsets    map[string]agent.AppSet
-	scopes     map[string]bool
-	scopeErr   error
-	rv         int              // the Applications' resourceVersion counter
-	failApp    map[string]error // UpdateApplicationSource of these Applications fails
-	failNS     map[string]error // SetNamespaceProtected of these namespaces fails
-	listAppErr error
-	nsReadErr  map[string]error // GetNamespaceLabels of these namespaces fails
-	reads      map[string]int
-	strict     bool
-	everActive map[string]bool
+	t             *testing.T
+	mu            sync.Mutex
+	ns            map[string]map[string]string
+	nsLists       int
+	grants        map[string]agent.Grant
+	apps          []agent.Application
+	objs          map[string][]agent.ObjectDetail // by namespace
+	data          map[string]map[string]string
+	grantOps      int
+	workOps       int // anything that would touch a workload: must stay 0
+	failList      bool
+	log           []string        // grant operations, in order
+	failName      map[string]bool // writes of these grant names fail
+	verbs         map[string]int  // create, update, delete, valid, put, app, ns: the writes the agent made
+	appsets       map[string]agent.AppSet
+	scopes        map[string]bool
+	scopeErr      error
+	rv            int              // the Applications' resourceVersion counter
+	failApp       map[string]error // UpdateApplicationSource of these Applications fails
+	failNS        map[string]error // SetNamespaceProtected of these namespaces fails
+	listAppErr    error
+	nsReadErr     map[string]error // GetNamespaceLabels of these namespaces fails
+	reads         map[string]int
+	schemaMissing []string // CRD schema fields that are not installed
+	schemaErr     error
+	liveExempt    map[string]bool
+	pruning       bool // the fake API server prunes fields the schema lacks
+	strict        bool
+	everActive    map[string]bool
 	// live: the key=hash pairs of namespace ns that the verified feed lists now (nil: not checked)
 	live func(ns string) map[string]bool
 }
@@ -159,7 +163,7 @@ func (k *fakeKube) CreateGrant(_ context.Context, g agent.Grant) error {
 		return errors.New("already exists")
 	}
 	k.log = append(k.log, fmt.Sprintf("create %s/%s active=%v", g.Namespace, g.Name, g.Active()))
-	k.grants[key] = cp(g)
+	k.grants[key] = k.prune(cp(g))
 	k.checkActive()
 	return nil
 }
@@ -178,7 +182,7 @@ func (k *fakeKube) UpdateGrant(_ context.Context, g, _ agent.Grant) error {
 		return errors.New("not found")
 	}
 	k.log = append(k.log, fmt.Sprintf("update %s/%s active=%v", g.Namespace, g.Name, g.Active()))
-	n := cp(g)
+	n := k.prune(cp(g))
 	n.Valid = old.Valid // spec and labels are replaced; status is not touched
 	k.grants[key] = n
 	k.checkActive()
@@ -269,7 +273,8 @@ type fakeCore struct {
 	held       []client.ProtectedPair
 	static     map[string]bool // app/env pairs CLEARANCE_PROTECTED_ENVIRONMENTS protects (named in static_removed)
 	reportDown bool
-	heldSeq    int64 // the number of the last report the "core" took
+	heldSeq    int64                                     // the number of the last report the "core" took
+	refuse     func(req *client.ProtectionRequest) error // a refusal for some reports (a 4xx)
 }
 
 func (c *fakeCore) ProtectionSeq(context.Context, string) (int64, error) {
@@ -286,6 +291,11 @@ func (c *fakeCore) ReportProtection(_ context.Context, cluster string, req *clie
 	defer c.mu.Unlock()
 	if c.reportDown || c.down {
 		return nil, errors.New("core unreachable")
+	}
+	if c.refuse != nil {
+		if err := c.refuse(req); err != nil {
+			return nil, err
+		}
 	}
 	if cluster != "hangar-prod" {
 		c.t.Errorf("a report for cluster %s: the agent reports its own", cluster)

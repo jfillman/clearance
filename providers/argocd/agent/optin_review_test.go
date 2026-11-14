@@ -292,6 +292,7 @@ func TestAnOptOutIsNotHeldByARefusedUnlabelOfANamespaceTheAgentCannotHaveLabelle
 		w.kube.ns["app-z"] = map[string]string{agent.LabelProtected: "true", agent.LabelProtectedBy: agent.ProtectedByOptIn}
 		w.kube.failNS["app-z"] = forbidden
 		w.setAnn("web-prod", agent.AnnProtect, nil)
+		w.clock.add(70 * time.Second) // past the report debounce
 		w.a = mustAgent(t, w, func(c *agent.Config) { c.OptIn.Namespaces = configured })
 		return w
 	}
@@ -324,7 +325,7 @@ func TestTheNamespacesEnvironmentLabelDecidesAndADisagreeingApplicationIsBlocked
 	}
 	w.mustReconcile()
 	if w.isSwitched("web-prod") {
-		t.Fatal("an Application whose env label disagrees with its namespace's was switched")
+		t.Fatal("an Application whose env label differs from the environment's was switched")
 	}
 	if !w.isSwitched("api-prod") {
 		t.Fatal("not switched")
@@ -337,7 +338,7 @@ func TestTheNamespacesEnvironmentLabelDecidesAndADisagreeingApplicationIsBlocked
 	}
 	var st map[string]string
 	_ = json.Unmarshal([]byte(w.kube.data["clearance-system/clearance-argocd-agent-state"]["optin.json"]), &st)
-	if !strings.Contains(st["argocd-apps/web-prod"], "disagrees with its namespace") {
+	if !strings.Contains(st["argocd-apps/web-prod"], "differs from the environment") {
 		t.Errorf("reported: %v", st)
 	}
 }
@@ -537,6 +538,7 @@ func TestDeletingAnAnnotatedApplicationIsAnOptOutOnTheCoresRecord(t *testing.T) 
 	w.addApp("web-prod", "app-a", protect())
 	w.mustReconcile()
 	w.kube.apps = nil // the Application is deleted
+	w.clock.add(70 * time.Second)
 	w.mustReconcile()
 	r := w.core.reports[len(w.core.reports)-1]
 	if len(r.Pairs) != 0 || !strings.Contains(r.Reason, "application deleted (web/prod)") {
@@ -562,6 +564,7 @@ func TestOptingOutOneOfTwoApplicationsOfAPairIsRecorded(t *testing.T) {
 	w.mustReconcile()
 	n := len(w.core.reports)
 	w.setAnn("web-copy", agent.AnnProtect, nil)
+	w.clock.add(70 * time.Second) // past the report debounce
 	w.mustReconcile()
 	if len(w.core.reports) != n+1 {
 		t.Fatalf("an opt-out that changes no set is still reported: %d", len(w.core.reports)-n)
@@ -601,6 +604,7 @@ func TestReportNumbersOnlyGoUpAndSurviveARestart(t *testing.T) {
 	w.kube.data = map[string]map[string]string{}
 	w.a = w.restart()
 	w.setAnn("api-prod", agent.AnnProtect, nil)
+	w.clock.add(70 * time.Second) // past the report debounce
 	w.mustReconcile()
 	if last := w.core.reports[len(w.core.reports)-1]; last.Seq != 42 {
 		t.Fatalf("after a state loss: %d, want 42", last.Seq)

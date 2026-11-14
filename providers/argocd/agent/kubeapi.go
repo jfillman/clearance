@@ -750,3 +750,59 @@ func (a *API) ClusterScopes(ctx context.Context) (map[string]bool, error) {
 	}
 	return scope, nil
 }
+
+// GrantSchemaFields implements Kube: the CRD's schema for the version the agent uses.
+func (a *API) GrantSchemaFields(ctx context.Context) (map[string]bool, error) {
+	var crd struct {
+		Spec struct {
+			Versions []struct {
+				Name   string `json:"name"`
+				Schema struct {
+					OpenAPIV3Schema struct {
+						Properties struct {
+							Spec struct {
+								Properties struct {
+									Objects struct {
+										AdditionalProperties struct {
+											Properties map[string]json.RawMessage `json:"properties"`
+										} `json:"additionalProperties"`
+									} `json:"objects"`
+									Carried struct {
+										Items struct {
+											Properties struct {
+												Objects struct {
+													AdditionalProperties struct {
+														Properties map[string]json.RawMessage `json:"properties"`
+													} `json:"additionalProperties"`
+												} `json:"objects"`
+											} `json:"properties"`
+										} `json:"items"`
+									} `json:"carried"`
+								} `json:"properties"`
+							} `json:"spec"`
+						} `json:"properties"`
+					} `json:"openAPIV3Schema"`
+				} `json:"schema"`
+			} `json:"versions"`
+		} `json:"spec"`
+	}
+	path := "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/" + url.PathEscape(a.Grants.Plural+"."+a.Grants.Group)
+	if err := a.call(ctx, "GET", path, "", nil, &crd); err != nil {
+		return nil, err
+	}
+	for _, v := range crd.Spec.Versions {
+		if v.Name != a.Grants.Version {
+			continue
+		}
+		sp := v.Schema.OpenAPIV3Schema.Properties.Spec.Properties
+		out := map[string]bool{}
+		for k := range sp.Objects.AdditionalProperties.Properties {
+			out["objects."+k] = true
+		}
+		for k := range sp.Carried.Items.Properties.Objects.AdditionalProperties.Properties {
+			out["carried."+k] = true
+		}
+		return out, nil
+	}
+	return nil, fmt.Errorf("the CRD has no version %s", a.Grants.Version)
+}

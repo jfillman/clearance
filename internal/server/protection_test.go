@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jfillman/clearance/internal/core"
@@ -40,13 +41,16 @@ func protectionFixture(t *testing.T, dsn string) *fixture {
 	return newFixture(t, cfg)
 }
 
+var seqCounter atomic.Int64
+
+// pairs is a report body with a fresh number (reports must carry one, and one that only goes up).
 func pairs(ps ...string) map[string]any {
 	l := []any{}
 	for _, p := range ps {
 		app, env, _ := strings.Cut(p, "/")
 		l = append(l, map[string]any{"app": app, "env": env})
 	}
-	return map[string]any{"pairs": l}
+	return map[string]any{"pairs": l, "seq": seqCounter.Add(1)}
 }
 
 func protectionRecords(f *fixture) []map[string]any {
@@ -127,11 +131,14 @@ func TestProtectionReportTrust(t *testing.T) {
 	f.do("PUT", "/v1/protection/hangar-prod", agentOdd, good()).want(t, 403, "belongs to provider")
 	f.do("PUT", "/v1/protection/hangar-x", agentOdd, good()).want(t, 200, "")
 	f.do("PUT", "/v1/protection/Hangar_Dev", agentDev, good()).want(t, 400, "cluster is a name")
-	f.do("PUT", "/v1/protection/hangar-dev", agentDev, `{"pairs": [], "extra": 1}`).want(t, 400, "unknown field")
-	f.do("PUT", "/v1/protection/hangar-dev", agentDev, `{}`).want(t, 400, "pairs is required")
+	f.do("PUT", "/v1/protection/hangar-dev", agentDev, `{"pairs": [], "seq": 1, "extra": 1}`).want(t, 400, "unknown field")
+	f.do("PUT", "/v1/protection/hangar-dev", agentDev, `{"seq": 1}`).want(t, 400, "pairs is required")
+	// A report with no number (or 0) cannot bypass the ordering check.
+	f.do("PUT", "/v1/protection/hangar-dev", agentDev, `{"pairs": []}`).want(t, 400, "seq is required")
+	f.do("PUT", "/v1/protection/hangar-dev", agentDev, `{"pairs": [], "seq": 0}`).want(t, 400, "seq is required")
 	f.do("PUT", "/v1/protection/hangar-dev", agentDev, pairs("Web/dev")).want(t, 400, "names")
 	f.do("PUT", "/v1/protection/hangar-dev", agentDev, pairs("web/dev", "web/dev")).want(t, 400, "twice")
-	f.do("PUT", "/v1/protection/hangar-dev", agentDev, map[string]any{"pairs": []any{}, "reason": strings.Repeat("x", 501)}).want(t, 400, "reason")
+	f.do("PUT", "/v1/protection/hangar-dev", agentDev, map[string]any{"pairs": []any{}, "seq": 1, "reason": strings.Repeat("x", 501)}).want(t, 400, "reason")
 	many := make([]string, 0, 5001)
 	for i := 0; i < 5001; i++ {
 		many = append(many, fmt.Sprintf("a%d/dev", i))
@@ -320,19 +327,55 @@ func seqBounds(t *testing.T, f *fixture) {
 	}
 }
 
-func TestSetChangesAreBoundedPerHour(t *testing.T) {
+func TestRemovalsAreBoundedPerHourAndAdditionsAreNot(t *testing.T) {
 	f := protectionFixture(t, "")
-	for i := 0; i < server.MaxProtectionRecordsPerHour; i++ {
-		f.do("PUT", "/v1/protection/hangar-dev", agentDev, withSeq(pairs(fmt.Sprintf("a%d/dev", i)), i+1)).want(t, 200, "")
+	n := server.MaxProtectionRecordsPerHour
+	// One tenant flips its pair on and off: each removal is counted.
+	for i := 0; i < n; i++ {
+		f.do("PUT", "/v1/protection/hangar-dev", agentDev, pairs("flip/dev")).want(t, 200, "")
+		f.do("PUT", "/v1/protection/hangar-dev", agentDev, pairs()).want(t, 200, "")
 	}
-	f.do("PUT", "/v1/protection/hangar-dev", agentDev, withSeq(pairs("flood/dev"), 99)).want(t, 429, "at most")
-	if n := len(protectionRecords(f)); n != server.MaxProtectionRecordsPerHour {
-		t.Fatalf("%d records", n)
+	// The budget is spent. Another team's pure ADDITION is still taken, on any number of such reports.
+	for i := 0; i < 40; i++ {
+		var names []string
+		for j := 0; j <= i; j++ {
+			names = append(names, fmt.Sprintf("team%d/dev", j))
+		}
+		f.do("PUT", "/v1/protection/hangar-dev", agentDev, pairs(names...)).want(t, 200, "")
 	}
-	// An unchanged report (the heartbeat) is not a record and is never refused by the bound.
-	f.do("PUT", "/v1/protection/hangar-dev", agentDev, withSeq(pairs("a29/dev"), 30)).want(t, 200, "")
-	// Another cluster has its own bound.
+	// A removal (or a mix) now is refused with 429, and nothing changes.
+	f.do("PUT", "/v1/protection/hangar-dev", agentDev, pairs("team0/dev")).want(t, 429, "at most")
+	f.do("PUT", "/v1/protection/hangar-dev", agentDev, pairs("team0/dev", "new/dev")).want(t, 429, "at most")
+	got, _ := f.core.Store.Protections(context.Background())
+	if !strings.Contains(string(got[0].Doc), "team39") {
+		t.Fatalf("held: %s", got[0].Doc)
+	}
+	// An unchanged report (the heartbeat) is never refused. Another cluster has its own bound.
+	last := pairs()
+	var names []string
+	for j := 0; j < 40; j++ {
+		names = append(names, fmt.Sprintf("team%d/dev", j))
+	}
+	last = pairs(names...)
+	f.do("PUT", "/v1/protection/hangar-dev", agentDev, last).want(t, 200, "")
 	f.do("PUT", "/v1/protection/hangar-x", agentOdd, pairs("x/dev")).want(t, 200, "")
+}
+
+func TestTheRefusedReportMemoryIsBounded(t *testing.T) {
+	f := protectionFixture(t, "")
+	f.do("PUT", "/v1/protection/hangar-dev", agentDev, withSeq(pairs("web/dev"), 5000)).want(t, 200, "")
+	for i := 1; i <= 40; i++ { // 40 distinct stale numbers: only the hourly bound's worth are recorded
+		f.do("PUT", "/v1/protection/hangar-dev", agentDev, withSeq(pairs(fmt.Sprintf("a%d/dev", i)), i)).want(t, 409, "")
+	}
+	var refused int
+	for _, r := range f.records() {
+		if r["tool"] == "protection.refused" {
+			refused++
+		}
+	}
+	if refused > server.MaxProtectionRecordsPerHour {
+		t.Fatalf("%d refusals recorded: more than the hourly bound", refused)
+	}
 }
 
 // Opting out of one of two Applications that share a pair changes no set, and is still recorded when the agent says why.

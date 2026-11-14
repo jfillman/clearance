@@ -153,7 +153,7 @@ func (a *Agent) fetchAndApply(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listing the grants: %w", err)
 	}
-	if a.cfg.OptIn.Enabled {
+	if a.cfg.OptIn.Enabled && a.optInSchemaOK(ctx, suspectPruned(have)) {
 		return a.reconcileMerged(ctx, v, desiredGrants(v.claims, a.now()), have)
 	}
 	return a.reconcile(ctx, desiredGrants(v.claims, a.now()), have)
@@ -445,13 +445,33 @@ func (a *Agent) expireGrants(ctx context.Context) error {
 					keep = append(keep, c)
 				}
 			}
+			cur := g
+			changed := false
 			if len(keep) != len(g.Spec.Carried) {
 				g.Spec.Carried = keep
-				if err := a.kube.UpdateGrant(ctx, g, g); err != nil {
-					errs = append(errs, fmt.Errorf("dropping expired carried trees of grant %s: %w", gkey(g), err))
+				changed = true
+			}
+			// A merged grant has one expiry per object, the expiry of the clearance it came from: the agent drops each on its own
+			// clock, feed or no feed (admission has no clock), so an Application whose clearance has run out does not stay
+			// admissible until the longest of its siblings' does.
+			if g.Labels[LabelMerged] == "true" {
+				objs := map[string]GrantObject{}
+				for k, o := range g.Spec.Objects {
+					if o.ExpiresAt == "" || expiryAfter(o.ExpiresAt, a.now()) {
+						objs[k] = o
+					}
+				}
+				if len(objs) != len(g.Spec.Objects) {
+					g.Spec.Objects = objs
+					changed = true
+				}
+			}
+			if changed {
+				if err := a.kube.UpdateGrant(ctx, g, cur); err != nil {
+					errs = append(errs, fmt.Errorf("dropping expired objects of grant %s: %w", gkey(g), err))
 					continue
 				}
-				a.log.Info("carried trees expired", "grant", gkey(g))
+				a.log.Info("expired objects and carried trees dropped", "grant", gkey(g))
 			}
 			continue
 		}
