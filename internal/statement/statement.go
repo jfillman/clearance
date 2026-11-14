@@ -18,9 +18,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/jfillman/clearance/internal/canon"
@@ -55,6 +58,9 @@ const (
 	MaxBlindWindows = 200
 	// MaxScopes caps the observed scopes a statement summarises.
 	MaxScopes = 500
+	// MaxUnresolved caps the unresolved exceptions the insurer profile lists. A packet with more is refused, not cut: the
+	// profile lists each one.
+	MaxUnresolved = 1000
 	// MaxPacketJSON caps the packet.json a statement is derived from.
 	MaxPacketJSON = 256 << 20
 )
@@ -126,12 +132,11 @@ type PacketRef struct {
 	Digest string `json:"digest" contract:"required"`
 }
 
-// CheckpointRef is the witnessed ledger checkpoint the packet's records stand under: its size and root, and the SHA-256
-// of the log's origin (the origin is the log's name, which may be a hostname: it is in the packet, not here).
+// CheckpointRef is the witnessed ledger checkpoint the packet's records stand under: its size and root. The log's origin
+// (its name, which may be a host name) is in the packet, not here: not even a hash of it, which a guess could confirm.
 type CheckpointRef struct {
-	OriginSHA256 string `json:"origin_sha256" contract:"required"`
-	Size         int64  `json:"size" contract:"required"`
-	Root         string `json:"root" contract:"required"`
+	Size int64  `json:"size" contract:"required"`
+	Root string `json:"root" contract:"required"`
 }
 
 // Cited are the records the counts rest on, as a count and one digest over their (seq, hash) pairs in seq order. The
@@ -281,8 +286,10 @@ type Status struct {
 	ID           string `json:"id" contract:"required"`
 	State        string `json:"state" contract:"required"`
 	SupersededBy string `json:"superseded_by,omitempty"`
-	RevokedAt    string `json:"revoked_at,omitempty"`
-	AsOf         string `json:"as_of" contract:"required"`
+	// SuccessorRevoked is true when the statement that replaced this one was itself revoked: neither is current.
+	SuccessorRevoked bool   `json:"successor_revoked,omitempty"`
+	RevokedAt        string `json:"revoked_at,omitempty"`
+	AsOf             string `json:"as_of" contract:"required"`
 }
 
 // Check is what a Status must satisfy by itself.
@@ -319,10 +326,96 @@ func (d *Document) Check() error {
 		return errors.New("packet names no packet")
 	case d.Supersedes != "" && (!ValidID(d.Supersedes) || d.Supersedes == d.ID):
 		return errors.New("supersedes is not another statement's id")
-	case d.Issuer == "" || len(d.Issuer) > 256:
-		return errors.New("no issuer")
+	case !ValidIssuer(d.Issuer):
+		return errors.New("the issuer is not a public label or an https URL")
+	}
+	return d.checkSets()
+}
+
+var (
+	blindKinds   = []string{"core-outage", "feed-blind", "feed-degraded", "break-glass"}
+	scopeStates  = []string{"healthy", "degraded", "blind"}
+	ledgerStates = []string{"checkpointed", "no-checkpoint", "off"}
+	dispositions = []string{"none-recorded", "still-live", "revoked-not-recleared"}
+)
+
+func isRFC3339(s string) bool { _, err := time.Parse(time.RFC3339, s); return err == nil }
+
+func isHex64(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil && s == strings.ToLower(s)
+}
+
+// checkSets is the closed sets, the times, the hex and the list lengths: what a signed document is held to however it was made.
+func (d *Document) checkSets() error {
+	h := d.Summary.Health
+	switch {
+	case !isRFC3339(d.Period.From) || !isRFC3339(d.Period.To) || !isRFC3339(d.IssuedAt):
+		return errors.New("a time is not RFC 3339")
+	case !slices.Contains(ledgerStates, d.Summary.Ledger.State):
+		return errors.New("the ledger state is not one this reads")
+	case d.Checkpoint != nil && (d.Checkpoint.Size < 1 || !isHex64(d.Checkpoint.Root)):
+		return errors.New("the checkpoint is not a size and a SHA-256 root")
+	case !isHex64(d.Packet.Digest) || !isHex64(d.Cited.SHA256):
+		return errors.New("a digest is not a SHA-256")
+	case len(h.BlindWindows) > MaxBlindWindows || len(h.Scopes) > MaxScopes || d.Scope.Observed > MaxScopes:
+		return errors.New("a list is longer than a statement carries")
+	case d.Insurer != nil && (len(d.Insurer.Unresolved) > MaxUnresolved || len(d.Insurer.Telemetry) > MaxScopes):
+		return errors.New("a list is longer than a statement carries")
+	case len(d.Mapping) > 64 || len(d.Witness.Independent) > 32:
+		return errors.New("a list is longer than a statement carries")
+	}
+	for _, w := range h.BlindWindows {
+		if !slices.Contains(blindKinds, w.Kind) || !isRFC3339(w.From) || !isRFC3339(w.To) || w.Seconds < 0 || w.Index < 0 || w.Index > len(h.Scopes) {
+			return errors.New("a blind window is not one this reads")
+		}
+	}
+	for _, s := range h.Scopes {
+		if !slices.Contains(scopeStates, s.State) {
+			return errors.New("a scope's state is not one this reads")
+		}
+	}
+	if d.Insurer != nil {
+		for _, u := range d.Insurer.Unresolved {
+			if !slices.Contains(ExceptionClasses, u.Class) || !slices.Contains(dispositions, u.Disposition) {
+				return errors.New("an unresolved exception is not one this reads")
+			}
+		}
 	}
 	return nil
+}
+
+var labelIssuer = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 _-]{0,62}$`)
+
+// ValidIssuer reports whether s may be printed as the issuer: a plain label (letters, digits, spaces, hyphens: no dot, so it
+// is never a host name) or an https URL whose host has a dot, is not an IP literal and is not an internal name (.local,
+// .internal, .lan, .localdomain, .home.arpa, .svc, localhost) and carries no credentials, port, query or fragment. A bare host
+// name with no dot is a label to this check: it cannot tell the operator's chosen label from one, which is why the docs tell
+// the operator to choose a label that is not a host.
+func ValidIssuer(s string) bool {
+	if len(s) == 0 || len(s) > 200 || !utf8.ValidString(s) {
+		return false
+	}
+	if !strings.Contains(s, "://") {
+		return labelIssuer.MatchString(s)
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Scheme != "https" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Port() != "" || strings.ContainsAny(s, "?#") {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "" || !strings.Contains(host, ".") || net.ParseIP(host) != nil || strings.HasSuffix(host, ".") || host == "localhost" {
+		return false
+	}
+	for _, bad := range []string{".local", ".internal", ".lan", ".localdomain", ".home.arpa", ".svc", ".intranet", ".corp", ".invalid", ".test", ".localhost"} {
+		if strings.HasSuffix(host, bad) || strings.Contains(host, bad+".") {
+			return false
+		}
+	}
+	return true
 }
 
 func validPacketID(s string) bool {

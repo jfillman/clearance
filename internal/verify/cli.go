@@ -37,7 +37,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	status := fs.String("status", "", "with --statement: the signed status (GET /s/<id>/status.json) fetched now: whether the statement is superseded or revoked is the core's current state")
 	statusAge := fs.Duration("status-max-age", DefaultStatusMaxAge, "with --statement: how old the status may be")
 	var indepWitness ownFlag
-	fs.Var(&indepWitness, "independent-witness", "with --statement: the name of a witness you know the issuer does not run (repeatable): check 4 passes only on its countersignature. Without any, the statement's own declaration is used and check 4 is SELF-VOUCHED at best")
+	fs.Var(&indepWitness, "independent-witness", "with --statement: a witness you know the issuer does not run (repeatable), as a name or <name>=<its key as the witness policy lists it>: check 4 passes only on its countersignature. Without any, the statement's own declaration is used and check 4 is SELF-VOUCHED at best")
 	noSeen := fs.Bool("no-seen", false, "neither read nor write the note of checkpoints seen")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, sampleUsage+"\n\nor, for a packet:\n\nusage: clearance verify <packet-dir> [flags]\n\nChecks an evidence packet offline: no call to Clearance, a database or the recorder.\n"+

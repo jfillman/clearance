@@ -45,27 +45,52 @@ func TestABucketRefillsAndNothingStaysBlocked(t *testing.T) {
 	now := time.Unix(1000, 0)
 	l := newLimiter(60, 3, 6000, 100, 0, func() time.Time { return now })
 	for i := 0; i < 3; i++ {
-		if ok, _ := l.allow("a"); !ok {
+		if ok, _ := l.allowClient("a"); !ok {
 			t.Fatalf("request %d refused inside the burst", i)
 		}
 	}
-	ok, wait := l.allow("a")
+	ok, wait := l.allowClient("a")
 	if ok || wait <= 0 || wait > 2*time.Second {
 		t.Fatalf("%v %v", ok, wait)
 	}
 	now = now.Add(wait)
-	if ok, _ := l.allow("a"); !ok {
+	if ok, _ := l.allowClient("a"); !ok {
 		t.Error("still blocked after the stated wait: a lockout")
 	}
-	// The table is a fixed array: a million distinct clients add no memory, and a refused client does not spend the global budget.
-	g := newLimiter(6000, 1, 60, 2, 0, func() time.Time { return now })
-	g.allow("x")
-	before := g.global.tokens
-	g.allow("x") // over x's own burst
-	if g.global.tokens != before {
-		t.Error("a refused client drew down the listener's bucket")
-	}
-	if len(g.buckets) != limiterBuckets {
+	if len(l.buckets) != limiterBuckets {
 		t.Fatal("the table is not fixed")
+	}
+}
+
+// The listener's own budget is for work that costs something: a client's cheap requests never draw it down.
+func TestTheGlobalBudgetIsOnlyChargedWhereItIsCharged(t *testing.T) {
+	now := time.Unix(1000, 0)
+	l := newLimiter(6000, 1000, 60, 2, 0, func() time.Time { return now })
+	for i := 0; i < 500; i++ {
+		l.allowClient("x")
+	}
+	if ok, _ := l.chargeGlobal(); !ok {
+		t.Fatal("cheap requests spent the expensive budget")
+	}
+	l.chargeGlobal()
+	if ok, _ := l.chargeGlobal(); ok {
+		t.Error("the expensive budget is not bounded")
+	}
+}
+
+// With trusted hops 2 and a header that is shorter (or a client that forges extra entries on the left), the client is never what
+// a visitor chose: it is read from the right, and a header too short for the hops falls back to the connection.
+func TestForgedForwardedForIsNeverBelievedBeyondTheTrustedHops(t *testing.T) {
+	clock := func() time.Time { return time.Unix(1000, 0) }
+	l := newLimiter(60, 3, 6000, 100, 2, clock)
+	r, _ := http.NewRequest("GET", "http://x/", nil)
+	r.RemoteAddr = "10.0.0.1:5"
+	r.Header.Add("X-Forwarded-For", "198.51.100.1")
+	if got := l.clientOf(r); got != "10.0.0.1" {
+		t.Errorf("a header shorter than the hops: %s", got)
+	}
+	r.Header.Set("X-Forwarded-For", "1.1.1.1, 2.2.2.2, 203.0.113.5, 10.1.1.1")
+	if got := l.clientOf(r); got != "203.0.113.5" {
+		t.Errorf("the second from the right: %s", got)
 	}
 }

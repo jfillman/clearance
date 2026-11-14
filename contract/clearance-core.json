@@ -3811,6 +3811,9 @@
           "profile": {
             "type": "string"
           },
+          "reissue": {
+            "type": "string"
+          },
           "scope": {
             "type": "string"
           },

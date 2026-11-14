@@ -2478,6 +2478,7 @@ class StatementRequest(Model):
         Field("packet", "packet", ("str",), True),
         Field("policy_version", "policy_version", ("str",), True),
         Field("profile", "profile", ("str",), False),
+        Field("reissue", "reissue", ("str",), False),
         Field("scope", "scope", ("str",), True),
         Field("supersedes", "supersedes", ("str",), False),
     )
@@ -2485,6 +2486,7 @@ class StatementRequest(Model):
     packet: str
     policy_version: str
     profile: str | None = None
+    reissue: str | None = None
     scope: str
     supersedes: str | None = None
 

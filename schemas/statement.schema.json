@@ -9,7 +9,7 @@
   "properties": {
     "_type": {"const": "clearance.statement/v1"},
     "id": {"type": "string", "pattern": "^st-[0-9a-f]{32}$", "description": "128 random bits: not derived from the packet and not sequential."},
-    "issuer": {"type": "string", "minLength": 1, "maxLength": 256, "description": "The issuing core's token issuer name: the name its published keys (GET /v1/keys) belong to."},
+    "issuer": {"type": "string", "minLength": 1, "maxLength": 200, "description": "The issuing core's token issuer name: the name its published keys (GET /v1/keys) belong to. A plain label (no dot) or an https URL with a public host: never an internal name."},
     "issued_at": {"type": "string", "format": "date-time"},
     "profile": {"enum": ["standard", "insurer"]},
     "period": {"$ref": "#/$defs/period"},
@@ -29,8 +29,8 @@
       "description": "The witnessed ledger checkpoint the packet's records stand under; null when the packet has none (the statement then says so and checks 3 and 4 cannot pass).",
       "oneOf": [
         {"type": "null"},
-        {"type": "object", "additionalProperties": false, "required": ["origin_sha256", "size", "root"],
-         "properties": {"origin_sha256": {"$ref": "#/$defs/sha256"}, "size": {"type": "integer", "minimum": 1}, "root": {"$ref": "#/$defs/sha256"}}}
+        {"type": "object", "additionalProperties": false, "required": ["size", "root"],
+         "properties": {"size": {"type": "integer", "minimum": 1}, "root": {"$ref": "#/$defs/sha256"}}}
       ]
     },
     "cited_records": {
@@ -120,6 +120,7 @@
         "id": {"type": "string", "pattern": "^st-[0-9a-f]{32}$"},
         "state": {"enum": ["valid", "superseded", "revoked"]},
         "superseded_by": {"type": "string", "pattern": "^st-[0-9a-f]{32}$"},
+        "successor_revoked": {"type": "boolean", "description": "True when the statement that replaced this one was itself revoked: neither is current."},
         "revoked_at": {"type": "string"},
         "as_of": {"type": "string", "format": "date-time"}
       }

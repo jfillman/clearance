@@ -31,12 +31,16 @@ import (
 //	CLEARANCE_VERIFY_TRUSTED_PROXY_HOPS   how many trusted proxies sit in front of the listener (0: the connection's address is
 //	                                      the client; N: the Nth address from the right of X-Forwarded-For)
 //	CLEARANCE_VERIFY_MAX_CHECKS           how many statement verifications may run at once (default 2)
+//	CLEARANCE_VERIFY_DIRECT_EXPOSURE      true: the listener is reached directly, with no proxy in front. REQUIRED when
+//	                                      CLEARANCE_VERIFY_TRUSTED_PROXY_HOPS is 0, and refused with hops above 0. Behind a
+//	                                      proxy every visitor shares the proxy's address, so one client's budget would be the
+//	                                      whole internet's: the listener refuses to start that way
 func statementConfig(getenv func(string) string, led *ledger.Config) (string, server.StatementOptions, error) {
 	var o server.StatementOptions
 	listen := getenv("CLEARANCE_VERIFY_LISTEN")
 	if listen == "" {
 		for _, k := range []string{"CLEARANCE_STATEMENT_LOG_KEYS_FILE", "CLEARANCE_STATEMENT_WITNESS_POLICY_FILE", "CLEARANCE_STATEMENT_INDEPENDENT_WITNESSES", "CLEARANCE_VERIFY_PUBLIC_URL", "CLEARANCE_VERIFY_RATE_PER_CLIENT", "CLEARANCE_VERIFY_BURST_PER_CLIENT",
-			"CLEARANCE_VERIFY_RATE_GLOBAL", "CLEARANCE_VERIFY_BURST_GLOBAL", "CLEARANCE_VERIFY_TRUSTED_PROXY_HOPS", "CLEARANCE_VERIFY_MAX_CHECKS"} {
+			"CLEARANCE_VERIFY_RATE_GLOBAL", "CLEARANCE_VERIFY_BURST_GLOBAL", "CLEARANCE_VERIFY_TRUSTED_PROXY_HOPS", "CLEARANCE_VERIFY_MAX_CHECKS", "CLEARANCE_VERIFY_DIRECT_EXPOSURE"} {
 			if getenv(k) != "" {
 				return "", o, fmt.Errorf("%s is set but CLEARANCE_VERIFY_LISTEN is not: the verify page is off, and is not enabled by its settings", k)
 			}
@@ -94,6 +98,18 @@ func statementConfig(getenv func(string) string, led *ledger.Config) (string, se
 				return "", o, fmt.Errorf("%s is a whole number from %d to %d", f.env, f.min, f.max)
 			}
 			*f.into = n
+		}
+	}
+	direct := getenv("CLEARANCE_VERIFY_DIRECT_EXPOSURE")
+	if direct != "" && direct != "true" && direct != "false" {
+		return "", o, errors.New("CLEARANCE_VERIFY_DIRECT_EXPOSURE is true or false")
+	}
+	if listen != "" {
+		switch {
+		case o.TrustedProxyHops == 0 && direct != "true":
+			return "", o, errors.New("CLEARANCE_VERIFY_LISTEN with CLEARANCE_VERIFY_TRUSTED_PROXY_HOPS 0 needs CLEARANCE_VERIFY_DIRECT_EXPOSURE=true: behind a proxy every visitor would share the proxy's address and one rate-limit budget; set the number of trusted proxy hops, or say the listener is exposed directly")
+		case o.TrustedProxyHops > 0 && direct == "true":
+			return "", o, errors.New("CLEARANCE_VERIFY_DIRECT_EXPOSURE=true and CLEARANCE_VERIFY_TRUSTED_PROXY_HOPS above 0 contradict: a direct listener has no proxy, and a client's X-Forwarded-For would be believed")
 		}
 	}
 	return listen, o, nil

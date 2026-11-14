@@ -30,13 +30,20 @@ var StatementChecks = [7]string{
 // check, and not a failure: the lab's honest answer until a witness the issuer does not run has seen the log.
 const NotWitnessed Status = "NOT INDEPENDENTLY WITNESSED"
 
+// PassDeclared: the countersignature was verified, and the witness is one the ISSUER declares independent of it. The
+// declaration is the issuer's, not something the verifier established, so this is not a PASS: it never makes a verification
+// exit 0 (only the hosted page, which is the issuer, produces it, and it says so in the summary).
+const PassDeclared Status = "PASS, INDEPENDENCE DECLARED"
+
 // Live is the core's current state of a statement, as the core itself reports it (the hosted page): its state and when
 // that was read.
 type Live struct {
 	State        string
 	SupersededBy string
-	RevokedAt    string
-	AsOf         time.Time
+	// SuccessorRevoked: the statement that replaced this one was itself revoked.
+	SuccessorRevoked bool
+	RevokedAt        string
+	AsOf             time.Time
 }
 
 // StatementOptions are the trust inputs of a statement verification, all of them bytes the caller already read.
@@ -49,7 +56,11 @@ type StatementOptions struct {
 	Keys    token.KeySet
 	KeysSrc string
 	Issuer  string
-	// IndependentWitnesses are the names of the witnesses YOU know the issuer does not run. Check 4 passes only on a
+	// DeclaredIndependent are the witnesses the ISSUER declares it does not run (the hosted page: the deployment's own
+	// configuration). A countersignature by one gives PassDeclared, never Pass, and is never offered by the offline command.
+	DeclaredIndependent []string
+	// IndependentWitnesses are the witnesses YOU know the issuer does not run, each a name or name=<vkey> (the witness's key as
+	// the witness policy lists it: then it must be in the policy under that name). Check 4 passes only on a
 	// countersignature by one of these. Without any, the statement's own declaration is used and the check is
 	// SELF-VOUCHED at best: who runs a witness is the issuer's claim until you supply it.
 	IndependentWitnesses []string
@@ -66,7 +77,7 @@ type StatementOptions struct {
 }
 
 // DefaultStatusMaxAge is how old a signed status may be before check 7 will not rest on it.
-const DefaultStatusMaxAge = 24 * time.Hour
+const DefaultStatusMaxAge = time.Hour
 
 // VerifyStatementFile is `clearance verify --statement <file>`.
 func VerifyStatementFile(file string, so StatementOptions) *Report {
@@ -131,12 +142,15 @@ func VerifyStatement(envelope []byte, name string, so StatementOptions) *Report 
 		for i := 2; i < 6; i++ {
 			checks[i].Status, checks[i].Detail = NotChecked, "the statement's signature was not verified, so nothing it says is checked against anything"
 		}
-		checks[6] = noDoc7(CheckCurrent("", so))
+		var asOf string
+		checks[6], asOf = checkCurrent("", so)
+		checks[6] = noDoc7(checks[6])
+		rep.StateAsOf = asOf
 		rep.note(statementNote)
 		return rep
 	}
 	packetChecks(&checks, doc, so)
-	checks[6] = CheckCurrent(doc.ID, so)
+	checks[6], rep.StateAsOf = checkCurrent(doc.ID, so)
 	rep.note(statementNote)
 	return rep
 }
@@ -211,6 +225,20 @@ func c1c2(checks *[7]Check, envelope []byte, so StatementOptions) *statement.Doc
 	return doc
 }
 
+// StatementPacketChecks runs checks 3 to 6 on a statement document against the packet in so, with the same code the seven checks
+// use: the core calls it before it signs, so a statement whose counts the packet does not give is never issued.
+func StatementPacketChecks(doc *statement.Document, so StatementOptions) [4]Check {
+	if so.Now == nil {
+		so.Now = time.Now
+	}
+	var checks [7]Check
+	for i := range checks {
+		checks[i] = Check{Name: StatementChecks[i]}
+	}
+	packetChecks(&checks, doc, so)
+	return [4]Check{checks[2], checks[3], checks[4], checks[5]}
+}
+
 // packetChecks runs checks 3 to 6 against the packet.
 func packetChecks(checks *[7]Check, doc *statement.Document, so StatementOptions) {
 	if so.PacketDir == "" && so.PacketFiles == nil {
@@ -278,7 +306,7 @@ func packetChecks(checks *[7]Check, doc *statement.Document, so StatementOptions
 		c3 = append(c3, Check{Name: "the checkpoint is verified", Status: NotChecked, Detail: "the packet's checkpoint was not verified"})
 	default:
 		cp := c.cp
-		if doc.Checkpoint.Size != cp.size || doc.Checkpoint.Root != hex.EncodeToString(cp.root) || doc.Checkpoint.OriginSHA256 != sha256Hex([]byte(cp.origin)) {
+		if doc.Checkpoint.Size != cp.size || doc.Checkpoint.Root != hex.EncodeToString(cp.root) {
 			c3 = append(c3, bindCheck("the statement's checkpoint is the packet's", []string{"the checkpoint the statement names is not the one the packet carries"}))
 		}
 		if n := countAfter(c.recs, cp.size); n > 0 {
@@ -397,25 +425,61 @@ func witnessChecks(c *ctx, base []Check, doc *statement.Document, so StatementOp
 		}
 		return out
 	}
-	trusted, declared := so.IndependentWitnesses, false
-	if len(trusted) == 0 {
-		trusted, declared = doc.Witness.Independent, true
+	cosigned := c.cp.cosigned
+	count := func(names []string) (n int, hit []string) {
+		for _, cs := range cosigned {
+			if slices.Contains(names, cs) {
+				n++
+				hit = append(hit, cs)
+			}
+		}
+		return
 	}
-	independent := 0
-	for _, n := range c.cp.cosigned {
-		if slices.Contains(trusted, n) {
-			independent++
+	notWit := Check{Name: "a witness the issuer does not run", Status: NotWitnessed,
+		Detail: "NOT YET INDEPENDENTLY WITNESSED: no countersignature on the checkpoint is from a witness known not to be run by the issuer. The log is protected from a rewrite only by witnesses the issuer runs, or by ones whose independence is not established; an independent witness has not yet seen it"}
+	switch {
+	case len(so.IndependentWitnesses) > 0:
+		pol, _ := c.material(c.opts.WitnessPolicy, filePolicy)
+		if n, _ := count(trustedWitnessNames(so.IndependentWitnesses, pol)); n > 0 {
+			out = append(out, Check{Name: "a witness the issuer does not run", Status: Pass, Detail: fmt.Sprintf("%d countersignature(s) from a witness you know the issuer does not run", n)})
+		} else {
+			out = append(out, notWit)
+		}
+	case len(so.DeclaredIndependent) > 0:
+		if n, hit := count(so.DeclaredIndependent); n > 0 {
+			out = append(out, Check{Name: "a witness the issuer does not run", Status: PassDeclared,
+				Detail: "countersigned by " + strings.Join(hit, ", ") + ", a witness the ISSUER DECLARES independent of it. The countersignature was verified; the witness's independence is the issuer's declaration, not something verified here. Confirm it yourself with --independent-witness " + hit[0] + "=<the witness's key from the witness policy>"})
+		} else {
+			out = append(out, notWit)
+		}
+	default:
+		if n, _ := count(doc.Witness.Independent); n > 0 {
+			out = append(out, Check{Name: "a witness the issuer does not run", Status: SelfVouched,
+				Detail: "a countersignature is from a witness the issuer declares independent of it; supply the independent witnesses you know (--independent-witness) to check that yourself"})
+		} else {
+			out = append(out, notWit)
 		}
 	}
-	switch {
-	case independent == 0:
-		out = append(out, Check{Name: "a witness the issuer does not run", Status: NotWitnessed,
-			Detail: "NOT YET INDEPENDENTLY WITNESSED: no countersignature on the checkpoint is from a witness known not to be run by the issuer. The log is protected from a rewrite only by witnesses the issuer runs, or by ones whose independence is not established; an independent witness has not yet seen it"})
-	case declared:
-		out = append(out, Check{Name: "a witness the issuer does not run", Status: SelfVouched,
-			Detail: "a countersignature is from a witness the issuer declares independent of it; supply the independent witnesses you know (--independent-witness) to check that yourself"})
-	default:
-		out = append(out, Check{Name: "a witness the issuer does not run", Status: Pass, Detail: fmt.Sprintf("%d countersignature(s) from a witness you know the issuer does not run", independent)})
+	return out
+}
+
+// trustedWitnessNames are the names a verifier's --independent-witness entries vouch for: a bare name, or name=<vkey> where the
+// witness policy lists that very key under that name.
+func trustedWitnessNames(entries []string, policy []byte) []string {
+	var out []string
+	for _, e := range entries {
+		name, key, keyed := strings.Cut(e, "=")
+		if !keyed {
+			out = append(out, name)
+			continue
+		}
+		for _, ln := range strings.Split(string(policy), "\n") {
+			f := strings.Fields(ln)
+			if len(f) >= 3 && f[0] == "witness" && f[2] == key && strings.SplitN(key, "+", 2)[0] == name {
+				out = append(out, name)
+				break
+			}
+		}
 	}
 	return out
 }
@@ -427,7 +491,7 @@ func rollup(top Check, subs []Check) Check {
 		top.Status, top.Detail = NotChecked, "the check did not run"
 		return top
 	}
-	rank := map[Status]int{Fail: 6, NotChecked: 5, NotCheckpointed: 4, NotWitnessed: 3, SelfVouched: 2, Pass: 0}
+	rank := map[Status]int{Fail: 7, NotChecked: 6, NotCheckpointed: 5, NotWitnessed: 4, SelfVouched: 3, PassDeclared: 1, Pass: 0}
 	worst := Pass
 	var trust []string
 	for _, s := range subs {
@@ -476,6 +540,12 @@ func rollup(top Check, subs []Check) Check {
 // CheckCurrent is check 7 against the core's own live state or a signed status. id is the statement's id ("" when the
 // statement itself was not verified).
 func CheckCurrent(id string, so StatementOptions) Check {
+	c, _ := checkCurrent(id, so)
+	return c
+}
+
+// checkCurrent is CheckCurrent and the time its answer is as of ("" when there is none).
+func checkCurrent(id string, so StatementOptions) (Check, string) {
 	c := Check{Name: StatementChecks[6]}
 	if so.Now == nil {
 		so.Now = time.Now
@@ -484,32 +554,32 @@ func CheckCurrent(id string, so StatementOptions) Check {
 	var asOf time.Time
 	switch {
 	case so.Live != nil:
-		st = statement.Status{State: so.Live.State, SupersededBy: so.Live.SupersededBy, RevokedAt: so.Live.RevokedAt}
+		st = statement.Status{State: so.Live.State, SupersededBy: so.Live.SupersededBy, RevokedAt: so.Live.RevokedAt, SuccessorRevoked: so.Live.SuccessorRevoked}
 		asOf = so.Live.AsOf
 		c.Trust = "the issuing core's own current state"
 	case len(so.Status) > 0:
 		if len(so.Keys) == 0 {
 			c.Status, c.Detail = NotChecked, "a status was supplied and no issuer keys: it cannot be trusted"
-			return c
+			return c, ""
 		}
 		payload, _, err := token.VerifyDSSE(so.Status, statement.StatusPayloadType, so.Keys)
 		if err != nil {
 			c.Status, c.Detail = Fail, "the status does not verify under the issuer's keys: "+err.Error()
-			return c
+			return c, ""
 		}
 		p, err := statement.ParseStatus(payload)
 		if err != nil {
 			c.Status, c.Detail = Fail, "the signed status is not a status: "+err.Error()
-			return c
+			return c, ""
 		}
 		if id != "" && p.ID != id {
 			c.Status, c.Detail = Fail, "the status is for another statement"
-			return c
+			return c, ""
 		}
 		t, err := time.Parse(time.RFC3339, p.AsOf)
 		if err != nil {
 			c.Status, c.Detail = Fail, "the status's as_of is not an RFC 3339 time"
-			return c
+			return c, ""
 		}
 		st, asOf = *p, t
 		c.Trust = "a status signed by keys you supplied"
@@ -521,15 +591,15 @@ func CheckCurrent(id string, so StatementOptions) Check {
 		switch {
 		case asOf.After(now.Add(5 * time.Minute)):
 			c.Status, c.Detail = Fail, "the status is dated in the future"
-			return c
+			return c, ""
 		case now.Sub(asOf) > max:
 			c.Status = NotChecked
-			c.Detail = fmt.Sprintf("the status is as of %s, older than %s: fetch a fresh one (revocation is the core's current state)", asOf.UTC().Format(time.RFC3339), max)
-			return c
+			c.Detail = fmt.Sprintf("the status is as of %s, older than %s: fetch a fresh one (revocation is the core's current state, and a status that was valid an hour ago may not be now)", asOf.UTC().Format(time.RFC3339), max)
+			return c, asOf.UTC().Format(time.RFC3339)
 		}
 	default:
 		c.Status, c.Detail = NotChecked, "no current state was supplied: whether the statement has been superseded or revoked is the core's current state, and it is not in the statement. Fetch /s/<id>/status.json and pass it with --status"
-		return c
+		return c, ""
 	}
 	when := asOf.UTC().Format(time.RFC3339)
 	switch st.State {
@@ -539,8 +609,11 @@ func CheckCurrent(id string, so StatementOptions) Check {
 		c.Status, c.Detail = Fail, "REVOKED, as of "+when+": the issuer withdrew this statement; do not rely on it"
 	case statement.StateSuperseded:
 		c.Status, c.Detail = Fail, "SUPERSEDED by "+st.SupersededBy+", as of "+when+": a correction replaced it; read that one"
+		if st.SuccessorRevoked {
+			c.Detail = "SUPERSEDED by " + st.SupersededBy + ", as of " + when + ", and that successor was itself REVOKED: no statement in this chain is current"
+		}
 	default:
 		c.Status, c.Detail = Fail, "the state is not one this verifier knows"
 	}
-	return c
+	return c, when
 }

@@ -772,6 +772,11 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 	loopCtx, stopLoops := context.WithCancel(context.Background())
 	loopsDone := make(chan struct{})
 	go func() { c.Loops(loopCtx); close(loopsDone) }()
+	// The statement index (P-3) is read once at start, whether or not the verify page is on: GET /v1/keys keeps the keys of the
+	// statements that stand.
+	if err := c.Server.WarmStatements(ctx); err != nil {
+		log.Warn("statements: the statement records could not be read at start; retrying in the background", "error", err.Error())
+	}
 	serveErr := make(chan error, 2)
 	go func() { serveErr <- hs.Serve(ln) }()
 	// The verify page (P-3) is a second listener, started only when CLEARANCE_VERIFY_LISTEN is set. With it unset nothing
@@ -784,9 +789,6 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 			<-loopsDone
 			_ = hs.Close()
 			return fmt.Errorf("core: verify listen %s: %w", cfg.VerifyListen, err)
-		}
-		if err := c.Server.WarmStatements(ctx); err != nil {
-			log.Warn("verify page: the statement records could not be read at start; the first request reads them", "error", err.Error())
 		}
 		vs = c.Server.VerifyHTTPServer(cfg.VerifyListen)
 		go func() { serveErr <- vs.Serve(vln) }()

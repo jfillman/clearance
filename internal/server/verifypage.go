@@ -105,10 +105,18 @@ type stmtResults struct {
 	sem   chan struct{}
 }
 
+type resultRefusal int
+
+const (
+	notRefused   resultRefusal = iota
+	refusedBusy                // every verification slot is taken: 503, the next try finds the result
+	refusedLimit               // the listener's budget for verifications is spent: 429
+)
+
 // result is the checks' result for e, run at most once at a time and kept for resultTTL. A run is started only for an id the
-// chain holds a statement of, so nothing an anonymous caller invents can cost more than a map miss. busy is true when
-// every verification slot is taken: the caller answers 503 and the next try finds the result.
-func (s *Server) result(ctx context.Context, e *stmtEntry) (res *stmtResult, busy bool) {
+// chain holds a statement of, so nothing an anonymous caller invents can cost more than a map miss, and only a run that must
+// be made is charged to the listener's global budget (charge), after the cache and before the semaphore.
+func (s *Server) result(ctx context.Context, e *stmtEntry, charge func() bool) (res *stmtResult, refused resultRefusal) {
 	c := &s.stmtRes
 	c.mu.Lock()
 	if c.by == nil {
@@ -125,24 +133,28 @@ func (s *Server) result(ctx context.Context, e *stmtEntry) (res *stmtResult, bus
 		case <-r.done:
 			if now.Sub(r.at) < ttl {
 				c.mu.Unlock()
-				return r, false
+				return r, notRefused
 			}
 		default: // still running: wait for it
 			c.mu.Unlock()
 			select {
 			case <-r.done:
-				return r, false
+				return r, notRefused
 			case <-ctx.Done():
-				return nil, true
+				return nil, refusedBusy
 			}
 		}
+	}
+	if charge != nil && !charge() {
+		c.mu.Unlock()
+		return nil, refusedLimit
 	}
 	sem := c.sem
 	select {
 	case sem <- struct{}{}:
 	default:
 		c.mu.Unlock()
-		return nil, true
+		return nil, refusedBusy
 	}
 	r := &stmtResult{done: make(chan struct{}), digest: e.digest}
 	if _, ok := c.by[e.id]; !ok {
@@ -170,9 +182,9 @@ func (s *Server) result(ctx context.Context, e *stmtEntry) (res *stmtResult, bus
 	}()
 	select {
 	case <-r.done:
-		return r, false
+		return r, notRefused
 	case <-ctx.Done():
-		return nil, true
+		return nil, refusedBusy
 	}
 }
 
@@ -184,7 +196,11 @@ func (s *Server) runStatementChecks(ctx context.Context, e *stmtEntry) (*verify.
 	if err != nil {
 		return nil, nil, errors.New("no issuer")
 	}
-	rows, err := s.opt.Store.SigningKeys(ctx, s.opt.Clock().Add(-KeysWindow-token.MaxAccessLifetime))
+	envelope, err := s.statementEnvelope(ctx, e)
+	if err != nil {
+		return nil, nil, err
+	}
+	rows, err := s.publishedKeys(ctx, s.opt.Clock().Add(-KeysWindow-token.MaxAccessLifetime))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -197,17 +213,8 @@ func (s *Server) runStatementChecks(ctx context.Context, e *stmtEntry) (*verify.
 			}
 		}
 	}
-	opt := s.statementOpts()
-	so := verify.StatementOptions{Keys: ks, KeysSrc: "the keys this core publishes (GET /v1/keys)", Issuer: issuer, IndependentWitnesses: opt.IndependentWitnesses, Options: verify.Options{Now: s.opt.Clock}}
-	so.LogKeys, so.LogKeysSrc = opt.LogKeys, "this deployment's configured log keys"
-	so.WitnessPolicy, so.WitnessPolicySrc = opt.WitnessPolicy, "this deployment's configured witness policy"
-	so.RecipientKeys, so.RecipientKeysSrc = map[string][]byte{}, map[string]string{}
-	for _, p := range s.opt.Providers {
-		if p.Assurance() && len(p.Keys) > 0 {
-			so.RecipientKeys[p.Name] = []byte(strings.Join(p.Keys, "\n"))
-			so.RecipientKeysSrc[p.Name] = "registered with this core"
-		}
-	}
+	so := s.statementVerifyOptions(nil)
+	so.Keys, so.KeysSrc, so.Issuer = ks, "the keys this core publishes (GET /v1/keys)", issuer
 	pk, err := s.opt.Store.Packet(ctx, e.packetID)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
@@ -225,16 +232,22 @@ func (s *Server) runStatementChecks(ctx context.Context, e *stmtEntry) (*verify.
 		so.PacketFiles = b.Files
 	}
 	so.Live = &verify.Live{State: statement.StateValid, AsOf: s.opt.Clock()}
-	rep := verify.VerifyStatement(e.envelope, e.id, so)
+	rep := verify.VerifyStatement(envelope, e.id, so)
 	var doc *statement.Document
 	if len(rep.Checks) == 7 && rep.Checks[1].Status == verify.Pass {
 		var env struct {
 			Payload string `json:"payload"`
 		}
-		if json.Unmarshal(e.envelope, &env) == nil {
+		if json.Unmarshal(envelope, &env) == nil {
 			if raw, err := base64.StdEncoding.DecodeString(env.Payload); err == nil {
 				doc, _ = statement.Parse(raw)
 			}
+		}
+		// What is shown is what was signed AND is the statement this id names: a signed document for another id, put under this
+		// one, is a failure and shows nothing of itself.
+		if doc == nil || doc.ID != e.id {
+			doc = nil
+			rep.Checks[1].Status, rep.Checks[1].Detail = verify.Fail, "the signed document is not the statement this id names"
 		}
 	}
 	return rep, doc, nil
@@ -243,6 +256,11 @@ func (s *Server) runStatementChecks(ctx context.Context, e *stmtEntry) (*verify.
 // VerifyHandler is the public handler. It is built even when no listener serves it, so tests drive it; the core mounts it
 // only on CLEARANCE_VERIFY_LISTEN.
 func (s *Server) VerifyHandler() http.Handler {
+	// The index of statements is read here, once, not on a request: until it is read the page answers 503 and a failed read is
+	// retried in the background.
+	if err := s.WarmStatements(context.Background()); err != nil {
+		s.log.Warn("verify page: the statement records could not be read; the page answers 503 until a retry succeeds", "error", err.Error())
+	}
 	o := s.statementOpts()
 	lim := newLimiter(o.ClientPerMinute, o.ClientBurst, o.GlobalPerMinute, o.GlobalBurst, o.TrustedProxyHops, s.opt.Clock)
 	h := &verifyPage{s: s, lim: lim, base: o.PublicBaseURL}
@@ -308,13 +326,14 @@ func (v *verifyPage) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The limit comes first and covers every other path, including the ones that do not exist: guessing costs budget.
-	if ok, wait := v.lim.allow(v.lim.clientOf(r)); !ok {
+	if ok, wait := v.lim.allowClient(v.lim.clientOf(r)); !ok {
 		w.Header().Set("Retry-After", fmt.Sprint(int(wait.Seconds())+1))
 		v.plain(w, http.StatusTooManyRequests, "Too many requests. Try again shortly.\n")
 		return
 	}
 	id, part, ok := route(r.URL.Path)
-	if !ok {
+	// A path with any non-default encoding (%2f, %2e%2e, an encoded id) is not the page's path, however it decodes.
+	if !ok || r.URL.RawPath != "" {
 		v.notFound(w)
 		return
 	}
@@ -377,7 +396,14 @@ func (v *verifyPage) statementJSON(w http.ResponseWriter, r *http.Request, e *st
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+e.id+`.json"`)
-	_, _ = w.Write(e.envelope)
+	raw, err := v.s.statementEnvelope(r.Context(), e)
+	if err != nil {
+		w.Header().Del("Content-Disposition")
+		w.Header().Del("ETag")
+		v.plain(w, http.StatusServiceUnavailable, "The statement could not be read. Try again shortly.\n")
+		return
+	}
+	_, _ = w.Write(raw)
 }
 
 // statusJSON is the signed current state, as of the read.
@@ -388,12 +414,15 @@ func (v *verifyPage) statusJSON(w http.ResponseWriter, live stmtLive) {
 		return
 	}
 	e := live.entry
-	st := statement.Status{Type: statement.StatusSchema, ID: e.id, State: e.state(), SupersededBy: e.supersededBy, AsOf: pycompat.ISO(v.s.opt.Clock().UTC().Truncate(time.Second))}
+	// as_of is when the index was last read from the chain, not when this answer was signed: a status never claims to be fresher
+	// than the read behind it.
+	st := statement.Status{Type: statement.StatusSchema, ID: e.id, State: e.state(), SupersededBy: e.supersededBy, SuccessorRevoked: live.successorRevoked,
+		AsOf: pycompat.ISO(live.asOf.UTC().Truncate(time.Second))}
 	if e.revoked {
 		st.RevokedAt = e.revokedAt
 	}
 	if e.state() == statement.StateRevoked {
-		st.SupersededBy = "" // revoked wins; a revoked statement is not "superseded"
+		st.SupersededBy, st.SuccessorRevoked = "", false // revoked wins; a revoked statement is not "superseded"
 	}
 	payload, err := st.Canonical()
 	if err == nil {
@@ -434,7 +463,7 @@ type pageData struct {
 	Blind                         []blindRow
 	Successor                     string
 	Superseded, Revoked, HaveDoc  bool
-	Limitation                    string
+	Limitation, Declaration       string
 	Command                       string
 	Base                          string
 	Insurer                       *insurerView
@@ -478,6 +507,7 @@ var statusSays = map[verify.Status]string{
 	verify.SelfVouched:     "Passed only on the issuer's own word.",
 	verify.NotCheckpointed: "Not under a witnessed checkpoint.",
 	verify.NotWitnessed:    "NOT YET INDEPENDENTLY WITNESSED: a witness the issuer does not run has not yet seen this log.",
+	verify.PassDeclared:    "Countersignature verified; the witness's independence is the issuer's declaration.",
 }
 
 func statusClass(s verify.Status) string {
@@ -487,13 +517,18 @@ func statusClass(s verify.Status) string {
 	case verify.Fail:
 		return "bad"
 	}
-	return "warn"
+	return "warn" // PassDeclared included: it is not a pass of independence
 }
 
 func (v *verifyPage) page(w http.ResponseWriter, r *http.Request, live stmtLive) {
 	e := live.entry
-	res, busy := v.s.result(r.Context(), e)
-	if busy || res == nil {
+	res, refused := v.s.result(r.Context(), e, func() bool { ok, _ := v.lim.chargeGlobal(); return ok })
+	switch {
+	case refused == refusedLimit:
+		w.Header().Set("Retry-After", "5")
+		v.plain(w, http.StatusTooManyRequests, "Too many verifications at once. Try again shortly.\n")
+		return
+	case refused != notRefused || res == nil:
 		w.Header().Set("Retry-After", "2")
 		v.plain(w, http.StatusServiceUnavailable, "The checks are busy. Try again in a moment.\n")
 		return
@@ -502,10 +537,10 @@ func (v *verifyPage) page(w http.ResponseWriter, r *http.Request, live stmtLive)
 		v.plain(w, http.StatusServiceUnavailable, "The checks could not be run. Try again shortly.\n")
 		return
 	}
-	asOf := v.s.opt.Clock()
+	asOf := live.asOf
 	rep := &verify.Report{Packet: e.id, Checks: slices.Clone(res.rep.Checks)}
 	st := e.state()
-	rep.Checks[6] = verify.CheckCurrent(e.id, verify.StatementOptions{Live: &verify.Live{State: st, SupersededBy: e.supersededBy, RevokedAt: e.revokedAt, AsOf: asOf}, Options: verify.Options{Now: v.s.opt.Clock}})
+	rep.Checks[6] = verify.CheckCurrent(e.id, verify.StatementOptions{Live: &verify.Live{State: st, SupersededBy: e.supersededBy, SuccessorRevoked: live.successorRevoked, RevokedAt: e.revokedAt, AsOf: asOf}, Options: verify.Options{Now: v.s.opt.Clock}})
 	if res.rep.Checks[1].Status != verify.Pass {
 		// The signature did not verify: nothing in the statement is shown, and the live state is not vouched for either.
 		rep.Checks[6].Status = verify.NotChecked
@@ -520,8 +555,14 @@ func (v *verifyPage) page(w http.ResponseWriter, r *http.Request, live stmtLive)
 			says = c.Detail // check 7's words are the verifier's own and carry no name
 		}
 		d.Checks = append(d.Checks, checkRow{N: i + 1, Name: strings.TrimPrefix(c.Name, fmt.Sprintf("%d. ", i+1)), Status: string(c.Status), Class: statusClass(c.Status), Says: says, What: checkWhat[i]})
-		if i == 3 && c.Status == verify.NotWitnessed {
-			d.Limitation = "not yet independently witnessed"
+		if i == 3 {
+			switch c.Status {
+			case verify.NotWitnessed, verify.SelfVouched:
+				d.Limitation = "not yet independently witnessed"
+			case verify.PassDeclared:
+				d.Declaration = c.Detail
+				d.Checks[len(d.Checks)-1].Says = c.Detail
+			}
 		}
 	}
 	if doc := res.doc; doc != nil {
@@ -554,7 +595,7 @@ func (v *verifyPage) page(w http.ResponseWriter, r *http.Request, live stmtLive)
 			}
 		}
 	}
-	d.Command = "clearance verify --statement " + e.id + ".json --statement-keys <the issuer's keys> --statement-issuer <the issuer> --log-keys <log keys> --witness-policy <policy> --status status.json --packet <packet the subscriber opened to you>"
+	d.Command = "clearance verify --statement " + e.id + ".json --statement-keys <the issuer's keys> --statement-issuer <the issuer> --log-keys <log keys> --witness-policy <policy> --independent-witness <name>=<key> --status status.json --packet <packet the subscriber opened to you>"
 	var buf bytes.Buffer
 	if err := pageTmpl.Execute(&buf, d); err != nil || buf.Len() > maxPageBytes {
 		v.s.log.ErrorContext(r.Context(), "verify page: the page could not be rendered", "statement", e.id)
@@ -580,13 +621,30 @@ func pageWord(rep *verify.Report) (word, class, sentence string) {
 	case c7.Status == verify.Fail && strings.HasPrefix(c7.Detail, "REVOKED"):
 		return "REVOKED", "bad", "The issuer withdrew this statement. Do not rely on it."
 	case c7.Status == verify.Fail && strings.HasPrefix(c7.Detail, "SUPERSEDED"):
+		if strings.Contains(c7.Detail, "REVOKED") {
+			return "SUPERSEDED", "bad", "A correction replaced this statement, and that correction was itself revoked: no statement in this chain is current."
+		}
 		return "SUPERSEDED", "warn", "A correction replaced this statement. Read the newer one."
 	}
-	switch rep.ExitCode() {
-	case 0:
-		return "VERIFIED", "ok", "All seven checks passed."
-	case 1:
+	failed, incomplete, declared := false, false, false
+	for _, c := range rep.Checks {
+		switch c.Status {
+		case verify.Pass:
+		case verify.PassDeclared:
+			declared = true
+		case verify.Fail:
+			failed = true
+		default:
+			incomplete = true
+		}
+	}
+	switch {
+	case failed:
 		return "FAILED", "bad", "This statement does not verify. Do not rely on it."
+	case !incomplete && declared:
+		return "VERIFIED", "ok", "All seven checks passed, with one declaration: the witness's independence is the issuer's word, not something this page verified (see below)."
+	case !incomplete:
+		return "VERIFIED", "ok", "All seven checks passed."
 	}
 	return "INCOMPLETE", "warn", "Nothing failed, but not every check could be completed. The checks below say which."
 }
@@ -614,6 +672,7 @@ var pageTmpl = template.Must(template.New("page").Funcs(template.FuncMap{"css": 
 <p>{{.Sentence}}{{if .Successor}} Its successor is <a href="/s/{{.Successor}}">{{.Successor}}</a>.{{end}}</p>
 <p class="mut">State read {{.AsOf}} (UTC). Checks 1 to 6 were run at {{.Checked}}. A revoked or replaced statement shows here as soon as the issuer does it.</p>
 {{if .Limitation}}<p class="box warn"><strong>Limitation: {{.Limitation}}.</strong> The log's checkpoint has been countersigned only by witnesses the issuer runs, or by ones whose independence is not established. Everything else may be correct; this one assurance is not yet in place.</p>{{end}}
+{{if .Declaration}}<p class="box warn"><strong>Declared by the issuer, not verified here.</strong> {{.Declaration}}</p>{{end}}
 <details><summary>The seven checks</summary>
 <table><tbody>{{range .Checks}}<tr><td>{{.N}}</td><td><strong>{{.Name}}</strong><br><span class="mut">{{.What}}</span></td><td class="{{.Class}}"><strong>{{.Status}}</strong><br>{{.Says}}</td></tr>{{end}}</tbody></table>
 </details>

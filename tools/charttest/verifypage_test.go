@@ -76,13 +76,55 @@ func TestTheVerifyPageRendersOnItsOwnPortRouteAndPolicy(t *testing.T) {
 func TestTheVerifyPageRefusesToRenderWithoutItsHostnameParentsAndPolicyPeers(t *testing.T) {
 	base := []string{"-f", valuesFile("verify-values.yaml")}
 	for name, args := range map[string][]string{
-		"no hostname":     {"--set", "verifyPage.httpRoute.hostnames=null"},
-		"no parents":      {"--set", "verifyPage.httpRoute.parentRefs=null"},
-		"no policy peers": {"--set", "verifyPage.networkPolicy.from=null"},
-		"http public URL": {"--set", "verifyPage.publicURL=http://verify.example.com"},
+		"no hostname":                 {"--set", "verifyPage.httpRoute.hostnames=null"},
+		"no parents":                  {"--set", "verifyPage.httpRoute.parentRefs=null"},
+		"no policy peers":             {"--set", "verifyPage.networkPolicy.from=null"},
+		"http public URL":             {"--set", "verifyPage.publicURL=http://verify.example.com"},
+		"hops 0 behind a gateway":     {"--set", "verifyPage.limits.trustedProxyHops=0"},
+		"hops with no network policy": {"--set", "networkPolicy.enabled=false"},
+		"direct exposure with hops":   {"--set", "verifyPage.directExposure=true"},
 	} {
 		if text, err := helm(t, append(slices.Clone(base), args...)...); err == nil {
 			t.Errorf("%s rendered:\n%s", name, text)
 		}
+	}
+}
+
+// Behind a Gateway the client is the address the Gateway saw, so the chart needs a trusted hop count of at least 1 and a
+// NetworkPolicy that leaves the pod reachable from the Gateway alone; a direct listener says so, with no hops. Both ways render.
+func TestTheVerifyPageClientAddressSettingsRenderBothWays(t *testing.T) {
+	env := func(objs []obj) map[string]string {
+		out := map[string]string{}
+		for _, o := range objs {
+			if o["kind"] != "Deployment" || get(o, "metadata", "name") != "t-clearance-core" {
+				continue
+			}
+			for _, e := range get(o, "spec", "template", "spec", "containers", 0, "env").([]any) {
+				if v, ok := get(e, "value").(string); ok {
+					out[get(e, "name").(string)] = v
+				}
+			}
+		}
+		return out
+	}
+	e := env(render(t, "-f", valuesFile("verify-values.yaml")))
+	if e["CLEARANCE_VERIFY_TRUSTED_PROXY_HOPS"] != "1" || e["CLEARANCE_VERIFY_DIRECT_EXPOSURE"] != "" {
+		t.Errorf("behind a gateway: %v", e)
+	}
+	e = env(render(t, "-f", valuesFile("verify-values.yaml"), "--set", "verifyPage.directExposure=true", "--set", "verifyPage.limits.trustedProxyHops=0"))
+	if e["CLEARANCE_VERIFY_TRUSTED_PROXY_HOPS"] != "0" || e["CLEARANCE_VERIFY_DIRECT_EXPOSURE"] != "true" {
+		t.Errorf("direct: %v", e)
+	}
+}
+
+// A change to the verify page's log keys changes the core pod's template, so the pod restarts and reads the file again.
+func TestAChangeToTheVerifyLogKeysRestartsTheCore(t *testing.T) {
+	sum := func(keys string) any {
+		d := find(render(t, "-f", valuesFile("verify-values.yaml"), "--set", "verifyPage.logKeys="+keys), "Deployment", "t-clearance-core")
+		return get(d, "spec", "template", "metadata", "annotations", "checksum/verify-config")
+	}
+	a, b := sum("example-log+00000000+AAAA"), sum("example-log+00000000+BBBB")
+	if a == nil || a == b {
+		t.Errorf("%v %v", a, b)
 	}
 }

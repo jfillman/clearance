@@ -29,6 +29,13 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   JavaScript, a strict CSP, `no-store`, a 128-bit random id, one `404` for every id that is not a statement, no parameters, per-client and global rate limits with `429`, no
   record or cookie written by any anonymous request, no recipient detail. **Not to be enabled until its security review pass signs it off.** JSON schema
   `schemas/statement.schema.json`; fuzz targets for the verifier, the parser and the page's request handling.
+  Review fixes: the listener refuses to start behind a proxy with 0 trusted hops unless `CLEARANCE_VERIFY_DIRECT_EXPOSURE=true` (chart: hops >= 1 and a
+  NetworkPolicy, or `verifyPage.directExposure`); the global budget is charged only to verifications that must be computed; the hosted page never presents
+  witness independence as verified (it reads "PASS, INDEPENDENCE DECLARED" with the declaration in the summary); public reads never wait on an issue or a
+  slow store, never scan the chain, and a cold or stale index is 503; a key that signed a standing statement stays in `GET /v1/keys`; a status is good for an
+  hour offline and its as-of is printed; the issuer is a public label or https URL; the packet's sets, times, hex and list lengths are validated; a request
+  matching a revoked statement is 409 (`reissue` issues it again on purpose) and a statement whose correction was revoked says so; the core runs checks 3 to 6
+  before it signs (422 on a failure); the log's origin hash is no longer in a statement.
 - P-1: **assurance providers, acceptance receipts and recipient access** ([docs/assurance.md](docs/assurance.md)). A new provider class
   (`class: "assurance"` in `CLEARANCE_PROVIDERS`: a name and registered ECDSA P-256 keys, no principals: never an account).
   `POST /v1/packets` (an admin publishes a `clearance packet` directory as a bundle; the id is the content address of its manifest),

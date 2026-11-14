@@ -45,6 +45,8 @@ type Report struct {
 	Inputs []Input
 	Checks []Check
 	Notes  []string
+	// StateAsOf is the time a statement's current state (check 7) is as of; "" when there is none.
+	StateAsOf string
 }
 
 func (r *Report) add(c Check) { r.Checks = append(r.Checks, c) }
@@ -132,6 +134,9 @@ func (r *Report) WriteStatement(w io.Writer) {
 	fmt.Fprintf(w, "clearance verify --statement %s\n\nTrust inputs (a statement vouching for its own keys proves nothing):\n", r.Packet)
 	for _, in := range r.Inputs {
 		fmt.Fprintf(w, "  %-28s %s\n", in.Name, in.Source)
+	}
+	if r.StateAsOf != "" {
+		fmt.Fprintf(w, "\nCURRENT STATE AS OF %s (a revocation after this time is not in this answer)\n", r.StateAsOf)
 	}
 	fmt.Fprintln(w, "\nChecks:")
 	for _, c := range r.Checks {

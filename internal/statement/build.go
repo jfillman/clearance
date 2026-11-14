@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jfillman/clearance/internal/canon"
 	"github.com/jfillman/clearance/internal/receipt"
 )
 
@@ -168,7 +167,10 @@ func Summarize(packetJSON, recordsJSONL []byte, profile string) (*Derived, error
 	d := &Derived{Period: Period{From: p.Header.From, To: p.Header.To}, Observed: len(p.Coverage.Scopes), Cited: CitedOf(recs)}
 	l := p.Verification.Ledger
 	if l.State == "checkpointed" {
-		d.Checkpoint = &CheckpointRef{OriginSHA256: canon.SHA256Hex([]byte(l.Origin)), Size: l.Size, Root: l.Root}
+		if l.Origin == "" || l.Size < 1 || !isHex64(l.Root) {
+			return nil, errors.New("the packet's checkpoint is not an origin, a size and a SHA-256 root")
+		}
+		d.Checkpoint = &CheckpointRef{Size: l.Size, Root: l.Root}
 	}
 	s := &d.Summary
 	s.TotalRecords = p.Coverage.Total
@@ -182,6 +184,9 @@ func Summarize(packetJSON, recordsJSONL []byte, profile string) (*Derived, error
 	}
 	if len(byCov) > 0 {
 		return nil, errors.New("the packet counts a coverage state this statement does not know: a state left out would read as none")
+	}
+	if !slices.Contains(ledgerStates, l.State) || l.Checkpointed < 0 || l.NotCheckpointed < 0 {
+		return nil, errors.New("the packet's ledger state is not one this statement reads")
 	}
 	s.Ledger = Ledger{State: l.State, Checkpointed: l.Checkpointed, NotCheckpointed: l.NotCheckpointed}
 
@@ -231,6 +236,9 @@ func Summarize(packetJSON, recordsJSONL []byte, profile string) (*Derived, error
 		if !sc.Collector {
 			state = "blind"
 		}
+		if !slices.Contains(scopeStates, state) || st.Blind.Seconds < 0 || st.Cleared.Count < 0 || st.Seen.Count < 0 {
+			return nil, errors.New("an observed scope's state or counts are not ones this statement reads")
+		}
 		h.Scopes = append(h.Scopes, ScopeHealth{Index: i + 1, Collector: sc.Collector, State: state, Clean: st.Clean && sc.Collector,
 			Cleared: st.Cleared.Count, Seen: st.Seen.Count, BlindSeconds: st.Blind.Seconds})
 		h.BlindSeconds += st.Blind.Seconds
@@ -243,6 +251,9 @@ func Summarize(packetJSON, recordsJSONL []byte, profile string) (*Derived, error
 	}
 	h.BlindWindows = []BlindWindow{}
 	for _, w := range p.Coverage.Degraded {
+		if !slices.Contains(blindKinds, w.Kind) || !isRFC3339(w.From) || !isRFC3339(w.To) || w.Seconds < 0 {
+			return nil, errors.New("the packet has a degraded window this statement does not read")
+		}
 		if len(h.BlindWindows) >= MaxBlindWindows {
 			h.BlindWindowsCut = true
 			break
@@ -265,6 +276,9 @@ func Summarize(packetJSON, recordsJSONL []byte, profile string) (*Derived, error
 	s.Receipts.Count = len(p.Acceptances.Receipts)
 
 	if profile == ProfileInsurer {
+		if len(unresolved) > MaxUnresolved {
+			return nil, fmt.Errorf("the packet has more than %d unresolved exceptions: the insurer profile lists each one", MaxUnresolved)
+		}
 		d.Insurer = insurerOf(&p, unresolved, tele)
 	}
 	return d, nil

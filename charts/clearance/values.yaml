@@ -627,14 +627,20 @@ verifyPage:
   # The names of the log's witnesses you assert you do NOT run (the cosignature names). Empty: no statement can say it is
   # independently witnessed, and check 4 prints "not yet independently witnessed".
   independentWitnesses: []
-  # Limits: requests a minute and the burst, for one client and for the whole listener; the proxy hops in front of the listener
-  # (0: the connection's address); how many verifications may run at once.
+  # The listener is reached through your Gateway, so the client is the address the Gateway saw: trustedProxyHops is how many trusted
+  # proxies are in front of the pod (a Gateway is 1), and the page counts X-Forwarded-For from the RIGHT by that many. With 0 behind a
+  # Gateway every visitor would share the Gateway's address and one client budget, so the chart refuses it. That is only safe if the
+  # pod is reachable from the Gateway alone (otherwise X-Forwarded-For is a client's to forge), so the chart also requires
+  # networkPolicy.enabled. directExposure: true is the other case: no proxy at all (hops 0, the connection's address is the client).
+  directExposure: false
+  # Limits: requests a minute and the burst, for one client; the global pair bounds the verifications that must be computed (a
+  # result not yet cached), not cheap reads; how many verifications may run at once.
   limits:
     clientPerMinute: 30
     clientBurst: 10
     globalPerMinute: 600
     globalBurst: 100
-    trustedProxyHops: 0
+    trustedProxyHops: 1
     maxChecks: 2
 
 service:

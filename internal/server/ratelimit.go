@@ -9,23 +9,22 @@ import (
 	"time"
 )
 
-// limiter is the public listener's abuse limit: a token bucket per client and one for everyone, in fixed memory. A client
+// limiter is the public listener's abuse limit: a token bucket per client and one for the expensive work, in fixed memory. A client
 // is a bucket chosen by a keyed hash of its address (the key is random per process), so the table cannot be grown by
 // sending from many addresses and one address cannot aim at another's bucket; two clients that collide share a bucket,
 // which costs them a slower page, never a lockout (a bucket refills with time, and nothing is ever blocked for longer than
 // its refill).
 type limiter struct {
-	mu       sync.Mutex
-	seed     maphash.Seed
-	buckets  [limiterBuckets]bucket
-	global   bucket
-	perSec   float64 // a client's refill
-	burst    float64
-	gPerSec  float64
-	gBurst   float64
-	hops     int
-	nowFn    func() time.Time
-	rejected int64
+	mu      sync.Mutex
+	seed    maphash.Seed
+	buckets [limiterBuckets]bucket
+	global  bucket
+	perSec  float64 // a client's refill
+	burst   float64
+	gPerSec float64
+	gBurst  float64
+	hops    int
+	nowFn   func() time.Time
 }
 
 const limiterBuckets = 4096
@@ -57,9 +56,9 @@ func (b *bucket) take(now time.Time, perSec, burst float64) (ok bool, wait time.
 	return false, time.Duration((1 - b.tokens) / perSec * float64(time.Second))
 }
 
-// allow charges one request to the client and then to the whole listener. A client already over its own limit does not
-// draw down the global bucket.
-func (l *limiter) allow(client string) (bool, time.Duration) {
+// allowClient charges one request to the client's own bucket. Every request is charged here, whatever it asks for, so a
+// guesser pays for each guess; a refused client is told how long to wait.
+func (l *limiter) allowClient(client string) (bool, time.Duration) {
 	now := l.nowFn()
 	var h maphash.Hash
 	h.SetSeed(l.seed)
@@ -67,15 +66,17 @@ func (l *limiter) allow(client string) (bool, time.Duration) {
 	i := h.Sum64() % limiterBuckets
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if ok, wait := l.buckets[i].take(now, l.perSec, l.burst); !ok {
-		l.rejected++
-		return false, wait
-	}
-	if ok, wait := l.global.take(now, l.gPerSec, l.gBurst); !ok {
-		l.rejected++
-		return false, wait
-	}
-	return true, 0
+	return l.buckets[i].take(now, l.perSec, l.burst)
+}
+
+// chargeGlobal charges one verification to the listener's bucket. Only work that costs something is charged here (a result
+// that must be computed, which the verification semaphore also bounds): a 404, a cached page and a status are cheap and are
+// limited per client only, so addresses that drain the cheap paths cannot starve everyone else's reads.
+func (l *limiter) chargeGlobal() (bool, time.Duration) {
+	now := l.nowFn()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.global.take(now, l.gPerSec, l.gBurst)
 }
 
 // clientOf is who the request is from: the connection's address, or, behind a configured number of trusted proxies, the

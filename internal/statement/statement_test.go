@@ -3,6 +3,7 @@ package statement_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -276,4 +277,101 @@ func FuzzValidID(f *testing.F) {
 		_ = statement.ValidLabel(s)
 		_ = statement.ValidPolicyVersion(s)
 	})
+}
+
+func TestTheIssuerIsAPublicLabelOrAnHTTPSURLNeverAnInternalName(t *testing.T) {
+	for _, ok := range []string{"clearance", "Example Corp", "acme-prod", "https://clearance.example.com", "https://id.example.co.uk/"} {
+		if !statement.ValidIssuer(ok) {
+			t.Errorf("%q refused", ok)
+		}
+	}
+	for _, bad := range []string{"", "clearance.local", "clearance.example.com", "http://clearance.example.com", "https://clearance", "https://localhost", "https://clearance.local",
+		"https://core.hangar.internal", "https://core.svc.cluster.local", "https://10.0.0.5", "https://[::1]", "https://192.168.1.2/x", "https://user:pw@clearance.example.com",
+		"https://clearance.example.com:8443", "https://clearance.example.com/?a=1", "https://clearance.example.com/#x", "ftp://clearance.example.com", "https://nas.lan",
+		"https://box.home.arpa", "https://a.example.com.", "a/b", "name:8080", "https://" + strings.Repeat("a", 200) + ".com", strings.Repeat("a", 64), "-x", "<b>", "x\ny"} {
+		if statement.ValidIssuer(bad) {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}
+
+func TestAPacketOrDocumentWithAnUnknownSetAMalformedTimeOrAnOverlongListIsRefused(t *testing.T) {
+	cut := func(mod func(map[string]any)) error {
+		_, err := statement.Build(statement.Input{ID: "st-" + strings.Repeat("1", 32), Issuer: "c", IssuedAt: "2026-11-14T00:00:00Z", Profile: statement.ProfileInsurer, ScopeLabel: "x",
+			PolicyVersion: "v", PacketID: "pk-" + strings.Repeat("2", 32), PacketDigest: strings.Repeat("2", 64), PacketJSON: packetJSON(mod)})
+		return err
+	}
+	if err := cut(nil); err != nil {
+		t.Fatal(err)
+	}
+	win := func(p map[string]any) map[string]any {
+		return p["coverage_statement"].(map[string]any)["degraded_windows"].([]any)[0].(map[string]any)
+	}
+	scope := func(p map[string]any) map[string]any {
+		return p["coverage_statement"].(map[string]any)["observation_health"].([]any)[0].(map[string]any)["statement"].(map[string]any)
+	}
+	ledger := func(p map[string]any) map[string]any {
+		return p["verification"].(map[string]any)["ledger"].(map[string]any)
+	}
+	for name, mod := range map[string]func(map[string]any){
+		"an unknown blind kind":     func(p map[string]any) { win(p)["kind"] = "mystery" },
+		"a blind window time":       func(p map[string]any) { win(p)["from"] = "yesterday" },
+		"a negative blind duration": func(p map[string]any) { win(p)["seconds"] = -5 },
+		"an unknown scope state":    func(p map[string]any) { scope(p)["state"] = "on-fire" },
+		"a negative blind seconds":  func(p map[string]any) { scope(p)["could_not_see"].(map[string]any)["seconds"] = -1 },
+		"an unknown ledger state":   func(p map[string]any) { ledger(p)["state"] = "maybe" },
+		"a root that is not hex":    func(p map[string]any) { ledger(p)["root"] = strings.Repeat("z", 64) },
+		"a short root":              func(p map[string]any) { ledger(p)["root"] = "abcd" },
+		"an upper-case root":        func(p map[string]any) { ledger(p)["root"] = strings.Repeat("A", 64) },
+		"no origin":                 func(p map[string]any) { ledger(p)["origin"] = "" },
+		"a zero checkpoint size":    func(p map[string]any) { ledger(p)["size"] = 0 },
+		"too many observed scopes": func(p map[string]any) {
+			c := p["coverage_statement"].(map[string]any)
+			l := []any{}
+			for i := 0; i < statement.MaxScopes+1; i++ {
+				l = append(l, map[string]any{"scope": fmt.Sprint("s", i), "collector": true, "statement": map[string]any{"state": "healthy"}})
+			}
+			c["observation_health"] = l
+		},
+		"too many unresolved exceptions": func(p map[string]any) {
+			e := p["exceptions"].(map[string]any)
+			rows := []any{}
+			for i := 0; i < statement.MaxUnresolved+1; i++ {
+				rows = append(rows, map[string]any{"class": "out-of-band", "seq": i, "resolution": "none recorded"})
+			}
+			e["rows"] = rows
+			e["by_class"].([]any)[0].(map[string]any)["count"] = len(rows)
+		},
+	} {
+		if err := cut(mod); err == nil {
+			t.Errorf("%s: a statement was cut", name)
+		}
+	}
+	// A signed document is held to the same sets however it was made: the verifier's parse refuses each.
+	good := build(t, statement.ProfileInsurer, nil)
+	raw, _ := good.Canonical()
+	for name, edit := range map[string]func(*statement.Document){
+		"a blind kind":      func(d *statement.Document) { d.Summary.Health.BlindWindows[0].Kind = "mystery" },
+		"a blind time":      func(d *statement.Document) { d.Summary.Health.BlindWindows[0].To = "soon" },
+		"a scope state":     func(d *statement.Document) { d.Summary.Health.Scopes[0].State = "on-fire" },
+		"a ledger state":    func(d *statement.Document) { d.Summary.Ledger.State = "maybe" },
+		"a checkpoint root": func(d *statement.Document) { d.Checkpoint.Root = "nothex" },
+		"a period":          func(d *statement.Document) { d.Period.From = "x" },
+		"a disposition":     func(d *statement.Document) { d.Insurer.Unresolved[0].Disposition = "ignored" },
+		"too many windows": func(d *statement.Document) {
+			d.Summary.Health.BlindWindows = make([]statement.BlindWindow, statement.MaxBlindWindows+1)
+		},
+		"an internal issuer": func(d *statement.Document) { d.Issuer = "core.corp.internal" },
+	} {
+		var d statement.Document
+		_ = json.Unmarshal(raw, &d)
+		edit(&d)
+		b, _ := d.Canonical()
+		if _, err := statement.Parse(b); err == nil {
+			t.Errorf("%s: parsed", name)
+		}
+	}
+	if _, err := statement.Parse(raw); err != nil {
+		t.Fatal(err)
+	}
 }
