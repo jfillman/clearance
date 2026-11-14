@@ -22,7 +22,40 @@ func (s *Server) ResetStatementIndexForTest() {
 	s.stmtRes.mu.Lock()
 	s.stmtRes.by, s.stmtRes.order = nil, nil
 	s.stmtRes.mu.Unlock()
-	_ = s.WarmStatements(context.Background())
+	_ = s.refreshForWrite(context.Background())
+}
+
+// RefreshStatementsForTest is one synchronous read of the chain's tail into the index.
+func (s *Server) RefreshStatementsForTest(ctx context.Context) error { return s.refreshForWrite(ctx) }
+
+// StatementIndexNextForTest is the next seq the index will read.
+func (s *Server) StatementIndexNextForTest() int64 {
+	s.stmts.refreshMu.Lock()
+	defer s.stmts.refreshMu.Unlock()
+	return s.stmts.next
+}
+
+// StatementLoopRunningForTest says whether the background goroutine is running.
+func (s *Server) StatementLoopRunningForTest() bool {
+	s.stmts.mu.RLock()
+	defer s.stmts.mu.RUnlock()
+	return s.stmts.loop
+}
+
+// SetStatementPageSizeForTest changes how many records one read of the chain takes (0: the default).
+func SetStatementPageSizeForTest(n int) {
+	if n == 0 {
+		n = 2000
+	}
+	statementPageSize = n
+}
+
+// StatementResultCachedForTest says whether the page holds a check result for the statement.
+func (s *Server) StatementResultCachedForTest(id string) bool {
+	s.stmtRes.mu.Lock()
+	defer s.stmtRes.mu.Unlock()
+	_, ok := s.stmtRes.by[id]
+	return ok
 }
 
 // ColdStatementIndexForTest drops the index and does NOT read it again: the state of a core whose start could not read the chain.
@@ -53,28 +86,99 @@ func (s *Server) AgeStatementIndexForTest(d time.Duration) {
 // atomically, so a background retry that is reading the store never races the test that heals it.
 type faultStore struct {
 	store.Store
-	mode atomic.Int32 // 0 healthy, 1 broken, 2 hung
+	mode   atomic.Int32 // 0 healthy, 1 broken, 2 hung, 3 slow
+	delay  atomic.Int64 // mode 3: each read takes this many nanoseconds
+	budget atomic.Int32 // reads of the records that may succeed before they fail (negative: no limit)
+}
+
+func (f *faultStore) Head(ctx context.Context) (int64, string, error) {
+	if err := f.wait(ctx); err != nil {
+		return 0, "", err
+	}
+	return f.Store.Head(ctx)
+}
+
+func (f *faultStore) wait(ctx context.Context) error {
+	switch f.mode.Load() {
+	case 1:
+		return errors.New("the store is down")
+	case 2:
+		for f.mode.Load() == 2 { // hung until healed or the caller gives up
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(20 * time.Millisecond):
+			}
+		}
+	case 3:
+		select {
+		case <-time.After(time.Duration(f.delay.Load())):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
 }
 
 func (s *Server) fault() *faultStore {
 	if f, ok := s.opt.Store.(*faultStore); ok {
 		return f
 	}
-	f := &faultStore{Store: s.opt.Store}
-	s.opt.Store = f
+	var f *faultStore
+	s.pauseStatementLoop(func() {
+		f = &faultStore{Store: s.opt.Store}
+		f.budget.Store(-1)
+		s.opt.Store = f
+	})
 	return f
 }
 
+// pauseStatementLoop runs swap with the background goroutine stopped (it reads the store without a lock, as production code does)
+// and starts it again if it was running.
+func (s *Server) pauseStatementLoop(swap func()) {
+	s.stmts.mu.RLock()
+	was := s.stmts.loop
+	s.stmts.mu.RUnlock()
+	if was {
+		s.StopStatements()
+		for i := 0; i < 500; i++ {
+			s.stmts.mu.RLock()
+			running := s.stmts.loop
+			s.stmts.mu.RUnlock()
+			if !running {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	swap()
+	if was {
+		s.StartStatements(context.Background())
+	}
+}
+
 func (f *faultStore) Records(ctx context.Context, from int64, limit int) ([]store.Record, error) {
-	switch f.mode.Load() {
-	case 1:
-		return nil, errors.New("the store is down")
-	case 2:
-		<-ctx.Done()
-		return nil, ctx.Err()
+	if err := f.wait(ctx); err != nil {
+		return nil, err
+	}
+	if b := f.budget.Load(); b >= 0 {
+		if b == 0 {
+			return nil, errors.New("the store stopped answering")
+		}
+		f.budget.Add(-1)
 	}
 	return f.Store.Records(ctx, from, limit)
 }
+
+// SlowReadsForTest makes every read of the chain take d.
+func (s *Server) SlowReadsForTest(d time.Duration) {
+	f := s.fault()
+	f.delay.Store(int64(d))
+	f.mode.Store(3)
+}
+
+// FailRecordsAfterForTest lets n more reads of the chain's records succeed, then fails them (until HealReadsForTest).
+func (s *Server) FailRecordsAfterForTest(n int) { s.fault().budget.Store(int32(n)) }
 
 // BreakReadsForTest makes every read of the chain's records fail from now on, and the index look old.
 func (s *Server) BreakReadsForTest() {
@@ -89,11 +193,15 @@ func (s *Server) HangReadsForTest() {
 }
 
 // HealReadsForTest undoes BreakReadsForTest and HangReadsForTest.
-func (s *Server) HealReadsForTest() { s.fault().mode.Store(0) }
+func (s *Server) HealReadsForTest() {
+	f := s.fault()
+	f.mode.Store(0)
+	f.budget.Store(-1)
+}
 
 // SlowAtomicForTest makes every store write take d first.
 func (s *Server) SlowAtomicForTest(d time.Duration) {
-	s.opt.Store = &slowWrites{Store: s.opt.Store, d: d}
+	s.pauseStatementLoop(func() { s.opt.Store = &slowWrites{Store: s.opt.Store, d: d} })
 }
 
 type slowWrites struct {
@@ -109,8 +217,8 @@ func (w *slowWrites) Atomic(ctx context.Context, fn func(store.Tx) error) error 
 
 // CountReadsForTest counts the reads of the chain's records from now on.
 func (s *Server) CountReadsForTest() func() int {
-	c := &countingReads{Store: s.opt.Store}
-	s.opt.Store = c
+	c := &countingReads{}
+	s.pauseStatementLoop(func() { c.Store = s.opt.Store; s.opt.Store = c })
 	return func() int { c.mu.Lock(); defer c.mu.Unlock(); return c.n }
 }
 

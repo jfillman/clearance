@@ -23,6 +23,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -141,6 +142,8 @@ type Server struct {
 	// mutex serializes issue and revoke.
 	stmts   stmtIndex
 	stmtRes stmtResults
+	keyMu   sync.Mutex
+	kidKeys map[string]json.RawMessage
 
 	// targetsMu serializes target publishes: the held-digest check and the write it guards are one step.
 	targetsMu sync.Mutex
@@ -197,7 +200,7 @@ func (s *Server) mountServices() {
 // unauthenticated are the requests no bearer token is asked of.
 func unauthenticated(r *http.Request) bool {
 	switch {
-	case r.Method == http.MethodGet && (r.URL.Path == "/healthz" || r.URL.Path == "/readyz" || r.URL.Path == "/v1/keys"):
+	case r.Method == http.MethodGet && (r.URL.Path == "/healthz" || r.URL.Path == "/readyz" || r.URL.Path == "/v1/keys" || r.URL.Path == "/v1/statement-keys"):
 		return true
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/github/webhook":
 		return true // the payload's HMAC signature authenticates it (githubapp.App.Accept)

@@ -280,7 +280,8 @@ func FuzzValidID(f *testing.F) {
 }
 
 func TestTheIssuerIsAPublicLabelOrAnHTTPSURLNeverAnInternalName(t *testing.T) {
-	for _, ok := range []string{"clearance", "Example Corp", "acme-prod", "https://clearance.example.com", "https://id.example.co.uk/"} {
+	for _, ok := range []string{"clearance", "Example Corp", "acme-prod", "https://clearance.example.com", "https://id.example.co.uk/", "https://www.corp.acme.com",
+		"https://corp.example.com", "https://local.example.com", "https://xn--bcher-kva.example", "https://a-b.example.io"} {
 		if !statement.ValidIssuer(ok) {
 			t.Errorf("%q refused", ok)
 		}
@@ -288,7 +289,12 @@ func TestTheIssuerIsAPublicLabelOrAnHTTPSURLNeverAnInternalName(t *testing.T) {
 	for _, bad := range []string{"", "clearance.local", "clearance.example.com", "http://clearance.example.com", "https://clearance", "https://localhost", "https://clearance.local",
 		"https://core.hangar.internal", "https://core.svc.cluster.local", "https://10.0.0.5", "https://[::1]", "https://192.168.1.2/x", "https://user:pw@clearance.example.com",
 		"https://clearance.example.com:8443", "https://clearance.example.com/?a=1", "https://clearance.example.com/#x", "ftp://clearance.example.com", "https://nas.lan",
-		"https://box.home.arpa", "https://a.example.com.", "a/b", "name:8080", "https://" + strings.Repeat("a", 200) + ".com", strings.Repeat("a", 64), "-x", "<b>", "x\ny"} {
+		"https://box.home.arpa", "https://a.example.com.", "a/b", "name:8080", "https://" + strings.Repeat("a", 200) + ".com", strings.Repeat("a", 64), "-x", "<b>", "x\ny",
+		// the spellings of an address that a lax parser folds to 127.0.0.1, and a host with a non-ASCII letter
+		"https://127.1", "https://0x7f.0.0.1", "https://0177.0.0.1", "https://10.1", "https://2130706433", "https://0x7f000001", "https://127.0.0.1", "https://1.2.3.4.5",
+		"https://\uff4c\uff4f\uff43\uff41\uff4c", "https://\uff4c\uff4f\uff43\uff41\uff4c.example.com", "https://caf\u00e9.example.com", "https://example.c0m", "https://example.c",
+		"https://-a.example.com", "https://a-.example.com", "https://a..example.com", "https://x.example.com/path", "https://example.corp", "https://api.example.internal",
+		"https://host.test", "https://foo.invalid", "https://foo.localhost", "https://a.b.svc", "https://a.intranet"} {
 		if statement.ValidIssuer(bad) {
 			t.Errorf("%q accepted", bad)
 		}

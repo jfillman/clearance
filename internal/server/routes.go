@@ -395,6 +395,22 @@ var routeTable = []Route{
 		serve:     func(s *Server) http.HandlerFunc { return s.issueStatement },
 	},
 	{
+		Method: "GET", Path: "/v1/statement-keys", OperationID: "statementKeys", Auth: AuthNone, MaxBody: DefaultMaxBody,
+		Summary: "The keys verification statements (P-3) are checked with, a JWKS, public like /v1/keys and NOT the same set: GET /v1/keys is the " +
+			"token keys, for the window a token can live; this is the key in use and every key that signed a statement that stands. No verifier " +
+			"of a token, a packet credential, a feed or an attestation reads it. 503 while the statement index is cold or too old: never an empty set.",
+		Responses: []Response{{200, "the statement verification keys", token.JWKS{}}, {503, "the statements are not read yet", ErrorResponse{}}},
+		serve:     func(s *Server) http.HandlerFunc { return s.statementKeys },
+	},
+	{
+		Method: "GET", Path: "/v1/statements", OperationID: "listStatements", Auth: AuthBearer, MaxBody: DefaultMaxBody,
+		Summary: "An admin lists the statements signed by one signing key id, whatever their state: what retiring that key for compromise has to deal " +
+			"with (revoke them and reissue them under a new key; docs/statement.md).",
+		Query:     []QueryParam{{Name: "key", Description: "the signing key id (required)"}},
+		Responses: append([]Response{{200, "the statements that key signed", StatementList{}}}, errs(400, 401, 403, 503)...),
+		serve:     func(s *Server) http.HandlerFunc { return s.listStatements },
+	},
+	{
 		Method: "POST", Path: "/v1/statements/{id}/revoke", OperationID: "revokeStatement", Auth: AuthBearer, MaxBody: MaxStatementBody,
 		Summary: "An admin revokes a statement: from the next read it verifies as revoked on the public page and in its signed status. A " +
 			"statement.revoke record, written before the answer; revoking a revoked statement is the same answer and records nothing. The " +

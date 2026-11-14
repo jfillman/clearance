@@ -71,10 +71,20 @@ HTML, and verifies it offline. **The hosted proof on the production hostname is 
   Gateway alone, otherwise the header is a client's to forge. So: the core **refuses to start the listener with 0 hops** unless
   `CLEARANCE_VERIFY_DIRECT_EXPOSURE=true` says there is no proxy (and refuses that setting with hops above 0); the chart refuses to
   render with `verifyPage.limits.trustedProxyHops` below 1 (default 1) unless `verifyPage.directExposure: true`, and refuses hops above 0
-  without `networkPolicy.enabled`. IPv6 clients count by their /64.
+  without `networkPolicy.enabled`. IPv6 clients count by their /64. Entries may be `ip`, `ip:port`, `[v6]:port` or `[v6]`. A request whose client cannot be named (fewer
+  entries than hops, or an entry that is not an address) is **unattributed**: it shares one dedicated bucket with a tighter budget (a quarter of
+  a client's) and a rate-limited log line, and is never charged to the proxy's own address. **Set the hops to the real number of proxies.** Too
+  low names a proxy as the client (everyone behind it shares a budget); too high lets a client pick the entry itself by prepending addresses
+  (it picks its own bucket, which defeats the per-client limit, though not the global budget for computed work), and shows as unattributed
+  requests in the log.
 - **Anonymous traffic cannot grow the chain.** No request to the public listener writes a record, a cookie or a file
   (asserted: the chain's head is unchanged after many reads, refusals and 429s). Only the authenticated issue and revoke write,
   and both are idempotent.
+- **The index is read in the background, never on a request and never before the core serves.** One goroutine reads the chain's tail about once a
+  second (one cheap `Head` read when nothing is new) once something needs it (the verify listener, `GET /v1/statement-keys`); a long chain warms page by
+  page, each page applied as it is read, so a read that times out resumes where it stopped; it stops when the core shuts down. Requests only read the
+  snapshot: they never wait on the store, an issue, a revoke or a refresh, and answer `503` at once when the snapshot is cold or older than ten seconds. The
+  snapshot is "as of" when its read began, never later.
 - **Constant-ish work per request.** Checks 1 to 6 rest on immutable data and this deployment's trust inputs, so they are run
   **once** per statement (and again after ten minutes), single-flight, and only for an id the chain holds a statement of. An
   invented id costs a map lookup. The index of statements holds small entries only (no envelope: it is read from the statement's record
@@ -94,12 +104,22 @@ HTML, and verifies it offline. **The hosted proof on the production hostname is 
   the page says the correction was itself revoked and that no statement in the chain is current, and the verifier says so and exits 1.
 - **What is shown is what was signed, for this id.** The page shows a statement's content only when checks 1 and 2 pass **and** the
   signed document's id is the id in the URL; otherwise it shows the failure and none of the summary.
+- **A statement is never signed over proofs nobody checked.** A packet that says it is checkpointed must carry its inclusion proofs and its
+  checkpoint file, and the core must have log keys configured (`CLEARANCE_STATEMENT_LOG_KEYS_FILE`) to check them with; otherwise `422` with the
+  reason, and check 3 (the proofs and the checkpoint's signature, under those keys) must pass (or say only that some records come after the
+  checkpoint). **A packet on no checkpoint is refused:** the spec's third check is that every cited record is under one, so a statement over a packet
+  with none could never pass it (the spec is silent on issuing one; refusing is the narrow reading).
 - **A statement the packet does not support is never signed.** The packet is the admin's to publish, so at issue the core runs checks 3
   to 6 on the statement it built, against the packet, with the same code the page runs, and refuses `422` if any **fails**. A check whose
   input is missing is not a refusal (the page shows it NOT CHECKED). Nothing is recorded for a refusal: no statement exists.
 - **A revoked statement is not answered as if it stood.** The same request as a revoked statement is `409` (naming the revoked statement),
   not `200 created: false`. To issue the same content again, send `reissue: <the revoked id>`: a new statement with a new id, whose record
-  says which revoked one it replaces. `supersedes` is for a statement that stands; a revoked one cannot be superseded.
+  says which revoked one it replaces. A reissue must repeat the revoked statement's content (the same packet, scope label, policy version and profile), or
+  it is `409`: to change any of them, issue a new statement; and a revoked statement has at most one live reissue (once that one is revoked too, the
+  latest revoked statement is the one to reissue). `supersedes` is for a statement that stands, or one whose correction was itself revoked (a correction
+  can be made again); a revoked statement cannot be superseded. A statement's chain of corrections is followed to its end: if the last is revoked, every
+  earlier one says that no statement in the chain is current. The signed status is signed once per snapshot (about once a second per statement), not once per
+  request, and the check results are kept least-recently-used with the size a setting (`CLEARANCE_VERIFY_RESULT_CACHE`, default 128).
 - **HTML with no script.** The page is server-rendered with `html/template` (contextual escaping), has no JavaScript, no inline
   script, no event handler, no cookie, no third-party asset and no user-controlled URL or attribute. The Content-Security-Policy
   is `default-src 'none'; style-src 'sha256-<the page's one style>'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`.
@@ -122,10 +142,10 @@ The page and `clearance verify --statement` run these, in this order. Each is re
 
 | # | Check | Verified against | What a pass proves | What it does not prove |
 | --- | --- | --- | --- | --- |
-| 1 | Signed by the issuer's Clearance identity | The issuer's published keys (`GET /v1/keys`) you hold, and the issuer name you pin (`--statement-issuer`); on the page, this core's own keys and issuer | A key you hold for that issuer signed the statement. Without `--statement-issuer` the check is SELF-VOUCHED: the name is the statement's own claim | That the issuer is trustworthy |
+| 1 | Signed by the issuer's Clearance identity | The issuer's statement keys (`GET /v1/statement-keys`, or `/s/<id>/keys.json` for the one that signed it) you hold, and the issuer name you pin (`--statement-issuer`); on the page, this core's own keys and issuer | A key you hold for that issuer signed the statement. Without `--statement-issuer` the check is SELF-VOUCHED: the name is the statement's own claim | That the issuer is trustworthy |
 | 2 | The signature is valid and the signed document is the one read | The DSSE signature over the payload, and the payload equal to the canonical form of the document it carries | Nothing in the statement was changed after it was signed, and what you read is what was signed | Anything about the content |
 | 3 | Every cited record has an inclusion proof under a checkpoint | The packet the statement names (its manifest digest, its records' digest, its checkpoint), the packet's records and proofs, and **your** log keys and witness policy (`--log-keys`, `--witness-policy`) | The statement is cut from this packet; the records it cites are exactly the packet's; each one hashes to what it states, is linked in the chain, and proves into a checkpoint the log signed. A record recorded after the checkpoint is **not** a pass (NOT CHECKPOINTED): issue the statement for a period that ended before the newest checkpoint | That the records are complete before the log began |
-| 4 | The checkpoint is countersigned by a witness Clearance does not run | The checkpoint's countersignatures under your witness policy, and the witnesses **you** know the issuer does not run (`--independent-witness <name>`, or `<name>=<the witness key as the policy lists it>`, which must be that key in the policy under that name) | A witness the issuer does not run has seen this log, so it cannot be rewritten or shortened unnoticed. The hosted page is the issuer, so it can verify the countersignature but not who runs the witness: on the page this row reads **PASS, INDEPENDENCE DECLARED**, names the witness, says in plain words that the independence is the issuer's declaration, and the word may be VERIFIED only with that declaration shown in the summary (not behind the click) and the command that confirms it (`--independent-witness <name>=<key>`); it is never a plain PASS. With no independent witness the check prints **NOT INDEPENDENTLY WITNESSED** ("not yet independently witnessed") and is never a pass. Without `--independent-witness`, the statement's own declaration of its independent witnesses is used and the check is SELF-VOUCHED at best | That the witness is competent or honest |
+| 4 | The checkpoint is countersigned by a witness Clearance does not run | The checkpoint's countersignatures under your witness policy, and the witnesses **you** know the issuer does not run (`--independent-witness <name>=<the witness key as the policy lists it>`, which must be that key in the policy under that name; a bare name counts for nothing) | A witness the issuer does not run has seen this log, so it cannot be rewritten or shortened unnoticed. The hosted page is the issuer, so it can verify the countersignature but not who runs the witness: on the page this row reads **PASS, INDEPENDENCE DECLARED**, names the witness, and says in plain words that the independence is the issuer's declaration. The headline is then **VERIFIED, WITNESS INDEPENDENCE DECLARED** in the warning colour, with the declaration in the summary (not behind the click) and the command that confirms it. **The plain green VERIFIED is not reachable on the hosted page**; the all-green result is obtained offline, with the reader's own `--independent-witness <name>=<key>`. A bare name is refused by the command (exit 2): a name is a label until it is tied to a key the witness policy holds. With no independent witness the check prints **NOT INDEPENDENTLY WITNESSED** ("not yet independently witnessed") and is never a pass. Without `--independent-witness`, the statement's own declaration of its independent witnesses is used and the check is SELF-VOUCHED at best | That the witness is competent or honest |
 | 5 | The counts recompute from the cited records | `packet.json` and the records, by `statement.Summarize` (the function the issuer built the statement with) after the packet verifier's own recount of the packet's figures from its records and, for receipts, each receipt's signature under the recipient keys you supply | Total records, every coverage-state count, the cited-records digest, the period, the ledger result, the receipts and the insurer figures equal what the records give | That the records describe every change in the organisation |
 | 6 | Exceptions and observation health are present and match | The same recomputation, and the scope statements rebuilt from the records (`observe.Build`, as the packet check does) | Every coverage state, every exception class and every observed scope is listed (a state left out would read as none); the exceptions by class and unresolved count and the health, blind windows included, equal the packet's; every exception row cites a record the packet carries | The exceptions' rows are presentation of the records (as the packet verifier already says): the class and resolution of a row are not recomputed from the records, only that they agree with the packet and cite carried records |
 | 7 | Not superseded or revoked | The issuer's current state: on the page, the core's own, read now; offline, the signed status (`GET /s/<id>/status.json`) fetched now (`--status`) and no older than `--status-max-age` (default **1h**: a status that said valid an hour ago may not be now; the report prints "CURRENT STATE AS OF") | At the time printed, the statement was neither revoked nor replaced by a correction | That it is not revoked a minute later |
@@ -173,6 +193,7 @@ answers the same and writes nothing.
 | `CLEARANCE_VERIFY_TRUSTED_PROXY_HOPS` | Trusted proxies in front of the listener. **0 needs `CLEARANCE_VERIFY_DIRECT_EXPOSURE=true`** (the core refuses to start otherwise); above 0 is safe only if the pod is reachable from the proxy alone |
 | `CLEARANCE_VERIFY_DIRECT_EXPOSURE` | `true`: the listener is reached directly, with no proxy; refused together with hops above 0 |
 | `CLEARANCE_VERIFY_MAX_CHECKS` | Verifications that may run at once (default 2) |
+| `CLEARANCE_VERIFY_RESULT_CACHE` | How many statements' check results the page keeps, least recently used out first (default 128) |
 
 ## Checking it offline
 
@@ -195,7 +216,7 @@ is decided on an unverified statement).
 
 [schemas/statement.schema.json](https://github.com/jfillman/clearance/blob/main/schemas/statement.schema.json) is the JSON schema of the
 signed document (`clearance.statement/v1`) and, in `$defs.status`, of the status. The envelope is DSSE with payload type
-`application/vnd.clearance.statement.v1+json`, signed ES256 by the core's clearance key (the key `GET /v1/keys` serves); the payload is
+`application/vnd.clearance.statement.v1+json`, signed ES256 by the core's clearance key (published as a statement key, below); the payload is
 the document's canonical JSON (keys sorted, no insignificant whitespace), so a verifier needs no Clearance code to check it: verify
 the DSSE signature, then check the payload's bytes are the canonical form of the JSON they hold. The rules checks 3 to 6 apply are
 those of [verify.md](verify.md) and `internal/statement`.
@@ -216,17 +237,34 @@ observation-health summary with blind windows' times, how many receipts and thei
 independent (and, on the page, which of them countersigned), the **packet id and digest** and the **ledger checkpoint's size and root** (the size is
 how many records the whole chain held at the checkpoint, which is needed to check a proof; the root is a hash). The **issuer** is constrained at issue
 to a plain label (letters, digits, spaces, hyphens: no dot) or an https URL with a public host: an `.local`, `.internal`, `.lan` or similar name, an
-IP literal, a bare port or a non-https URL is refused, so choose `CLEARANCE_TOKEN_ISSUER` as a name you are content to print. A bare host name with no
+IP literal, a bare port or a non-https URL is refused, so choose `CLEARANCE_TOKEN_ISSUER` as a name you are content to print. The host must be ASCII letters, digits and hyphens only (no IDNA folding: any other
+character is refused), have at least two labels, a final label that is alphabetic and at least two characters, no all-numeric or `0x`-prefixed label (so no
+IP in any spelling: `127.1`, `0x7f.0.0.1`, `0177.0.0.1`, `10.1`) and not end in `.local`, `.internal`, `.lan`, `.localdomain`, `.home.arpa`, `.svc`, `.intranet`,
+`.corp`, `.invalid`, `.test` or `.localhost` (whole trailing labels: `www.corp.acme.com` is fine). **A name that merely resolves to an internal address
+(nip.io style) cannot be detected.** The issuer is a printed label: nothing fetches it, on the page, in the verifier or in the core. A bare host name with no
 dot is indistinguishable from a label and is accepted as one. Nothing else deployment-wide is in it: no record id, no origin of the log, no cluster,
 account, repository, person or firm.
 
 ## Keys over time
 
-A statement is verified with the issuer's key that signed it, and a key leaves `GET /v1/keys` a month after it retires. So the core keeps published
-every key that signed a statement that has **not been revoked**, for as long as that statement exists (and the page uses the same set): rotating the
-signing key does not stop an earlier statement from verifying. An offline verifier gets an old key from `GET /v1/keys` (it is there while the statement
-stands) and should keep a copy of the keys file next to the statement it archives: once a statement is revoked its key may leave the list, and a
-revoked statement needs no key to be read as revoked.
+**Statement keys are not token keys.** `GET /v1/keys` is the token JWKS every relying party reads, and it is exactly what it was: the key in
+use and those retired within the token window. It never carries a key for a statement, so retiring a key for compromise removes it from
+there on schedule whatever statements it signed. A statement's key is published separately:
+
+- `GET /v1/statement-keys` on the core (public, like `/v1/keys`): the key in use and every key that signed a statement that has **not been
+  revoked**, for as long as that statement stands. It is `503`, never an empty set, while the statement index is cold or too old.
+- `/s/<id>/keys.json` on the verify listener: only the key that signed that statement (a revoked statement's key too).
+
+The page and `clearance verify --statement --statement-keys` use the statement keys. A statement key is **never** accepted for a token, a
+packet credential, a feed or an attestation: those verifiers read the token key window, not this list (tested: a packet credential
+signed by a key that is only in the statement keys is `401`). The same key material signs both today, so the separation is by where it
+is published and what each verifier accepts, not by a second key.
+
+**Retiring a key for compromise, with statements standing.** A key that signed statements can forge statements until nothing trusts it. Retire it
+by (1) listing what it signed, `GET /v1/statements?key=<key id>` (admin: id, state, packet, key, seq), (2) revoking those statements, and
+(3) reissuing the ones you still want under the new key (`reissue`, or a fresh `POST /v1/statements`). Revoking removes the key from
+`/v1/statement-keys`. Until then a standing statement keeps its key published, which is the price of it still verifying; a revoked statement
+needs no key to be read as revoked. An offline verifier gets a statement's key from `/s/<id>/keys.json` and should archive it beside the statement.
 
 ## What the seven checks do not prove, in one place
 

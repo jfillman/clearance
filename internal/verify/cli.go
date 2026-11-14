@@ -37,7 +37,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	status := fs.String("status", "", "with --statement: the signed status (GET /s/<id>/status.json) fetched now: whether the statement is superseded or revoked is the core's current state")
 	statusAge := fs.Duration("status-max-age", DefaultStatusMaxAge, "with --statement: how old the status may be")
 	var indepWitness ownFlag
-	fs.Var(&indepWitness, "independent-witness", "with --statement: a witness you know the issuer does not run (repeatable), as a name or <name>=<its key as the witness policy lists it>: check 4 passes only on its countersignature. Without any, the statement's own declaration is used and check 4 is SELF-VOUCHED at best")
+	fs.Var(&indepWitness, "independent-witness", "with --statement: a witness you know the issuer does not run (repeatable), as <name>=<its key as the witness policy lists it> (a bare name is refused): check 4 passes only on its countersignature. Without any, the statement's own declaration is used and check 4 is SELF-VOUCHED at best")
 	noSeen := fs.Bool("no-seen", false, "neither read nor write the note of checkpoints seen")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, sampleUsage+"\n\nor, for a packet:\n\nusage: clearance verify <packet-dir> [flags]\n\nChecks an evidence packet offline: no call to Clearance, a database or the recorder.\n"+
@@ -195,6 +195,12 @@ type statementFlags struct {
 
 // verifyStatementMain is `clearance verify --statement`: the seven checks, exit codes as for a packet and a sample.
 func verifyStatementMain(file string, f statementFlags, stdout, stderr io.Writer) int {
+	for _, w := range f.own {
+		if name, key, ok := strings.Cut(w, "="); !ok || name == "" || key == "" {
+			fmt.Fprintf(stderr, "verify: --independent-witness %q is <name>=<key>: a name alone is a label, not a witness you can name\n", w)
+			return 2
+		}
+	}
 	so := StatementOptions{Issuer: f.issuer, IndependentWitnesses: f.own, StatusMaxAge: f.statusAge, PacketDir: f.packet}
 	read := func(flagName, path string, into *[]byte, src *string) bool {
 		if path == "" {

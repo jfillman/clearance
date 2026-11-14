@@ -145,7 +145,10 @@ func TestRunServesTheVerifyListenerOnlyWhenAsked(t *testing.T) {
 	}
 	resp.Body.Close()
 	for _, p := range []string{"/readyz", "/v1/keys", "/v1/statements", "/healthz/../v1/keys"} {
-		r, err := http.Get("http://" + va + p)
+		// The visitor the one trusted proxy saw: without the header a request is unattributed and shares a tight budget.
+		req, _ := http.NewRequest("GET", "http://"+va+p, nil)
+		req.Header.Set("X-Forwarded-For", "198.51.100.9")
+		r, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}

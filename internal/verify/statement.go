@@ -59,8 +59,8 @@ type StatementOptions struct {
 	// DeclaredIndependent are the witnesses the ISSUER declares it does not run (the hosted page: the deployment's own
 	// configuration). A countersignature by one gives PassDeclared, never Pass, and is never offered by the offline command.
 	DeclaredIndependent []string
-	// IndependentWitnesses are the witnesses YOU know the issuer does not run, each a name or name=<vkey> (the witness's key as
-	// the witness policy lists it: then it must be in the policy under that name). Check 4 passes only on a
+	// IndependentWitnesses are the witnesses YOU know the issuer does not run, each name=<vkey> (the witness's key as the witness
+	// policy lists it: it must be in the policy under that name; a bare name counts for nothing). Check 4 passes only on a
 	// countersignature by one of these. Without any, the statement's own declaration is used and the check is
 	// SELF-VOUCHED at best: who runs a witness is the issuer's claim until you supply it.
 	IndependentWitnesses []string
@@ -463,14 +463,14 @@ func witnessChecks(c *ctx, base []Check, doc *statement.Document, so StatementOp
 	return out
 }
 
-// trustedWitnessNames are the names a verifier's --independent-witness entries vouch for: a bare name, or name=<vkey> where the
-// witness policy lists that very key under that name.
+// trustedWitnessNames are the names a verifier's --independent-witness entries vouch for: name=<vkey>, where the witness policy
+// lists that very key under that name. A bare name vouches for nothing: a name is only a label until it is tied to a key the
+// witness policy holds, and "I know this witness is independent" is a claim about a key.
 func trustedWitnessNames(entries []string, policy []byte) []string {
 	var out []string
 	for _, e := range entries {
 		name, key, keyed := strings.Cut(e, "=")
-		if !keyed {
-			out = append(out, name)
+		if !keyed || name == "" || key == "" {
 			continue
 		}
 		for _, ln := range strings.Split(string(policy), "\n") {

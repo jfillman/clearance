@@ -25,14 +25,14 @@ spec:
       labels:
         {{- include "clearance.selector" (dict "ctx" . "component" "core") | nindent 8 }}
         {{- with .Values.core.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
-      {{- if or .Values.core.podAnnotations (and .Values.verifyPage.enabled .Values.verifyPage.logKeys) }}
+      {{- if or .Values.core.podAnnotations .Values.verifyPage.enabled }}
       annotations:
         {{- with .Values.core.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-        {{- if and .Values.verifyPage.enabled .Values.verifyPage.logKeys }}
-        {{- /* A change to the verify page's log keys restarts the pod: the core reads the file once, at start. */}}
-        checksum/verify-config: {{ .Values.verifyPage.logKeys | sha256sum }}
+        {{- if .Values.verifyPage.enabled }}
+        {{- /* A change to the verify page's log keys or to the witness policy restarts the pod: the core reads both files once, at start. */}}
+        checksum/verify-config: {{ printf "%s\n%s" .Values.verifyPage.logKeys (.Values.ledger.witnessPolicy | default "") | sha256sum }}
         {{- end }}
       {{- end }}
     spec:
@@ -195,6 +195,7 @@ spec:
             - {name: CLEARANCE_VERIFY_BURST_GLOBAL, value: {{ $l.globalBurst | quote }}}
             - {name: CLEARANCE_VERIFY_TRUSTED_PROXY_HOPS, value: {{ $l.trustedProxyHops | quote }}}
             - {name: CLEARANCE_VERIFY_MAX_CHECKS, value: {{ $l.maxChecks | quote }}}
+            - {name: CLEARANCE_VERIFY_RESULT_CACHE, value: {{ $l.resultCacheSize | quote }}}
             {{- if .Values.verifyPage.directExposure }}
             - {name: CLEARANCE_VERIFY_DIRECT_EXPOSURE, value: "true"}
             {{- end }}

@@ -642,6 +642,7 @@ verifyPage:
     globalBurst: 100
     trustedProxyHops: 1
     maxChecks: 2
+    resultCacheSize: 128
 
 service:
   type: ClusterIP

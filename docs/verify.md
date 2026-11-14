@@ -101,8 +101,8 @@ log keys, the packet or the core's own `packet.sample` record (`--sample-record`
 `clearance verify --statement statement.json` checks a [verification statement](statement.md) (P-3) the same way: the seven checks (signed by the
 issuer's identity; the signature; every cited record under a checkpoint; a witness the issuer does not run; the counts recompute; exceptions
 and health present and matching; not superseded or revoked), each reported on its own line, exit 0 only when every one was run and passed against
-trust inputs you supplied. `--statement-keys` and `--statement-issuer` (the issuer's keys and name), `--log-keys` and `--witness-policy`,
-`--independent-witness` (a witness you know the issuer does not run: a name, or `<name>=<its key from the witness policy>`), `--packet` (the packet the subscriber opened to you) and `--status` (the
+trust inputs you supplied. `--statement-keys` and `--statement-issuer` (the issuer's statement keys, `GET /v1/statement-keys` or `/s/<id>/keys.json`, and its name), `--log-keys` and `--witness-policy`,
+`--independent-witness` (a witness you know the issuer does not run: `<name>=<its key from the witness policy>`; a bare name is refused), `--packet` (the packet the subscriber opened to you) and `--status` (the
 signed status, fetched now, at most an hour old by default) are its trust inputs; each one missing leaves its check NOT CHECKED, SELF-VOUCHED or NOT INDEPENDENTLY WITNESSED
 (exit 2), never a pass. A revoked or superseded statement fails (exit 1).
 

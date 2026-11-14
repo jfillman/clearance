@@ -634,6 +634,9 @@ func (c *Core) useKey(ctx context.Context, s token.Signer) error {
 // Close closes the evidence ledger, if any, and the store (once).
 func (c *Core) Close() {
 	c.once.Do(func() {
+		if c.Server != nil {
+			c.Server.StopStatements()
+		}
 		if c.Ledger != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			_ = c.Ledger.Close(ctx)
@@ -772,11 +775,6 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 	loopCtx, stopLoops := context.WithCancel(context.Background())
 	loopsDone := make(chan struct{})
 	go func() { c.Loops(loopCtx); close(loopsDone) }()
-	// The statement index (P-3) is read once at start, whether or not the verify page is on: GET /v1/keys keeps the keys of the
-	// statements that stand.
-	if err := c.Server.WarmStatements(ctx); err != nil {
-		log.Warn("statements: the statement records could not be read at start; retrying in the background", "error", err.Error())
-	}
 	serveErr := make(chan error, 2)
 	go func() { serveErr <- hs.Serve(ln) }()
 	// The verify page (P-3) is a second listener, started only when CLEARANCE_VERIFY_LISTEN is set. With it unset nothing
@@ -790,6 +788,8 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 			_ = hs.Close()
 			return fmt.Errorf("core: verify listen %s: %w", cfg.VerifyListen, err)
 		}
+		// The statement index is read in the background, after the core serves, page by page; the page answers 503 until it is warm.
+		c.Server.StartStatements(ctx)
 		vs = c.Server.VerifyHTTPServer(cfg.VerifyListen)
 		go func() { serveErr <- vs.Serve(vln) }()
 		log.Info("clearance verify page serving (public, read-only)", "addr", vln.Addr().String())

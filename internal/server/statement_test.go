@@ -202,6 +202,18 @@ func p3Lab(t *testing.T, o p3opts) *p3lab {
 	return l
 }
 
+// indep is the --independent-witness argument a stranger would give: the independent witness's name and its key as the policy lists it.
+func (l *p3lab) indep(t *testing.T) string {
+	t.Helper()
+	for _, ln := range strings.Split(string(l.policy), "\n") {
+		if f := strings.Fields(ln); len(f) >= 3 && f[0] == "witness" && f[1] == "ind" {
+			return "indep-witness=" + f[2]
+		}
+	}
+	t.Fatal("no independent witness in the policy")
+	return ""
+}
+
 func policy2(p string) []byte { return []byte(p) }
 
 func orDefault(v, d string) string {
@@ -249,6 +261,9 @@ func (l *p3lab) getWith(t *testing.T, method, path string, hdr map[string]string
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, ok := hdr["X-Forwarded-For"]; !ok {
+		req.Header.Set("X-Forwarded-For", "198.51.100.1") // the visitor the one trusted proxy saw
+	}
 	for k, v := range hdr {
 		req.Header.Set(k, v)
 	}
@@ -262,7 +277,7 @@ func (l *p3lab) getWith(t *testing.T, method, path string, hdr map[string]string
 }
 
 func (p page) word() string {
-	m := regexp.MustCompile(`<p class="word [a-z]+" role="status">([A-Z]+)</p>`).FindStringSubmatch(p.body)
+	m := regexp.MustCompile(`<p class="word [a-z]+" role="status">([A-Z ,]+)</p>`).FindStringSubmatch(p.body)
 	if m == nil {
 		return ""
 	}
@@ -322,7 +337,7 @@ func (l *p3lab) offline(t *testing.T, id string, extra []string, drop ...string)
 	}
 	args := map[string][]string{
 		"statement":        {writeTemp(t, "statement.json", []byte(st.body))},
-		"statement-keys":   {l.coreKeysFile(t)},
+		"statement-keys":   {writeTemp(t, "keys.json", []byte(l.get(t, "/s/"+id+"/keys.json").body))},
 		"statement-issuer": {"clearance"},
 		"log-keys":         {writeTemp(t, "log.pub", []byte(l.vkey+"\n"))},
 		"witness-policy":   {writeTemp(t, "policy.txt", l.policy)},
@@ -475,12 +490,12 @@ func TestP3StatementGate(t *testing.T) {
 	// The page never presents the witness's independence as verified: the word may be VERIFIED only with the declaration in the
 	// summary (outside the checks' <details>), naming the witness and the command that confirms it.
 	summary := pg.body[:strings.Index(pg.body, "<details>")]
-	if pg.word() != "VERIFIED" || strings.Contains(pg.body, "not yet independently witnessed") ||
+	if pg.word() != "VERIFIED, WITNESS INDEPENDENCE DECLARED" || !strings.Contains(pg.body, `class="word warn"`) || strings.Contains(pg.body, "not yet independently witnessed") ||
 		!strings.Contains(summary, "Declared by the issuer, not verified here") || !strings.Contains(summary, "indep-witness") ||
 		!strings.Contains(summary, "ISSUER DECLARES independent") || !strings.Contains(pg.body, "--independent-witness &lt;name&gt;=&lt;key&gt;") {
 		t.Errorf("independent: word %q; the declaration is not in the summary:\n%s", pg.word(), summary)
 	}
-	if code, out := ind.offline(t, is.ID, []string{"--independent-witness", "indep-witness"}); code != 0 || strings.Count(out, "[PASS]") != 7 || !strings.Contains(out, "VERIFIED") {
+	if code, out := ind.offline(t, is.ID, []string{"--independent-witness", ind.indep(t)}); code != 0 || strings.Count(out, "[PASS]") != 7 || !strings.Contains(out, "VERIFIED") {
 		t.Fatalf("independent offline: exit %d\n%s", code, out)
 	}
 	// Without naming the independent witness itself, the stranger has only the issuer's word for it: not exit 0.
@@ -488,7 +503,7 @@ func TestP3StatementGate(t *testing.T) {
 		t.Errorf("independent, unpinned: exit %d\n%s", code, out)
 	}
 	// A witness the stranger names that did not countersign is not independence.
-	if code, _ := ind.offline(t, is.ID, []string{"--independent-witness", "someone-else"}); code != 2 {
+	if code, _ := ind.offline(t, is.ID, []string{"--independent-witness", "someone-else=" + strings.SplitN(ind.indep(t), "=", 2)[1]}); code != 2 {
 		t.Errorf("a named witness that did not sign: exit %d", code)
 	}
 
@@ -601,7 +616,7 @@ func TestP3ACorrectionSupersedesAndAPublicReadNeverWrites(t *testing.T) {
 	if pg.word() != "SUPERSEDED" || !strings.Contains(pg.body, `href="/s/`+nw.ID+`"`) {
 		t.Errorf("superseded: word %q", pg.word())
 	}
-	if l.get(t, "/s/"+nw.ID).word() != "VERIFIED" && l.get(t, "/s/"+nw.ID).word() != "INCOMPLETE" {
+	if w := l.get(t, "/s/"+nw.ID).word(); w != "INCOMPLETE" {
 		t.Error("the successor does not show a result")
 	}
 	if code, out := l.offline(t, old.ID, nil); code != 1 || !strings.Contains(out, "SUPERSEDED by "+nw.ID) {
@@ -765,7 +780,7 @@ func TestP3ARevocationOnAnotherReplicaIsSeenWithinASecond(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(1100 * time.Millisecond)
+	time.Sleep(2500 * time.Millisecond) // the background read of the tail runs about once a second
 	if w := l.get(t, "/s/"+st.ID).word(); w != "REVOKED" {
 		t.Errorf("after another replica revoked: %q", w)
 	}
@@ -787,7 +802,7 @@ func TestP3ARevocationOnAnotherReplicaIsSeenWithinASecond(t *testing.T) {
 func TestP3TheVerifierFailsWhatWasAlteredAndNeverPassesWhatItCouldNotCheck(t *testing.T) {
 	l := p3Lab(t, p3opts{independent: true})
 	st := l.issue(t, l.req())
-	good, out := l.offline(t, st.ID, []string{"--independent-witness", "indep-witness"})
+	good, out := l.offline(t, st.ID, []string{"--independent-witness", l.indep(t)})
 	if good != 0 {
 		t.Fatalf("the baseline does not pass: %d\n%s", good, out)
 	}
@@ -800,7 +815,7 @@ func TestP3TheVerifierFailsWhatWasAlteredAndNeverPassesWhatItCouldNotCheck(t *te
 		status := l.get(t, "/s/"+st.ID+"/status.json").body
 		args := []string{"--statement", writeTemp(t, "s.json", envelope), "--statement-keys", l.coreKeysFile(t), "--statement-issuer", "clearance",
 			"--log-keys", writeTemp(t, "l", []byte(l.vkey+"\n")), "--witness-policy", writeTemp(t, "p", l.policy), "--packet", packetDir,
-			"--status", writeTemp(t, "st", []byte(status)), "--independent-witness", "indep-witness", "--no-seen"}
+			"--status", writeTemp(t, "st", []byte(status)), "--independent-witness", l.indep(t), "--no-seen"}
 		var o, e bytes.Buffer
 		c := verify.Main(append(args, extra...), &o, &e)
 		return c, o.String() + e.String()

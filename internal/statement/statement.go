@@ -18,7 +18,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/url"
 	"regexp"
 	"slices"
@@ -391,10 +390,14 @@ func (d *Document) checkSets() error {
 var labelIssuer = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 _-]{0,62}$`)
 
 // ValidIssuer reports whether s may be printed as the issuer: a plain label (letters, digits, spaces, hyphens: no dot, so it
-// is never a host name) or an https URL whose host has a dot, is not an IP literal and is not an internal name (.local,
-// .internal, .lan, .localdomain, .home.arpa, .svc, localhost) and carries no credentials, port, query or fragment. A bare host
-// name with no dot is a label to this check: it cannot tell the operator's chosen label from one, which is why the docs tell
-// the operator to choose a label that is not a host.
+// is never a host name) or an https URL (no path but "/", no credentials, port, query or fragment) whose host is ASCII letters,
+// digits and hyphens only (no IDNA folding: any other byte is refused), has at least two labels, a final label that is
+// alphabetic and at least two characters, no all-numeric label and no 0x-prefixed label (so no IP literal in any spelling:
+// 127.1, 0x7f.0.0.1, 0177.0.0.1, 10.1), and does not END in an internal suffix (.local, .internal, .lan, .localdomain,
+// .home.arpa, .svc, .intranet, .corp, .invalid, .test, .localhost) or equal localhost. Suffixes are matched as whole trailing labels, so
+// www.corp.acme.com is fine. A name that merely RESOLVES to an internal address (nip.io style) cannot be detected here; the issuer
+// is a printed label and nothing fetches it. A bare host name with no dot is a label to this check: it cannot tell the operator's
+// chosen label from one, which is why the docs tell the operator to choose a label that is not a host.
 func ValidIssuer(s string) bool {
 	if len(s) == 0 || len(s) > 200 || !utf8.ValidString(s) {
 		return false
@@ -403,19 +406,56 @@ func ValidIssuer(s string) bool {
 		return labelIssuer.MatchString(s)
 	}
 	u, err := url.Parse(s)
-	if err != nil || u.Scheme != "https" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Port() != "" || strings.ContainsAny(s, "?#") {
+	if err != nil || u.Scheme != "https" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Port() != "" || strings.ContainsAny(s, "?#") ||
+		(u.Path != "" && u.Path != "/") {
 		return false
 	}
-	host := strings.ToLower(u.Hostname())
-	if host == "" || !strings.Contains(host, ".") || net.ParseIP(host) != nil || strings.HasSuffix(host, ".") || host == "localhost" {
-		return false
-	}
-	for _, bad := range []string{".local", ".internal", ".lan", ".localdomain", ".home.arpa", ".svc", ".intranet", ".corp", ".invalid", ".test", ".localhost"} {
-		if strings.HasSuffix(host, bad) || strings.Contains(host, bad+".") {
+	host := u.Hostname()
+	for i := 0; i < len(host); i++ {
+		if host[i] > 0x7e || host[i] < 0x2d {
 			return false
 		}
 	}
-	return true
+	host = strings.ToLower(host)
+	labels := strings.Split(host, ".")
+	if len(labels) < 2 || host == "localhost" {
+		return false
+	}
+	for _, l := range labels {
+		if !hostLabel.MatchString(l) || strings.HasPrefix(l, "0x") || allDigits(l) {
+			return false
+		}
+	}
+	last := labels[len(labels)-1]
+	if len(last) < 2 || !alphabetic(last) {
+		return false
+	}
+	for _, bad := range []string{"local", "internal", "lan", "localdomain", "svc", "intranet", "corp", "invalid", "test", "localhost"} {
+		if last == bad {
+			return false
+		}
+	}
+	return !strings.HasSuffix(host, ".home.arpa")
+}
+
+var hostLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+func allDigits(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return s != ""
+}
+
+func alphabetic(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 'a' || s[i] > 'z' {
+			return false
+		}
+	}
+	return s != ""
 }
 
 func validPacketID(s string) bool {

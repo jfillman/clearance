@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -189,6 +191,8 @@ func TestP3AHungStoreIs503WithoutPilingUpGoroutines(t *testing.T) {
 func TestP3AColdIndexIs503AndNoRequestScansTheChain(t *testing.T) {
 	l := p3Lab(t, p3opts{})
 	st := l.issue(t, l.req())
+	l.f.core.Server.StopStatements()
+	waitFor(t, func() bool { return !l.f.core.Server.StatementLoopRunningForTest() })
 	l.f.core.Server.ColdStatementIndexForTest()
 	reads := l.f.core.Server.CountReadsForTest()
 	for i := 0; i < 20; i++ {
@@ -204,14 +208,23 @@ func TestP3AColdIndexIs503AndNoRequestScansTheChain(t *testing.T) {
 	}
 }
 
+func waitFor(t *testing.T, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !ok() {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func TestP3AFailedWarmIsRetriedInTheBackgroundAndThePageRecovers(t *testing.T) {
 	l := p3Lab(t, p3opts{})
 	st := l.issue(t, l.req())
 	l.f.core.Server.ColdStatementIndexForTest()
 	l.f.core.Server.BreakReadsForTest()
-	if err := l.f.core.Server.WarmStatements(context.Background()); err == nil {
-		t.Fatal("a warm over a store that cannot be read succeeded")
-	}
+	time.Sleep(2500 * time.Millisecond) // the background goroutine tries and fails
 	if p := l.get(t, "/s/"+st.ID); p.status != 503 {
 		t.Fatalf("%d", p.status)
 	}
@@ -224,20 +237,113 @@ func TestP3AFailedWarmIsRetriedInTheBackgroundAndThePageRecovers(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatal("the background retry never warmed the index")
 		}
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(300 * time.Millisecond)
 	}
+}
+
+// ---- A: the warm is in the background, resumes, and stops ----
+
+func TestP3AWarmThatTimesOutMidChainResumesWhereItStopped(t *testing.T) {
+	l := p3Lab(t, p3opts{})
+	l.issue(t, l.req())
+	head, _, _ := l.f.core.Store.Head(context.Background())
+	l.f.core.Server.StopStatements()
+	waitFor(t, func() bool { return !l.f.core.Server.StatementLoopRunningForTest() })
+	l.f.core.Server.ColdStatementIndexForTest()
+	server.SetStatementPageSizeForTest(5)
+	defer server.SetStatementPageSizeForTest(0)
+	pages := int(head+1)/5 + 1
+	if pages < 6 {
+		t.Fatalf("the chain is too short for the test: %d records", head+1)
+	}
+	l.f.core.Server.FailRecordsAfterForTest(3) // three pages, then the store stops answering
+	if err := l.f.core.Server.RefreshStatementsForTest(context.Background()); err == nil {
+		t.Fatal("the read over a failing store succeeded")
+	}
+	if next := l.f.core.Server.StatementIndexNextForTest(); next != 15 {
+		t.Fatalf("progress was not kept: next is %d, want 15 (three pages of five)", next)
+	}
+	l.f.core.Server.HealReadsForTest()
+	reads := l.f.core.Server.CountReadsForTest()
+	if err := l.f.core.Server.RefreshStatementsForTest(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := reads(); n > pages-3+1 {
+		t.Errorf("the resume read %d pages, more than the %d that were left", n, pages-3)
+	}
+	if l.f.core.Server.StatementIndexSizeForTest() != 1 {
+		t.Error("the statement was not found after the resume")
+	}
+}
+
+func TestP3TheLoopStopsWhenToldAndABuiltHandlerAnswersAtOnceOnASlowStore(t *testing.T) {
+	l := p3Lab(t, p3opts{})
+	st := l.issue(t, l.req())
+	l.get(t, "/s/"+st.ID)
+	l.f.core.Server.StopStatements()
+	waitFor(t, func() bool { return !l.f.core.Server.StatementLoopRunningForTest() })
+	// A store that takes three seconds per read: building the handler and answering are not held up by it (the index is read in the
+	// background, never before the core serves), a cold page is a 503 at once, and /healthz never touches the store.
+	l.f.core.Server.ColdStatementIndexForTest()
+	l.f.core.Server.SlowReadsForTest(3 * time.Second)
+	began := time.Now()
+	h := l.f.core.Server.VerifyHandler()
+	_ = h
+	if p := l.get(t, "/healthz"); p.status != 200 {
+		t.Fatalf("%d", p.status)
+	}
+	if p := l.get(t, "/s/"+st.ID); p.status != 503 {
+		t.Fatalf("a cold page on a slow store: %d", p.status)
+	}
+	if took := time.Since(began); took > time.Second {
+		t.Errorf("building the handler and answering took %s on a slow store", took)
+	}
+	l.f.core.Server.StopStatements()
+	waitFor(t, func() bool { return !l.f.core.Server.StatementLoopRunningForTest() })
+	l.f.core.Server.HealReadsForTest()
+}
+
+// ---- H: a slow store never holds a visitor ----
+
+func TestP3ASlowStoreNeverDelaysAPageResponse(t *testing.T) {
+	l := p3Lab(t, p3opts{})
+	st := l.issue(t, l.req())
+	l.get(t, "/s/"+st.ID)
+	l.f.core.Server.SlowReadsForTest(2 * time.Second)
+	end := time.Now().Add(3 * time.Second)
+	n := 0
+	for time.Now().Before(end) {
+		began := time.Now()
+		p := l.get(t, "/s/"+st.ID)
+		if took := time.Since(began); took > 300*time.Millisecond || p.status != 200 {
+			t.Fatalf("request %d: %d in %s on a slow store", n, p.status, took)
+		}
+		n++
+		time.Sleep(50 * time.Millisecond)
+	}
+	// A snapshot that goes too old is a fast 503, not a wait.
+	l.f.core.Server.HangReadsForTest()
+	began := time.Now()
+	if p := l.get(t, "/s/"+st.ID); p.status != 503 || time.Since(began) > 300*time.Millisecond {
+		t.Errorf("a stale snapshot: %d in %s", p.status, time.Since(began))
+	}
+	l.f.core.Server.HealReadsForTest()
 }
 
 // ---- item 5: a statement outlives its key's window ----
 
-func TestP3AStatementStillVerifiesAfterItsKeyLeavesTheRetirementWindow(t *testing.T) {
+func TestP3AStatementKeyOutsideTheTokenWindowIsNotATokenKeyButVerifiesItsStatement(t *testing.T) {
 	l := p3Lab(t, p3opts{independent: true})
 	st := l.issue(t, l.req())
 	oldKid := l.coreKey.KeyID()
-	keysHave := func(kid string) bool {
-		resp := l.f.do("GET", "/v1/keys", "", nil)
-		raw, _ := json.Marshal(resp.body)
-		return strings.Contains(string(raw), kid)
+	has := func(path string) bool {
+		resp, err := http.Get(l.f.srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		return strings.Contains(string(raw), oldKid)
 	}
 	next := signer(t)
 	jwk, err := token.PublicJWK(next.Public())
@@ -246,26 +352,75 @@ func TestP3AStatementStillVerifiesAfterItsKeyLeavesTheRetirementWindow(t *testin
 	}
 	raw, _ := json.Marshal(jwk)
 	if err := l.f.core.Store.Atomic(context.Background(), func(tx store.Tx) error {
-		return tx.UseSigningKey(context.Background(), store.SigningKey{KeyID: jwk.Kid, JWK: raw}, time.Now().Add(-60*24*time.Hour))
+		return tx.UseSigningKey(context.Background(), store.SigningKey{KeyID: jwk.Kid, JWK: raw}, time.Now().Add(-400*24*time.Hour))
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// The old key retired 60 days ago, past the window (31 days): it is still published, for the statement it signed.
-	if !keysHave(oldKid) || !keysHave(jwk.Kid) {
-		t.Fatal("the key that signed a standing statement is not published")
+	// The token keys are exactly what they were: the key retired 400 days ago is not in them, and the key in use is.
+	if has("/v1/keys") {
+		t.Fatal("a retired key is in GET /v1/keys because a statement it signed stands")
 	}
+	// The statement keys carry it, for as long as the statement stands, and the page and the offline verifier use it.
+	waitFor(t, func() bool { return has("/v1/statement-keys") })
 	l.f.core.Server.ResetStatementIndexForTest()
 	if pg := l.get(t, "/s/"+st.ID); pg.checkStatus(t, 0) != "PASS" || pg.checkStatus(t, 1) != "PASS" {
 		t.Errorf("the page after the rotation: %s", pg.word())
 	}
-	if code, out := l.offline(t, st.ID, []string{"--independent-witness", "indep-witness"}); code != 0 {
+	if kj := l.get(t, "/s/"+st.ID+"/keys.json"); kj.status != 200 || !strings.Contains(kj.body, oldKid) || strings.Count(kj.body, `"kid"`) != 1 {
+		t.Errorf("keys.json: %d %s", kj.status, kj.body)
+	}
+	if code, out := l.offline(t, st.ID, []string{"--independent-witness", l.indep(t)}); code != 0 {
 		t.Errorf("offline after the rotation: exit %d\n%s", code, out)
 	}
-	// Once the statement is revoked it needs nothing: the old key leaves /v1/keys.
-	l.f.do("POST", "/v1/statements/"+st.ID+"/revoke", "user:admin", map[string]any{"reason": "done"}).want(t, 200, "")
-	if keysHave(oldKid) {
-		t.Error("a key stays published for a statement that no longer stands")
+	// A statement key is never a token key: a packet credential signed by the retired key is refused, though its key is in the
+	// statement keys.
+	now := time.Now()
+	cred, err := token.IssueAccess(context.Background(), l.coreKey, token.AccessClaims{Type: token.AccessType, Issuer: "clearance", Audience: token.AccessAudience, Subject: "dl-1",
+		Packet: l.pid, Digest: l.bundle.Digest, Recipient: "lab-auditor", Scope: []string{"summary"}, IssuedAt: now.Unix(), NotBefore: now.Add(-time.Minute).Unix(), Expires: now.Add(time.Hour).Unix()})
+	if err != nil {
+		t.Fatal(err)
 	}
+	if a := l.f.do("GET", "/v1/packets/"+l.pid, cred, nil); a.status != 401 {
+		t.Errorf("a credential signed by a key outside the token window: %d", a.status)
+	}
+	// The admin can list what that key signed, for retiring it.
+	items := l.f.do("GET", "/v1/statements?key="+oldKid, "user:admin", nil).want(t, 200, "")
+	if raw, _ := json.Marshal(items.body); !strings.Contains(string(raw), st.ID) {
+		t.Errorf("the statements signed by the key: %s", raw)
+	}
+	l.f.do("GET", "/v1/statements?key="+oldKid, "user:dana", nil).want(t, 403, "")
+	l.f.do("GET", "/v1/statements?key=a%20b", "user:admin", nil).want(t, 400, "")
+	l.f.do("GET", "/v1/statements?key="+oldKid+"&x=1", "user:admin", nil).want(t, 400, "")
+	// Once the statement is revoked its key leaves the set.
+	l.f.do("POST", "/v1/statements/"+st.ID+"/revoke", "user:admin", map[string]any{"reason": "done"}).want(t, 200, "")
+	waitFor(t, func() bool { return !has("/v1/statement-keys") })
+}
+
+func TestP3TheStatementKeysAreA503WhileColdNeverAnEmptySet(t *testing.T) {
+	l := p3Lab(t, p3opts{})
+	l.f.core.Server.StopStatements()
+	waitFor(t, func() bool { return !l.f.core.Server.StatementLoopRunningForTest() })
+	l.f.core.Server.ColdStatementIndexForTest()
+	l.f.core.Server.HangReadsForTest()
+	resp, err := http.Get(l.f.srv.URL + "/v1/statement-keys")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 503 || strings.Contains(string(body), `"keys"`) {
+		t.Errorf("a cold index: %d %s", resp.StatusCode, body)
+	}
+	l.f.core.Server.HealReadsForTest()
+	waitFor(t, func() bool {
+		r, err := http.Get(l.f.srv.URL + "/v1/statement-keys")
+		if err != nil {
+			return false
+		}
+		defer r.Body.Close()
+		b, _ := io.ReadAll(r.Body)
+		return r.StatusCode == 200 && strings.Contains(string(b), l.coreKey.KeyID())
+	})
 }
 
 // ---- item 6: how old a status may be ----
@@ -284,12 +439,12 @@ func TestP3AStatusOlderThanAnHourIsNotAnExitZeroAndTheAsOfIsPrinted(t *testing.T
 		return writeTemp(t, "status.json", b)
 	}
 	for _, age := range []time.Duration{2 * time.Hour, 25 * time.Hour} {
-		code, out := l.offline(t, st.ID, []string{"--independent-witness", "indep-witness", "--status", signed(age)}, "status")
+		code, out := l.offline(t, st.ID, []string{"--independent-witness", l.indep(t), "--status", signed(age)}, "status")
 		if code != 2 || !strings.Contains(out, "[NOT CHECKED] 7.") {
 			t.Errorf("a status %s old: exit %d\n%s", age, code, out)
 		}
 	}
-	code, out := l.offline(t, st.ID, []string{"--independent-witness", "indep-witness", "--status", signed(20 * time.Minute)}, "status")
+	code, out := l.offline(t, st.ID, []string{"--independent-witness", l.indep(t), "--status", signed(20 * time.Minute)}, "status")
 	if code != 0 || !strings.Contains(out, "CURRENT STATE AS OF") {
 		t.Errorf("a fresh status: exit %d\n%s", code, out)
 	}
@@ -341,8 +496,12 @@ func (l *p3lab) forge(t *testing.T, id string, doc *statement.Document, signWith
 }
 
 func (l *p3lab) docFor(t *testing.T, id string) *statement.Document {
+	return l.docForIssuer(t, id, "clearance")
+}
+
+func (l *p3lab) docForIssuer(t *testing.T, id, issuer string) *statement.Document {
 	t.Helper()
-	d, err := statement.Build(statement.Input{ID: id, Issuer: "clearance", IssuedAt: time.Now().UTC().Format(time.RFC3339), ScopeLabel: "Forged scope", PolicyVersion: "forged-1",
+	d, err := statement.Build(statement.Input{ID: id, Issuer: issuer, IssuedAt: time.Now().UTC().Format(time.RFC3339), ScopeLabel: "Forged scope", PolicyVersion: "forged-1",
 		PacketID: l.pid, PacketDigest: l.bundle.Digest, PacketJSON: l.bundle.Files["packet.json"], RecordsJSONL: l.bundle.Files[packet.FileRecords]})
 	if err != nil {
 		t.Fatal(err)
@@ -362,8 +521,14 @@ func TestP3TheContentIsShownOnlyWhenTheSignatureHoldsAndTheIdIsTheStatementsOwn(
 	// A statement for its own id, signed by a key the core does not publish.
 	c := "st-" + strings.Repeat("c", 32)
 	l.forge(t, c, l.docFor(t, c), signer(t))
-	time.Sleep(1100 * time.Millisecond)
-	for name, id := range map[string]string{"another id": b, "another key": c} {
+	// A statement whose signature verifies, under the right key, but which names another issuer: check 1 fails and nothing is shown.
+	d := "st-" + strings.Repeat("d", 32)
+	l.forge(t, d, l.docForIssuer(t, d, "another-issuer"), l.coreKey)
+	time.Sleep(2500 * time.Millisecond)
+	if pg := l.get(t, "/s/"+d); pg.checkStatus(t, 0) != "FAIL" || pg.checkStatus(t, 1) != "PASS" {
+		t.Fatalf("the renamed issuer: check 1 %q, check 2 %q: the test must fail check 1 while the signature verifies", pg.checkStatus(t, 0), pg.checkStatus(t, 1))
+	}
+	for name, id := range map[string]string{"another id": b, "another key": c, "another issuer": d} {
 		pg := l.get(t, "/s/"+id)
 		if pg.status != 200 || pg.word() != "FAILED" || strings.Contains(pg.body, "Counts by coverage state") || strings.Contains(pg.body, "Forged scope") || !strings.Contains(pg.body, "did not verify") {
 			t.Errorf("%s: %d word %q, the summary is shown or the failure is not", name, pg.status, pg.word())

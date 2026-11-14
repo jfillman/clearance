@@ -31,6 +31,7 @@ import (
 //	CLEARANCE_VERIFY_TRUSTED_PROXY_HOPS   how many trusted proxies sit in front of the listener (0: the connection's address is
 //	                                      the client; N: the Nth address from the right of X-Forwarded-For)
 //	CLEARANCE_VERIFY_MAX_CHECKS           how many statement verifications may run at once (default 2)
+//	CLEARANCE_VERIFY_RESULT_CACHE         how many statements' check results the page keeps, least recently used out first (default 128)
 //	CLEARANCE_VERIFY_DIRECT_EXPOSURE      true: the listener is reached directly, with no proxy in front. REQUIRED when
 //	                                      CLEARANCE_VERIFY_TRUSTED_PROXY_HOPS is 0, and refused with hops above 0. Behind a
 //	                                      proxy every visitor shares the proxy's address, so one client's budget would be the
@@ -40,7 +41,7 @@ func statementConfig(getenv func(string) string, led *ledger.Config) (string, se
 	listen := getenv("CLEARANCE_VERIFY_LISTEN")
 	if listen == "" {
 		for _, k := range []string{"CLEARANCE_STATEMENT_LOG_KEYS_FILE", "CLEARANCE_STATEMENT_WITNESS_POLICY_FILE", "CLEARANCE_STATEMENT_INDEPENDENT_WITNESSES", "CLEARANCE_VERIFY_PUBLIC_URL", "CLEARANCE_VERIFY_RATE_PER_CLIENT", "CLEARANCE_VERIFY_BURST_PER_CLIENT",
-			"CLEARANCE_VERIFY_RATE_GLOBAL", "CLEARANCE_VERIFY_BURST_GLOBAL", "CLEARANCE_VERIFY_TRUSTED_PROXY_HOPS", "CLEARANCE_VERIFY_MAX_CHECKS", "CLEARANCE_VERIFY_DIRECT_EXPOSURE"} {
+			"CLEARANCE_VERIFY_RATE_GLOBAL", "CLEARANCE_VERIFY_BURST_GLOBAL", "CLEARANCE_VERIFY_TRUSTED_PROXY_HOPS", "CLEARANCE_VERIFY_MAX_CHECKS", "CLEARANCE_VERIFY_DIRECT_EXPOSURE", "CLEARANCE_VERIFY_RESULT_CACHE"} {
 			if getenv(k) != "" {
 				return "", o, fmt.Errorf("%s is set but CLEARANCE_VERIFY_LISTEN is not: the verify page is off, and is not enabled by its settings", k)
 			}
@@ -91,7 +92,8 @@ func statementConfig(getenv func(string) string, led *ledger.Config) (string, se
 		min, max int
 	}{{"CLEARANCE_VERIFY_RATE_PER_CLIENT", &o.ClientPerMinute, 1, 6000}, {"CLEARANCE_VERIFY_BURST_PER_CLIENT", &o.ClientBurst, 1, 1000},
 		{"CLEARANCE_VERIFY_RATE_GLOBAL", &o.GlobalPerMinute, 1, 600000}, {"CLEARANCE_VERIFY_BURST_GLOBAL", &o.GlobalBurst, 1, 100000},
-		{"CLEARANCE_VERIFY_TRUSTED_PROXY_HOPS", &o.TrustedProxyHops, 0, 8}, {"CLEARANCE_VERIFY_MAX_CHECKS", &o.MaxChecks, 1, 16}} {
+		{"CLEARANCE_VERIFY_TRUSTED_PROXY_HOPS", &o.TrustedProxyHops, 0, 8}, {"CLEARANCE_VERIFY_MAX_CHECKS", &o.MaxChecks, 1, 16},
+		{"CLEARANCE_VERIFY_RESULT_CACHE", &o.ResultCacheSize, 1, 10000}} {
 		if v := getenv(f.env); v != "" {
 			n, err := strconv.Atoi(v)
 			if err != nil || n < f.min || n > f.max {

@@ -3,6 +3,9 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -49,6 +52,8 @@ type StatementOptions struct {
 	// The verify listener's limits: requests a minute for one client and its burst, for the whole listener and its burst, the
 	// number of trusted proxy hops in front of it (0: the connection's address), and how many verifications may run at once.
 	ClientPerMinute, ClientBurst, GlobalPerMinute, GlobalBurst, TrustedProxyHops, MaxChecks int
+	// ResultCacheSize is how many statements' check results the page keeps (least recently used out first; 0: 128).
+	ResultCacheSize int
 }
 
 // Defaults of the verify listener's limits.
@@ -62,10 +67,10 @@ const (
 	maxPageBytes = 256 << 10
 	// resultTTL is how long the result of checks 1 to 6 (which rest on immutable data and this deployment's trust inputs) is
 	// kept before they are run again; failedResultTTL for a run that could not complete.
-	resultTTL       = 10 * time.Minute
-	failedResultTTL = 15 * time.Second
-	resultCacheSize = 128
-	verifyHandlerTO = 10 * time.Second
+	resultTTL              = 10 * time.Minute
+	failedResultTTL        = 15 * time.Second
+	defaultResultCacheSize = 128
+	verifyHandlerTO        = 10 * time.Second
 )
 
 func (s *Server) statementOpts() StatementOptions {
@@ -84,6 +89,9 @@ func (s *Server) statementOpts() StatementOptions {
 	}
 	if o.MaxChecks <= 0 {
 		o.MaxChecks = DefaultVerifyMaxChecks
+	}
+	if o.ResultCacheSize <= 0 {
+		o.ResultCacheSize = defaultResultCacheSize
 	}
 	return o
 }
@@ -132,6 +140,10 @@ func (s *Server) result(ctx context.Context, e *stmtEntry, charge func() bool) (
 		select {
 		case <-r.done:
 			if now.Sub(r.at) < ttl {
+				// Least recently used goes first: a hit moves the entry to the end of the order.
+				if k := slices.Index(c.order, e.id); k >= 0 {
+					c.order = append(append(c.order[:k:k], c.order[k+1:]...), e.id)
+				}
 				c.mu.Unlock()
 				return r, notRefused
 			}
@@ -158,7 +170,7 @@ func (s *Server) result(ctx context.Context, e *stmtEntry, charge func() bool) (
 	}
 	r := &stmtResult{done: make(chan struct{}), digest: e.digest}
 	if _, ok := c.by[e.id]; !ok {
-		for len(c.order) >= resultCacheSize {
+		for len(c.order) >= s.statementOpts().ResultCacheSize {
 			delete(c.by, c.order[0])
 			c.order = c.order[1:]
 		}
@@ -200,21 +212,27 @@ func (s *Server) runStatementChecks(ctx context.Context, e *stmtEntry) (*verify.
 	if err != nil {
 		return nil, nil, err
 	}
-	rows, err := s.publishedKeys(ctx, s.opt.Clock().Add(-KeysWindow-token.MaxAccessLifetime))
-	if err != nil {
-		return nil, nil, err
-	}
+	// A statement is verified with the one key that signed it, taken from the statement keys, which are not the token keys.
 	ks := token.KeySet{}
-	for _, k := range rows {
-		var j token.JWK
-		if json.Unmarshal(k.JWK, &j) == nil {
-			if pub, err := j.Public(); err == nil {
-				ks[j.Kid] = pub
-			}
+	if j, ok, err := s.statementKeyFor(ctx, e.kid); err != nil {
+		return nil, nil, err
+	} else if ok {
+		if pub, err := j.Public(); err == nil {
+			ks[j.Kid] = pub
 		}
 	}
 	so := s.statementVerifyOptions(nil)
-	so.Keys, so.KeysSrc, so.Issuer = ks, "the keys this core publishes (GET /v1/keys)", issuer
+	so.Keys, so.KeysSrc, so.Issuer = ks, "the statement keys this core publishes (GET /v1/statement-keys)", issuer
+	keyKnown := len(ks) > 0
+	if !keyKnown {
+		// A statement signed by a key this core does not publish is not "no keys supplied": it fails. A placeholder key that
+		// signed nothing makes the signature check say so.
+		if k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader); err == nil {
+			if kid, err := token.KeyID(&k.PublicKey); err == nil {
+				so.Keys = token.KeySet{kid: &k.PublicKey}
+			}
+		}
+	}
 	pk, err := s.opt.Store.Packet(ctx, e.packetID)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
@@ -234,7 +252,7 @@ func (s *Server) runStatementChecks(ctx context.Context, e *stmtEntry) (*verify.
 	so.Live = &verify.Live{State: statement.StateValid, AsOf: s.opt.Clock()}
 	rep := verify.VerifyStatement(envelope, e.id, so)
 	var doc *statement.Document
-	if len(rep.Checks) == 7 && rep.Checks[1].Status == verify.Pass {
+	if len(rep.Checks) == 7 && rep.Checks[0].Status == verify.Pass && rep.Checks[1].Status == verify.Pass {
 		var env struct {
 			Payload string `json:"payload"`
 		}
@@ -250,19 +268,23 @@ func (s *Server) runStatementChecks(ctx context.Context, e *stmtEntry) (*verify.
 			rep.Checks[1].Status, rep.Checks[1].Detail = verify.Fail, "the signed document is not the statement this id names"
 		}
 	}
+	if doc == nil && rep.Checks[0].Status == verify.Pass && rep.Checks[1].Status == verify.Pass {
+		rep.Checks[1].Status, rep.Checks[1].Detail = verify.Fail, "the signed document could not be read"
+	}
 	return rep, doc, nil
 }
 
 // VerifyHandler is the public handler. It is built even when no listener serves it, so tests drive it; the core mounts it
 // only on CLEARANCE_VERIFY_LISTEN.
 func (s *Server) VerifyHandler() http.Handler {
-	// The index of statements is read here, once, not on a request: until it is read the page answers 503 and a failed read is
-	// retried in the background.
-	if err := s.WarmStatements(context.Background()); err != nil {
-		s.log.Warn("verify page: the statement records could not be read; the page answers 503 until a retry succeeds", "error", err.Error())
-	}
+	// The index of statements is kept by one background goroutine, never on a request: until its first complete read the page
+	// answers 503, and it keeps answering 503 if the snapshot goes too old.
+	s.StartStatements(context.Background())
 	o := s.statementOpts()
 	lim := newLimiter(o.ClientPerMinute, o.ClientBurst, o.GlobalPerMinute, o.GlobalBurst, o.TrustedProxyHops, s.opt.Clock)
+	lim.warn = func() {
+		s.log.Warn("verify page: a request could not be attributed to a client; it shares one tight budget. trusted_proxy_hops is probably set higher than the real number of proxies, or a proxy does not append X-Forwarded-For")
+	}
 	h := &verifyPage{s: s, lim: lim, base: o.PublicBaseURL}
 	inner := http.TimeoutHandler(http.HandlerFunc(h.serve), verifyHandlerTO, "The request took too long.\n")
 	// The security headers are set on the connection's own writer first, so the timeout's 503 carries them too.
@@ -284,7 +306,11 @@ type verifyPage struct {
 	s    *Server
 	lim  *limiter
 	base string
+	sc   sync.Mutex
+	scm  map[string]signedStatus
 }
+
+type signedStatus struct{ payload, raw []byte }
 
 // setSecurity sets the headers every answer of the listener carries, errors included.
 func setSecurity(w http.ResponseWriter) {
@@ -345,11 +371,11 @@ func (v *verifyPage) serve(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if !statement.ValidID(id) {
 		// The same lookup an unknown id costs, so a malformed id and an unknown one take the same work.
-		_, _, _ = v.s.lookupStatement(ctx, "st-00000000000000000000000000000000")
+		_, _, _ = v.s.lookupStatement("st-00000000000000000000000000000000")
 		v.notFound(w)
 		return
 	}
-	live, found, err := v.s.lookupStatement(ctx, id)
+	live, found, err := v.s.lookupStatement(id)
 	switch {
 	case err != nil:
 		v.s.log.ErrorContext(ctx, "verify page: the store could not be read", "error", err.Error())
@@ -364,6 +390,8 @@ func (v *verifyPage) serve(w http.ResponseWriter, r *http.Request) {
 		v.statementJSON(w, r, live.entry)
 	case "status.json":
 		v.statusJSON(w, live)
+	case "keys.json":
+		v.keysJSON(w, r, live.entry)
 	default:
 		v.page(w, r, live)
 	}
@@ -377,7 +405,7 @@ func route(path string) (id, part string, ok bool) {
 	}
 	id, part, _ = strings.Cut(rest, "/")
 	switch part {
-	case "", "statement.json", "status.json":
+	case "", "statement.json", "status.json", "keys.json":
 		return id, part, id != "" && !strings.Contains(rest, "//") && !strings.HasSuffix(rest, "/")
 	}
 	return "", "", false
@@ -406,6 +434,25 @@ func (v *verifyPage) statementJSON(w http.ResponseWriter, r *http.Request, e *st
 	_, _ = w.Write(raw)
 }
 
+// keysJSON is the key that signed this statement, and only that key: a JWKS the verifier checks the statement with. It is not the
+// token keys and not the core's whole statement key set.
+func (v *verifyPage) keysJSON(w http.ResponseWriter, r *http.Request, e *stmtEntry) {
+	j, ok, err := v.s.statementKeyFor(r.Context(), e.kid)
+	if err != nil || !ok {
+		v.plain(w, http.StatusServiceUnavailable, "The statement's key could not be read. Try again shortly.\n")
+		return
+	}
+	raw, err := json.Marshal(token.JWKS{Keys: []token.JWK{j}})
+	if err != nil {
+		v.plain(w, http.StatusServiceUnavailable, "The statement's key could not be read.\n")
+		return
+	}
+	setSecurity(w)
+	w.Header().Set("Cache-Control", "public, max-age=300") // the key that signed a statement never changes
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_, _ = w.Write(raw)
+}
+
 // statusJSON is the signed current state, as of the read.
 func (v *verifyPage) statusJSON(w http.ResponseWriter, live stmtLive) {
 	signer, _, err := v.s.opt.Gate.Credentials()
@@ -426,15 +473,32 @@ func (v *verifyPage) statusJSON(w http.ResponseWriter, live stmtLive) {
 	}
 	payload, err := st.Canonical()
 	if err == nil {
-		var env token.Envelope
-		if env, err = token.SignDSSE(context.Background(), signer, statement.StatusPayloadType, payload); err == nil {
-			var raw []byte
-			if raw, err = json.Marshal(env); err == nil {
-				setSecurity(w)
-				w.Header().Set("Content-Type", "application/json; charset=utf-8")
-				_, _ = w.Write(raw)
-				return
+		// One signature per distinct status: the payload changes only when the state or the snapshot's as-of does (about once a
+		// second), so a holder of one id cannot make the core sign once per request.
+		v.sc.Lock()
+		hit, ok := v.scm[e.id]
+		v.sc.Unlock()
+		var raw []byte
+		if ok && bytes.Equal(hit.payload, payload) {
+			raw = hit.raw
+		} else {
+			var env token.Envelope
+			if env, err = token.SignDSSE(context.Background(), signer, statement.StatusPayloadType, payload); err == nil {
+				if raw, err = json.Marshal(env); err == nil {
+					v.sc.Lock()
+					if v.scm == nil || len(v.scm) > 2048 {
+						v.scm = map[string]signedStatus{}
+					}
+					v.scm[e.id] = signedStatus{payload: payload, raw: raw}
+					v.sc.Unlock()
+				}
 			}
+		}
+		if err == nil && raw != nil {
+			setSecurity(w)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			_, _ = w.Write(raw)
+			return
 		}
 	}
 	v.plain(w, http.StatusServiceUnavailable, "The status could not be signed.\n")
@@ -642,9 +706,9 @@ func pageWord(rep *verify.Report) (word, class, sentence string) {
 	case failed:
 		return "FAILED", "bad", "This statement does not verify. Do not rely on it."
 	case !incomplete && declared:
-		return "VERIFIED", "ok", "All seven checks passed, with one declaration: the witness's independence is the issuer's word, not something this page verified (see below)."
+		return "VERIFIED, WITNESS INDEPENDENCE DECLARED", "warn", "All seven checks passed, with one declaration: the witness's independence is the issuer's word, not something this page verified (see below). The all-green VERIFIED is obtained offline, with your own --independent-witness name=<key>."
 	case !incomplete:
-		return "VERIFIED", "ok", "All seven checks passed."
+		return "VERIFIED", "ok", "All seven checks passed." // not reachable on the hosted page: it is the issuer, so it cannot verify who runs a witness
 	}
 	return "INCOMPLETE", "warn", "Nothing failed, but not every check could be completed. The checks below say which."
 }

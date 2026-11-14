@@ -7,6 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -122,6 +125,8 @@ type stmtEntry struct {
 	kid        string // the key that signed it
 	packetID   string
 	profile    string
+	scope      string // the printed scope label and the policy label: what a reissue must repeat
+	policy     string
 	supersedes string
 	reissues   string
 	reqKey     string
@@ -129,6 +134,7 @@ type stmtEntry struct {
 	hash       string
 	// current state: set as the chain's records about the statement are read.
 	supersededBy string
+	reissuedBy   string
 	revoked      bool
 	revokedAt    string
 	revokeSeq    int64
@@ -145,26 +151,30 @@ func (e *stmtEntry) state() string {
 	return statement.StateValid
 }
 
-// stmtIndex is the statement records of the chain, by id, read once (warm) and then kept current by re-reading the chain's tail:
-// the one writer's own writes land in it at once, and another replica's land within statementTailEvery. Public readers take
-// only the read lock and never wait on a write or on the store: a refresh is single-flight (a reader that finds one running
-// uses the snapshot), and a snapshot older than statementMaxStale is not served.
+// stmtIndex is the statement records of the chain, by id, kept current by one background goroutine (StartStatements) that
+// re-reads the chain's tail about once a second. Requests only READ the snapshot: they never wait on the store, a write or a
+// refresh. A snapshot that was never completed (cold) or is older than statementMaxStale is not served (the page answers 503).
+// A refresh applies each page it reads as it goes, so a read that times out in a long chain resumes where it stopped.
 type stmtIndex struct {
 	mu     sync.RWMutex
 	byID   map[string]*stmtEntry
 	byReq  map[string]string
-	synced time.Time
+	synced time.Time // when the last COMPLETE read BEGAN: the state is as of then, never later
 	warmed bool
+	loop   bool
+	stop   context.CancelFunc
 
 	refreshMu sync.Mutex // one reader of the chain's tail at a time; guards next
 	next      int64
 	writeMu   sync.Mutex // serialises issue and revoke
-	warming   bool       // guarded by mu: a background warm loop is running
 }
+
+// statementPageSize is how many records one read of the chain takes (a variable so a test can make a short chain long).
+var statementPageSize = 2000
 
 var (
 	errStatementsCold  = errors.New("the statement index is not warm yet")
-	errStatementsStale = errors.New("the statement index could not be refreshed in time")
+	errStatementsStale = errors.New("the statement index is older than it may be served")
 )
 
 type stmtEvent struct {
@@ -175,17 +185,34 @@ type stmtEvent struct {
 	hash      string
 }
 
-// refreshLocked reads the chain from next on and folds in every statement.issue and statement.revoke. The caller holds
-// refreshMu; the read takes no other lock, and the result is applied under the write lock in one step.
+func (x *stmtIndex) initLocked() {
+	if x.byID == nil {
+		x.byID, x.byReq = map[string]*stmtEntry{}, map[string]string{}
+	}
+}
+
+// refreshLocked reads the chain from next on and folds in every statement.issue and statement.revoke, a page at a time, each page
+// applied under the write lock and next advanced with it. The caller holds refreshMu. started (the clock before the first read) is
+// the time the state is as of.
 func (s *Server) refreshLocked(ctx context.Context, x *stmtIndex) error {
-	const page = 2000
-	var evs []stmtEvent
-	next := x.next
+	started := s.opt.Clock()
+	if head, _, err := s.opt.Store.Head(ctx); err != nil {
+		return err
+	} else if head < x.next {
+		// Nothing new since the last read: confirmed current, at the cost of one indexed read.
+		x.mu.Lock()
+		x.initLocked()
+		x.synced, x.warmed = started, true
+		x.mu.Unlock()
+		return nil
+	}
 	for {
-		recs, err := s.opt.Store.Records(ctx, next, page)
+		recs, err := s.opt.Store.Records(ctx, x.next, statementPageSize)
 		if err != nil {
 			return err
 		}
+		var evs []stmtEvent
+		next := x.next
 		for _, r := range recs {
 			seq, _ := gate.SeqInt(r["seq"])
 			next = seq + 1
@@ -204,6 +231,7 @@ func (s *Server) refreshLocked(ctx context.Context, x *stmtIndex) error {
 			}
 			pk, _ := r["packet"].(map[string]any)
 			e := &stmtEntry{id: id, digest: fmt.Sprint(st["payload_sha256"]), packetID: fmt.Sprint(pk["id"]), profile: fmt.Sprint(st["profile"]),
+				scope: fmt.Sprint(st["scope"]), policy: fmt.Sprint(st["policy_version"]),
 				reqKey: fmt.Sprint(st["request_sha256"]), seq: seq, hash: fmt.Sprint(r["hash"]), kid: envelopeKid(st["envelope"])}
 			if sup, _ := st["supersedes"].(string); statement.ValidID(sup) {
 				e.supersedes = sup
@@ -213,34 +241,67 @@ func (s *Server) refreshLocked(ctx context.Context, x *stmtIndex) error {
 			}
 			evs = append(evs, stmtEvent{issue: e})
 		}
-		if len(recs) < page {
-			break
+		x.mu.Lock()
+		x.initLocked()
+		for _, ev := range evs {
+			x.applyLocked(ev)
+		}
+		x.next = next
+		last := len(recs) < statementPageSize
+		if last {
+			x.synced, x.warmed = started, true
+		}
+		x.mu.Unlock()
+		if last {
+			return nil
 		}
 	}
-	x.mu.Lock()
-	if x.byID == nil {
-		x.byID, x.byReq = map[string]*stmtEntry{}, map[string]string{}
+}
+
+// applyLocked folds one record into the index. The caller holds x.mu.
+func (x *stmtIndex) applyLocked(ev stmtEvent) {
+	if ev.issue == nil {
+		if e := x.byID[ev.revokeID]; e != nil && !e.revoked {
+			e.revoked, e.revokedAt, e.revokeSeq, e.revokeHash = true, ev.revokedAt, ev.seq, ev.hash
+		}
+		return
 	}
-	for _, ev := range evs {
-		switch {
-		case ev.issue != nil:
-			e := ev.issue
-			if x.byID[e.id] != nil {
-				continue
-			}
-			x.byID[e.id], x.byReq[e.reqKey] = e, e.id
-			if old := x.byID[e.supersedes]; e.supersedes != "" && old != nil && old.supersededBy == "" {
-				old.supersededBy = e.id
-			}
-		default:
-			if e := x.byID[ev.revokeID]; e != nil && !e.revoked {
-				e.revoked, e.revokedAt, e.revokeSeq, e.revokeHash = true, ev.revokedAt, ev.seq, ev.hash
-			}
+	e := ev.issue
+	if x.byID[e.id] != nil {
+		return
+	}
+	x.byID[e.id], x.byReq[e.reqKey] = e, e.id
+	x.linkLocked(e)
+}
+
+// linkLocked records what a new statement replaces: a statement is superseded by this one if it stood unreplaced, or if its
+// replacement was itself revoked (then a correction may be made again); a revoked statement it reissues remembers it.
+func (x *stmtIndex) linkLocked(e *stmtEntry) {
+	if old := x.byID[e.supersedes]; e.supersedes != "" && old != nil {
+		if succ := x.byID[old.supersededBy]; old.supersededBy == "" || (succ != nil && succ.revoked) {
+			old.supersededBy = e.id
 		}
 	}
-	x.next, x.synced, x.warmed = next, s.opt.Clock(), true
-	x.mu.Unlock()
-	return nil
+	if old := x.byID[e.reissues]; e.reissues != "" && old != nil {
+		old.reissuedBy = e.id
+	}
+}
+
+// chainEndRevokedLocked is true when the statements that replaced e, followed to the last, end in a revoked one: nothing in the
+// chain is current. The caller holds x.mu.
+func (x *stmtIndex) chainEndRevokedLocked(e *stmtEntry) bool {
+	cur := e
+	for i := 0; i < 64; i++ {
+		if cur.supersededBy == "" {
+			return cur != e && cur.revoked
+		}
+		next := x.byID[cur.supersededBy]
+		if next == nil {
+			return false
+		}
+		cur = next
+	}
+	return false
 }
 
 func envelopeKid(env any) string {
@@ -254,7 +315,7 @@ func envelopeKid(env any) string {
 	return k
 }
 
-// refreshForWrite is the authenticated path's refresh: it waits its turn, and the first call on a cold index reads the chain.
+// refreshForWrite is the authenticated path's refresh (and the background goroutine's): it waits its turn.
 func (s *Server) refreshForWrite(ctx context.Context) error {
 	x := &s.stmts
 	x.refreshMu.Lock()
@@ -262,121 +323,230 @@ func (s *Server) refreshForWrite(ctx context.Context) error {
 	return s.refreshLocked(ctx, x)
 }
 
-// stmtLive is a statement's current state as of the read that gave it.
+// stmtLive is a statement's current state as of the snapshot that gave it.
 type stmtLive struct {
 	entry            *stmtEntry // a copy: nothing in it changes after the lock is released
-	asOf             time.Time  // when the index was last read from the chain
-	successorRevoked bool       // the statement that replaced this one was itself revoked
+	asOf             time.Time  // when the read behind the snapshot began
+	successorRevoked bool       // the replacements of this statement, followed to the last, end in a revoked one
 }
 
-// lookupStatement is the public read: the statement by id, with its current state. It never scans the chain and never waits on a
-// write: a cold index is errStatementsCold (the page answers 503 until the background warm finishes), and a snapshot older than
-// statementMaxStale that could not be refreshed is errStatementsStale (503: it must not say valid on a state it could not
-// read). found is false for an id the chain holds no statement of.
-func (s *Server) lookupStatement(ctx context.Context, id string) (stmtLive, bool, error) {
+// lookupStatement is the public read: the statement by id, with its current state, from the snapshot alone. It never touches
+// the store, never scans the chain and never waits: a cold snapshot is errStatementsCold and one older than statementMaxStale
+// errStatementsStale (the page answers 503: it must not say valid on a state it could not read). found is false for an id the
+// chain holds no statement of.
+func (s *Server) lookupStatement(id string) (stmtLive, bool, error) {
 	x := &s.stmts
 	x.mu.RLock()
-	warmed, synced := x.warmed, x.synced
-	x.mu.RUnlock()
-	if !warmed {
+	defer x.mu.RUnlock()
+	if !x.warmed {
 		return stmtLive{}, false, errStatementsCold
 	}
-	if now := s.opt.Clock(); now.Sub(synced) >= statementTailEvery {
-		if x.refreshMu.TryLock() {
-			rctx, cancel := context.WithTimeout(ctx, statementRefreshTimeout)
-			err := s.refreshLocked(rctx, x)
-			cancel()
-			x.refreshMu.Unlock()
-			if err != nil && now.Sub(synced) > statementMaxStale {
-				return stmtLive{}, false, err
-			}
-		} else if now.Sub(synced) > statementMaxStale {
-			return stmtLive{}, false, errStatementsStale
-		}
+	if s.opt.Clock().Sub(x.synced) > statementMaxStale {
+		return stmtLive{}, false, errStatementsStale
 	}
-	x.mu.RLock()
-	defer x.mu.RUnlock()
 	e := x.byID[id]
 	if e == nil {
 		return stmtLive{asOf: x.synced}, false, nil
 	}
 	cp := *e
-	live := stmtLive{entry: &cp, asOf: x.synced}
-	if succ := x.byID[e.supersededBy]; succ != nil && succ.revoked {
-		live.successorRevoked = true
-	}
-	return live, true, nil
+	return stmtLive{entry: &cp, asOf: x.synced, successorRevoked: x.chainEndRevokedLocked(e)}, true, nil
 }
 
-// liveStatementKids are the signing keys of every statement not revoked: GET /v1/keys keeps each for as long as its statement
-// stands, so a statement does not stop verifying when its key leaves the retirement window.
-func (s *Server) liveStatementKids() map[string]bool {
+// StartStatements starts the one goroutine that keeps the statement index current: it reads the chain's tail now and then about
+// once a second until ctx ends or StopStatements is called. It is not started until something needs the index (the verify page,
+// GET /v1/statement-keys), and it never runs before the core serves: a long chain warms in the background, page by page.
+func (s *Server) StartStatements(ctx context.Context) {
+	x := &s.stmts
+	x.mu.Lock()
+	if x.loop {
+		x.mu.Unlock()
+		return
+	}
+	x.loop = true
+	lctx, cancel := context.WithCancel(ctx)
+	x.stop = cancel
+	x.mu.Unlock()
+	go func() {
+		defer func() {
+			x.mu.Lock()
+			x.loop = false
+			x.mu.Unlock()
+		}()
+		var lastLog time.Time
+		for {
+			rctx, c := context.WithTimeout(lctx, 30*time.Second)
+			err := s.refreshForWrite(rctx)
+			c()
+			wait := statementTailEvery
+			if err != nil && lctx.Err() == nil {
+				wait = 2 * time.Second
+				if now := time.Now(); now.Sub(lastLog) > time.Minute {
+					lastLog = now
+					s.log.Warn("statements: the chain's tail could not be read; the page serves 503 once its snapshot is too old", "error", err.Error())
+				}
+			}
+			select {
+			case <-lctx.Done():
+				return
+			case <-time.After(wait):
+			}
+		}
+	}()
+}
+
+// StopStatements ends the goroutine StartStatements started.
+func (s *Server) StopStatements() {
+	x := &s.stmts
+	x.mu.Lock()
+	stop := x.stop
+	x.mu.Unlock()
+	if stop != nil {
+		stop()
+	}
+}
+
+// statementKeys are the keys statements are verified with, and they are NOT the token keys: GET /v1/keys is unchanged and carries
+// only the keys a token may be signed with, for the window a token can live. A statement's key is published here (every
+// key that signed a statement that stands, and the one in use) and, for one statement, at /s/<id>/keys.json. No verifier of a
+// token, a packet credential, a feed or an attestation reads this set, so a key that left the token window does not become
+// acceptable for any of them by appearing in it.
+func (s *Server) statementKeyRows(ctx context.Context) ([]store.SigningKey, error) {
 	x := &s.stmts
 	x.mu.RLock()
-	defer x.mu.RUnlock()
-	out := map[string]bool{}
+	warmed, synced := x.warmed, x.synced
+	live := map[string]bool{}
 	for _, e := range x.byID {
 		if !e.revoked && e.kid != "" {
-			out[e.kid] = true
+			live[e.kid] = true
 		}
 	}
-	return out
-}
-
-// publishedKeys are the signing keys GET /v1/keys and the verify page's checks use: the one in use, those retired since
-// `since`, and every key that signed a statement still standing.
-func (s *Server) publishedKeys(ctx context.Context, since time.Time) ([]store.SigningKey, error) {
+	x.mu.RUnlock()
+	if !warmed {
+		return nil, errStatementsCold
+	}
+	if s.opt.Clock().Sub(synced) > statementMaxStale {
+		return nil, errStatementsStale
+	}
 	rows, err := s.opt.Store.SigningKeys(ctx, time.Time{})
 	if err != nil {
 		return nil, err
 	}
-	live := s.liveStatementKids()
 	out := rows[:0:0]
 	for _, k := range rows {
-		if k.RetiredAt == nil || k.RetiredAt.After(since) || live[k.KeyID] {
+		if k.RetiredAt == nil || live[k.KeyID] {
 			out = append(out, k)
 		}
 	}
 	return out, nil
 }
 
-// WarmStatements reads the statement records of the chain once, so no public request does. A failure starts a background
-// retry (every few seconds) and returns the error; until a read succeeds the public page answers 503 and reads nothing.
-func (s *Server) WarmStatements(ctx context.Context) error {
+// statementKeyFor is the key with this id, whatever its state (a statement is verified with the key that signed it, revoked or
+// not). The JWK of a key id never changes, so it is kept after the first read.
+func (s *Server) statementKeyFor(ctx context.Context, kid string) (token.JWK, bool, error) {
+	s.keyMu.Lock()
+	raw, ok := s.kidKeys[kid]
+	s.keyMu.Unlock()
+	if !ok {
+		rows, err := s.opt.Store.SigningKeys(ctx, time.Time{})
+		if err != nil {
+			return token.JWK{}, false, err
+		}
+		s.keyMu.Lock()
+		if s.kidKeys == nil {
+			s.kidKeys = map[string]json.RawMessage{}
+		}
+		for _, k := range rows {
+			s.kidKeys[k.KeyID] = k.JWK
+		}
+		raw, ok = s.kidKeys[kid]
+		s.keyMu.Unlock()
+		if !ok {
+			return token.JWK{}, false, nil
+		}
+	}
+	var j token.JWK
+	if json.Unmarshal(raw, &j) != nil {
+		return token.JWK{}, false, nil
+	}
+	return j, true, nil
+}
+
+// statementKeys is GET /v1/statement-keys: the statement verification keys (a JWKS), public like /v1/keys. A cold or stale index
+// is 503, never an empty set.
+func (s *Server) statementKeys(w http.ResponseWriter, r *http.Request) {
+	s.StartStatements(context.Background())
+	rows, err := s.statementKeyRows(r.Context())
+	if err != nil {
+		if errors.Is(err, errStatementsCold) || errors.Is(err, errStatementsStale) {
+			w.Header().Set("Retry-After", "2")
+			writeError(w, http.StatusServiceUnavailable, "the statements are not read yet: try again shortly")
+		} else {
+			writeError(w, http.StatusServiceUnavailable, "the store could not be read")
+		}
+		return
+	}
+	out := token.JWKS{Keys: []token.JWK{}}
+	for _, k := range rows {
+		var j token.JWK
+		if json.Unmarshal(k.JWK, &j) == nil {
+			out.Keys = append(out.Keys, j)
+		}
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, out)
+}
+
+// StatementListItem is one statement in GET /v1/statements.
+type StatementListItem struct {
+	ID      string `json:"id" contract:"required"`
+	State   string `json:"state" contract:"required"`
+	Profile string `json:"profile" contract:"required"`
+	Packet  string `json:"packet" contract:"required"`
+	Key     string `json:"key" contract:"required"`
+	Seq     int64  `json:"seq" contract:"required"`
+}
+
+// StatementList is GET /v1/statements's answer.
+type StatementList struct {
+	Items []StatementListItem `json:"items" contract:"required"`
+}
+
+var keyIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+
+// listStatements is GET /v1/statements?key=<key id>: an admin lists the statements signed by one key, whatever their state: what
+// retiring that key for compromise has to deal with (docs/statement.md).
+func (s *Server) listStatements(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.subscriber(w, r); !ok {
+		return
+	}
+	q := r.URL.Query()
+	for k := range q {
+		if k != "key" {
+			writeError(w, http.StatusBadRequest, "unknown parameter "+k+" (key only)")
+			return
+		}
+	}
+	kid := q.Get("key")
+	if !keyIDPattern.MatchString(kid) {
+		writeError(w, http.StatusBadRequest, "key is a signing key id")
+		return
+	}
+	if err := s.refreshForWrite(r.Context()); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "the store could not be read")
+		return
+	}
 	x := &s.stmts
 	x.mu.RLock()
-	warm := x.warmed
+	out := StatementList{Items: []StatementListItem{}}
+	for _, e := range x.byID {
+		if e.kid == kid {
+			out.Items = append(out.Items, StatementListItem{ID: e.id, State: e.state(), Profile: e.profile, Packet: e.packetID, Key: e.kid, Seq: e.seq})
+		}
+	}
 	x.mu.RUnlock()
-	if warm {
-		return nil
-	}
-	wctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	err := s.refreshForWrite(wctx)
-	cancel()
-	if err == nil {
-		return nil
-	}
-	x.mu.Lock()
-	start := !x.warming
-	x.warming = true
-	x.mu.Unlock()
-	if start {
-		go func() {
-			for {
-				time.Sleep(5 * time.Second)
-				rctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				e := s.refreshForWrite(rctx)
-				cancel()
-				if e == nil {
-					x.mu.Lock()
-					x.warming = false
-					x.mu.Unlock()
-					return
-				}
-			}
-		}()
-	}
-	return err
+	slices.SortFunc(out.Items, func(a, b StatementListItem) int { return int(a.Seq - b.Seq) })
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, out)
 }
 
 // statementEnvelope is the signed envelope of a statement, read from its issue record.
@@ -401,6 +571,32 @@ func (s *Server) statementEnvelope(ctx context.Context, e *stmtEntry) ([]byte, e
 		return nil, errors.New("the stored statement is unreadable")
 	}
 	return raw, nil
+}
+
+// checkpointRule says why a packet cannot carry a statement ("" when it can).
+func checkpointRule(files map[string][]byte, logKeys []byte) string {
+	var pj struct {
+		Verification struct {
+			Ledger struct {
+				State string `json:"state"`
+			} `json:"ledger"`
+		} `json:"verification"`
+	}
+	if json.Unmarshal(files["packet.json"], &pj) != nil {
+		return "packet.json is not readable"
+	}
+	switch pj.Verification.Ledger.State {
+	case "checkpointed":
+	default:
+		return "the packet stands on no witnessed ledger checkpoint (its ledger state is " + strconv.Quote(pj.Verification.Ledger.State) + "): every cited record must be under one"
+	}
+	if len(bytes.TrimSpace(files[packet.FileProofs])) == 0 || len(bytes.TrimSpace(files[packet.FileCheckpoint])) == 0 {
+		return "the packet says it is checkpointed and does not carry its inclusion proofs and its checkpoint"
+	}
+	if len(bytes.TrimSpace(logKeys)) == 0 {
+		return "this deployment has no log keys configured (CLEARANCE_STATEMENT_LOG_KEYS_FILE): the checkpoint and the proofs cannot be checked, so no statement is signed over them"
+	}
+	return ""
 }
 
 func statementRequestKey(packetDigest string, req StatementRequest, profile string) (string, error) {
@@ -550,7 +746,7 @@ func (s *Server) issueStatement(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusNotFound, "no such statement to supersede")
 			case old.revoked:
 				writeError(w, http.StatusConflict, "that statement is revoked: a revoked statement stays revoked; to issue its content again send reissue, or issue a new one without supersedes")
-			case old.supersededBy != "":
+			case old.supersededBy != "" && !(x.byID[old.supersededBy] != nil && x.byID[old.supersededBy].revoked):
 				writeError(w, http.StatusConflict, "that statement has already been superseded")
 			default:
 				return false
@@ -564,6 +760,10 @@ func (s *Server) issueStatement(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusNotFound, "no such statement to reissue")
 			case !old.revoked:
 				writeError(w, http.StatusConflict, "that statement is not revoked: a statement that stands is corrected with supersedes")
+			case old.packetID != req.Packet || old.scope != req.Scope || old.policy != req.PolicyVersion || old.profile != profile:
+				writeError(w, http.StatusConflict, "a reissue repeats the revoked statement's content (the same packet, scope, policy version and profile): to change any of them, issue a new statement without reissue")
+			case old.reissuedBy != "" && x.byID[old.reissuedBy] != nil && !x.byID[old.reissuedBy].revoked:
+				writeError(w, http.StatusConflict, "that statement was already reissued as "+old.reissuedBy+", which stands: one live reissue per revoked statement")
 			default:
 				return false
 			}
@@ -589,11 +789,19 @@ func (s *Server) issueStatement(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "the packet cannot be summarised: "+err.Error())
 		return
 	}
-	// The packet is the admin's to publish; the counts in it are checked here, with the checks the page runs, before anything is
-	// signed. A check whose input is missing is not a refusal (the page shows it NOT CHECKED); one that FAILS is.
-	for _, c := range verify.StatementPacketChecks(doc, s.statementVerifyOptions(b.Files)) {
-		if c.Status == verify.Fail {
-			writeError(w, http.StatusUnprocessableEntity, "the packet does not support the statement, so none was signed: "+c.Name)
+	// The packet is the admin's to publish, so what it says is checked before anything is signed. A packet that says it is
+	// checkpointed must carry its proofs and its checkpoint, and this deployment must hold the log keys to check them with: a
+	// statement is not signed over proofs nobody checked. A packet on no checkpoint is refused: a statement's third check is
+	// that every cited record is under one, and it could never pass.
+	if why := checkpointRule(b.Files, s.statementOpts().LogKeys); why != "" {
+		writeError(w, http.StatusUnprocessableEntity, "the packet does not support a statement, so none was signed: "+why)
+		return
+	}
+	checks := verify.StatementPacketChecks(doc, s.statementVerifyOptions(b.Files))
+	for i, c := range checks {
+		// Checks 3 to 6. A failure is a refusal; so is a check 3 that is anything but a pass or "records after the checkpoint".
+		if c.Status == verify.Fail || (i == 0 && c.Status != verify.Pass && c.Status != verify.NotCheckpointed) {
+			writeError(w, http.StatusUnprocessableEntity, "the packet does not support the statement, so none was signed: "+c.Name+" ("+string(c.Status)+")")
 			return
 		}
 	}
@@ -639,7 +847,7 @@ func (s *Server) issueStatement(w http.ResponseWriter, r *http.Request) {
 	}
 	var rec store.Record
 	err = s.opt.Store.Atomic(ctx, func(tx store.Tx) error {
-		st := map[string]any{"id": id, "profile": profile, "request_sha256": reqKey, "payload_sha256": digest, "envelope": envObj}
+		st := map[string]any{"id": id, "profile": profile, "scope": req.Scope, "policy_version": req.PolicyVersion, "request_sha256": reqKey, "payload_sha256": digest, "envelope": envObj}
 		if req.Supersedes != "" {
 			st["supersedes"] = req.Supersedes
 		}
@@ -661,13 +869,13 @@ func (s *Server) issueStatement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	seq, _ := gate.SeqInt(rec["seq"])
-	e := &stmtEntry{id: id, digest: digest, kid: signer.KeyID(), packetID: pk.ID, profile: profile, supersedes: req.Supersedes, reissues: req.Reissue, reqKey: reqKey, seq: seq, hash: fmt.Sprint(rec["hash"])}
+	e := &stmtEntry{id: id, digest: digest, kid: signer.KeyID(), packetID: pk.ID, profile: profile, scope: req.Scope, policy: req.PolicyVersion,
+		supersedes: req.Supersedes, reissues: req.Reissue, reqKey: reqKey, seq: seq, hash: fmt.Sprint(rec["hash"])}
 	x.mu.Lock()
-	x.byID[id], x.byReq[reqKey] = e, id
-	if req.Supersedes != "" {
-		x.byID[req.Supersedes].supersededBy = id
-	}
-	cp := *e
+	// The background refresh may have read this very record already, and folded a revocation of it in: it is not overwritten.
+	x.initLocked()
+	x.applyLocked(stmtEvent{issue: e})
+	cp := *x.byID[id]
 	x.mu.Unlock()
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, s.issued(&cp, true))

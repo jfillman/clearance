@@ -128,3 +128,16 @@ func TestAChangeToTheVerifyLogKeysRestartsTheCore(t *testing.T) {
 		t.Errorf("%v %v", a, b)
 	}
 }
+
+// A change to the witness policy the statement checks read also changes the core pod's template: the core reads the policy once, at start.
+func TestAChangeToTheWitnessPolicyRestartsTheCoreWhenTheVerifyPageIsOn(t *testing.T) {
+	sum := func(policy string) any {
+		d := find(render(t, "-f", valuesFile("verify-values.yaml"), "--set", "ledger.enabled=true", "--set", "ledger.existingSecret=clearance-ledger",
+			"--set", "ledger.witnessPolicy="+policy), "Deployment", "t-clearance-core")
+		return get(d, "spec", "template", "metadata", "annotations", "checksum/verify-config")
+	}
+	a, b := sum("witness a vkey-a https://a.example.com"), sum("witness b vkey-b https://b.example.com")
+	if a == nil || a == b {
+		t.Errorf("%v %v", a, b)
+	}
+}

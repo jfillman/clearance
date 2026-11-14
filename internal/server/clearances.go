@@ -163,9 +163,7 @@ const KeysWindow = token.MaxLifetime
 // keys is GET /v1/keys: the clearance token verification keys (a JWKS), the one in use and those retired within
 // KeysWindow. Public; no token asked.
 func (s *Server) keys(w http.ResponseWriter, r *http.Request) {
-	// The one in use, those retired within KeysWindow, and every key that signed a verification statement still standing (P-3): a
-	// statement does not stop verifying when its key leaves the window.
-	rows, err := s.publishedKeys(r.Context(), s.opt.Clock().Add(-KeysWindow))
+	rows, err := s.opt.Store.SigningKeys(r.Context(), s.opt.Clock().Add(-KeysWindow))
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "the store could not be read")
 		return
