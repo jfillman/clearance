@@ -25,9 +25,12 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	identity := fs.String("identity", "", "attestations: the identity the signing certificate must name. Without --identity and --issuer the signer is read from each attestation and reported as unpinned")
 	issuer := fs.String("issuer", "", "attestations: the OIDC issuer the signing certificate must record")
 	seen := fs.String("seen-file", "", "the local note of checkpoints seen (default: <user config dir>/clearance/verify-seen.json)")
+	sample := fs.String("sample", "", "check a sample file (the answer of GET /v1/packets/{id}/sample) instead of a packet directory")
+	sampleRecord := fs.String("sample-record", "", "with --sample: the core's packet.sample record the sample names (GET /v1/evidence/{seq} on the core), which the sample's own copy is compared with. Without it the check that the core drew the sample is NOT CHECKED (exit 2)")
+	samplePacket := fs.String("packet", "", "with --sample: the packet directory the sample was drawn from, which the sample is then checked against")
 	noSeen := fs.Bool("no-seen", false, "neither read nor write the note of checkpoints seen")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: clearance verify <packet-dir> [flags]\n\nChecks an evidence packet offline: no call to Clearance, a database or the recorder.\n"+
+		fmt.Fprintln(stderr, sampleUsage+"\n\nor, for a packet:\n\nusage: clearance verify <packet-dir> [flags]\n\nChecks an evidence packet offline: no call to Clearance, a database or the recorder.\n"+
 			"Exit 0 verified; 1 failed; 2 nothing failed but something could not be established (a trust input missing, keys taken from the packet, not checkpointed).")
 		fs.PrintDefaults()
 	}
@@ -37,6 +40,18 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	}
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if *sample != "" {
+		if dir != "" || fs.NArg() > 0 {
+			fmt.Fprintln(stderr, "verify: --sample takes a file, not a packet directory (use --packet <dir> for the packet it was drawn from)")
+			return 2
+		}
+	} else if *samplePacket != "" || *sampleRecord != "" {
+		fmt.Fprintln(stderr, "verify: --packet and --sample-record go with --sample")
+		return 2
+	}
+	if *sample != "" {
+		return verifySampleMain(*sample, *samplePacket, [3]string{*logKeys, *policy, *sampleRecord}, stdout, stderr)
 	}
 	if dir == "" && fs.NArg() == 1 {
 		dir = fs.Arg(0)
@@ -113,3 +128,32 @@ type recipientFlag []string
 
 func (r *recipientFlag) String() string     { return strings.Join(*r, ",") }
 func (r *recipientFlag) Set(v string) error { *r = append(*r, v); return nil }
+
+// verifySampleMain is `clearance verify --sample`; trust is the paths of the log keys and the witness policy.
+func verifySampleMain(sample, packetDir string, trust [3]string, stdout, stderr io.Writer) int {
+	var o Options
+	for _, in := range []struct {
+		flag, path string
+		into       *[]byte
+		src        *string
+	}{{"log-keys", trust[0], &o.LogKeys, &o.LogKeysSrc}, {"witness-policy", trust[1], &o.WitnessPolicy, &o.WitnessPolicySrc}, {"sample-record", trust[2], &o.SampleRecord, &o.SampleRecordSrc}} {
+		if in.path == "" {
+			continue
+		}
+		b, err := os.ReadFile(in.path)
+		if err != nil {
+			fmt.Fprintf(stderr, "verify: --%s: %v\n", in.flag, err)
+			return 2
+		}
+		*in.into, *in.src = b, in.path
+	}
+	if packetDir != "" {
+		if st, err := os.Stat(packetDir); err != nil || !st.IsDir() {
+			fmt.Fprintf(stderr, "verify: %s is not a packet directory\n", packetDir)
+			return 2
+		}
+	}
+	rep := VerifySample(sample, packetDir, o)
+	rep.Write(stdout)
+	return rep.ExitCode()
+}

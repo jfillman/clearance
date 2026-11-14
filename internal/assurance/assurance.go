@@ -22,6 +22,7 @@ import (
 
 	"github.com/jfillman/clearance/internal/packet"
 	"github.com/jfillman/clearance/internal/receipt"
+	"github.com/jfillman/clearance/internal/sampling"
 )
 
 // Client reaches a core's packet routes.
@@ -118,6 +119,46 @@ func (c *Client) Pull(ctx context.Context, packetID, credential, part string) (*
 		return nil, fmt.Errorf("assurance: asked for %s and the core sent %s", packetID, b.ID)
 	}
 	return b, nil
+}
+
+// SampleRequest is what a sample call asks for (P-2): zero N is the core's default (25), an empty Stratify uniform. The Seed
+// is required: the auditor chooses it once the packet's digest is fixed.
+type SampleRequest struct {
+	N        int
+	Seed     string
+	Stratify string
+}
+
+// Sample draws a sample of a packet's cleared changes under a credential. The document is parsed and its packet checked to
+// be the one asked for; the raw bytes are returned too, to write to a file for `clearance verify --sample`.
+func (c *Client) Sample(ctx context.Context, packetID, credential string, r SampleRequest) (*sampling.Document, []byte, error) {
+	if !sampling.ValidSeed(r.Seed) {
+		return nil, nil, errors.New("assurance: a sample needs a seed (1 to 64 letters, digits, dots, underscores or hyphens)")
+	}
+	q := url.Values{}
+	if r.N != 0 {
+		q.Set("n", fmt.Sprint(r.N))
+	}
+	q.Set("seed", r.Seed)
+	if r.Stratify != "" {
+		q.Set("stratify", r.Stratify)
+	}
+	path := "/v1/packets/" + url.PathEscape(packetID) + "/sample"
+	if len(q) > 0 {
+		path += "?" + q.Encode()
+	}
+	raw, err := c.do(ctx, http.MethodGet, path, nil, credential)
+	if err != nil {
+		return nil, nil, err
+	}
+	var d sampling.Document
+	if err := json.Unmarshal(raw, &d); err != nil || d.Schema != sampling.Schema {
+		return nil, nil, errors.New("assurance: the core's answer is not a sample document")
+	}
+	if d.Packet.ID != packetID {
+		return nil, nil, fmt.Errorf("assurance: asked for a sample of %s and the core sent one of %s", packetID, d.Packet.ID)
+	}
+	return &d, raw, nil
 }
 
 // Recorded is the core's answer to an accepted receipt.

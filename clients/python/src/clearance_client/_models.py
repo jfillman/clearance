@@ -18,7 +18,7 @@ CONTRACT_VERSION = "1.0.0"
 
 RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "run.finish", "human.answer", "session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome", "deploy.exception", "deploy.degraded", "federated.decision", "observation", "assessment", "resolution", "observation.health", "observation.verification", "grc.push", "grc.report")
 
-__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Delivery", "DeliveryRequest", "DeliveryWindow", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateBulkResolutionFailed", "GateBulkResolutionRecorded", "GateBulkResolutionRequest", "GateBulkResolutionResult", "GateBulkResolutionSkipped", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateReason", "GateRequirement", "GateResolutionRecorded", "GateResolutionRequest", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PacketBundle", "PacketCheckpointRef", "PacketError", "PacketLinks", "PacketMeta", "PacketPublished", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProvidedDefinition", "ProviderEvent", "Ready", "ReceiptRecorded", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "TargetsGate", "TargetsObserver", "TargetsRequest", "TargetsResult", "TargetsTarget", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
+__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Delivery", "DeliveryRequest", "DeliveryWindow", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateBulkResolutionFailed", "GateBulkResolutionRecorded", "GateBulkResolutionRequest", "GateBulkResolutionResult", "GateBulkResolutionSkipped", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateReason", "GateRequirement", "GateResolutionRecorded", "GateResolutionRequest", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PacketBundle", "PacketCheckpointRef", "PacketError", "PacketLinks", "PacketMeta", "PacketPublished", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProvidedDefinition", "ProviderEvent", "Ready", "ReceiptRecorded", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "SamplingCheckpoint", "SamplingDocument", "SamplingItem", "SamplingPacketRef", "SamplingParams", "SamplingPopulationDoc", "SamplingProof", "SamplingRecorded", "SamplingRow", "SamplingStratum", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "TargetsGate", "TargetsObserver", "TargetsRequest", "TargetsResult", "TargetsTarget", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -2090,6 +2090,224 @@ class ReviewResult(Model):
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
+class SamplingCheckpoint(Model):
+    """Contract schema SamplingCheckpoint."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("log_keys", "log_keys", ("str",), False),
+        Field("note", "note", ("str",), True),
+        Field("origin", "origin", ("str",), True),
+        Field("root", "root", ("str",), True),
+        Field("size", "size", ("int",), True),
+        Field("witness_policy", "witness_policy", ("str",), False),
+    )
+
+    log_keys: str | None = None
+    note: str
+    origin: str
+    root: str
+    size: int
+    witness_policy: str | None = None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class SamplingDocument(Model):
+    """Contract schema SamplingDocument."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("checkpoint", "checkpoint", ("ref", "SamplingCheckpoint"), True),
+        Field("delivery", "delivery", ("str",), True),
+        Field("effective_seed", "effective_seed", ("str",), True),
+        Field("method", "method", ("str",), True),
+        Field("packet", "packet", ("ref", "SamplingPacketRef"), True),
+        Field("params", "params", ("ref", "SamplingParams"), True),
+        Field("population", "population", ("ref", "SamplingPopulationDoc"), True),
+        Field("recipient", "recipient", ("str",), True),
+        Field("recorded", "recorded", ("nullable", ("ref", "SamplingRecorded")), False),
+        Field("schema", "schema", ("str",), True),
+        Field("selected", "selected", ("list", ("ref", "SamplingItem")), True),
+        Field("strata", "strata", ("list", ("ref", "SamplingStratum")), False),
+    )
+
+    checkpoint: SamplingCheckpoint
+    delivery: str
+    effective_seed: str
+    method: str
+    packet: SamplingPacketRef
+    params: SamplingParams
+    population: SamplingPopulationDoc
+    recipient: str
+    recorded: SamplingRecorded | None = None
+    schema: str
+    selected: list[SamplingItem]
+    strata: list[SamplingStratum] | None = None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class SamplingItem(Model):
+    """Contract schema SamplingItem."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("change", "change", ("str",), True),
+        Field("month", "month", ("str",), True),
+        Field("proof", "proof", ("ref", "SamplingProof"), True),
+        Field("record", "record", ("any",), True),
+        Field("seq", "seq", ("int",), True),
+        Field("tier", "tier", ("nullable", ("int",)), True),
+    )
+
+    change: str
+    month: str
+    proof: SamplingProof
+    record: Any
+    seq: int
+    tier: int | None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class SamplingPacketRef(Model):
+    """Contract schema SamplingPacketRef."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("digest", "digest", ("str",), True),
+        Field("from", "from_", ("str",), True),
+        Field("id", "id", ("str",), True),
+        Field("to", "to", ("str",), True),
+    )
+
+    digest: str
+    from_: str
+    id: str
+    to: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class SamplingParams(Model):
+    """Contract schema SamplingParams."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("n", "n", ("int",), True),
+        Field("seed", "seed", ("str",), True),
+        Field("stratify", "stratify", ("str",), True),
+    )
+
+    n: int
+    seed: str
+    stratify: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class SamplingPopulationDoc(Model):
+    """Contract schema SamplingPopulationDoc."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("changes", "changes", ("list", ("ref", "SamplingRow")), True),
+        Field("cleared", "cleared", ("int",), True),
+        Field("cleared_excluded", "cleared_excluded", ("map", ("int",)), True),
+        Field("count", "count", ("int",), True),
+        Field("eligible", "eligible", ("int",), True),
+        Field("sha256", "sha256", ("str",), True),
+    )
+
+    changes: list[SamplingRow]
+    cleared: int
+    cleared_excluded: dict[str, int]
+    count: int
+    eligible: int
+    sha256: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class SamplingProof(Model):
+    """Contract schema SamplingProof."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("hash", "hash", ("str",), True),
+        Field("leaf_hash", "leaf_hash", ("str",), True),
+        Field("path", "path", ("list", ("str",)), True),
+        Field("seq", "seq", ("int",), True),
+        Field("tree_size", "tree_size", ("int",), True),
+    )
+
+    hash: str
+    leaf_hash: str
+    path: list[str]
+    seq: int
+    tree_size: int
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class SamplingRecorded(Model):
+    """Contract schema SamplingRecorded."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("hash", "hash", ("str",), True),
+        Field("record", "record", ("any",), True),
+        Field("seq", "seq", ("int",), True),
+    )
+
+    hash: str
+    record: Any
+    seq: int
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class SamplingRow(Model):
+    """Contract schema SamplingRow."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("app", "app", ("str",), True),
+        Field("change", "change", ("str",), True),
+        Field("clear_seq", "clear_seq", ("nullable", ("int",)), True),
+        Field("clear_verified", "clear_verified", ("bool",), True),
+        Field("eligible", "eligible", ("bool",), True),
+        Field("env", "env", ("str",), True),
+        Field("excluded", "excluded", ("str",), False),
+        Field("month", "month", ("str",), True),
+        Field("state", "state", ("str",), True),
+        Field("tier", "tier", ("nullable", ("int",)), True),
+    )
+
+    app: str
+    change: str
+    clear_seq: int | None
+    clear_verified: bool
+    eligible: bool
+    env: str
+    excluded: str | None = None
+    month: str
+    state: str
+    tier: int | None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class SamplingStratum(Model):
+    """Contract schema SamplingStratum."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("month", "month", ("str",), True),
+        Field("population", "population", ("int",), True),
+        Field("sample", "sample", ("int",), True),
+        Field("tier", "tier", ("nullable", ("int",)), True),
+    )
+
+    month: str
+    population: int
+    sample: int
+    tier: int | None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
 class Scope(Model):
     """Contract schema DecideScope (a request type: unknown keys are refused by the core)."""
 
@@ -2561,6 +2779,16 @@ MODELS: dict[str, type[Model]] = {
     "ReviewChange": ReviewChange,
     "ReviewProblem": ReviewProblem,
     "ReviewResult": ReviewResult,
+    "SamplingCheckpoint": SamplingCheckpoint,
+    "SamplingDocument": SamplingDocument,
+    "SamplingItem": SamplingItem,
+    "SamplingPacketRef": SamplingPacketRef,
+    "SamplingParams": SamplingParams,
+    "SamplingPopulationDoc": SamplingPopulationDoc,
+    "SamplingProof": SamplingProof,
+    "SamplingRecorded": SamplingRecorded,
+    "SamplingRow": SamplingRow,
+    "SamplingStratum": SamplingStratum,
     "Scope": Scope,
     "SessionState": SessionState,
     "SourceFailure": SourceFailure,
@@ -2606,6 +2834,7 @@ OPERATIONS: dict[str, Operation] = {
     "getPacket": Operation("GET", "/v1/packets/{id}", "packet-credential", 65536, None, PacketBundle),
     "deliverPacket": Operation("POST", "/v1/packets/{id}/deliveries", "bearer", 8192, DeliveryRequest, Delivery),
     "acceptReceipt": Operation("POST", "/v1/packets/{id}/receipts", "recipient-signature", 262144, None, ReceiptRecorded),
+    "getPacketSample": Operation("GET", "/v1/packets/{id}/sample", "packet-credential", 65536, None, SamplingDocument),
     "verifyProvenance": Operation("POST", "/v1/provenance", "bearer", 4194304, None, ProvenanceVerdict),
     "appendRecord": Operation("POST", "/v1/records", "provider", 262144, RecordRequest, RecordRef),
     "publishTargets": Operation("PUT", "/v1/targets/{source}", "provider", 4194304, TargetsRequest, TargetsResult),

@@ -3403,6 +3403,337 @@
         ],
         "type": "object"
       },
+      "SamplingCheckpoint": {
+        "properties": {
+          "log_keys": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "root": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "witness_policy": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "note",
+          "origin",
+          "root",
+          "size"
+        ],
+        "type": "object"
+      },
+      "SamplingDocument": {
+        "properties": {
+          "checkpoint": {
+            "$ref": "#/components/schemas/SamplingCheckpoint"
+          },
+          "delivery": {
+            "type": "string"
+          },
+          "effective_seed": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "packet": {
+            "$ref": "#/components/schemas/SamplingPacketRef"
+          },
+          "params": {
+            "$ref": "#/components/schemas/SamplingParams"
+          },
+          "population": {
+            "$ref": "#/components/schemas/SamplingPopulationDoc"
+          },
+          "recipient": {
+            "type": "string"
+          },
+          "recorded": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SamplingRecorded"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "schema": {
+            "type": "string"
+          },
+          "selected": {
+            "items": {
+              "$ref": "#/components/schemas/SamplingItem"
+            },
+            "type": "array"
+          },
+          "strata": {
+            "items": {
+              "$ref": "#/components/schemas/SamplingStratum"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "checkpoint",
+          "delivery",
+          "effective_seed",
+          "method",
+          "packet",
+          "params",
+          "population",
+          "recipient",
+          "schema",
+          "selected"
+        ],
+        "type": "object"
+      },
+      "SamplingItem": {
+        "properties": {
+          "change": {
+            "type": "string"
+          },
+          "month": {
+            "type": "string"
+          },
+          "proof": {
+            "$ref": "#/components/schemas/SamplingProof"
+          },
+          "record": {},
+          "seq": {
+            "type": "integer"
+          },
+          "tier": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "change",
+          "month",
+          "proof",
+          "record",
+          "seq",
+          "tier"
+        ],
+        "type": "object"
+      },
+      "SamplingPacketRef": {
+        "properties": {
+          "digest": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "digest",
+          "from",
+          "id",
+          "to"
+        ],
+        "type": "object"
+      },
+      "SamplingParams": {
+        "properties": {
+          "n": {
+            "type": "integer"
+          },
+          "seed": {
+            "type": "string"
+          },
+          "stratify": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "n",
+          "seed",
+          "stratify"
+        ],
+        "type": "object"
+      },
+      "SamplingPopulationDoc": {
+        "properties": {
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/SamplingRow"
+            },
+            "type": "array"
+          },
+          "cleared": {
+            "type": "integer"
+          },
+          "cleared_excluded": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "eligible": {
+            "type": "integer"
+          },
+          "sha256": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "changes",
+          "cleared",
+          "cleared_excluded",
+          "count",
+          "eligible",
+          "sha256"
+        ],
+        "type": "object"
+      },
+      "SamplingProof": {
+        "properties": {
+          "hash": {
+            "type": "string"
+          },
+          "leaf_hash": {
+            "type": "string"
+          },
+          "path": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "tree_size": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "hash",
+          "leaf_hash",
+          "path",
+          "seq",
+          "tree_size"
+        ],
+        "type": "object"
+      },
+      "SamplingRecorded": {
+        "properties": {
+          "hash": {
+            "type": "string"
+          },
+          "record": {},
+          "seq": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "hash",
+          "record",
+          "seq"
+        ],
+        "type": "object"
+      },
+      "SamplingRow": {
+        "properties": {
+          "app": {
+            "type": "string"
+          },
+          "change": {
+            "type": "string"
+          },
+          "clear_seq": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "clear_verified": {
+            "type": "boolean"
+          },
+          "eligible": {
+            "type": "boolean"
+          },
+          "env": {
+            "type": "string"
+          },
+          "excluded": {
+            "type": "string"
+          },
+          "month": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "tier": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "app",
+          "change",
+          "clear_seq",
+          "clear_verified",
+          "eligible",
+          "env",
+          "month",
+          "state",
+          "tier"
+        ],
+        "type": "object"
+      },
+      "SamplingStratum": {
+        "properties": {
+          "month": {
+            "type": "string"
+          },
+          "population": {
+            "type": "integer"
+          },
+          "sample": {
+            "type": "integer"
+          },
+          "tier": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "month",
+          "population",
+          "sample",
+          "tier"
+        ],
+        "type": "object"
+      },
       "TargetsGate": {
         "additionalProperties": false,
         "properties": {
@@ -5755,6 +6086,149 @@
         "summary": "The recipient's acceptance receipt: a DSSE envelope (application/vnd.clearance.acceptance-receipt.v1+json) signed with a key the recipient registered, naming the packet, the delivery, the engagement, the framework and mapping versions, the checkpoint, the verdict (accepted, accepted-with-notes, questioned, rejected) and control notes keyed to the mapping's rows. The signature is the authentication. The core checks the key, the delivery and that the receipt binds this packet's digest, mappings and checkpoint, then records it (packet.receipt). A later packet carries it in its Acceptances section.",
         "x-clearance-auth": "recipient-signature",
         "x-clearance-max-body": 262144
+      }
+    },
+    "/v1/packets/{id}/sample": {
+      "get": {
+        "operationId": "getPacketSample",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "the sample size, 1 to 100 (default 25); at most the number of eligible changes",
+            "in": "query",
+            "name": "n",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "description": "required: 1 to 64 letters, digits, dots, underscores or hyphens, chosen by the auditor after the packet's digest is fixed (there is no default seed)",
+            "in": "query",
+            "name": "seed",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "none (uniform, the default) or tier-month (proportional by tier and the month of the change's first record)",
+            "in": "query",
+            "name": "stratify",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SamplingDocument"
+                }
+              }
+            },
+            "description": "the sample document (clearance.packet-sample/v1)"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "an unknown, repeated, malformed or out-of-range query parameter, a missing seed, or n above the eligible changes"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PacketError"
+                }
+              }
+            },
+            "description": "no credential, one the core did not issue, or an expired one (PK-EXPIRED)"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PacketError"
+                }
+              }
+            },
+            "description": "another packet, a credential without both parts, not yet good, or a recipient no longer registered"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PacketError"
+                }
+              }
+            },
+            "description": "the core does not hold the packet"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the packet stood on no witnessed checkpoint, so nothing in it has an inclusion proof"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the encoded sample would be over the size the verifier reads"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PacketError"
+                }
+              }
+            },
+            "description": "the delivery has been read, refused or sampled too often (the caps: reads per hour, refusals per hour, 20 distinct samples); nothing past a cap is recorded"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the store could not record it: treat as unreachable (fail closed)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The recipient draws a sample of the packet's cleared changes (P-2) under the same credential as GET /v1/packets/{id}, which must carry both parts (summary and evidence). The sample is reproducible: the same packet, seed, n and stratify give the same changes, and the response states the rule and the effective seed. Each sampled change comes with its clear record and an inclusion proof against the packet's checkpoint; the population (every change of the packet, with why any is not eligible, and the cleared changes excluded by reason) is printed with it, with its SHA-256. The seed is required: it is the auditor's, because a default would be a function of the packet alone and so something its builder could grind for. The sampling is a packet.sample record written before the answer; asking again for the same sample is served from that record and writes nothing. `clearance verify --sample` checks the result offline. A refusal is a packet.sample record with its rule, as a refused read is.",
+        "x-clearance-auth": "packet-credential",
+        "x-clearance-credential": "a packet access credential, minted by POST /v1/packets/{id}/deliveries (not an authenticator token)",
+        "x-clearance-max-body": 65536
       }
     },
     "/v1/provenance": {

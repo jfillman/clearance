@@ -1,6 +1,7 @@
 package verify
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -53,6 +54,10 @@ type Options struct {
 	// own carried key (SELF-VOUCHED).
 	RecipientKeys    map[string][]byte
 	RecipientKeysSrc map[string]string
+	// SampleRecord is the packet.sample record of a sample as the core serves it (GET /v1/evidence/{seq}), for `--sample`: what
+	// the sample's record is compared with. Empty: the check that the core drew the sample is NOT CHECKED.
+	SampleRecord    []byte
+	SampleRecordSrc string
 	// SeenFile is the local note of checkpoints seen (the weak-witness behaviour). Empty: none is kept.
 	SeenFile string
 	Now      func() time.Time
@@ -69,6 +74,9 @@ type ctx struct {
 	recs     []rec
 	cp       *checkpoint // the checkpoint as verified or, with no key, as stated
 	cpTrust  trust       // how far the checkpoint's root is authenticated
+	// mem, when not nil, is the whole file set (a sample document's carried checkpoint, keys and proofs): reads and
+	// existence checks are answered from it and never from disk.
+	mem map[string][]byte
 }
 
 type trust int
@@ -101,6 +109,12 @@ func Verify(dir string, opts Options) *Report {
 
 // read reads a packet file (a slash path inside dir), refusing anything outside it or over the cap.
 func (c *ctx) read(name string) ([]byte, error) {
+	if c.mem != nil {
+		if b, ok := c.mem[name]; ok {
+			return b, nil
+		}
+		return nil, fmt.Errorf("%s: not in the sample", name)
+	}
 	if name == "" || strings.Contains(name, "..") || strings.HasPrefix(name, "/") || strings.Contains(name, "\\") {
 		return nil, fmt.Errorf("%q is not a path inside the packet", name)
 	}
@@ -120,6 +134,10 @@ func (c *ctx) read(name string) ([]byte, error) {
 }
 
 func (c *ctx) exists(name string) bool {
+	if c.mem != nil {
+		b, ok := c.mem[name]
+		return ok && len(bytes.TrimSpace(b)) > 0
+	}
 	_, err := os.Stat(filepath.Join(c.dir, filepath.FromSlash(name)))
 	return err == nil
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/jfillman/clearance/internal/provenance"
 	"github.com/jfillman/clearance/internal/receipt"
 	"github.com/jfillman/clearance/internal/review"
+	"github.com/jfillman/clearance/internal/sampling"
 	"github.com/jfillman/clearance/internal/token"
 )
 
@@ -396,6 +397,31 @@ var routeTable = []Route{
 			{429, "this delivery has been refused too often this hour (the refusals past the cap are not recorded)", PacketError{}},
 			errs(503)[0]},
 		serve: func(s *Server) http.HandlerFunc { return s.getPacket },
+	},
+	{
+		Method: "GET", Path: "/v1/packets/{id}/sample", OperationID: "getPacketSample", Auth: AuthCredential, MaxBody: DefaultMaxBody,
+		Summary: "The recipient draws a sample of the packet's cleared changes (P-2) under the same credential as GET /v1/packets/{id}, " +
+			"which must carry both parts (summary and evidence). The sample is reproducible: the same packet, seed, n and stratify give " +
+			"the same changes, and the response states the rule and the effective seed. Each sampled change comes with its clear record " +
+			"and an inclusion proof against the packet's checkpoint; the population (every change of the packet, with why any is not " +
+			"eligible, and the cleared changes excluded by reason) is printed with it, with its SHA-256. The seed is required: it is the " +
+			"auditor's, because a default would be a function of the packet alone and so something its builder could grind for. The sampling is a packet.sample record written before the " +
+			"answer; asking again for the same sample is served from that record and writes nothing. `clearance verify --sample` checks " +
+			"the result offline. A refusal is a packet.sample record with its rule, as a refused read is.",
+		Query: []QueryParam{
+			{Name: "n", Description: "the sample size, 1 to 100 (default 25); at most the number of eligible changes", Integer: true},
+			{Name: "seed", Description: "required: 1 to 64 letters, digits, dots, underscores or hyphens, chosen by the auditor after the packet's digest is fixed (there is no default seed)"},
+			{Name: "stratify", Description: "none (uniform, the default) or tier-month (proportional by tier and the month of the change's first record)"}},
+		Responses: []Response{{200, "the sample document (clearance.packet-sample/v1)", sampling.Document{}},
+			{400, "an unknown, repeated, malformed or out-of-range query parameter, a missing seed, or n above the eligible changes", ErrorResponse{}},
+			{413, "the encoded sample would be over the size the verifier reads", ErrorResponse{}},
+			{401, "no credential, one the core did not issue, or an expired one (PK-EXPIRED)", PacketError{}},
+			{403, "another packet, a credential without both parts, not yet good, or a recipient no longer registered", PacketError{}},
+			{404, "the core does not hold the packet", PacketError{}},
+			{409, "the packet stood on no witnessed checkpoint, so nothing in it has an inclusion proof", ErrorResponse{}},
+			{429, "the delivery has been read, refused or sampled too often (the caps: reads per hour, refusals per hour, 20 distinct samples); nothing past a cap is recorded", PacketError{}},
+			errs(503)[0]},
+		serve: func(s *Server) http.HandlerFunc { return s.getSample },
 	},
 	{
 		Method: "POST", Path: "/v1/packets/{id}/receipts", OperationID: "acceptReceipt", Auth: AuthRecipientKey, MaxBody: receipt.MaxEnvelopeBytes,

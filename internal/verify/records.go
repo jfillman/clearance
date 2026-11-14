@@ -36,29 +36,12 @@ func (c *ctx) recordsCheck() {
 		lines = nil
 	}
 	for i, ln := range lines {
-		n := i + 1
-		v, err := canon.Parse(ln)
-		m, ok := v.(map[string]any)
-		if err != nil || !ok {
-			bad = append(bad, fmt.Sprintf("line %d: not a record (%v)", n, errOr(err, "not an object")))
-			continue
-		}
-		seq, ok := intOf(m["seq"])
-		stated, _ := m["hash"].(string)
-		prev, _ := m["prev_hash"].(string)
-		if !ok || len(stated) != 64 {
-			bad = append(bad, fmt.Sprintf("line %d: no seq or no 64-hex hash", n))
-			continue
-		}
-		delete(m, "hash")
-		cb, err := canon.Canonical(m)
-		if err != nil {
-			bad = append(bad, fmt.Sprintf("line %d (seq %d): cannot be canonicalized: %v", n, seq, err))
-			continue
-		}
-		r := rec{line: n, seq: seq, stated: stated, computed: canon.SHA256Hex(cb), prev: prev, m: m}
-		if r.computed != r.stated {
-			bad = append(bad, fmt.Sprintf("line %d (seq %d): ALTERED. It states hash %s and its content hashes to %s", n, seq, short8(stated), short8(r.computed)))
+		r, problem := parseRecordLine(i+1, ln)
+		if problem != "" {
+			bad = append(bad, problem)
+			if r.line == 0 {
+				continue
+			}
 		}
 		c.recs = append(c.recs, r)
 	}
@@ -87,6 +70,32 @@ func (c *ctx) recordsCheck() {
 		chk.Status, chk.Detail = Pass, fmt.Sprintf("%d records, every hash recomputes from the original, adjacent seqs are linked", len(c.recs))
 	}
 	c.rep.add(chk)
+}
+
+// parseRecordLine reads one carried record and recomputes its hash. A line that is not a record gives a zero rec and the
+// problem; a record whose hash does not recompute gives the rec (so its seq is still known) and the problem.
+func parseRecordLine(n int, ln []byte) (rec, string) {
+	v, err := canon.Parse(ln)
+	m, ok := v.(map[string]any)
+	if err != nil || !ok {
+		return rec{}, fmt.Sprintf("line %d: not a record (%v)", n, errOr(err, "not an object"))
+	}
+	seq, ok := intOf(m["seq"])
+	stated, _ := m["hash"].(string)
+	prev, _ := m["prev_hash"].(string)
+	if !ok || len(stated) != 64 {
+		return rec{}, fmt.Sprintf("line %d: no seq or no 64-hex hash", n)
+	}
+	delete(m, "hash")
+	cb, err := canon.Canonical(m)
+	if err != nil {
+		return rec{}, fmt.Sprintf("line %d (seq %d): cannot be canonicalized: %v", n, seq, err)
+	}
+	r := rec{line: n, seq: seq, stated: stated, computed: canon.SHA256Hex(cb), prev: prev, m: m}
+	if r.computed != r.stated {
+		return r, fmt.Sprintf("line %d (seq %d): ALTERED. It states hash %s and its content hashes to %s", n, seq, short8(stated), short8(r.computed))
+	}
+	return r, ""
 }
 
 func errOr(err error, s string) string {

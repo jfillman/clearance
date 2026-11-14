@@ -126,6 +126,14 @@ type Server struct {
 	receiptMu sync.Mutex
 	receipts  map[string]ReceiptRecorded
 
+	// sampleMu serializes samplings (P-2) and guards sampled, the index of samplings the chain already holds, so asking for a
+	// sample already drawn writes nothing. samplers keeps the checked sampling frame of the last few packets.
+	sampleMu sync.Mutex
+	sampled  *sampleIndex
+	samplers samplers
+	// sampleMax caps the encoded sample (0: sampling.MaxDocument); a test lowers it.
+	sampleMax int
+
 	// targetsMu serializes target publishes: the held-digest check and the write it guards are one step.
 	targetsMu sync.Mutex
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/jfillman/clearance/internal/cli"
 	"github.com/jfillman/clearance/internal/packet"
 	"github.com/jfillman/clearance/internal/receipt"
+	"github.com/jfillman/clearance/internal/sampling"
 )
 
 // The recipient's commands (P-1, docs/assurance.md): for a firm that has no system to pull a packet and sign a receipt
@@ -24,6 +25,7 @@ const credentialEnv = "CLEARANCE_PACKET_CREDENTIAL"
 
 func init() {
 	cli.Register(cli.Command{Name: "receipt pull", Summary: "recipient: read a packet under the credential a subscriber gave you and unpack it (no account)", Run: receiptPull})
+	cli.Register(cli.Command{Name: "receipt sample", Summary: "recipient: draw a sample of a packet's cleared changes, with an inclusion proof per record (no account); check it with `clearance verify --sample`", Run: receiptSample})
 	cli.Register(cli.Command{Name: "receipt sign", Summary: "recipient: sign an acceptance receipt for a packet you were given, with your own key (offline)", Run: receiptSign})
 	cli.Register(cli.Command{Name: "receipt submit", Summary: "recipient: send a signed receipt to the core that holds the packet (no account: the signature is the proof)", Run: receiptSubmit})
 }
@@ -72,6 +74,46 @@ func receiptPull(ctx context.Context, args []string, stdout, stderr io.Writer) i
 		return 1
 	}
 	fmt.Fprintf(stdout, "packet %s (digest %s): %d files in %s\nverify it with: clearance verify %s\n", b.ID, b.Digest, len(b.Files), *out, *out)
+	return 0
+}
+
+func receiptSample(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("receipt sample", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	core := fs.String("core", os.Getenv("CLEARANCE_URL"), "the core's URL (default $CLEARANCE_URL)")
+	id := fs.String("packet", "", "the packet id (pk-...), from the subscriber")
+	credFile := fs.String("credential-file", "", "a file holding the credential (- for stdin; default $"+credentialEnv+"): never a flag value")
+	n := fs.Int("n", 0, "the sample size, 1 to 100 (default 25)")
+	seed := fs.String("seed", "", "REQUIRED: a seed you choose once the packet's digest is fixed (letters, digits, . _ -; at most 64): the same packet, seed, n and stratify draw the same sample")
+	stratify := fs.String("stratify", "", "none (uniform, the default) or tier-month")
+	out := fs.String("out", "", "write the sample document here (default stdout)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *core == "" || !packet.ValidID(*id) || !sampling.ValidSeed(*seed) || fs.NArg() > 0 {
+		fmt.Fprintln(stderr, "usage: clearance receipt sample --core <url> --packet <pk-id> --seed S [--n N] [--stratify none|tier-month] [--credential-file <file>|-] [--out file]")
+		return 2
+	}
+	cred, err := readCredential(*credFile, os.Stdin)
+	if err != nil || cred == "" {
+		fmt.Fprintln(stderr, "receipt sample: no credential: give --credential-file (or - for stdin) or set "+credentialEnv)
+		return 2
+	}
+	doc, raw, err := (&assurance.Client{Base: *core}).Sample(ctx, *id, cred, assurance.SampleRequest{N: *n, Seed: *seed, Stratify: *stratify})
+	if err != nil {
+		fmt.Fprintln(stderr, "receipt sample:", err)
+		return 1
+	}
+	if *out == "" {
+		fmt.Fprintln(stdout, string(raw))
+		return 0
+	}
+	if err := os.WriteFile(*out, raw, 0o644); err != nil {
+		fmt.Fprintln(stderr, "receipt sample:", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "sample of %d of %d eligible changes of packet %s (%s, seed %s): %s\nverify it with: clearance verify --sample %s --packet <the packet directory> --sample-record <record %d, read from the core>\n",
+		len(doc.Selected), doc.Population.Eligible, doc.Packet.ID, doc.Params.Stratify, doc.Params.Seed, *out, *out, doc.Recorded.Seq)
 	return 0
 }
 
