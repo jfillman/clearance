@@ -80,7 +80,7 @@ cleared it. The month a change belongs to is the month (UTC) of its first record
 Everything is public, so anyone holding the packet redraws the same sample:
 
 ```text
-effective seed = SHA-256("clearance.sample-seed/v1" 0x00 packet digest 0x00 seed)      (seed is empty when none was given)
+effective seed = SHA-256("clearance.sample-seed/v1" 0x00 packet digest 0x00 seed)      (the seed is always the caller's: required)
 key(change)    = SHA-256(effective seed || big-endian 64-bit seq of its clearing record)
 uniform        = the n eligible changes with the smallest keys
 tier-month     = group the eligible changes by (tier, month); each group gets floor(n * size / eligible) places, the
