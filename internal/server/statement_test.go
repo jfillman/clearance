@@ -45,6 +45,8 @@ type p3opts struct {
 	stmt func(*server.StatementOptions)
 	// issuer is the token issuer the statements print ("": clearance).
 	issuer string
+	// noPage: the verify handler is not built (the listener is off).
+	noPage bool
 }
 
 type p3lab struct {
@@ -197,8 +199,10 @@ func p3Lab(t *testing.T, o p3opts) *p3lab {
 	}
 	l.pid = l.bundle.ID
 	f.do("POST", "/v1/packets", "user:admin", l.bundle.JSON).want(t, 200, "")
-	l.verifier = httptest.NewServer(f.core.Server.VerifyHandler())
-	t.Cleanup(l.verifier.Close)
+	if !o.noPage {
+		l.verifier = httptest.NewServer(f.core.Server.VerifyHandler())
+		t.Cleanup(l.verifier.Close)
+	}
 	return l
 }
 
@@ -212,6 +216,13 @@ func (l *p3lab) indep(t *testing.T) string {
 	}
 	t.Fatal("no independent witness in the policy")
 	return ""
+}
+
+// statementWriter writes a record the way the core's issue and revoke do: as the core, with the tool and the statement marked as fields it verified.
+func statementWriter() evidence.Writer {
+	w := evidence.Core("test")
+	w.Verified = map[string]bool{"tool": true, "statement": true, "packet": true, "ts": true, "decision": true, "target": true, "principal": true, "args_sha256": true, "result": true}
+	return w
 }
 
 func policy2(p string) []byte { return []byte(p) }
@@ -775,7 +786,7 @@ func TestP3ARevocationOnAnotherReplicaIsSeenWithinASecond(t *testing.T) {
 		_, err := tx.Append(context.Background(), store.Event{"ts": time.Now().UTC().Format(time.RFC3339), "task_id": nil, "session": nil, "parent": nil,
 			"principal": "user:admin", "agent": nil, "tool": server.ToolStatementRevoke, "tier": nil, "decision": "allow", "rule": nil,
 			"target": "statement:" + st.ID, "args_sha256": p2hex('0'), "boundary": "deployment", "result": "revoked elsewhere",
-			"statement": map[string]any{"id": st.ID, "reason": "elsewhere"}}, evidence.Core("test"))
+			"statement": map[string]any{"id": st.ID, "reason": "elsewhere"}}, statementWriter())
 		return err
 	}); err != nil {
 		t.Fatal(err)

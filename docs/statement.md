@@ -80,17 +80,27 @@ HTML, and verifies it offline. **The hosted proof on the production hostname is 
 - **Anonymous traffic cannot grow the chain.** No request to the public listener writes a record, a cookie or a file
   (asserted: the chain's head is unchanged after many reads, refusals and 429s). Only the authenticated issue and revoke write,
   and both are idempotent.
-- **The index is read in the background, never on a request and never before the core serves.** One goroutine reads the chain's tail about once a
-  second (one cheap `Head` read when nothing is new) once something needs it (the verify listener, `GET /v1/statement-keys`); a long chain warms page by
-  page, each page applied as it is read, so a read that times out resumes where it stopped; it stops when the core shuts down. Requests only read the
-  snapshot: they never wait on the store, an issue, a revoke or a refresh, and answer `503` at once when the snapshot is cold or older than ten seconds. The
-  snapshot is "as of" when its read began, never later.
+- **Nothing anonymous starts or drives the index.** One goroutine reads the chain's tail about once a second (one cheap `Head` read when nothing is
+  new). It is started only by: the startup pass when the chain already holds a statement the core issued (the same single pass that builds the
+  outcome index: no second scan), an admin's issue, revoke or list, and the verify listener being enabled. It is **never** started by an anonymous
+  request: on a core that has never issued a statement, `GET /v1/statement-keys` answers at once with the key in use (the whole set, since no statement
+  exists to need another) and touches neither the index nor the store (asserted: zero store calls, no goroutine). Once statements exist and the snapshot is
+  cold or older than ten seconds, it is `503`, never an empty set. A long chain warms page by page, each page applied as it is read, so a read that times
+  out resumes where it stopped. When the core stops, the loop stops for good: nothing restarts it. The index trusts only the records the core wrote as
+  statement records (its own provider, boundary deployment, and the tool and the statement marked as fields the core verified): a record with a statement
+  tool name written by a registered provider, or without those marks, is ignored.
+- **Which public paths can read the store, and what bounds them.** The public paths read the index snapshot, which needs no store read and never waits
+  on a refresh, an issue or a revoke; a cold or stale snapshot is `503` at once. Only these can read the store: a **result-cache miss** (the first view of a
+  statement, then once every ten minutes) reads the statement's record, its packet and its signing key, bounded by the global budget (`429` when spent),
+  the semaphore (2 verifications at once, then `503`) and the check-result cache (least recently used, 128 by default); a **first download** of
+  `statement.json` reads the statement's record, then it is served from a bounded cache of envelope bytes (64 statements, immutable); the **first**
+  `/s/<id>/keys.json` of a key reads the signing keys, then the key is kept. `status.json`, the page of a cached result, a 404 and `healthz` read no store
+  at all. Every other cost is the per-client budget.
 - **Constant-ish work per request.** Checks 1 to 6 rest on immutable data and this deployment's trust inputs, so they are run
   **once** per statement (and again after ten minutes), single-flight, and only for an id the chain holds a statement of. An
-  invented id costs a map lookup. The index of statements holds small entries only (no envelope: it is read from the statement's record
-  when wanted), at most `MaxStatements` of them, and public requests take only its read lock: they never wait on an issue, a revoke
-  or a slow store, and they never scan the chain (a cold index is `503` until the background warm succeeds). A run reads the packet this core already holds; **no request makes the server fetch anything**
-  (no witness lookup, no URL: the core's own store is the only thing read). Check 7 and the status are read fresh each time.
+  invented id costs a map lookup. The index of statements holds small entries only (no envelope), at most `MaxStatements` of them (a few megabytes in all).
+  **No request makes the server fetch anything** (no witness lookup, no URL: the core's own store is the only thing read). Check 7 and the status are read
+  from the snapshot each time.
 - **Caching that fits a revocable object.** The page and the status are `Cache-Control: no-store`: a revoked statement is
   revoked on the next load, whoever holds an earlier copy, and no shared cache can serve it as valid. The cost is bounded by the
   limits and the result cache. The signed statement is immutable, so it is `no-cache` with a strong `ETag` (revalidated, `304`

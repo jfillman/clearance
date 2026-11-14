@@ -140,7 +140,7 @@ func (s *Server) pauseStatementLoop(swap func()) {
 	was := s.stmts.loop
 	s.stmts.mu.RUnlock()
 	if was {
-		s.StopStatements()
+		s.PauseStatementLoopForTest()
 		for i := 0; i < 500; i++ {
 			s.stmts.mu.RLock()
 			running := s.stmts.loop
@@ -153,8 +153,71 @@ func (s *Server) pauseStatementLoop(swap func()) {
 	}
 	swap()
 	if was {
-		s.StartStatements(context.Background())
+		s.StartStatements()
 	}
+}
+
+// PauseStatementLoopForTest ends the running goroutine WITHOUT ending the core's statement life: StartStatements starts it again.
+func (s *Server) PauseStatementLoopForTest() {
+	s.stmts.mu.RLock()
+	stop := s.stmts.stop
+	s.stmts.mu.RUnlock()
+	if stop != nil {
+		stop()
+	}
+	for i := 0; i < 500; i++ {
+		s.stmts.mu.RLock()
+		running := s.stmts.loop
+		s.stmts.mu.RUnlock()
+		if !running {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// RestartStatementsForTest is what a restart of the core does for statements: the loop and the index are gone, and the startup pass over
+// the chain decides whether anything runs.
+func (s *Server) RestartStatementsForTest() error {
+	s.PauseStatementLoopForTest()
+	s.ColdStatementIndexForTest()
+	s.stmtRes.mu.Lock()
+	s.stmtRes.by, s.stmtRes.order = nil, nil
+	s.stmtRes.mu.Unlock()
+	return s.startupPass(context.Background())
+}
+
+// StatementsSeenForTest says whether the core knows the chain holds a statement.
+func (s *Server) StatementsSeenForTest() bool { return s.stmtSeen.Load() }
+
+// CountStoreCallsForTest counts the reads of the chain's head and records and of the signing keys from now on.
+func (s *Server) CountStoreCallsForTest() func() int {
+	c := &callCounter{}
+	s.pauseStatementLoop(func() { c.Store = s.opt.Store; s.opt.Store = c })
+	return func() int { c.mu.Lock(); defer c.mu.Unlock(); return c.n }
+}
+
+type callCounter struct {
+	store.Store
+	mu sync.Mutex
+	n  int
+}
+
+func (c *callCounter) bump() { c.mu.Lock(); c.n++; c.mu.Unlock() }
+
+func (c *callCounter) Head(ctx context.Context) (int64, string, error) {
+	c.bump()
+	return c.Store.Head(ctx)
+}
+
+func (c *callCounter) Records(ctx context.Context, from int64, limit int) ([]store.Record, error) {
+	c.bump()
+	return c.Store.Records(ctx, from, limit)
+}
+
+func (c *callCounter) SigningKeys(ctx context.Context, since time.Time) ([]store.SigningKey, error) {
+	c.bump()
+	return c.Store.SigningKeys(ctx, since)
 }
 
 func (f *faultStore) Records(ctx context.Context, from int64, limit int) ([]store.Record, error) {

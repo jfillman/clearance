@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/jfillman/clearance/internal/evidence"
 	"io"
 	"net/http"
 	"os"
@@ -18,7 +19,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jfillman/clearance/internal/evidence"
 	"github.com/jfillman/clearance/internal/packet"
 	"github.com/jfillman/clearance/internal/server"
 	"github.com/jfillman/clearance/internal/statement"
@@ -396,10 +396,10 @@ func TestP3AStatementKeyOutsideTheTokenWindowIsNotATokenKeyButVerifiesItsStateme
 	waitFor(t, func() bool { return !has("/v1/statement-keys") })
 }
 
-func TestP3TheStatementKeysAreA503WhileColdNeverAnEmptySet(t *testing.T) {
+func TestP3TheStatementKeysAreA503WhileColdOnceStatementsExistNeverAnEmptySet(t *testing.T) {
 	l := p3Lab(t, p3opts{})
-	l.f.core.Server.StopStatements()
-	waitFor(t, func() bool { return !l.f.core.Server.StatementLoopRunningForTest() })
+	l.issue(t, l.req()) // a statement exists
+	l.f.core.Server.PauseStatementLoopForTest()
 	l.f.core.Server.ColdStatementIndexForTest()
 	l.f.core.Server.HangReadsForTest()
 	resp, err := http.Get(l.f.srv.URL + "/v1/statement-keys")
@@ -409,9 +409,10 @@ func TestP3TheStatementKeysAreA503WhileColdNeverAnEmptySet(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode != 503 || strings.Contains(string(body), `"keys"`) {
-		t.Errorf("a cold index: %d %s", resp.StatusCode, body)
+		t.Errorf("a cold index with statements: %d %s", resp.StatusCode, body)
 	}
 	l.f.core.Server.HealReadsForTest()
+	l.f.core.Server.StartStatements() // what the next admin call, or a restart, does
 	waitFor(t, func() bool {
 		r, err := http.Get(l.f.srv.URL + "/v1/statement-keys")
 		if err != nil {
@@ -470,6 +471,11 @@ func decodeB64(s string) ([]byte, error) { return base64.StdEncoding.DecodeStrin
 // forge appends a statement.issue record under id holding a statement of another id, or one signed by another key.
 func (l *p3lab) forge(t *testing.T, id string, doc *statement.Document, signWith token.Signer) {
 	t.Helper()
+	l.forgeWith(t, id, doc, signWith, statementWriter())
+}
+
+func (l *p3lab) forgeWith(t *testing.T, id string, doc *statement.Document, signWith token.Signer, w evidence.Writer) {
+	t.Helper()
 	pl, err := doc.Canonical()
 	if err != nil {
 		t.Fatal(err)
@@ -488,7 +494,7 @@ func (l *p3lab) forge(t *testing.T, id string, doc *statement.Document, signWith
 			"target": "statement:" + id, "args_sha256": hex.EncodeToString(sum[:]), "boundary": "deployment", "result": "forged for the test",
 			"packet":    map[string]any{"id": l.pid, "digest": l.bundle.Digest},
 			"statement": map[string]any{"id": id, "profile": "standard", "request_sha256": hex.EncodeToString(sum[:]), "payload_sha256": hex.EncodeToString(sum[:]), "envelope": obj}},
-			evidence.Core("test"))
+			w)
 		return err
 	}); err != nil {
 		t.Fatal(err)

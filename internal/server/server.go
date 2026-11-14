@@ -30,6 +30,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jfillman/clearance/internal/authn"
@@ -142,8 +143,15 @@ type Server struct {
 	// mutex serializes issue and revoke.
 	stmts   stmtIndex
 	stmtRes stmtResults
-	keyMu   sync.Mutex
-	kidKeys map[string]json.RawMessage
+	// life ends for good when StopStatements is called (the core is closing): nothing starts the statement loop after it. stmtSeen
+	// is true once the chain is known to hold a statement.issue record of the core's own (read in the startup pass, or set by an
+	// issue): until then GET /v1/statement-keys touches no index and no store, and no goroutine runs for statements.
+	life      context.Context
+	lifeStop  context.CancelFunc
+	stmtSeen  atomic.Bool
+	envelopes envelopeCache
+	keyMu     sync.Mutex
+	kidKeys   map[string]json.RawMessage
 
 	// targetsMu serializes target publishes: the held-digest check and the write it guards are one step.
 	targetsMu sync.Mutex
@@ -164,11 +172,10 @@ func New(ctx context.Context, opt Options) (*Server, error) {
 		opt.MaxClockSkew = DefaultMaxClockSkew
 	}
 	s := &Server{opt: opt, log: opt.Log, mux: http.NewServeMux()}
-	idx, err := outcomeIndex(ctx, opt.Store)
-	if err != nil {
-		return nil, fmt.Errorf("server: reading the outcome index: %w", err)
+	s.life, s.lifeStop = context.WithCancel(context.Background())
+	if err := s.startupPass(ctx); err != nil {
+		return nil, err
 	}
-	s.outcomes = idx
 	for _, rt := range Routes() {
 		if rt.serve != nil {
 			s.mux.HandleFunc(rt.Pattern(), rt.serve(s))
@@ -230,16 +237,37 @@ func (s *Server) HTTPServer(addr string) *http.Server {
 	}
 }
 
-// outcomeIndex is every decision seq an outcome record names, from the whole chain.
-func outcomeIndex(ctx context.Context, st store.Reader) (map[int64]bool, error) {
+// startupPass is the one read of the whole chain at start: the index of decisions that have an outcome, and whether any statement the
+// core issued exists (then the statement index is kept in the background from the start; otherwise nothing runs for statements until
+// an admin issues one or the verify listener is enabled).
+func (s *Server) startupPass(ctx context.Context) error {
+	idx, seen, err := outcomeIndex(ctx, s.opt.Store)
+	if err != nil {
+		return fmt.Errorf("server: reading the outcome index: %w", err)
+	}
+	s.outcomes = idx
+	s.stmtSeen.Store(seen)
+	if seen {
+		s.StartStatements()
+	}
+	return nil
+}
+
+// outcomeIndex is every decision seq an outcome record names, from the whole chain, and whether a statement.issue record the core wrote
+// itself is on it.
+func outcomeIndex(ctx context.Context, st store.Reader) (map[int64]bool, bool, error) {
+	seen := false
 	idx := map[int64]bool{}
 	const page = 5000
 	for from := int64(0); ; {
 		recs, err := st.Records(ctx, from, page)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		for _, r := range recs {
+			if r["tool"] == ToolStatementIssue && coreStatementRecord(r) {
+				seen = true
+			}
 			if of, ok := r["outcome_of"].(map[string]any); ok {
 				if seq, ok := gate.SeqInt(of["seq"]); ok {
 					idx[seq] = true
@@ -247,7 +275,7 @@ func outcomeIndex(ctx context.Context, st store.Reader) (map[int64]bool, error) 
 			}
 		}
 		if len(recs) < page {
-			return idx, nil
+			return idx, seen, nil
 		}
 		last, _ := gate.SeqInt(recs[len(recs)-1]["seq"])
 		from = last + 1

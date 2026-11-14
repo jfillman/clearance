@@ -31,7 +31,7 @@ import (
 // (CLEARANCE_VERIFY_LISTEN), off unless it is set, with its own handler, its own limits and none of the authenticated API's
 // routes. It serves a statement's PUBLIC summary and the seven checks, server-rendered with no script, to anyone who holds
 // the statement's id (128 random bits). It is read-only: no request to it writes a record, a cookie or a file, and it
-// makes no request of its own (it reads this core's store and nothing else).
+// makes no request of its own (it reads this core's store and nothing else, and only on the bounded paths docs/statement.md lists).
 //
 // Nothing recipient-specific is on it: no record id, no proof, no exception row, no person, firm, repository or
 // cluster. Those are the statement's recipient detail, which the subscriber opens to a named recipient through the
@@ -279,7 +279,7 @@ func (s *Server) runStatementChecks(ctx context.Context, e *stmtEntry) (*verify.
 func (s *Server) VerifyHandler() http.Handler {
 	// The index of statements is kept by one background goroutine, never on a request: until its first complete read the page
 	// answers 503, and it keeps answering 503 if the snapshot goes too old.
-	s.StartStatements(context.Background())
+	s.StartStatements()
 	o := s.statementOpts()
 	lim := newLimiter(o.ClientPerMinute, o.ClientBurst, o.GlobalPerMinute, o.GlobalBurst, o.TrustedProxyHops, s.opt.Clock)
 	lim.warn = func() {

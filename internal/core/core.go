@@ -789,7 +789,7 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 			return fmt.Errorf("core: verify listen %s: %w", cfg.VerifyListen, err)
 		}
 		// The statement index is read in the background, after the core serves, page by page; the page answers 503 until it is warm.
-		c.Server.StartStatements(ctx)
+		c.Server.StartStatements()
 		vs = c.Server.VerifyHTTPServer(cfg.VerifyListen)
 		go func() { serveErr <- vs.Serve(vln) }()
 		log.Info("clearance verify page serving (public, read-only)", "addr", vln.Addr().String())

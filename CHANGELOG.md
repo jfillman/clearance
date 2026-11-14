@@ -43,6 +43,9 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   without its proofs and the log keys, or over a packet on no checkpoint; the hosted headline is "VERIFIED, WITNESS INDEPENDENCE DECLARED" and a bare
   `--independent-witness NAME` is refused; reissue repeats the revoked content, chains of corrections are followed to their end, the signed status is cached per
   snapshot, the result cache is LRU with a setting, and the witness policy is in the pod checksum.
+  Third round: nothing anonymous starts the statement loop (`GET /v1/statement-keys` on a core that never issued a statement answers with the key in use and
+  reads nothing; the loop starts from the startup pass when statements exist, an admin call or the listener, and never after the core stops); the index trusts only
+  records the core marked as its own statement records; `statement.json` is served from a bounded cache of immutable envelopes.
 - P-1: **assurance providers, acceptance receipts and recipient access** ([docs/assurance.md](docs/assurance.md)). A new provider class
   (`class: "assurance"` in `CLEARANCE_PROVIDERS`: a name and registered ECDSA P-256 keys, no principals: never an account).
   `POST /v1/packets` (an admin publishes a `clearance packet` directory as a bundle; the id is the content address of its manifest),

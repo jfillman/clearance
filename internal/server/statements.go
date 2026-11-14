@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jfillman/clearance/internal/canon"
+	"github.com/jfillman/clearance/internal/evidence"
 	"github.com/jfillman/clearance/internal/gate"
 	"github.com/jfillman/clearance/internal/packet"
 	"github.com/jfillman/clearance/internal/pycompat"
@@ -156,13 +157,15 @@ func (e *stmtEntry) state() string {
 // refresh. A snapshot that was never completed (cold) or is older than statementMaxStale is not served (the page answers 503).
 // A refresh applies each page it reads as it goes, so a read that times out in a long chain resumes where it stopped.
 type stmtIndex struct {
-	mu     sync.RWMutex
-	byID   map[string]*stmtEntry
-	byReq  map[string]string
-	synced time.Time // when the last COMPLETE read BEGAN: the state is as of then, never later
-	warmed bool
-	loop   bool
-	stop   context.CancelFunc
+	mu      sync.RWMutex
+	byID    map[string]*stmtEntry
+	byReq   map[string]string
+	synced  time.Time // when the last COMPLETE read BEGAN: the state is as of then, never later
+	warmed  bool
+	loop    bool
+	restart bool // a start was asked for while the loop was ending: it starts again as it ends
+	lctx    context.Context
+	stop    context.CancelFunc
 
 	refreshMu sync.Mutex // one reader of the chain's tail at a time; guards next
 	next      int64
@@ -217,7 +220,7 @@ func (s *Server) refreshLocked(ctx context.Context, x *stmtIndex) error {
 			seq, _ := gate.SeqInt(r["seq"])
 			next = seq + 1
 			tool, _ := r["tool"].(string)
-			if (tool != ToolStatementIssue && tool != ToolStatementRevoke) || r["decision"] != "allow" {
+			if (tool != ToolStatementIssue && tool != ToolStatementRevoke) || r["decision"] != "allow" || !coreStatementRecord(r) {
 				continue
 			}
 			st, _ := r["statement"].(map[string]any)
@@ -352,57 +355,88 @@ func (s *Server) lookupStatement(id string) (stmtLive, bool, error) {
 	return stmtLive{entry: &cp, asOf: x.synced, successorRevoked: x.chainEndRevokedLocked(e)}, true, nil
 }
 
-// StartStatements starts the one goroutine that keeps the statement index current: it reads the chain's tail now and then about
-// once a second until ctx ends or StopStatements is called. It is not started until something needs the index (the verify page,
-// GET /v1/statement-keys), and it never runs before the core serves: a long chain warms in the background, page by page.
-func (s *Server) StartStatements(ctx context.Context) {
+// coreStatementRecord says whether a record is one the core wrote as a statement record: its provider is the core's own, its boundary is
+// deployment, and the core marked both the tool and the statement as fields IT verified (issueStatement and revokeStatement set them).
+// A record with the right tool name and none of that (a registered provider may write kinds of its own through POST /v1/records) is not
+// a statement and is ignored.
+func coreStatementRecord(r store.Record) bool {
+	pv, _ := r["provider"].(map[string]any)
+	if pv["name"] != evidence.CoreProviderName || r["boundary"] != "deployment" {
+		return false
+	}
+	vs, _ := r["verified"].([]any)
+	tool, stmt := false, false
+	for _, v := range vs {
+		switch v {
+		case "tool":
+			tool = true
+		case "statement":
+			stmt = true
+		}
+	}
+	return tool && stmt
+}
+
+// StartStatements starts the one goroutine that keeps the statement index current: it reads the chain's tail about once a second until
+// the core stops. It is started from exactly these places: the startup pass when the chain already holds a statement, an admin's
+// issue, revoke or list, the verify listener being enabled, never from an anonymous request. After StopStatements nothing starts it.
+// A start that finds the loop on its way out is not lost: the loop starts again as it ends.
+func (s *Server) StartStatements() {
 	x := &s.stmts
 	x.mu.Lock()
+	defer x.mu.Unlock()
+	if s.life.Err() != nil {
+		return
+	}
 	if x.loop {
-		x.mu.Unlock()
+		if x.lctx != nil && x.lctx.Err() != nil {
+			x.restart = true
+		}
 		return
 	}
 	x.loop = true
-	lctx, cancel := context.WithCancel(ctx)
-	x.stop = cancel
-	x.mu.Unlock()
-	go func() {
-		defer func() {
-			x.mu.Lock()
-			x.loop = false
-			x.mu.Unlock()
-		}()
-		var lastLog time.Time
-		for {
-			rctx, c := context.WithTimeout(lctx, 30*time.Second)
-			err := s.refreshForWrite(rctx)
-			c()
-			wait := statementTailEvery
-			if err != nil && lctx.Err() == nil {
-				wait = 2 * time.Second
-				if now := time.Now(); now.Sub(lastLog) > time.Minute {
-					lastLog = now
-					s.log.Warn("statements: the chain's tail could not be read; the page serves 503 once its snapshot is too old", "error", err.Error())
-				}
-			}
-			select {
-			case <-lctx.Done():
-				return
-			case <-time.After(wait):
-			}
-		}
-	}()
+	x.restart = false
+	lctx, cancel := context.WithCancel(s.life)
+	x.lctx, x.stop = lctx, cancel
+	go s.statementLoop(lctx)
 }
 
-// StopStatements ends the goroutine StartStatements started.
-func (s *Server) StopStatements() {
+func (s *Server) statementLoop(lctx context.Context) {
 	x := &s.stmts
-	x.mu.Lock()
-	stop := x.stop
-	x.mu.Unlock()
-	if stop != nil {
-		stop()
+	defer func() {
+		x.mu.Lock()
+		x.loop = false
+		again := x.restart && s.life.Err() == nil
+		x.restart = false
+		x.mu.Unlock()
+		if again {
+			s.StartStatements()
+		}
+	}()
+	var lastLog time.Time
+	for {
+		rctx, c := context.WithTimeout(lctx, 10*time.Second)
+		err := s.refreshForWrite(rctx)
+		c()
+		wait := statementTailEvery
+		if err != nil && lctx.Err() == nil {
+			wait = 2 * time.Second
+			if now := time.Now(); now.Sub(lastLog) > time.Minute {
+				lastLog = now
+				s.log.Warn("statements: the chain's tail could not be read; the page serves 503 once its snapshot is too old", "error", err.Error())
+			}
+		}
+		select {
+		case <-lctx.Done():
+			return
+		case <-time.After(wait):
+		}
 	}
+}
+
+// StopStatements ends the goroutine for good: the core is closing, and nothing starts it again.
+func (s *Server) StopStatements() {
+	s.lifeStop()
 }
 
 // statementKeys are the keys statements are verified with, and they are NOT the token keys: GET /v1/keys is unchanged and carries
@@ -471,10 +505,28 @@ func (s *Server) statementKeyFor(ctx context.Context, kid string) (token.JWK, bo
 	return j, true, nil
 }
 
-// statementKeys is GET /v1/statement-keys: the statement verification keys (a JWKS), public like /v1/keys. A cold or stale index
-// is 503, never an empty set.
+// statementKeys is GET /v1/statement-keys: the statement verification keys (a JWKS), public like /v1/keys. It is anonymous and starts
+// nothing: while the chain is not known to hold a statement the answer is the key in use (the whole set, since no statement exists to need
+// another) and it touches neither the index nor the store. Once statements exist the index is kept by the background loop, and a cold or
+// stale index is 503, never an empty set.
 func (s *Server) statementKeys(w http.ResponseWriter, r *http.Request) {
-	s.StartStatements(context.Background())
+	out := token.JWKS{Keys: []token.JWK{}}
+	if !s.stmtSeen.Load() {
+		signer, _, err := s.opt.Gate.Credentials()
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "no signing key")
+			return
+		}
+		j, err := token.PublicJWK(signer.Public())
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "no signing key")
+			return
+		}
+		out.Keys = append(out.Keys, j)
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
 	rows, err := s.statementKeyRows(r.Context())
 	if err != nil {
 		if errors.Is(err, errStatementsCold) || errors.Is(err, errStatementsStale) {
@@ -485,7 +537,6 @@ func (s *Server) statementKeys(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	out := token.JWKS{Keys: []token.JWK{}}
 	for _, k := range rows {
 		var j token.JWK
 		if json.Unmarshal(k.JWK, &j) == nil {
@@ -519,6 +570,7 @@ func (s *Server) listStatements(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.subscriber(w, r); !ok {
 		return
 	}
+	s.StartStatements()
 	q := r.URL.Query()
 	for k := range q {
 		if k != "key" {
@@ -551,6 +603,57 @@ func (s *Server) listStatements(w http.ResponseWriter, r *http.Request) {
 
 // statementEnvelope is the signed envelope of a statement, read from its issue record.
 func (s *Server) statementEnvelope(ctx context.Context, e *stmtEntry) ([]byte, error) {
+	if b := s.envelopes.get(e.id, e.digest); b != nil {
+		return b, nil
+	}
+	b, err := s.readEnvelope(ctx, e)
+	if err == nil {
+		s.envelopes.put(e.id, e.digest, b)
+	}
+	return b, err
+}
+
+// envelopeCache keeps the envelopes of the last few statements read (a statement is immutable), so repeated downloads and checks do
+// not read the store: the oldest entry out first, at most envelopeCacheSize.
+type envelopeCache struct {
+	mu    sync.Mutex
+	by    map[string]cachedEnvelope
+	order []string
+}
+
+type cachedEnvelope struct {
+	digest string
+	raw    []byte
+}
+
+const envelopeCacheSize = 64
+
+func (c *envelopeCache) get(id, digest string) []byte {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e, ok := c.by[id]; ok && e.digest == digest {
+		return e.raw
+	}
+	return nil
+}
+
+func (c *envelopeCache) put(id, digest string, raw []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.by == nil {
+		c.by = map[string]cachedEnvelope{}
+	}
+	if _, ok := c.by[id]; !ok {
+		for len(c.order) >= envelopeCacheSize {
+			delete(c.by, c.order[0])
+			c.order = c.order[1:]
+		}
+		c.order = append(c.order, id)
+	}
+	c.by[id] = cachedEnvelope{digest: digest, raw: raw}
+}
+
+func (s *Server) readEnvelope(ctx context.Context, e *stmtEntry) ([]byte, error) {
 	recs, err := s.opt.Store.Records(ctx, e.seq, 1)
 	if err != nil {
 		return nil, err
@@ -644,6 +747,7 @@ func (s *Server) issueStatement(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	s.StartStatements()
 	raw, ok := readBody(w, r, MaxStatementBody)
 	if !ok {
 		return
@@ -868,6 +972,7 @@ func (s *Server) issueStatement(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "the statement could not be recorded")
 		return
 	}
+	s.stmtSeen.Store(true) // from now a statement exists: the statement keys are no longer just the key in use
 	seq, _ := gate.SeqInt(rec["seq"])
 	e := &stmtEntry{id: id, digest: digest, kid: signer.KeyID(), packetID: pk.ID, profile: profile, scope: req.Scope, policy: req.PolicyVersion,
 		supersedes: req.Supersedes, reissues: req.Reissue, reqKey: reqKey, seq: seq, hash: fmt.Sprint(rec["hash"])}
@@ -888,6 +993,7 @@ func (s *Server) revokeStatement(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	s.StartStatements()
 	id := r.PathValue("id")
 	if !statement.ValidID(id) {
 		writeError(w, http.StatusNotFound, "no such statement")
