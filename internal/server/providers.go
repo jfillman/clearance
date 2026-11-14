@@ -49,6 +49,11 @@ type Provider struct {
 	// the Map's registry): ["hangar-prod"], or ["*"]. A publish replaces only its own source's set, so several
 	// providers may publish (each its own sources); a source belongs to the first provider that lists it.
 	Targets []string `json:"targets,omitempty"`
+	// Protection are "<principal glob>=<cluster>" entries: which principal may report which cluster's protected
+	// app/environment pairs (PUT /v1/protection/{cluster}, G-ARGO-10c). The cluster is exact, and a principal reports
+	// only for the clusters its own entries name, so an agent on one cluster cannot change what is protected on another.
+	// Absent: the provider reports no protection.
+	Protection []string `json:"protection,omitempty"`
 	// Class is "" (or "enforcement"): an enforcement point that asks first and reports what happened, or "assurance"
 	// (P-1): a recipient of evidence packets (an audit firm, a GRC hub, a customer's reviewer). An assurance provider
 	// is not a caller: it has no principals, writes no records through POST /v1/records, and is never a Clearance
@@ -151,7 +156,10 @@ func ParseProviders(v string) ([]Provider, error) {
 				return nil, fmt.Errorf("CLEARANCE_PROVIDERS[%d]: an empty principal glob", i)
 			}
 		}
-		if p.Kinds != nil && len(p.Kinds) == 0 && !p.Definitions && len(p.Targets) == 0 {
+		if err := checkProtection(i, p); err != nil {
+			return nil, err
+		}
+		if p.Kinds != nil && len(p.Kinds) == 0 && !p.Definitions && len(p.Targets) == 0 && len(p.Protection) == 0 {
 			return nil, fmt.Errorf("CLEARANCE_PROVIDERS[%d]: kinds is [] (no record kind) and the entry has no targets or "+
 				"definitions: it could do nothing", i)
 		}
@@ -183,7 +191,7 @@ func checkAssurance(i int, p *Provider) error {
 	case len(p.Principals) > 0:
 		return fmt.Errorf("CLEARANCE_PROVIDERS[%d]: an assurance provider has no principals: it is not an account, and "+
 			"it reads a packet under the credential a subscriber gave it", i)
-	case p.Kinds != nil || p.Definitions || len(p.Targets) > 0 || p.IntentCapture != "" || p.Conformance != "":
+	case p.Kinds != nil || p.Definitions || len(p.Targets) > 0 || len(p.Protection) > 0 || p.IntentCapture != "" || p.Conformance != "":
 		return fmt.Errorf("CLEARANCE_PROVIDERS[%d]: an assurance provider takes name, version and keys only", i)
 	case len(p.Keys) == 0 || len(p.Keys) > MaxRecipientKeys:
 		return fmt.Errorf("CLEARANCE_PROVIDERS[%d]: an assurance provider registers 1 to %d keys (ECDSA P-256 public keys, PEM)", i, MaxRecipientKeys)

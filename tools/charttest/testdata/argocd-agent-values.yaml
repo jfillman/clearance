@@ -1,0 +1,12 @@
+# Example values for the clearance-argocd-agent chart tests: nothing here is a real host or cluster.
+cluster: cluster-a
+apiURL: https://clearance-api.example.test
+coreURL: https://clearance.example.test
+argocd:
+  namespace: argocd
+  projects: [tenants]
+protectedNamespaces: [app-web-prod, app-api-prod]
+networkPolicy:
+  enabled: true
+  apiServerCIDRs: [10.0.0.1/32]
+  clearanceCIDRs: [203.0.113.10/32]

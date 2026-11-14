@@ -21,6 +21,19 @@ rules:
   - apiGroups: [{{ (split "/" .Values.grantAPI)._0 | quote }}]
     resources: [clearancegrants/status]
     verbs: [get, patch, update]
+  {{- if .Values.optIn.enabled }}
+  # The opt-in labels a namespace protected (and takes its own label off): get and patch, on the namespaces named in
+  # protectedNamespaces and no other. Discovery (/api, /apis) needs no rule: every authenticated user has it.
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, patch]
+    resourceNames: {{ .Values.protectedNamespaces | toJson }}
+  # The opt-in reads the ClearanceGrant CRD's schema (and only that CRD) and does not run against one that lacks the fields it writes.
+  - apiGroups: [apiextensions.k8s.io]
+    resources: [customresourcedefinitions]
+    verbs: [get]
+    resourceNames: [{{ printf "clearancegrants.%s" (split "/" .Values.grantAPI)._0 | quote }}]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -51,7 +64,7 @@ roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "age
 subjects:
   - {kind: ServiceAccount, name: {{ .Values.serviceAccount.name }}, namespace: {{ .Release.Namespace }}}
 ---
-# Argo CD's Applications: read and watch only.
+# Argo CD's Applications: read and watch{{ if .Values.optIn.enabled }}, and (the opt-in) patch{{ else }} only{{ end }}.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -61,7 +74,13 @@ metadata:
 rules:
   - apiGroups: [argoproj.io]
     resources: [applications]
-    verbs: [get, list, watch]
+    verbs: [get, list, watch{{ if .Values.optIn.enabled }}, patch{{ end }}]
+  {{- if .Values.optIn.enabled }}
+  # An Application's parent may be an ApplicationSet: the check that it ignores a switched Application's source reads it.
+  - apiGroups: [argoproj.io]
+    resources: [applicationsets]
+    verbs: [get]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

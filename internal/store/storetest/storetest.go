@@ -49,6 +49,7 @@ func Run(t *testing.T, open Opener) {
 		{"Changes", testChanges},
 		{"Definitions", testDefinitions},
 		{"Targets", testTargets},
+		{"Protection", testProtection},
 		{"Tokens", testTokens},
 		{"SigningKeys", testSigningKeys},
 		{"Feeds", testFeeds},
@@ -594,6 +595,79 @@ func testTargets(t *testing.T, open Opener) {
 	}
 	if got, _ := s.Targets(bg); len(got) != 2 {
 		t.Fatalf("a rolled-back publish is not kept: %v", got)
+	}
+	if err := put(set("z", "d", `{`)); err == nil {
+		t.Fatal("a doc that is not JSON: want an error")
+	}
+}
+
+func testProtection(t *testing.T, open Opener) {
+	s := open(t, nil)
+	set := func(cluster, digest, doc string) store.ProtectionSet {
+		return store.ProtectionSet{Cluster: cluster, Digest: digest, Doc: json.RawMessage(doc)}
+	}
+	put := func(sets ...store.ProtectionSet) error {
+		return s.Atomic(bg, func(tx store.Tx) error {
+			for _, x := range sets {
+				if err := tx.PutProtection(bg, x); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
+	if got, err := s.Protections(bg); err != nil || len(got) != 0 {
+		t.Fatalf("empty store: %v %v", got, err)
+	}
+	if err := put(set("b", "d2", `[{"app":"y","env":"prod"}]`), set("a", "d1", `[{"app":"x","env":"prod"}]`)); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.Protections(bg)
+	if len(got) != 2 || got[0].Cluster != "a" || got[1].Cluster != "b" || got[0].Digest != "d1" || got[0].ReportedAt.IsZero() || got[0].ChangedAt.IsZero() {
+		t.Fatalf("by cluster: %+v", got)
+	}
+	// The same digest again: reported_at moves, changed_at stays; a different digest moves both.
+	first := got[0]
+	time.Sleep(20 * time.Millisecond)
+	if err := put(set("a", "d1", `[{"app":"x","env":"prod"}]`)); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.Protections(bg)
+	if !got[0].ReportedAt.After(first.ReportedAt) || !got[0].ChangedAt.Equal(first.ChangedAt) {
+		t.Fatalf("an unchanged report moves reported_at only: %+v then %+v", first, got[0])
+	}
+	time.Sleep(20 * time.Millisecond)
+	if err := put(set("a", "d3", `[]`)); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.Protections(bg)
+	if got[0].Digest != "d3" || string(got[0].Doc) != "[]" || !got[0].ChangedAt.After(first.ChangedAt) || got[1].Digest != "d2" {
+		t.Fatalf("replace is per cluster: %+v", got)
+	}
+	// The sequence number and the recording window are the caller's and are kept as given.
+	ws := time.Now().UTC().Truncate(time.Second)
+	withSeq := set("a", "d3", `[]`)
+	withSeq.Seq, withSeq.WindowStart, withSeq.WindowCount, withSeq.AddCount = 9, ws, 4, 7
+	if err := put(withSeq); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.Protections(bg)
+	if got[0].Seq != 9 || got[0].WindowCount != 4 || got[0].AddCount != 7 || !got[0].WindowStart.Equal(ws) {
+		t.Fatalf("seq and window: %+v", got[0])
+	}
+	if err := s.Atomic(bg, func(tx store.Tx) error {
+		if err := tx.PutProtection(bg, set("c", "d4", `[]`)); err != nil {
+			return err
+		}
+		if in, _ := tx.Protections(bg); len(in) != 3 {
+			t.Errorf("a transaction reads its own write: %v", in)
+		}
+		return errors.New("roll back")
+	}); err == nil {
+		t.Fatal("want the rollback error")
+	}
+	if got, _ := s.Protections(bg); len(got) != 2 {
+		t.Fatalf("a rolled-back report is not kept: %v", got)
 	}
 	if err := put(set("z", "d", `{`)); err == nil {
 		t.Fatal("a doc that is not JSON: want an error")

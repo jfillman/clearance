@@ -416,6 +416,58 @@ def run(deny):
         print(("PASS " if r[0] else "FAIL ") + f"[{mode}] no active grant: the agent can still create a grant (excluded from the policy)")
         sh(["delete", "clearancegrant", "g3", "-n", "prot"])
 
+        print(f"-- the merged grant of a namespace two Applications share (G-ARGO-10c) ({mode})")
+        # The agent builds ONE grant per namespace, named clearance-merged, from the cleared trees of every protected
+        # Application that targets it, and labels the namespace only after the grant is active and valid.
+        def mcm(name, h, ns="shared"):
+            return cm(name, h, ns=ns)
+        def mgrant(objects, carried=None):
+            g = grant("clearance-merged", objects, ns="shared")
+            g["metadata"]["labels"]["clearance.hangar.io/merged"] = "true"
+            g["metadata"]["labels"]["app.kubernetes.io/managed-by"] = "clearance-argocd-agent"
+            g["spec"]["clearance"] = {"id": "merged", "tier": 1}
+            for key, o in g["spec"]["objects"].items():  # the owner of each object (display; admission does not read it)
+                o["app"] = "argocd/" + key.split("/")[-1]
+                o["expiresAt"] = "2099-01-01T00:00:00Z"  # the agent drops the object at this time; admission has no clock
+            if carried:
+                g["spec"]["carried"] = carried
+            return g
+        need(["create", "-f", "-"], {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": "shared"}})
+        check("the agent writes the merged grant while the namespace is not labelled", True,
+              sh(["create", "-f", "-"], mgrant({"/ConfigMap/web-cfg": H1, "apps/Deployment/web": H2, "apps/Deployment/api": H3},
+                 [{"change": "ch-web-old", "tree": "e" * 64, "expiresAt": "2099-01-01T00:00:00Z",
+                   "objects": {"/ConfigMap/web-cfg": {"rendered": H3}}}]), AGENT))
+        check("the agent marks it valid before it labels the namespace", True,
+              sh(["patch", "clearancegrant", "clearance-merged", "-n", "shared", "--subresource=status", "--type=merge",
+                  "-p", '{"status":{"valid":true,"reason":"verified"}}'], who=AGENT))
+        check("not matched yet: Argo writes anything in the unlabelled namespace", True, sh(["create", "-f", "-"], mcm("anything", H3), ARGO))
+        sh(["delete", "configmap", "anything", "-n", "shared", "--ignore-not-found"])
+        need(["label", "namespace", "shared", "clearance.hangar.io/protected=true", "clearance.hangar.io/protected-by=optin"])
+        check("admit: the first Application's ConfigMap at its hash", True, sh(["create", "-f", "-"], mcm("web-cfg", H1), ARGO))
+        check("admit: the first Application's Deployment", True, sh(["create", "-f", "-"], deploy("web", H2, ns="shared"), ARGO))
+        check("admit: the second Application's Deployment, same grant", True, sh(["create", "-f", "-"], deploy("api", H3, ns="shared"), ARGO))
+        check("admit: the first Application's older cleared tree (carried)", True,
+              sh(["patch", "configmap", "web-cfg", "-n", "shared", "--type=merge", "-p",
+                  '{"metadata":{"annotations":{"clearance.hangar.io/rendered":"' + H3 + '"}}}'], who=ARGO))
+        check("refuse: an object no protected Application's clearance lists", False, sh(["create", "-f", "-"], mcm("stranger", H1), ARGO),
+              "does not list /ConfigMap/stranger")
+        check("refuse: a listed Deployment at a hash nobody cleared for it", False,
+              sh(["patch", "deployment", "web", "-n", "shared", "--type=merge", "-p",
+                  '{"metadata":{"annotations":{"clearance.hangar.io/rendered":"' + H1 + '"}}}'], who=ARGO), "at " + H1)
+        sh(["delete", "configmap", "web-cfg", "-n", "shared", "--ignore-not-found"])
+        sh(["delete", "deployment", "web", "api", "-n", "shared", "--ignore-not-found"])
+        # The order the agent keeps on removal: the label comes off first, then the grant goes. The state it never makes
+        # (labelled, no grant) refuses everything Argo writes there under Deny, which is why the label goes first.
+        sh(["delete", "clearancegrant", "clearance-merged", "-n", "shared"])
+        r = sh(["create", "-f", "-"], mcm("no-grant-here", H1), ARGO)
+        results.append(r[0] == (not deny))
+        print(("PASS " if r[0] == (not deny) else "FAIL ") +
+              f"[{mode}] labelled with no merged grant: {'refused: the agent never leaves a namespace here' if deny else 'admitted (Warn)'}")
+        sh(["delete", "configmap", "no-grant-here", "-n", "shared", "--ignore-not-found"])
+        need(["label", "namespace", "shared", "clearance.hangar.io/protected-", "clearance.hangar.io/protected-by-"])
+        check("after the label is off, Argo writes in the namespace freely again", True, sh(["create", "-f", "-"], mcm("free", H1), ARGO))
+        sh(["delete", "configmap", "free", "-n", "shared", "--ignore-not-found"])
+
         print(f"-- audit annotation names the grant checked ({mode})")
         sh(["label", "clearancegrant", "g1", "-n", "prot", "clearance.hangar.io/active=true"], who=AGENT)
         sh(["patch", "configmap", "app-cm", "-n", "prot", "--type=merge", "-p", '{"data":{"k":"v7"}}'], who=ARGO)

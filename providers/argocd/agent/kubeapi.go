@@ -21,6 +21,18 @@ import (
 // ErrWatchGone is a watch whose resourceVersion the API server no longer holds (410).
 var ErrWatchGone = errors.New("agent: watch resourceVersion is too old")
 
+// Errors of the opt-in writes.
+var (
+	ErrConflict = errors.New("agent: the object changed since it was read")
+	// ErrInvalid: the API server refused a write as invalid (a schema or validation error, not a stale read): retrying
+	// the same patch cannot help, so it is reported and not treated as a conflict.
+	ErrInvalid  = errors.New("agent: the API server refused the write as invalid")
+	ErrNotFound = errors.New("agent: not found")
+	// ErrNotOurs: the namespace's protected label was not put there by this agent (it has no marker), so the agent
+	// does not remove it.
+	ErrNotOurs = errors.New("agent: the namespace's protected label is not the agent's")
+)
+
 // The grant CRD's group, version and plural (G-ARGO-2). Configurable because the CRD's version is its.
 type GrantAPI struct {
 	Group, Version, Plural string
@@ -254,19 +266,50 @@ func (a *API) DeleteGrant(ctx context.Context, ns, name string) error {
 	return err
 }
 
+type ignoreWire struct {
+	Group             string   `json:"group"`
+	Kind              string   `json:"kind"`
+	Name              string   `json:"name"`
+	Namespace         string   `json:"namespace"`
+	JSONPointers      []string `json:"jsonPointers"`
+	JQPathExpressions []string `json:"jqPathExpressions"`
+}
+
+func ignores(in []ignoreWire) []IgnoreDifference {
+	var out []IgnoreDifference
+	for _, i := range in {
+		out = append(out, IgnoreDifference{Group: i.Group, Kind: i.Kind, Name: i.Name, Namespace: i.Namespace,
+			JSONPointers: i.JSONPointers, JQPathExpressions: i.JQPathExpressions})
+	}
+	return out
+}
+
 type appWire struct {
 	Metadata struct {
 		Namespace       string            `json:"namespace"`
 		Name            string            `json:"name"`
 		Labels          map[string]string `json:"labels"`
+		Annotations     map[string]string `json:"annotations"`
 		UID             string            `json:"uid"`
 		ResourceVersion string            `json:"resourceVersion"`
+		OwnerReferences []struct {
+			Kind string `json:"kind"`
+			Name string `json:"name"`
+		} `json:"ownerReferences"`
 	} `json:"metadata"`
 	Spec struct {
 		Project     string `json:"project"`
 		Destination struct {
 			Namespace string `json:"namespace"`
+			Server    string `json:"server"`
+			Name      string `json:"name"`
 		} `json:"destination"`
+		Source            json.RawMessage   `json:"source"`
+		Sources           []json.RawMessage `json:"sources"`
+		IgnoreDifferences []ignoreWire      `json:"ignoreDifferences"`
+		SyncPolicy        struct {
+			SyncOptions []string `json:"syncOptions"`
+		} `json:"syncPolicy"`
 	} `json:"spec"`
 	Status struct {
 		Sync struct {
@@ -301,11 +344,20 @@ type appWire struct {
 
 func (w appWire) app() Application {
 	a := Application{Namespace: w.Metadata.Namespace, Name: w.Metadata.Name, Labels: w.Metadata.Labels, UID: w.Metadata.UID, Project: w.Spec.Project,
-		DestNS: w.Spec.Destination.Namespace, SyncState: w.Status.Sync.Status, Health: w.Status.Health.Status,
+		DestNS: w.Spec.Destination.Namespace, DestServer: w.Spec.Destination.Server, DestName: w.Spec.Destination.Name, SyncState: w.Status.Sync.Status, Health: w.Status.Health.Status,
 		Revisions: w.Status.Sync.Revisions}
 	if len(a.Revisions) == 0 && w.Status.Sync.Revision != "" {
 		a.Revisions = []string{w.Status.Sync.Revision}
 	}
+	a.Annotations, a.ResourceVersion = w.Metadata.Annotations, w.Metadata.ResourceVersion
+	if len(w.Spec.Source) > 0 && string(w.Spec.Source) != "null" {
+		a.Source = w.Spec.Source
+	}
+	a.Sources = w.Spec.Sources
+	for _, o := range w.Metadata.OwnerReferences {
+		a.Owners = append(a.Owners, OwnerRef{o.Kind, o.Name})
+	}
+	a.IgnoreDifferences, a.SyncOptions = ignores(w.Spec.IgnoreDifferences), w.Spec.SyncPolicy.SyncOptions
 	if s := w.Status.OperationState; s != nil {
 		op := &Operation{Phase: s.Phase, Message: s.Message, StartedAt: s.StartedAt, FinishedAt: s.FinishedAt}
 		if r := s.SyncResult; r != nil {
@@ -494,4 +546,263 @@ func (a *API) PutData(ctx context.Context, ns, name string, data map[string]stri
 		return patch()
 	}
 	return err
+}
+
+// UpdateApplicationSource implements Kube: one JSON patch, guarded by a test of the resource version the agent read
+// (the API server applies the patch to the stored object, so a changed Application fails the test: 422, read here as
+// ErrConflict). It writes spec.source, spec.sources and the switched annotation, and nothing else.
+func (a *API) UpdateApplicationSource(ctx context.Context, app Application, e SourceEdit) error {
+	esc := func(s string) string { return strings.NewReplacer("~", "~0", "/", "~1").Replace(s) }
+	ops := []map[string]any{{"op": "test", "path": "/metadata/resourceVersion", "value": app.ResourceVersion}}
+	field := func(path string, had bool, v any, set bool) {
+		switch {
+		case set:
+			ops = append(ops, map[string]any{"op": "add", "path": path, "value": v}) // add replaces an existing member
+		case had:
+			ops = append(ops, map[string]any{"op": "remove", "path": path})
+		}
+	}
+	field("/spec/source", len(app.Source) > 0, e.Source, len(e.Source) > 0)
+	var srcs any = e.Sources
+	field("/spec/sources", len(app.Sources) > 0, srcs, len(e.Sources) > 0)
+	_, hadAnn := app.Annotations[AnnSwitched]
+	if e.Switched != "" && app.Annotations == nil {
+		ops = append(ops, map[string]any{"op": "add", "path": "/metadata/annotations", "value": map[string]string{}})
+	}
+	field("/metadata/annotations/"+esc(AnnSwitched), hadAnn, e.Switched, e.Switched != "")
+	err := a.call(ctx, "PATCH", a.appsPath()+"/"+url.PathEscape(app.Name), "application/json-patch+json", ops, nil)
+	var se *StatusError
+	if errors.As(err, &se) && se.Code == http.StatusConflict {
+		return fmt.Errorf("%w: %s", ErrConflict, se.Body)
+	}
+	if errors.As(err, &se) && se.Code == http.StatusUnprocessableEntity {
+		if patchNotApplied(se.Body) {
+			return fmt.Errorf("%w: %s", ErrConflict, se.Body)
+		}
+		return fmt.Errorf("%w: %s", ErrInvalid, se.Body)
+	}
+	if errors.As(err, &se) && se.Code == http.StatusNotFound {
+		return ErrNotFound
+	}
+	return err
+}
+
+// patchNotApplied says whether a 422 is the API server's answer to a JSON patch that did not apply: a failed `test`
+// (the object changed since it was read) or an op on a path that is no longer there. The server answers both the same
+// way, and has no details: {"reason":"Invalid","message":"the server rejected our request due to an error in our request",
+// "details":{},"code":422} (measured against kube-apiserver 1.36.2 with envtest, docs/gate.md). A validation error
+// (a CRD schema or admission refusal) names its causes or says what is invalid, and is not this.
+func patchNotApplied(body string) bool {
+	var st struct {
+		Reason  string `json:"reason"`
+		Message string `json:"message"`
+		Details struct {
+			Causes []json.RawMessage `json:"causes"`
+			Name   string            `json:"name"`
+		} `json:"details"`
+	}
+	if json.Unmarshal([]byte(body), &st) != nil {
+		return false // a body cut at 300 bytes still starts with the fields above; unparseable: not a stale read
+	}
+	return st.Reason == "Invalid" && len(st.Details.Causes) == 0 && st.Details.Name == "" &&
+		st.Message == "the server rejected our request due to an error in our request"
+}
+
+// GetApplicationSet implements Kube.
+func (a *API) GetApplicationSet(ctx context.Context, name string) (AppSet, error) {
+	var w struct {
+		Metadata struct {
+			Namespace string `json:"namespace"`
+			Name      string `json:"name"`
+		} `json:"metadata"`
+		Spec struct {
+			Ignore []ignoreWire `json:"ignoreApplicationDifferences"`
+		} `json:"spec"`
+	}
+	err := a.call(ctx, "GET", "/apis/argoproj.io/v1alpha1/namespaces/"+url.PathEscape(a.ArgoNS)+"/applicationsets/"+url.PathEscape(name), "", nil, &w)
+	var se *StatusError
+	if errors.As(err, &se) && se.Code == http.StatusNotFound {
+		return AppSet{}, ErrNotFound
+	}
+	if err != nil {
+		return AppSet{}, err
+	}
+	return AppSet{Namespace: w.Metadata.Namespace, Name: w.Metadata.Name, IgnoreApplicationDifferences: ignores(w.Spec.Ignore)}, nil
+}
+
+// SetNamespaceProtected implements Kube: a read, then one merge patch guarded by the version read. Adding leaves a
+// namespace that is already labelled protected alone (an operator's label stays the operator's); removing needs the
+// agent's marker.
+func (a *API) SetNamespaceProtected(ctx context.Context, ns string, protected bool) error {
+	path := "/api/v1/namespaces/" + url.PathEscape(ns)
+	var cur struct {
+		Metadata struct {
+			Labels          map[string]string `json:"labels"`
+			ResourceVersion string            `json:"resourceVersion"`
+		} `json:"metadata"`
+	}
+	if err := a.call(ctx, "GET", path, "", nil, &cur); err != nil {
+		var se *StatusError
+		if errors.As(err, &se) && se.Code == http.StatusNotFound {
+			return ErrNotFound
+		}
+		return err
+	}
+	l := cur.Metadata.Labels
+	labels := map[string]any{}
+	if protected {
+		if l[LabelProtected] == "true" {
+			return nil
+		}
+		labels[LabelProtected], labels[LabelProtectedBy] = "true", ProtectedByOptIn
+	} else {
+		if l[LabelProtected] != "true" && l[LabelProtectedBy] == "" {
+			return nil
+		}
+		if l[LabelProtectedBy] != ProtectedByOptIn {
+			return ErrNotOurs
+		}
+		labels[LabelProtected], labels[LabelProtectedBy] = nil, nil
+	}
+	err := a.call(ctx, "PATCH", path, merge, map[string]any{"metadata": map[string]any{
+		"resourceVersion": cur.Metadata.ResourceVersion, "labels": labels}}, nil)
+	var se *StatusError
+	if errors.As(err, &se) && se.Code == http.StatusConflict {
+		return fmt.Errorf("%w: %s", ErrConflict, se.Body)
+	}
+	return err
+}
+
+// GetNamespaceLabels implements Kube.
+func (a *API) GetNamespaceLabels(ctx context.Context, ns string) (map[string]string, error) {
+	var cur struct {
+		Metadata struct {
+			Labels map[string]string `json:"labels"`
+		} `json:"metadata"`
+	}
+	if err := a.call(ctx, "GET", "/api/v1/namespaces/"+url.PathEscape(ns), "", nil, &cur); err != nil {
+		var se *StatusError
+		if errors.As(err, &se) && se.Code == http.StatusNotFound {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return cur.Metadata.Labels, nil
+}
+
+// ClusterScopes implements Kube: /api and /apis discovery, one request per group version.
+func (a *API) ClusterScopes(ctx context.Context) (map[string]bool, error) {
+	type resources struct {
+		APIResources []struct {
+			Name       string `json:"name"`
+			Kind       string `json:"kind"`
+			Namespaced bool   `json:"namespaced"`
+		} `json:"resources"`
+	}
+	var paths []string
+	var core struct {
+		Versions []string `json:"versions"`
+	}
+	if err := a.call(ctx, "GET", "/api", "", nil, &core); err != nil {
+		return nil, err
+	}
+	for _, v := range core.Versions {
+		paths = append(paths, "/api/"+v)
+	}
+	var groups struct {
+		Groups []struct {
+			Versions []struct {
+				GroupVersion string `json:"groupVersion"`
+			} `json:"versions"`
+		} `json:"groups"`
+	}
+	if err := a.call(ctx, "GET", "/apis", "", nil, &groups); err != nil {
+		return nil, err
+	}
+	for _, g := range groups.Groups {
+		for _, v := range g.Versions {
+			paths = append(paths, "/apis/"+v.GroupVersion)
+		}
+	}
+	scope := map[string]bool{}
+	ambiguous := map[string]bool{}
+	for _, p := range paths {
+		var l resources
+		if err := a.call(ctx, "GET", p, "", nil, &l); err != nil {
+			var se *StatusError
+			if errors.As(err, &se) && se.Code == http.StatusServiceUnavailable {
+				return nil, fmt.Errorf("discovery of %s: %w", p, err) // an aggregated API that is down: the answer is incomplete
+			}
+			return nil, err
+		}
+		for _, r := range l.APIResources {
+			if strings.Contains(r.Name, "/") {
+				continue
+			}
+			if was, ok := scope[r.Kind]; ok && was != !r.Namespaced {
+				ambiguous[r.Kind] = true
+			}
+			scope[r.Kind] = !r.Namespaced
+		}
+	}
+	for k := range ambiguous {
+		delete(scope, k)
+	}
+	return scope, nil
+}
+
+// GrantSchemaFields implements Kube: the CRD's schema for the version the agent uses.
+func (a *API) GrantSchemaFields(ctx context.Context) (map[string]bool, error) {
+	var crd struct {
+		Spec struct {
+			Versions []struct {
+				Name   string `json:"name"`
+				Schema struct {
+					OpenAPIV3Schema struct {
+						Properties struct {
+							Spec struct {
+								Properties struct {
+									Objects struct {
+										AdditionalProperties struct {
+											Properties map[string]json.RawMessage `json:"properties"`
+										} `json:"additionalProperties"`
+									} `json:"objects"`
+									Carried struct {
+										Items struct {
+											Properties struct {
+												Objects struct {
+													AdditionalProperties struct {
+														Properties map[string]json.RawMessage `json:"properties"`
+													} `json:"additionalProperties"`
+												} `json:"objects"`
+											} `json:"properties"`
+										} `json:"items"`
+									} `json:"carried"`
+								} `json:"properties"`
+							} `json:"spec"`
+						} `json:"properties"`
+					} `json:"openAPIV3Schema"`
+				} `json:"schema"`
+			} `json:"versions"`
+		} `json:"spec"`
+	}
+	path := "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/" + url.PathEscape(a.Grants.Plural+"."+a.Grants.Group)
+	if err := a.call(ctx, "GET", path, "", nil, &crd); err != nil {
+		return nil, err
+	}
+	for _, v := range crd.Spec.Versions {
+		if v.Name != a.Grants.Version {
+			continue
+		}
+		sp := v.Schema.OpenAPIV3Schema.Properties.Spec.Properties
+		out := map[string]bool{}
+		for k := range sp.Objects.AdditionalProperties.Properties {
+			out["objects."+k] = true
+		}
+		for k := range sp.Carried.Items.Properties.Objects.AdditionalProperties.Properties {
+			out["carried."+k] = true
+		}
+		return out, nil
+	}
+	return nil, fmt.Errorf("the CRD has no version %s", a.Grants.Version)
 }

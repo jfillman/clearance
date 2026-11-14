@@ -60,6 +60,23 @@ type TargetSet struct {
 	UpdatedAt      time.Time
 }
 
+// ProtectionSet is one row of clearance_protection (G-ARGO-10c): the app/environment pairs one cluster's agent has
+// reported as protected (PUT /v1/protection/{cluster}), as the sorted JSON array the digest is of. Digest is the sha256
+// hex of Doc. ReportedAt is the newest report received (changed or not: how stale the cluster's agent is); ChangedAt
+// is when Doc last changed.
+type ProtectionSet struct {
+	Cluster, Digest       string
+	Doc                   json.RawMessage
+	ReportedAt, ChangedAt time.Time
+	// Seq is the number of the newest report taken (agents number their reports; it only goes up). WindowStart and
+	// WindowCount bound how many reports are recorded per hour: the count of records written since WindowStart.
+	Seq         int64
+	WindowStart time.Time
+	WindowCount int
+	// AddCount counts, in the same window, the records of reports that only ADD pairs (their own, larger bound).
+	AddCount int
+}
+
 // Token is one row of clearance_tokens: the clearance token issued for a cleared change (C-1), in both its
 // encodings. One per change: a refresh replaces the row and keeps its nonce; a new clearance of the change replaces
 // the nonce. A revoked token (a new head superseded it, or it lapsed) keeps its row with RevokedAt set.
@@ -155,6 +172,9 @@ type Tx interface {
 	ReplaceDefinitions(ctx context.Context, defs []Definition) error
 	// PutTargets replaces the source's declared targets (an upsert by source).
 	PutTargets(ctx context.Context, t TargetSet) error
+	// PutProtection replaces the cluster's reported protected pairs (an upsert by cluster). ReportedAt is set to the
+	// store's clock on every call; ChangedAt only when the digest differs from the row's.
+	PutProtection(ctx context.Context, p ProtectionSet) error
 	// PutToken writes the change's token (an upsert by change id).
 	PutToken(ctx context.Context, t Token) error
 	// PutFeed writes the cluster's signed grant feed (an upsert by cluster).
@@ -204,6 +224,8 @@ type Reader interface {
 	Definitions(ctx context.Context) ([]Definition, error)
 	// Targets are the declared target sets, one per source, by source.
 	Targets(ctx context.Context) ([]TargetSet, error)
+	// Protections are the protected pairs each cluster's agent reported, by cluster.
+	Protections(ctx context.Context) ([]ProtectionSet, error)
 	// Token is the change's token (ErrNotFound when it has none).
 	Token(ctx context.Context, changeID string) (Token, error)
 	// TokensDue are the tokens not revoked that expire before due or are signed by a key other than keyID: the

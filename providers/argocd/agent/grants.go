@@ -153,6 +153,12 @@ func (a *Agent) fetchAndApply(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listing the grants: %w", err)
 	}
+	if a.cfg.OptIn.Enabled {
+		if a.optInSchemaOK(ctx, suspectPruned(have)) {
+			return a.reconcileMerged(ctx, v, desiredGrants(v.claims, a.now()), have)
+		}
+		return a.reconcileFrozen(ctx, v, desiredGrants(v.claims, a.now()), have)
+	}
 	return a.reconcile(ctx, desiredGrants(v.claims, a.now()), have)
 }
 
@@ -357,6 +363,23 @@ func (a *Agent) reconcile(ctx context.Context, want, have []Grant) error {
 		if failed[w.Namespace] || !w.Active() || haveBy[gkey(w)].Active() {
 			continue
 		}
+		// A flip to or from a merged grant (the opt-in) activates the new grant first, then deactivates the old: for a
+		// moment both are active, and the policy needs an object to pass both, so only what BOTH list is admitted (the
+		// merged grant lists every object of its Applications' clearances, so what ran under the old keeps running)
+		// and never more than either lists. A flip between per-change grants is as it was: out, then in, with the gap the
+		// policy refuses (Argo CD retries).
+		overlap := w.Labels[LabelMerged] == "true"
+		for _, h := range have {
+			if h.Namespace == w.Namespace && h.Active() && h.Labels[LabelMerged] == "true" {
+				overlap = true
+			}
+		}
+		if overlap {
+			if !step("activating", w, a.kube.UpdateGrant(ctx, w, haveBy[gkey(w)])) {
+				continue
+			}
+			a.log.Info("grant activated", "grant", gkey(w))
+		}
 		for _, h := range have {
 			if h.Namespace != w.Namespace || !h.Active() || gkey(h) == gkey(w) {
 				continue
@@ -377,7 +400,7 @@ func (a *Agent) reconcile(ctx context.Context, want, have []Grant) error {
 				}
 			}
 		}
-		if failed[w.Namespace] {
+		if overlap || failed[w.Namespace] {
 			continue
 		}
 		if step("activating", w, a.kube.UpdateGrant(ctx, w, haveBy[gkey(w)])) {
@@ -425,13 +448,33 @@ func (a *Agent) expireGrants(ctx context.Context) error {
 					keep = append(keep, c)
 				}
 			}
+			cur := g
+			changed := false
 			if len(keep) != len(g.Spec.Carried) {
 				g.Spec.Carried = keep
-				if err := a.kube.UpdateGrant(ctx, g, g); err != nil {
-					errs = append(errs, fmt.Errorf("dropping expired carried trees of grant %s: %w", gkey(g), err))
+				changed = true
+			}
+			// A merged grant has one expiry per object, the expiry of the clearance it came from: the agent drops each on its own
+			// clock, feed or no feed (admission has no clock), so an Application whose clearance has run out does not stay
+			// admissible until the longest of its siblings' does.
+			if g.Labels[LabelMerged] == "true" {
+				objs := map[string]GrantObject{}
+				for k, o := range g.Spec.Objects {
+					if o.ExpiresAt == "" || expiryAfter(o.ExpiresAt, a.now()) {
+						objs[k] = o
+					}
+				}
+				if len(objs) != len(g.Spec.Objects) {
+					g.Spec.Objects = objs
+					changed = true
+				}
+			}
+			if changed {
+				if err := a.kube.UpdateGrant(ctx, g, cur); err != nil {
+					errs = append(errs, fmt.Errorf("dropping expired objects of grant %s: %w", gkey(g), err))
 					continue
 				}
-				a.log.Info("carried trees expired", "grant", gkey(g))
+				a.log.Info("expired objects and carried trees dropped", "grant", gkey(g))
 			}
 			continue
 		}

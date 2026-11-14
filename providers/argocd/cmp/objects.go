@@ -12,6 +12,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"github.com/jfillman/clearance/internal/argosrc"
 	"github.com/jfillman/clearance/internal/gate/render"
 )
 
@@ -31,45 +32,9 @@ const (
 	AnnChartRelease = "hangar.io/release-id"
 )
 
-// clusterScoped are the kinds that take no namespace. Argo CD asks the cluster's discovery; a plugin cannot, so
-// the common kinds are listed, any other kind named Cluster* counts too, and the Application may add more
-// (PARAM_CLUSTERSCOPEDKINDS).
-var clusterScoped = setOf("Namespace", "Node", "PersistentVolume", "StorageClass", "PriorityClass", "IngressClass",
-	"RuntimeClass", "CSIDriver", "CSINode", "VolumeAttachment", "APIService", "CustomResourceDefinition",
-	"MutatingWebhookConfiguration", "ValidatingWebhookConfiguration", "ValidatingAdmissionPolicy",
-	"ValidatingAdmissionPolicyBinding", "MutatingAdmissionPolicy", "MutatingAdmissionPolicyBinding",
-	"CertificateSigningRequest", "GatewayClass", "VolumeSnapshotClass", "VolumeSnapshotContent", "ValidatingPolicy",
-	"MutatingPolicy", "GeneratingPolicy", "PolicyException", "ResourceQuotaClass", "TokenReview",
-	"SubjectAccessReview", "SelfSubjectAccessReview", "SelfSubjectRulesReview")
-
-func setOf(xs ...string) map[string]bool {
-	m := map[string]bool{}
-	for _, x := range xs {
-		m[x] = true
-	}
-	return m
-}
-
-// isClusterScoped is whether kind takes no namespace. extra is the Application's clusterScopedKinds: a kind in it is
-// cluster-scoped; `!Kind` says the opposite, for a kind the built-in rules guess wrongly (CloudNativePG's `Cluster`
-// is namespaced, though it is named Cluster*). The parity suite's scope audit lists what the cluster's discovery
-// says differently from the built-in rules.
-func isClusterScoped(kind string, extra []string) bool {
-	for _, k := range extra {
-		if k == "!"+kind {
-			return false
-		}
-	}
-	if clusterScoped[kind] || strings.HasPrefix(kind, "Cluster") {
-		return true
-	}
-	for _, k := range extra {
-		if k == kind {
-			return true
-		}
-	}
-	return false
-}
+// isClusterScoped is whether kind takes no namespace; the rules are internal/argosrc's (the agent writes the
+// clusterScopedKinds parameter from the cluster's discovery with the same ones).
+func isClusterScoped(kind string, extra []string) bool { return argosrc.IsClusterScoped(kind, extra) }
 
 // Tree is a rendered tree, canonicalised: every object with its namespace set, its hash, and the root.
 type Tree struct {

@@ -31,6 +31,52 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   with no readable time fails the receipt in `clearance verify`; a credential's window is checked again under the revocation gate with a fresh clock; `as_of` is whole seconds, the affected count
   is by record time, and a back-dated revoke for a recipient with no recorded delivery is refused.
 
+- G-ARGO-10c: **annotation opt-in for the Argo CD gate** ([docs/gate.md](docs/gate.md#annotation-opt-in-g-argo-10c-built)). **Off by default**: with it off the agent
+  and the default render of `charts/clearance-argocd-agent` are exactly what they were (a golden render from `main` is in `tools/charttest`).
+  - argocd-agent (`--optin`, chart `optIn.enabled`): an Application annotated `clearance.hangar.io/protect: "true"` (exactly that
+    value) is switched to the Clearance plugin with its original sources as the plugin's `sources`, one JSON patch guarded by the
+    resourceVersion; removing the annotation puts the original back exactly (shape included). It builds **one merged `ClearanceGrant`
+    per namespace** (`clearance-merged`) from the newest live clearance of every switched Application's own destination namespace
+    (older ones carried), keyed by group, kind, name and rendered hash. Two Applications claiming one object, or a grant over
+    `--optin-max-grant-bytes` (1,500,000) or the CRD's 2000 objects, is a `deploy.exception` (once) and the last good grant stays.
+    The namespace is labelled protected only after its merged grant is read back active and valid, and unlabelled (only where the agent put
+    its `protected-by` marker) before the grant is removed. The cluster's discovery fills the plugin's `clusterScopedKinds`.
+    Never switched: Applications on the deny list (`--optin-deny`, default `clearance`, `clearance-*`, `*-clearance`), those whose parent
+    app-of-apps or ApplicationSet does not ignore `/spec/source` and `/spec/sources` (the agent checks the parent and reports the missing
+    entry; it never edits a parent), and those a plugin cannot carry. No write when nothing changed; failed writes back off; an Application
+    is written at most three times in ten minutes.
+  - core: **`PUT /v1/protection/{cluster}`** and `GET /v1/protection`. A cluster's agent reports the app and environment pairs it protects;
+    the core protects a pair if `CLEARANCE_PROTECTED_ENVIRONMENTS` (unchanged, still the static source) or the agent says so. Who may report
+    is the provider's new `protection` list (`<principal glob>=<cluster>`), so an agent cannot report for another cluster. A changed set is
+    one `protection.report` record (pairs added and removed, the agent's reason); an unchanged one only renews the report's time; an agent
+    that goes quiet leaves its last set in force and `GET /v1/protection` shows it stale after 15 minutes. New table
+    `clearance_protection`; `contract/clearance-core.json` and the Python client's models change (new route and types); the Go client has
+    `ReportProtection`.
+  - chart: with `optIn.enabled` the agent also gets `patch` on Applications, `get` on ApplicationSets and `get`, `patch` on the
+    `protectedNamespaces` Namespace objects only (`resourceNames`); `optIn.enabled` without `protectedNamespaces` is refused.
+  - Review fixes: a merged grant never holds an object or carried tree the verified feed does not list (a revoked clearance leaves it; with
+    nothing live it is written empty and the namespace stays labelled); a conflict on one key no longer freezes the namespace (the incumbent
+    keeps the key, the newcomer's claim is left out; reported at the start, every 24 hours, and at the end); the destination namespace's
+    environment label decides the environment and an unreadable namespace is unknown; the switched marker is two halves; Applications
+    outside the agent's projects, for another cluster or outside `--optin-namespaces` are never switched; the write bound is kept in the
+    state; reports are numbered (409 for an old one) and a set change is recorded at most 30 times per cluster per hour (429).
+  - Second review round: every object in a merged grant has its own expiry (`objects[].expiresAt`) that the agent enforces on its own clock, feed or no feed
+    (admission has no clock); the agent reads the CRD's schema and does not run the opt-in against one that lacks `app` or `expiresAt`
+    (**upgrade order: CRD, then the agent, then `optIn.enabled`**); additions of pairs are not counted against the hourly bound and a pair is
+    taken by the core before its Application is switched; an unlabelled configured namespace has the agent's environment and a different
+    Application label is blocked; an opt-out whose original cannot be restored changes nothing; one unreadable namespace holds only itself; liveness
+    is the owner's clearance; reports must carry `seq`; an Application that leaves `--projects` is put back.
+  - Third review round: a failing schema read leaves a held merged grant and its label exactly as they are (only revoked and expired objects leave it);
+    the failed-read retry backs off from the pass interval; the exception for a failing check waits five minutes and is posted at most daily; additions
+    of pairs have their own bound (300 per cluster per hour); `GET /v1/protection` is for the cluster's own agent and admins; an ownerless held object is not
+    live once a grant has owners; an addition beside an unexplained opt-out is sent at once.
+  - **Upgrade notes.** For installs with the opt-in OFF: the exception scan now counts objects in live carried trees of a grant as covered, so an object that matches a
+    carried tree is no longer reported out-of-band (it can only report fewer exceptions, and matches what admission admits). For every install: the core's decision for
+    a change to an environment that is not in `CLEARANCE_PROTECTED_ENVIRONMENTS` now reads the reported pairs from the store, and a failed read treats the change as
+    protected (never fail-open).
+  - admission test: the merged grant of a namespace two Applications share, and the label-after-grant order, against a real kube-apiserver.
+  - The plugin's cluster-scope rules moved to `internal/argosrc` so the agent and the plugin apply the same ones (no change in behaviour).
+
 ## [0.48.0] - 2026-11-14
 
 ### Fixed
