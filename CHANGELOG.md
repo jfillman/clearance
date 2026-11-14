@@ -17,6 +17,35 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ### Added
 
+- P-3: **the verification statement and the hosted verify page** ([docs/statement.md](docs/statement.md)). `POST /v1/statements` (an admin cuts an immutable, signed statement from a
+  published packet: period, the scope as printed, policy version, counts by every coverage state, exceptions by every class, observation health with its blind windows, the
+  verification result, the receipts attached, a questionnaire-mapping block as data; `profile: insurer` adds the five insurer figures; `supersedes` for a correction),
+  `POST /v1/statements/{id}/revoke`; both are `statement.issue` / `statement.revoke` records written before the answer, idempotent, admin-only. The seven checks (signed by the
+  issuer's identity; signature; every cited record under a checkpoint; a witness Clearance does not run; counts recompute; exceptions and health present and matching;
+  not superseded or revoked) are `internal/verify`'s own code, run by `clearance verify --statement` (with `--statement-keys`, `--statement-issuer`, `--independent-witness`,
+  `--packet`, `--status`; exit 0 only when every check ran and passed, 1 on a failure or a revoked statement, 2 when something could not be established) and by the page.
+  Check 4 prints **"not yet independently witnessed"** when the only witnesses are ones the issuer runs: never a pass. The page is a **separate, off-by-default listener**
+  (`CLEARANCE_VERIFY_LISTEN`; chart `verifyPage.enabled: false`, its own Service, HTTPRoute and NetworkPolicy, no default hostname): server-rendered with `html/template`, no
+  JavaScript, a strict CSP, `no-store`, a 128-bit random id, one `404` for every id that is not a statement, no parameters, per-client and global rate limits with `429`, no
+  record or cookie written by any anonymous request, no recipient detail. **Not to be enabled until its security review pass signs it off.** JSON schema
+  `schemas/statement.schema.json`; fuzz targets for the verifier, the parser and the page's request handling.
+  Review fixes: the listener refuses to start behind a proxy with 0 trusted hops unless `CLEARANCE_VERIFY_DIRECT_EXPOSURE=true` (chart: hops >= 1 and a
+  NetworkPolicy, or `verifyPage.directExposure`); the global budget is charged only to verifications that must be computed; the hosted page never presents
+  witness independence as verified (it reads "PASS, INDEPENDENCE DECLARED" with the declaration in the summary); public reads never wait on an issue or a
+  slow store, never scan the chain, and a cold or stale index is 503; statement keys are published separately (`GET /v1/statement-keys`, `/s/<id>/keys.json`) and `GET /v1/keys` is unchanged; a status is good for an
+  hour offline and its as-of is printed; the issuer is a public label or https URL; the packet's sets, times, hex and list lengths are validated; a request
+  matching a revoked statement is 409 (`reissue` issues it again on purpose) and a statement whose correction was revoked says so; the core runs checks 3 to 6
+  before it signs (422 on a failure); the log's origin hash is no longer in a statement.
+  Second review round: the statement index is read in the background, page by page, never before the core serves, and requests never touch the store;
+  `GET /v1/keys` is exactly as before and the statement keys are a separate set that no token, credential, feed or attestation verifier reads (`GET
+  /v1/statements?key=` lists what a key signed); unattributable clients share one tight bucket, never the proxy's; content is shown only when checks 1 and 2
+  pass and the id matches; the issuer host rules are strict (no IP spellings, no IDNA, whole-label suffixes); no statement is signed over a checkpointed packet
+  without its proofs and the log keys, or over a packet on no checkpoint; the hosted headline is "VERIFIED, WITNESS INDEPENDENCE DECLARED" and a bare
+  `--independent-witness NAME` is refused; reissue repeats the revoked content, chains of corrections are followed to their end, the signed status is cached per
+  snapshot, the result cache is LRU with a setting, and the witness policy is in the pod checksum.
+  Third round: nothing anonymous starts the statement loop (`GET /v1/statement-keys` on a core that never issued a statement answers with the key in use and
+  reads nothing; the loop starts from the startup pass when statements exist, an admin call or the listener, and never after the core stops); the index trusts only
+  records the core marked as its own statement records; `statement.json` is served from a bounded cache of immutable envelopes.
 - P-1: **assurance providers, acceptance receipts and recipient access** ([docs/assurance.md](docs/assurance.md)). A new provider class
   (`class: "assurance"` in `CLEARANCE_PROVIDERS`: a name and registered ECDSA P-256 keys, no principals: never an account).
   `POST /v1/packets` (an admin publishes a `clearance packet` directory as a bundle; the id is the content address of its manifest),

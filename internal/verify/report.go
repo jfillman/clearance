@@ -45,6 +45,8 @@ type Report struct {
 	Inputs []Input
 	Checks []Check
 	Notes  []string
+	// StateAsOf is the time a statement's current state (check 7) is as of; "" when there is none.
+	StateAsOf string
 }
 
 func (r *Report) add(c Check) { r.Checks = append(r.Checks, c) }
@@ -125,4 +127,60 @@ func (r *Report) Write(w io.Writer) {
 		fmt.Fprintf(w, "\nNote: %s\n", n)
 	}
 	fmt.Fprintf(w, "\n%s\n", r.Verdict())
+}
+
+// WriteStatement prints a statement report: the seven checks, each on its own line, and the one-word result.
+func (r *Report) WriteStatement(w io.Writer) {
+	fmt.Fprintf(w, "clearance verify --statement %s\n\nTrust inputs (a statement vouching for its own keys proves nothing):\n", r.Packet)
+	for _, in := range r.Inputs {
+		fmt.Fprintf(w, "  %-28s %s\n", in.Name, in.Source)
+	}
+	if r.StateAsOf != "" {
+		fmt.Fprintf(w, "\nCURRENT STATE AS OF %s (a revocation after this time is not in this answer)\n", r.StateAsOf)
+	}
+	fmt.Fprintln(w, "\nChecks:")
+	for _, c := range r.Checks {
+		fmt.Fprintf(w, "  [%s] %s", c.Status, c.Name)
+		if c.Detail != "" {
+			fmt.Fprintf(w, ": %s", c.Detail)
+		}
+		fmt.Fprintln(w)
+		if c.Trust != "" {
+			fmt.Fprintf(w, "      trust: %s\n", c.Trust)
+		}
+		for _, f := range c.Findings {
+			fmt.Fprintf(w, "      - %s\n", f)
+		}
+	}
+	for _, n := range r.Notes {
+		fmt.Fprintf(w, "\nNote: %s\n", n)
+	}
+	fmt.Fprintf(w, "\n%s\n", r.StatementWord())
+}
+
+// StatementWord is the one word and a sentence: VERIFIED, INCOMPLETE (nothing failed, something could not be
+// established), SUPERSEDED, REVOKED or FAILED.
+func (r *Report) StatementWord() string {
+	if len(r.Checks) == 7 {
+		c := r.Checks[6]
+		switch {
+		case c.Status == Fail && strings.HasPrefix(c.Detail, "REVOKED"):
+			return "REVOKED: the issuer withdrew this statement. Do not rely on it."
+		case c.Status == Fail && strings.HasPrefix(c.Detail, "SUPERSEDED"):
+			return "SUPERSEDED: a correction replaced this statement."
+		}
+	}
+	switch r.ExitCode() {
+	case 0:
+		return "VERIFIED: all seven checks passed against the trust inputs you supplied."
+	case 1:
+		return "FAILED: the statement does not verify. Do not rely on it."
+	}
+	var what []string
+	for _, c := range r.Checks {
+		if c.Status != Pass {
+			what = append(what, c.Name+" ("+strings.ToLower(string(c.Status))+")")
+		}
+	}
+	return "INCOMPLETE: nothing failed, but these could not be established: " + strings.Join(what, "; ") + "."
 }

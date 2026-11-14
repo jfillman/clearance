@@ -16,6 +16,7 @@ nav:
   - Verifying a packet offline (C-4): verify.md
   - Assurance providers and receipts (P-1): assurance.md
   - The sampling call (P-2): sampling.md
+  - The verification statement and the hosted verify page (P-3): statement.md
   - GRC push, Vanta first (P-4): grc-push.md
   - The provider protocol and conformance: provider-protocol.md
   - The observation pipeline (O-2): observe-pipeline.md

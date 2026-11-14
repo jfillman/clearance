@@ -18,7 +18,7 @@ CONTRACT_VERSION = "1.0.0"
 
 RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "run.finish", "human.answer", "session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome", "deploy.exception", "deploy.degraded", "federated.decision", "observation", "assessment", "resolution", "observation.health", "observation.verification", "grc.push", "grc.report")
 
-__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Delivery", "DeliveryRequest", "DeliveryWindow", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateBulkResolutionFailed", "GateBulkResolutionRecorded", "GateBulkResolutionRequest", "GateBulkResolutionResult", "GateBulkResolutionSkipped", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateReason", "GateRequirement", "GateResolutionRecorded", "GateResolutionRequest", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PacketBundle", "PacketCheckpointRef", "PacketError", "PacketLinks", "PacketMeta", "PacketPublished", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProvidedDefinition", "ProviderEvent", "Ready", "ReceiptRecorded", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "SamplingCheckpoint", "SamplingDocument", "SamplingItem", "SamplingPacketRef", "SamplingParams", "SamplingPopulationDoc", "SamplingProof", "SamplingRecorded", "SamplingRow", "SamplingStratum", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "Subject", "SubjectProperties", "TargetsGate", "TargetsObserver", "TargetsRequest", "TargetsResult", "TargetsTarget", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
+__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Delivery", "DeliveryRequest", "DeliveryWindow", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateBulkResolutionFailed", "GateBulkResolutionRecorded", "GateBulkResolutionRequest", "GateBulkResolutionResult", "GateBulkResolutionSkipped", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateReason", "GateRequirement", "GateResolutionRecorded", "GateResolutionRequest", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PacketBundle", "PacketCheckpointRef", "PacketError", "PacketLinks", "PacketMeta", "PacketPublished", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProvidedDefinition", "ProviderEvent", "Ready", "ReceiptRecorded", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "SamplingCheckpoint", "SamplingDocument", "SamplingItem", "SamplingPacketRef", "SamplingParams", "SamplingPopulationDoc", "SamplingProof", "SamplingRecorded", "SamplingRow", "SamplingStratum", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "StatementIssued", "StatementLinks", "StatementList", "StatementListItem", "StatementRequest", "StatementRevokeRequest", "StatementRevoked", "Subject", "SubjectProperties", "TargetsGate", "TargetsObserver", "TargetsRequest", "TargetsResult", "TargetsTarget", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -2424,6 +2424,140 @@ class Spend(Model):
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
+class StatementIssued(Model):
+    """Contract schema StatementIssued."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("created", "created", ("bool",), True),
+        Field("digest", "digest", ("str",), True),
+        Field("hash", "hash", ("str",), True),
+        Field("id", "id", ("str",), True),
+        Field("links", "links", ("ref", "StatementLinks"), True),
+        Field("packet", "packet", ("str",), True),
+        Field("profile", "profile", ("str",), True),
+        Field("seq", "seq", ("int",), True),
+        Field("state", "state", ("str",), True),
+        Field("supersedes", "supersedes", ("str",), False),
+    )
+
+    created: bool
+    digest: str
+    hash: str
+    id: str
+    links: StatementLinks
+    packet: str
+    profile: str
+    seq: int
+    state: str
+    supersedes: str | None = None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class StatementLinks(Model):
+    """Contract schema StatementLinks."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("page", "page", ("str",), True),
+        Field("statement", "statement", ("str",), True),
+        Field("status", "status", ("str",), True),
+    )
+
+    page: str
+    statement: str
+    status: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class StatementList(Model):
+    """Contract schema StatementList."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("items", "items", ("list", ("ref", "StatementListItem")), True),
+    )
+
+    items: list[StatementListItem]
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class StatementListItem(Model):
+    """Contract schema StatementListItem."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("id", "id", ("str",), True),
+        Field("key", "key", ("str",), True),
+        Field("packet", "packet", ("str",), True),
+        Field("profile", "profile", ("str",), True),
+        Field("seq", "seq", ("int",), True),
+        Field("state", "state", ("str",), True),
+    )
+
+    id: str
+    key: str
+    packet: str
+    profile: str
+    seq: int
+    state: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class StatementRequest(Model):
+    """Contract schema StatementRequest (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("packet", "packet", ("str",), True),
+        Field("policy_version", "policy_version", ("str",), True),
+        Field("profile", "profile", ("str",), False),
+        Field("reissue", "reissue", ("str",), False),
+        Field("scope", "scope", ("str",), True),
+        Field("supersedes", "supersedes", ("str",), False),
+    )
+
+    packet: str
+    policy_version: str
+    profile: str | None = None
+    reissue: str | None = None
+    scope: str
+    supersedes: str | None = None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class StatementRevokeRequest(Model):
+    """Contract schema StatementRevokeRequest (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("reason", "reason", ("str",), True),
+    )
+
+    reason: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class StatementRevoked(Model):
+    """Contract schema StatementRevoked."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("created", "created", ("bool",), True),
+        Field("hash", "hash", ("str",), True),
+        Field("id", "id", ("str",), True),
+        Field("seq", "seq", ("int",), True),
+        Field("state", "state", ("str",), True),
+    )
+
+    created: bool
+    hash: str
+    id: str
+    seq: int
+    state: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
 class Subject(Model):
     """Contract schema DecideSubject (a request type: unknown keys are refused by the core)."""
 
@@ -2794,6 +2928,13 @@ MODELS: dict[str, type[Model]] = {
     "SourceFailure": SourceFailure,
     "SourceRef": SourceRef,
     "Spend": Spend,
+    "StatementIssued": StatementIssued,
+    "StatementLinks": StatementLinks,
+    "StatementList": StatementList,
+    "StatementListItem": StatementListItem,
+    "StatementRequest": StatementRequest,
+    "StatementRevokeRequest": StatementRevokeRequest,
+    "StatementRevoked": StatementRevoked,
     "Subject": Subject,
     "SubjectProperties": SubjectProperties,
     "TargetsGate": TargetsGate,
@@ -2837,6 +2978,10 @@ OPERATIONS: dict[str, Operation] = {
     "getPacketSample": Operation("GET", "/v1/packets/{id}/sample", "packet-credential", 65536, None, SamplingDocument),
     "verifyProvenance": Operation("POST", "/v1/provenance", "bearer", 4194304, None, ProvenanceVerdict),
     "appendRecord": Operation("POST", "/v1/records", "provider", 262144, RecordRequest, RecordRef),
+    "statementKeys": Operation("GET", "/v1/statement-keys", "none", 65536, None, TokenJWKS),
+    "listStatements": Operation("GET", "/v1/statements", "bearer", 65536, None, StatementList),
+    "issueStatement": Operation("POST", "/v1/statements", "bearer", 4096, StatementRequest, StatementIssued),
+    "revokeStatement": Operation("POST", "/v1/statements/{id}/revoke", "bearer", 4096, StatementRevokeRequest, StatementRevoked),
     "publishTargets": Operation("PUT", "/v1/targets/{source}", "provider", 4194304, TargetsRequest, TargetsResult),
     "hcpRunTask": Operation("POST", "/v1/terraform/run-task", "hcp-signature", 65536, None, HcprunAnswer),
 }

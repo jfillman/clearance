@@ -147,6 +147,11 @@ record's seq and hash; the records themselves are carried too, so they have incl
 A recipient with both parts in its scope can draw a sample of the packet's cleared changes with an inclusion proof per record,
 under the same credential, caps and record-before-serve ordering: see [sampling.md](sampling.md).
 
+## The verification statement
+
+A subscriber who wants to hand someone a link, not a packet, cuts a [verification statement](statement.md) from a published packet: a signed public summary with
+no recipient-specific detail, checked on a hosted page and by `clearance verify --statement`. The recipient detail it was cut from is this page's packet route.
+
 ## Known limits
 
 - **A leaked credential can use up a delivery's caps** (reads and refusals per hour; the sampling call's 20 distinct samples)

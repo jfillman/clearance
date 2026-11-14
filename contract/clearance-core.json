@@ -3734,6 +3734,184 @@
         ],
         "type": "object"
       },
+      "StatementIssued": {
+        "properties": {
+          "created": {
+            "type": "boolean"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "links": {
+            "$ref": "#/components/schemas/StatementLinks"
+          },
+          "packet": {
+            "type": "string"
+          },
+          "profile": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          },
+          "supersedes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "created",
+          "digest",
+          "hash",
+          "id",
+          "links",
+          "packet",
+          "profile",
+          "seq",
+          "state"
+        ],
+        "type": "object"
+      },
+      "StatementLinks": {
+        "properties": {
+          "page": {
+            "type": "string"
+          },
+          "statement": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "page",
+          "statement",
+          "status"
+        ],
+        "type": "object"
+      },
+      "StatementList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/StatementListItem"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "StatementListItem": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "packet": {
+            "type": "string"
+          },
+          "profile": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "packet",
+          "profile",
+          "seq",
+          "state"
+        ],
+        "type": "object"
+      },
+      "StatementRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "packet": {
+            "type": "string"
+          },
+          "policy_version": {
+            "type": "string"
+          },
+          "profile": {
+            "type": "string"
+          },
+          "reissue": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "supersedes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "packet",
+          "policy_version",
+          "scope"
+        ],
+        "type": "object"
+      },
+      "StatementRevokeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "type": "object"
+      },
+      "StatementRevoked": {
+        "properties": {
+          "created": {
+            "type": "boolean"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "created",
+          "hash",
+          "id",
+          "seq",
+          "state"
+        ],
+        "type": "object"
+      },
       "TargetsGate": {
         "additionalProperties": false,
         "properties": {
@@ -6390,6 +6568,321 @@
         "summary": "A registered provider's own record (one of RecordKinds), sealed with that provider's name and version; only provider and ts are verified.",
         "x-clearance-auth": "provider",
         "x-clearance-max-body": 262144
+      }
+    },
+    "/v1/statement-keys": {
+      "get": {
+        "operationId": "statementKeys",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenJWKS"
+                }
+              }
+            },
+            "description": "the statement verification keys"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the statements are not read yet"
+          }
+        },
+        "security": [],
+        "summary": "The keys verification statements (P-3) are checked with, a JWKS, public like /v1/keys and NOT the same set: GET /v1/keys is the token keys, for the window a token can live; this is the key in use and every key that signed a statement that stands. No verifier of a token, a packet credential, a feed or an attestation reads it. 503 while the statement index is cold or too old: never an empty set.",
+        "x-clearance-auth": "none",
+        "x-clearance-max-body": 65536
+      }
+    },
+    "/v1/statements": {
+      "get": {
+        "operationId": "listStatements",
+        "parameters": [
+          {
+            "description": "the signing key id (required)",
+            "in": "query",
+            "name": "key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatementList"
+                }
+              }
+            },
+            "description": "the statements that key signed"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is not valid (strict decoding, or a field the route refuses)"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no bearer token, or one the authenticator refused"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the caller may not do this"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the store could not record it: treat as unreachable (fail closed)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "An admin lists the statements signed by one signing key id, whatever their state: what retiring that key for compromise has to deal with (revoke them and reissue them under a new key; docs/statement.md).",
+        "x-clearance-auth": "bearer",
+        "x-clearance-max-body": 65536
+      },
+      "post": {
+        "operationId": "issueStatement",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatementRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatementIssued"
+                }
+              }
+            },
+            "description": "the statement's id, state, digest and links"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is not valid (strict decoding, or a field the route refuses)"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no bearer token, or one the authenticator refused"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the request conflicts with what is recorded"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is over the route's cap"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the store could not record it: treat as unreachable (fail closed)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "An admin cuts a verification statement (P-3) from a published packet of the packet view: an immutable, signed summary (period, scope as printed, policy version, counts by every coverage state, exceptions by class, observation health with its blind windows, the verification result, the receipts attached, a questionnaire-mapping block; profile insurer adds the five insurer figures) with no recipient-specific detail in it. The statement is a statement.issue record, written before the answer; the same request again is the same statement (created false) and records nothing. supersedes names the statement this one corrects, which then verifies as superseded. The public page is on the separate verify listener (CLEARANCE_VERIFY_LISTEN, off unless set).",
+        "x-clearance-auth": "bearer",
+        "x-clearance-max-body": 4096
+      }
+    },
+    "/v1/statements/{id}/revoke": {
+      "post": {
+        "operationId": "revokeStatement",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatementRevokeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatementRevoked"
+                }
+              }
+            },
+            "description": "the revocation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is not valid (strict decoding, or a field the route refuses)"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no bearer token, or one the authenticator refused"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such resource"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is over the route's cap"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the store could not record it: treat as unreachable (fail closed)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "An admin revokes a statement: from the next read it verifies as revoked on the public page and in its signed status. A statement.revoke record, written before the answer; revoking a revoked statement is the same answer and records nothing. The reason is recorded and never published.",
+        "x-clearance-auth": "bearer",
+        "x-clearance-max-body": 4096
       }
     },
     "/v1/targets/{source}": {

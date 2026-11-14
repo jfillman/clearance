@@ -1,0 +1,83 @@
+{{- if .Values.verifyPage.enabled }}
+{{- /* The hosted verify page (P-3): a public, read-only listener of the core. Nothing here renders unless verifyPage.enabled, and it is not to be
+       enabled until the security review pass in docs/statement.md has signed it off. No host name, address or alias is rendered from a default. */}}
+{{- $v := .Values.verifyPage }}
+{{- if not $v.httpRoute.parentRefs }}{{ fail "verifyPage.httpRoute.parentRefs is required when verifyPage.enabled" }}{{ end }}
+{{- if not $v.httpRoute.hostnames }}{{ fail "verifyPage.httpRoute.hostnames is required when verifyPage.enabled: the page's hostname is never a default" }}{{ end }}
+{{- if and .Values.networkPolicy.enabled (not $v.networkPolicy.from) }}{{ fail "verifyPage.networkPolicy.from is required when verifyPage.enabled with networkPolicy.enabled: the Gateway's pods or namespace" }}{{ end }}
+{{- $hops := int $v.limits.trustedProxyHops }}
+{{- if $v.directExposure }}
+{{- if gt $hops 0 }}{{ fail "verifyPage.directExposure with verifyPage.limits.trustedProxyHops above 0 contradict: a direct listener has no proxy" }}{{ end }}
+{{- else }}
+{{- if lt $hops 1 }}{{ fail "verifyPage.limits.trustedProxyHops must be at least 1 behind a Gateway (every visitor would share the Gateway's address and one rate-limit budget); set verifyPage.directExposure: true only if there is no proxy" }}{{ end }}
+{{- if not .Values.networkPolicy.enabled }}{{ fail "verifyPage.enabled with trustedProxyHops above 0 needs networkPolicy.enabled: X-Forwarded-For is trusted only if the pod is reachable from the Gateway alone" }}{{ end }}
+{{- end }}
+{{- if and $v.publicURL (not (hasPrefix "https://" $v.publicURL)) }}{{ fail "verifyPage.publicURL is an https URL" }}{{ end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "clearance.coreName" . }}-verify
+  labels:
+    {{- include "clearance.labels" . | nindent 4 }}
+    app.kubernetes.io/component: verify
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "clearance.selector" (dict "ctx" . "component" "core") | nindent 4 }}
+  ports:
+    - {name: verify, port: {{ $v.port }}, targetPort: verify, protocol: TCP}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "clearance.fullname" . }}-verify
+  labels:
+    {{- include "clearance.labels" . | nindent 4 }}
+    app.kubernetes.io/component: verify
+spec:
+  parentRefs:
+    {{- toYaml $v.httpRoute.parentRefs | nindent 4 }}
+  hostnames: {{ toYaml $v.httpRoute.hostnames | nindent 4 }}
+  rules:
+    # Only the page's own paths reach the pod: /s/<id> and its two downloads, and the health probe is not routed.
+    - matches:
+        - {path: {type: PathPrefix, value: /s/}}
+      backendRefs:
+        - name: {{ include "clearance.coreName" . }}-verify
+          port: {{ $v.port }}
+{{- if $v.logKeys }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "clearance.coreName" . }}-verify
+  labels:
+    {{- include "clearance.labels" . | nindent 4 }}
+    app.kubernetes.io/component: verify
+data:
+  log-keys: |
+    {{- $v.logKeys | nindent 4 }}
+{{- end }}
+{{- if .Values.networkPolicy.enabled }}
+---
+# The verify port is open to the Gateway and to nothing else; the API's own policy (port 8080) is unchanged, and the API is not
+# reachable through this port or this route.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "clearance.fullname" . }}-verify
+  labels:
+    {{- include "clearance.labels" . | nindent 4 }}
+    app.kubernetes.io/component: verify
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "clearance.selector" (dict "ctx" . "component" "core") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- toYaml $v.networkPolicy.from | nindent 8 }}
+      ports:
+        - {protocol: TCP, port: {{ $v.port }}}
+{{- end }}
+{{- end }}

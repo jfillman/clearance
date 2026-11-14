@@ -138,7 +138,9 @@ func Stored(r map[string]any) map[string]any
   (`packet` {id, digest, size, view, from, to, mappings, chain, checkpoint?}; `principal` the admin, `initiator`, `delegate`), `packet.deliver`
   (`packet` {id, digest}, `delivery` {recipient, scope, from, to, engagement?}; its seq is the delivery id `dl-<seq>`), `packet.fetch`
   (`principal` `recipient:<name>`, `decision` allow or deny, `rule` the refusal's `PK-*` rule, `delivery`, `fetch` {part?, scope, bytes}) and
-  `packet.receipt` (`packet`, `delivery`, `receipt` {verdict, engagement, payload_sha256, key_id, key, envelope}: the DSSE envelope as received,
+  `statement.issue` and `statement.revoke` (P-3, [statement.md](statement.md): `principal` the admin, `target` `statement:<id>`, `packet` {id, digest}, `statement` {id, profile,
+  request_sha256, payload_sha256, envelope: the signed DSSE envelope, supersedes?} for an issue, {id, reason, payload_sha256} for a revoke; written before the answer, and no
+  anonymous read of the public page writes one), `packet.receipt` (`packet`, `delivery`, `receipt` {verdict, engagement, payload_sha256, key_id, key, envelope}: the DSSE envelope as received,
   `args_sha256` its payload digest), and, from P-2 ([sampling.md](sampling.md)), `packet.sample` (`principal` `recipient:<name>`, `decision` allow or deny,
   `rule` the refusal's `PK-*` rule, `delivery`; an allowed one carries `sample` {id, n, seed, stratify, effective_seed, method,
   sample_sha256, population_sha256, population, eligible, checkpoint_size, selected: the sampled clearing-record seqs}). The core verifies the signature and bindings itself; the recipient's words (verdict, notes) are the

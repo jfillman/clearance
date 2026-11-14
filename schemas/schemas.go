@@ -20,3 +20,9 @@ var ChangeRequestV1 []byte
 //
 //go:embed change-attestation.schema.json
 var ChangeAttestationV1 []byte
+
+// StatementV1 is schemas/statement.schema.json: the verification statement (P-3) a core signs and `clearance verify
+// --statement` reads, and, in $defs.status, its signed status. internal/statement decodes the same shape strictly.
+//
+//go:embed statement.schema.json
+var StatementV1 []byte

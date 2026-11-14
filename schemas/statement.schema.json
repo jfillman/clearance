@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clearance.hangarplatform.dev/schemas/statement/v1.json",
+  "title": "clearance.statement/v1",
+  "description": "The verification statement (P-3, docs/statement.md): the signed payload of a DSSE envelope (payloadType application/vnd.clearance.statement.v1+json), the public summary of one evidence packet. It carries counts and nothing recipient-specific: no record id, no person, no firm, no repository, no cluster, no scope name. The signed bytes are this document's canonical JSON (keys sorted, no insignificant whitespace). internal/statement decodes the same shape strictly (unknown fields refused). The statement's signed status (clearance.statement-status/v1) is a separate, short document: see $defs.status.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["_type", "id", "issuer", "issued_at", "profile", "period", "scope", "policy_version", "packet", "checkpoint", "cited_records", "summary", "witnesses", "questionnaire_mapping", "questionnaire_mapping_version"],
+  "properties": {
+    "_type": {"const": "clearance.statement/v1"},
+    "id": {"type": "string", "pattern": "^st-[0-9a-f]{32}$", "description": "128 random bits: not derived from the packet and not sequential."},
+    "issuer": {"type": "string", "minLength": 1, "maxLength": 200, "description": "The issuing core's token issuer name: the name its published keys (GET /v1/keys) belong to. A plain label (no dot) or an https URL with a public host: never an internal name."},
+    "issued_at": {"type": "string", "format": "date-time"},
+    "profile": {"enum": ["standard", "insurer"]},
+    "period": {"$ref": "#/$defs/period"},
+    "scope": {
+      "type": "object", "additionalProperties": false, "required": ["label", "observed_scopes"],
+      "properties": {
+        "label": {"type": "string", "minLength": 1, "maxLength": 120, "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._,:/()&+-]*$", "description": "The subscriber's own words for the scope. The names of accounts and clusters are in the packet, not here."},
+        "observed_scopes": {"type": "integer", "minimum": 0}
+      }
+    },
+    "policy_version": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
+    "packet": {
+      "type": "object", "additionalProperties": false, "required": ["id", "digest"],
+      "properties": {"id": {"type": "string", "pattern": "^pk-[0-9a-f]{32}$"}, "digest": {"$ref": "#/$defs/sha256"}}
+    },
+    "checkpoint": {
+      "description": "The witnessed ledger checkpoint the packet's records stand under; null when the packet has none (the statement then says so and checks 3 and 4 cannot pass).",
+      "oneOf": [
+        {"type": "null"},
+        {"type": "object", "additionalProperties": false, "required": ["size", "root"],
+         "properties": {"size": {"type": "integer", "minimum": 1}, "root": {"$ref": "#/$defs/sha256"}}}
+      ]
+    },
+    "cited_records": {
+      "type": "object", "additionalProperties": false, "required": ["count", "sha256"],
+      "description": "The records the counts rest on: how many, and the SHA-256 of '<seq>:<record hash>\\n' for each in seq order. The records and their inclusion proofs are the recipient detail.",
+      "properties": {"count": {"type": "integer", "minimum": 0}, "sha256": {"$ref": "#/$defs/sha256"}}
+    },
+    "summary": {
+      "type": "object", "additionalProperties": false,
+      "required": ["total_records", "by_coverage", "exceptions", "observation_health", "ledger", "receipts"],
+      "properties": {
+        "total_records": {"type": "integer", "minimum": 0},
+        "by_coverage": {"$ref": "#/$defs/counts", "description": "Every coverage state, even at zero."},
+        "exceptions": {
+          "type": "object", "additionalProperties": false, "required": ["total", "unresolved", "by_class"],
+          "properties": {"total": {"type": "integer", "minimum": 0}, "unresolved": {"type": "integer", "minimum": 0}, "by_class": {"$ref": "#/$defs/counts", "description": "Every exception class, even at zero."}}
+        },
+        "observation_health": {
+          "type": "object", "additionalProperties": false,
+          "required": ["window_verified", "scopes", "could_not_see_seconds", "blind_windows", "blind_windows_cut"],
+          "properties": {
+            "window_verified": {"type": "boolean", "description": "True only when at least one scope was observed and every observed scope's feeds were healthy for the whole period."},
+            "scopes": {"type": "array", "items": {
+              "type": "object", "additionalProperties": false,
+              "required": ["index", "collector", "state", "clean", "cleared_and_verified", "seen_not_cleared", "could_not_see_seconds"],
+              "properties": {"index": {"type": "integer", "minimum": 1}, "collector": {"type": "boolean"}, "state": {"type": "string"}, "clean": {"type": "boolean"},
+                             "cleared_and_verified": {"type": "integer", "minimum": 0}, "seen_not_cleared": {"type": "integer", "minimum": 0}, "could_not_see_seconds": {"type": "integer", "minimum": 0}}
+            }},
+            "could_not_see_seconds": {"type": "integer", "minimum": 0},
+            "blind_windows": {"type": "array", "items": {
+              "type": "object", "additionalProperties": false, "required": ["kind", "scope_index", "from", "to", "seconds"],
+              "properties": {"kind": {"type": "string"}, "scope_index": {"type": "integer", "minimum": 0}, "from": {"type": "string"}, "to": {"type": "string"}, "seconds": {"type": "integer", "minimum": 0}}
+            }},
+            "blind_windows_cut": {"type": "boolean"}
+          }
+        },
+        "ledger": {
+          "type": "object", "additionalProperties": false, "required": ["state", "records_checkpointed", "records_not_checkpointed"],
+          "properties": {"state": {"enum": ["checkpointed", "no-checkpoint", "off"]}, "records_checkpointed": {"type": "integer", "minimum": 0}, "records_not_checkpointed": {"type": "integer", "minimum": 0}}
+        },
+        "receipts": {
+          "type": "object", "additionalProperties": false, "required": ["count", "by_verdict"],
+          "properties": {"count": {"type": "integer", "minimum": 0}, "by_verdict": {"$ref": "#/$defs/counts"}}
+        }
+      }
+    },
+    "insurer": {
+      "description": "Present exactly when profile is insurer. Shares are tenths of a percent (no floating point is signed); null when there was nothing to take a share of.",
+      "type": "object", "additionalProperties": false,
+      "required": ["critical_changes", "critical_with_two_independent_approvers", "critical_two_approver_share_per_mille", "unresolved_exceptions", "telemetry_coverage", "changes", "agent_proposed_changes", "agent_share_per_mille"],
+      "properties": {
+        "critical_changes": {"type": "integer", "minimum": 0},
+        "critical_with_two_independent_approvers": {"type": "integer", "minimum": 0},
+        "critical_two_approver_share_per_mille": {"type": ["integer", "null"], "minimum": 0, "maximum": 1000},
+        "unresolved_exceptions": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["class", "disposition"],
+          "properties": {"class": {"type": "string"}, "disposition": {"enum": ["none-recorded", "still-live", "revoked-not-recleared"]}}}},
+        "telemetry_coverage": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["scope_index", "visible_per_mille"],
+          "properties": {"scope_index": {"type": "integer", "minimum": 1}, "visible_per_mille": {"type": "integer", "minimum": 0, "maximum": 1000}}}},
+        "changes": {"type": "integer", "minimum": 0},
+        "agent_proposed_changes": {"type": "integer", "minimum": 0},
+        "agent_share_per_mille": {"type": ["integer", "null"], "minimum": 0, "maximum": 1000}
+      }
+    },
+    "witnesses": {
+      "type": "object", "additionalProperties": false, "required": ["declared_independent"],
+      "description": "The witnesses the issuer asserts it does not run. Empty is the default: independence is asserted, never assumed. A verifier that names its own independent witnesses ignores this list.",
+      "properties": {"declared_independent": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 128}}}
+    },
+    "questionnaire_mapping_version": {"type": "string"},
+    "questionnaire_mapping": {
+      "description": "What the statement is evidence for. Evidence toward an objective, not a claim that it is met.",
+      "type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["framework", "ref", "objective", "evidence"],
+        "properties": {"framework": {"type": "string"}, "ref": {"type": "string"}, "objective": {"type": "string"}, "evidence": {"type": "string"}}}
+    },
+    "supersedes": {"type": "string", "pattern": "^st-[0-9a-f]{32}$", "description": "The statement this one corrects. The other direction (superseded by) is the core's current state, in the status, never in a signed document."}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "period": {"type": "object", "additionalProperties": false, "required": ["from", "to"], "properties": {"from": {"type": "string", "format": "date-time"}, "to": {"type": "string", "format": "date-time"}}},
+    "counts": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["state", "count"], "properties": {"state": {"type": "string"}, "count": {"type": "integer", "minimum": 0}}}},
+    "status": {
+      "title": "clearance.statement-status/v1",
+      "description": "The signed answer to 'is this statement still current' (payloadType application/vnd.clearance.statement-status.v1+json), as of a time. A verifier trusts it only under the issuer's keys and only while as_of is recent.",
+      "type": "object", "additionalProperties": false, "required": ["_type", "id", "state", "as_of"],
+      "properties": {
+        "_type": {"const": "clearance.statement-status/v1"},
+        "id": {"type": "string", "pattern": "^st-[0-9a-f]{32}$"},
+        "state": {"enum": ["valid", "superseded", "revoked"]},
+        "superseded_by": {"type": "string", "pattern": "^st-[0-9a-f]{32}$"},
+        "successor_revoked": {"type": "boolean", "description": "True when the statement that replaced this one was itself revoked: neither is current."},
+        "revoked_at": {"type": "string"},
+        "as_of": {"type": "string", "format": "date-time"}
+      }
+    }
+  }
+}

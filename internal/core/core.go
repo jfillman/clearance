@@ -158,6 +158,11 @@ type Config struct {
 	Attest attest.Backend
 	// Ledger is the evidence ledger (C-3); nil: off, and nothing about it runs.
 	Ledger *ledger.Config
+	// VerifyListen is the verify page's own listen address (CLEARANCE_VERIFY_LISTEN, P-3). "" (the default): there is no such
+	// listener, no route and no port: the public page does not exist. Statements: its settings and the statement checks'
+	// trust inputs.
+	VerifyListen string
+	Statements   server.StatementOptions
 }
 
 // FromEnv reads Config from getenv, the authenticator included (authn.FromEnv).
@@ -301,6 +306,9 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		return cfg, err
 	}
 	if cfg.Ledger, err = ledger.FromEnv(getenv); err != nil {
+		return cfg, err
+	}
+	if cfg.VerifyListen, cfg.Statements, err = statementConfig(getenv, cfg.Ledger); err != nil {
 		return cfg, err
 	}
 	cfg.TokenIssuer = get("CLEARANCE_TOKEN_ISSUER", gate.DefaultTokenIssuer)
@@ -594,7 +602,7 @@ func (c *Core) wire(ctx context.Context) error {
 	}
 	srv, err := server.New(ctx, server.Options{Ledger: led, OnOutcome: onOutcome, Attestation: status, Store: c.Store, Engine: c.Engine, Auth: cfg.Auth,
 		Providers: cfg.Providers, Version: cfg.Version, Clock: c.clock, Log: c.log, MaxClockSkew: cfg.MaxClockSkew, PacketReadsPerHour: cfg.PacketReadsPerHour,
-		DevRecords:      cfg.DevRecords,
+		Statements: cfg.Statements, DevRecords: cfg.DevRecords,
 		Definitions:     &definitions.Service{Registry: reg, Store: c.Store, Clock: c.clock, Writer: writer},
 		ParseDefinition: parse, Gate: g, Review: rev, Provenance: prov, App: c.App, RunTask: c.RunTask})
 	if err != nil {
@@ -626,6 +634,9 @@ func (c *Core) useKey(ctx context.Context, s token.Signer) error {
 // Close closes the evidence ledger, if any, and the store (once).
 func (c *Core) Close() {
 	c.once.Do(func() {
+		if c.Server != nil {
+			c.Server.StopStatements()
+		}
 		if c.Ledger != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			_ = c.Ledger.Close(ctx)
@@ -764,8 +775,25 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 	loopCtx, stopLoops := context.WithCancel(context.Background())
 	loopsDone := make(chan struct{})
 	go func() { c.Loops(loopCtx); close(loopsDone) }()
-	serveErr := make(chan error, 1)
+	serveErr := make(chan error, 2)
 	go func() { serveErr <- hs.Serve(ln) }()
+	// The verify page (P-3) is a second listener, started only when CLEARANCE_VERIFY_LISTEN is set. With it unset nothing
+	// below runs: there is no socket for the public page.
+	var vs *http.Server
+	if cfg.VerifyListen != "" {
+		vln, err := net.Listen("tcp", cfg.VerifyListen)
+		if err != nil {
+			stopLoops()
+			<-loopsDone
+			_ = hs.Close()
+			return fmt.Errorf("core: verify listen %s: %w", cfg.VerifyListen, err)
+		}
+		// The statement index is read in the background, after the core serves, page by page; the page answers 503 until it is warm.
+		c.Server.StartStatements()
+		vs = c.Server.VerifyHTTPServer(cfg.VerifyListen)
+		go func() { serveErr <- vs.Serve(vln) }()
+		log.Info("clearance verify page serving (public, read-only)", "addr", vln.Addr().String())
+	}
 	pol := c.Engine.Policy()
 	log.Info("clearance core serving", "addr", ln.Addr().String(), "memory", cfg.Memory, "policy", pol.Bundle,
 		"policy_version", pol.Version, "bundles", c.Engine.BundleNames(), "providers", len(cfg.Providers), "github_app", c.App != nil,
@@ -783,6 +811,9 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 	defer cancel()
 	if err := hs.Shutdown(sctx); err != nil && runErr == nil {
 		runErr = err
+	}
+	if vs != nil {
+		_ = vs.Shutdown(sctx)
 	}
 	stopLoops()
 	<-loopsDone

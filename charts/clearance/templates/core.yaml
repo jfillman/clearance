@@ -25,9 +25,15 @@ spec:
       labels:
         {{- include "clearance.selector" (dict "ctx" . "component" "core") | nindent 8 }}
         {{- with .Values.core.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
-      {{- with .Values.core.podAnnotations }}
+      {{- if or .Values.core.podAnnotations .Values.verifyPage.enabled }}
       annotations:
+        {{- with .Values.core.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if .Values.verifyPage.enabled }}
+        {{- /* A change to the verify page's log keys or to the witness policy restarts the pod: the core reads both files once, at start. */}}
+        checksum/verify-config: {{ printf "%s\n%s" .Values.verifyPage.logKeys (.Values.ledger.witnessPolicy | default "") | sha256sum }}
+        {{- end }}
       {{- end }}
     spec:
       serviceAccountName: {{ include "clearance.coreSA" . }}
@@ -54,6 +60,9 @@ spec:
           args: ["core"]
           ports:
             - {name: http, containerPort: 8080, protocol: TCP}
+            {{- if .Values.verifyPage.enabled }}
+            - {name: verify, containerPort: {{ .Values.verifyPage.port }}, protocol: TCP}
+            {{- end }}
           env:
             - name: CLEARANCE_DSN
               valueFrom:
@@ -164,6 +173,33 @@ spec:
             - name: CLEARANCE_HCP_RUN_TASK_CONFIG_FILE
               value: /etc/clearance/hcp-run-task-config/config.json
             {{- end }}
+            {{- if .Values.verifyPage.enabled }}
+            - name: CLEARANCE_VERIFY_LISTEN
+              value: {{ printf ":%d" (int .Values.verifyPage.port) | quote }}
+            {{- with .Values.verifyPage.publicURL }}
+            - name: CLEARANCE_VERIFY_PUBLIC_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if .Values.verifyPage.logKeys }}
+            - name: CLEARANCE_STATEMENT_LOG_KEYS_FILE
+              value: /etc/clearance/verify/log-keys
+            {{- end }}
+            {{- with .Values.verifyPage.independentWitnesses }}
+            - name: CLEARANCE_STATEMENT_INDEPENDENT_WITNESSES
+              value: {{ include "clearance.csv" . | quote }}
+            {{- end }}
+            {{- $l := .Values.verifyPage.limits }}
+            - {name: CLEARANCE_VERIFY_RATE_PER_CLIENT, value: {{ $l.clientPerMinute | quote }}}
+            - {name: CLEARANCE_VERIFY_BURST_PER_CLIENT, value: {{ $l.clientBurst | quote }}}
+            - {name: CLEARANCE_VERIFY_RATE_GLOBAL, value: {{ $l.globalPerMinute | quote }}}
+            - {name: CLEARANCE_VERIFY_BURST_GLOBAL, value: {{ $l.globalBurst | quote }}}
+            - {name: CLEARANCE_VERIFY_TRUSTED_PROXY_HOPS, value: {{ $l.trustedProxyHops | quote }}}
+            - {name: CLEARANCE_VERIFY_MAX_CHECKS, value: {{ $l.maxChecks | quote }}}
+            - {name: CLEARANCE_VERIFY_RESULT_CACHE, value: {{ $l.resultCacheSize | quote }}}
+            {{- if .Values.verifyPage.directExposure }}
+            - {name: CLEARANCE_VERIFY_DIRECT_EXPOSURE, value: "true"}
+            {{- end }}
+            {{- end }}
             {{- include "clearance.sharedEnv" . | nindent 12 }}
             {{- with .Values.core.extraEnv }}
             {{- toYaml . | nindent 12 }}
@@ -212,6 +248,11 @@ spec:
               readOnly: true
             - name: ledger
               mountPath: /var/lib/clearance/ledger
+            {{- end }}
+            {{- if and .Values.verifyPage.enabled .Values.verifyPage.logKeys }}
+            - name: verify-config
+              mountPath: /etc/clearance/verify
+              readOnly: true
             {{- end }}
             {{- with .Values.core.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
@@ -278,6 +319,11 @@ spec:
         - name: ledger
           persistentVolumeClaim:
             claimName: {{ include "clearance.coreName" . }}-ledger
+        {{- end }}
+        {{- if and .Values.verifyPage.enabled .Values.verifyPage.logKeys }}
+        - name: verify-config
+          configMap:
+            name: {{ include "clearance.coreName" . }}-verify
         {{- end }}
         {{- with .Values.core.extraVolumes }}
         {{- toYaml . | nindent 8 }}

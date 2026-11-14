@@ -23,7 +23,7 @@ func (s *Server) SetSampleMaxForTest(n int) { s.sampleMax = n }
 // FailAtomicForTest makes the next store write fail once: before the commit ("before"), or after it ("after": the write is
 // made and the caller is told it failed, as a connection lost at commit looks).
 func (s *Server) FailAtomicForTest(mode string) {
-	s.opt.Store = &failingStore{Store: s.opt.Store, mode: mode}
+	s.pauseStatementLoop(func() { s.opt.Store = &failingStore{Store: s.opt.Store, mode: mode} })
 }
 
 type failingStore struct {
