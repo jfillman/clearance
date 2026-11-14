@@ -156,16 +156,6 @@ CREATE INDEX IF NOT EXISTS clearance_evidence_observed ON clearance_evidence ((r
 CREATE INDEX IF NOT EXISTS clearance_evidence_verification ON clearance_evidence ((record->>'scope'), seq)
   WHERE record->>'tool' = 'observation.verification';
 CREATE INDEX IF NOT EXISTS clearance_evidence_written ON clearance_evidence (written_at);
--- The Map's reads (clearance-api GET /v1/map; api/mapstore.go spells each predicate as its index does). A record's
--- jsonb is TOASTed (about 2 KB compressed), so every record a statement has to look at costs a fetch and a decompress:
--- each index below holds only the rows its statement wants, in the order it wants them, and the statement reads no others.
-CREATE INDEX IF NOT EXISTS clearance_evidence_gate ON clearance_evidence ((record->>'ts'))
-  WHERE record->>'tool' IN ('deploy.request', 'deploy.clear', 'deploy.deny', 'deploy.expire', 'deploy.outcome', 'deploy.exception', 'deploy.degraded')
-     OR (record->>'boundary' = 'runtime' AND record ? 'policy' AND NOT (record ? 'outcome_of'));
-CREATE INDEX IF NOT EXISTS clearance_evidence_health ON clearance_evidence ((record->>'scope'), seq)
-  WHERE record->>'tool' = 'observation.health';
-CREATE INDEX IF NOT EXISTS clearance_evidence_obs_ts ON clearance_evidence ((record->>'scope'), (record->>'ts'))
-  WHERE record->>'tool' IN ('observation', 'assessment');
 CREATE TABLE IF NOT EXISTS clearance_ledger_checkpoints (
   size   bigint      PRIMARY KEY,
   origin text        NOT NULL,
@@ -185,9 +175,6 @@ CREATE TABLE IF NOT EXISTS clearance_packets (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 `
-
-// migrateTimeout bounds Open's migration, which may build an index over the whole chain.
-const migrateTimeout = 15 * time.Minute
 
 // Options tune a store; the zero value is the defaults.
 type Options struct {
@@ -305,6 +292,8 @@ type Store struct {
 
 	headMu    sync.RWMutex
 	committed evidence.Checkpoint
+
+	build indexBuild
 }
 
 var _ store.Store = (*Store)(nil)
@@ -323,13 +312,7 @@ func Open(ctx context.Context, dsn string, opt Options) (*Store, error) {
 	}
 	cctx, cancel := deadline(ctx, opt)
 	defer cancel()
-	// Migrating can build an index over the whole chain (CREATE INDEX IF NOT EXISTS, the first start after a release
-	// that adds one): that scan is not a request, so it runs under its own bound instead of statement_timeout and the
-	// call deadline. This connection is the only writer (it holds the lock), so the build's SHARE lock blocks no one
-	// but the writer that is starting; readers go on reading.
-	mctx, mcancel := context.WithTimeout(ctx, migrateTimeout)
-	defer mcancel()
-	if _, err := s.conn.Exec(mctx, "SET statement_timeout = 0;\n"+Schema+"\nRESET statement_timeout;"); err != nil {
+	if _, err := s.conn.Exec(cctx, Schema); err != nil {
 		s.conn.Close(context.Background())
 		return nil, fmt.Errorf("pg: migrate: %w", err)
 	}
@@ -344,6 +327,7 @@ func Open(ctx context.Context, dsn string, opt Options) (*Store, error) {
 	}
 	s.committed = cp
 	opt.Logger.Info("clearance store open", "records", cp.Count, "head", cp.Head)
+	s.startIndexBuild()
 	return s, nil
 }
 
@@ -376,6 +360,7 @@ func (s *Store) Close() {
 		return
 	}
 	s.closed = true
+	s.stopIndexBuild()
 	if s.conn != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		s.conn.Close(ctx)

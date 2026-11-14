@@ -248,13 +248,30 @@ record) and `boundary`, takes `scope=<scope>` (one observed scope's records, rea
 `statement_timeout`): `GateActivity` over the window's gate records, `ScopeCoverage` over the declared scopes' observations and
 assessments in the window, `HealthBeforeScopes` for their health, and `Holding` for the changes holding. A record is TOASTed (about
 2 KB compressed), so what a statement costs is how many records it has to fetch and decompress. Each therefore reads only its own records
-from a partial index the schema adds (`CREATE INDEX IF NOT EXISTS` at core start): `clearance_evidence_gate` (the gate records by `ts`),
-`clearance_evidence_obs_ts` (observations and assessments by scope and `ts`) and `clearance_evidence_health` (health records by scope and
-`seq`), each predicate repeated word for word in `mapstore.go`. The window's reads cost the records in the window (gate records and
-observations), never the chain's length; health reads the newest 500 health records of each scope, so a core-written monitoring flip held
-longer than that loses its start (its state still reads as the flip's). `GateActivity` extracts a record's fields with one
+from a partial index (`clearance_evidence_gate`
+(the gate records by `ts`), `clearance_evidence_obs_ts` (observations and assessments by scope and `ts`) and `clearance_evidence_health` (health records by scope and
+`seq`), each predicate repeated word for word in `mapstore.go`). The window's reads cost the records in the window (gate records and
+observations), never the chain's length.
+
+**The indexes are built by the core after it starts, not by the migration.** On a chain of millions of records an index takes minutes, and the
+core, the deploy gate's only writer, must neither be down for that nor have its writes blocked. So the core starts and serves at once, then builds
+the three in the background, one at a time, with `CREATE INDEX CONCURRENTLY IF NOT EXISTS` on its own connection with no statement timeout
+(`pg.Store.BuildIndexes`; it logs each index's start, finish and duration). **Until an index exists the Map is as slow as it was without it**
+(seconds on a chain of tens of thousands of records, and a 503 `read failed` once a statement passes the 5 s `statement_timeout`). An interrupted
+build leaves an `INVALID` index that `IF NOT EXISTS` would skip for ever: at start the core finds an index of these names with
+`pg_index.indisvalid = false`, drops it (`DROP INDEX CONCURRENTLY`) and builds it again. A failed build is logged and tried again at the next start;
+it never stops the core. clearance-api (the reader) owns no DDL.
+
+**What the health bound loses.** Health reads the newest 500 health records of each scope and starts at the newest healthy collector record among
+them. A source's state is the collector's own newest record, except that a flip the core wrote (monitoring forced blind or degraded) holds the
+state at the worse of the two until the collector reports healthy. If such a flip began more than 500 health records before the window's end
+(roughly eight hours at one record a minute and two sources per scope) and the collector has not reported healthy since, the flip's record is not
+read: the Map shows the collector's own newest state (degraded, or blind when its record is stale) where it would have shown the flip's `blind`. It never shows a
+source healthier than it is, because a healthy collector record ends the flip and is in the tail. A source with no record among a scope's newest 500
+(a source silent for longer than that) reads as never seen, not as stale; both are `blind`. `TestHealthTailBoundAndWhatItLoses` pins both.
+`GateActivity` extracts a record's fields with one
 `jsonb_to_record`, so a record is decompressed once.
-`TestMapReadsOnlyTheIndexedRecords` fails if a Map read walks the table or misses one of the three indexes (it reads Postgres's own scan
+`TestMapReadsOnlyTheIndexedRecords` (indexes built first) fails if a Map read walks the table or misses one of the three indexes (it reads Postgres's own scan
 counts, so it holds on any machine); `TestMapStaysUnderABudgetOnALargeChain` holds `GET /v1/map` under a second on 25 000 records
 (about 0.2 s) and, with `CLEARANCE_MAP_PERF=1`, under three seconds on 250 000 (about 1.5 s: half of them gate records inside the window).
 

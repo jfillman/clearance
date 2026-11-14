@@ -93,6 +93,9 @@ func TestMapStaysUnderABudgetOnALargeChain(t *testing.T) {
 			if err := st.Atomic(bg, func(tx store.Tx) error { return tx.PutTargets(bg, synthRegistry()) }); err != nil {
 				t.Fatal(err)
 			}
+			if err := st.BuildIndexes(bg); err != nil { // the core builds them in the background after it starts
+				t.Fatal(err)
+			}
 			synthChain(t, dsn, n, 48*time.Hour)
 			rd := openReader(t, dsn)
 			h := newHarness(t, backend{"perf", func(*testing.T, world) (Store, string) { return rd, dsn }}, world{},
@@ -142,6 +145,9 @@ func TestMapReadsOnlyTheIndexedRecords(t *testing.T) {
 	}
 	defer st.Close()
 	if err := st.Atomic(bg, func(tx store.Tx) error { return tx.PutTargets(bg, synthRegistry()) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.BuildIndexes(bg); err != nil {
 		t.Fatal(err)
 	}
 	synthChain(t, dsn, 60000, 30*24*time.Hour)
