@@ -7,7 +7,7 @@
 {{- $_ := required "oidc.issuer is required with slack.enabled: the link page signs people in at the same IdP the core trusts" .Values.oidc.issuer }}
 {{- if not .Values.oidc.allowedUsers }}{{ fail "oidc.allowedUsers is required with slack.enabled: a link only names a person the core allows" }}{{ end }}
 {{- if not (has $s.transport (list "socket" "events")) }}{{ fail "slack.transport is socket or events" }}{{ end }}
-{{- if not (and (ge (int $s.clearMaxTier) 0) (le (int $s.clearMaxTier) 3)) }}{{ fail "slack.clearMaxTier is 0 to 3" }}{{ end }}
+{{- if not (and (ge (int $s.clearMaxTier) 0) (le (int $s.clearMaxTier) 2)) }}{{ fail "slack.clearMaxTier is 0 to 2" }}{{ end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

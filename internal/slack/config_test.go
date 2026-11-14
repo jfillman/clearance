@@ -49,7 +49,7 @@ func TestConfigRefusesWhatCannotWorkAndNeverPrintsASecret(t *testing.T) {
 		"no core":                     func(m map[string]string) { delete(m, "CLEARANCE_URL") },
 		"an http public URL":          func(m map[string]string) { m["CLEARANCE_SLACK_PUBLIC_URL"] = "http://slack.clearance.example" },
 		"no allowlist":                func(m map[string]string) { delete(m, "CLEARANCE_OIDC_ALLOWED_USERS") },
-		"a tier of 4":                 func(m map[string]string) { m["CLEARANCE_SLACK_CLEAR_MAX_TIER"] = "4" },
+		"a tier of 3":                 func(m map[string]string) { m["CLEARANCE_SLACK_CLEAR_MAX_TIER"] = "3" },
 		"a bad duration":              func(m map[string]string) { m["CLEARANCE_SLACK_ALERT_INTERVAL"] = "soon" },
 		"an unreadable secret file":   func(m map[string]string) { m["CLEARANCE_SLACK_CLIENT_SECRET_FILE"] = "/nonexistent/SECRET" },
 	} {
@@ -70,9 +70,9 @@ func TestConfigRefusesWhatCannotWorkAndNeverPrintsASecret(t *testing.T) {
 	if _, err := ConfigFromEnv(envOf(env)); err != nil {
 		t.Errorf("loopback http is allowed for a lab: %v", err)
 	}
-	env["CLEARANCE_SLACK_CLEAR_MAX_TIER"] = "3"
-	if c, err := ConfigFromEnv(envOf(env)); err != nil || c.ClearMaxTier != 3 {
-		t.Errorf("loosening the tier policy is a deployment's choice: %v %d", err, c.ClearMaxTier)
+	env["CLEARANCE_SLACK_CLEAR_MAX_TIER"] = "1"
+	if c, err := ConfigFromEnv(envOf(env)); err != nil || c.ClearMaxTier != 1 {
+		t.Errorf("tightening the tier policy is a deployment's choice: %v %d", err, c.ClearMaxTier)
 	}
 }
 

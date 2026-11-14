@@ -501,7 +501,7 @@ slack:
   # Sign in with Slack's client id, and the IdP client the link page uses (the issuer, claim and allowlist are oidc.*).
   slackClientId: ""
   idpClientId: ""
-  # The highest tier cleared from Slack (0-3). 2 keeps tier 3 and break-glass a step-up elsewhere.
+  # The highest tier cleared from Slack (0-2). Tier 3 and break-glass are always a step-up elsewhere.
   clearMaxTier: 2
   forwardAuthTime: true
   # Go durations ("": the defaults: 30 days, 120s, 60s, 30m, 15m).

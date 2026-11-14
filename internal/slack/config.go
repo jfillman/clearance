@@ -57,7 +57,8 @@ type Config struct {
 	// standalone web UI or Tower. Empty: the message says to use the CLI.
 	WebURL string
 
-	// ClearMaxTier is the highest tier a person may clear from Slack (default 2). Deny is allowed at any tier.
+	// ClearMaxTier is the highest tier a person may clear from Slack (default 2, never above 2: a tier 3 clear needs a
+	// fresh sign-in). Deny is allowed at any tier.
 	ClearMaxTier int
 	// ForwardAuthTime sends the link's IdP sign-in time as X-Clearance-Auth-Time (the core uses it only when
 	// CLEARANCE_FRESH_AUTH_DELEGATES=require).
@@ -176,8 +177,8 @@ func ConfigFromEnv(env func(string) string) (Config, error) {
 	}
 	if v := get("CLEARANCE_SLACK_CLEAR_MAX_TIER", ""); v != "" {
 		n, err := strconv.Atoi(v)
-		if err != nil || n < 0 || n > 3 {
-			return c, errors.New("CLEARANCE_SLACK_CLEAR_MAX_TIER is 0 to 3 (the default, 2, keeps a tier 3 clear a step-up elsewhere)")
+		if err != nil || n < 0 || n > 2 {
+			return c, errors.New("CLEARANCE_SLACK_CLEAR_MAX_TIER is 0 to 2 (a tier 3 clear needs a fresh sign-in, which Slack cannot give)")
 		}
 		c.ClearMaxTier = n
 	}

@@ -25,7 +25,8 @@ nothing is decided in Slack. Slack outage, a stopped service or a revoked token 
 | Resolve one exception | Yes, for an administrator (the core re-checks) | Append-only, newest wins, recorded |
 | Break-glass open or close, bulk resolve | **Never** from Slack | Rare, high blast radius, wants a deliberate step-up |
 
-`slack.clearMaxTier` (default 2, at most 3) is the deployment's choice to loosen the first row; break-glass is not configurable.
+`slack.clearMaxTier` (default 2, 0 to 2) is the deployment's choice to tighten the first row. It cannot be raised: a tier 3
+clear is never made from Slack, and break-glass is not configurable.
 
 - **The person is the link's, nothing else.** A Slack user is bound to a person by `/clearance link`, which needs **both**
   Sign in with Slack (the Slack user and workspace) and the people IdP's login (the person), in one browser session, in that
@@ -184,7 +185,7 @@ Secrets as `*_FILE`; everything else is the environment (the chart renders these
 | `CLEARANCE_ON_BEHALF_OF_HEADER` | `X-Clearance-On-Behalf-Of` | the deployment's name for it |
 | `CLEARANCE_SLACK_ROUTES_FILE` | none | the routes above |
 | `CLEARANCE_SLACK_WEB_URL` | none | `https://host/changes/{id}`: where a tier 3 clear is made |
-| `CLEARANCE_SLACK_CLEAR_MAX_TIER` | `2` | 0 to 3 |
+| `CLEARANCE_SLACK_CLEAR_MAX_TIER` | `2` | 0 to 2 |
 | `CLEARANCE_SLACK_FORWARD_AUTH_TIME` | `true` | send the link's proven sign-in time |
 | `CLEARANCE_SLACK_RELINK_AFTER`, `_ALERT_INTERVAL`, `_RECONCILE_INTERVAL`, `_STUCK_ATTESTATION_AFTER`, `_TIER3_OUTSIDE_AFTER`, `_MIN_POST_INTERVAL` | 720h, 120s, 60s, 30m, 15m, 1.1s | Go durations |
 

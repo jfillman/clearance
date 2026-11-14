@@ -77,6 +77,11 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   - admission test: the merged grant of a namespace two Applications share, and the label-after-grant order, against a real kube-apiserver.
   - The plugin's cluster-scope rules moved to `internal/argosrc` so the agent and the plugin apply the same ones (no change in behaviour).
 
+### Changed
+
+- **Slack: a tier 3 clear can no longer be enabled.** `slack.clearMaxTier` / `CLEARANCE_SLACK_CLEAR_MAX_TIER` is now 0 to 2 (was 0 to 3; the default
+  stays 2). A tier 3 clear needs a fresh sign-in, which a long-lived Slack link cannot give. A deployment that set 3 fails at render and at start: set 2.
+
 ## [0.48.0] - 2026-11-14
 
 ### Fixed
