@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -55,9 +56,35 @@ func renderAgent(t *testing.T, args ...string) []obj {
 	return out
 }
 
-// An install that does not turn the opt-in on renders exactly what charts/clearance-argocd-agent on main (2b3d6b7, before
-// G-ARGO-10c) rendered over the same values: the golden file is that render. Both are non-empty, so an empty comparison
-// (two renders that failed alike) cannot pass.
+// decode reads a render's documents into a map keyed by kind and name.
+func decodeDocs(t *testing.T, text string) map[string]obj {
+	t.Helper()
+	out := map[string]obj{}
+	dec := yaml.NewDecoder(strings.NewReader(text))
+	for {
+		var o obj
+		if err := dec.Decode(&o); errors.Is(err, io.EOF) {
+			break
+		} else if err != nil {
+			t.Fatalf("decoding a render: %v", err)
+		}
+		if o == nil {
+			continue
+		}
+		k := fmt.Sprint(o["kind"], "/", get(o, "metadata", "namespace"), "/", get(o, "metadata", "name"))
+		if _, dup := out[k]; dup {
+			t.Fatalf("%s is rendered twice", k)
+		}
+		out[k] = o
+	}
+	return out
+}
+
+// An install that does not turn the opt-in on renders what charts/clearance-argocd-agent on main (2b3d6b7, before
+// G-ARGO-10c) rendered over the same values: the golden file is that render. The comparison is of the decoded
+// documents, not of bytes, because the order of the documents is Helm's and differs between Helm releases (the byte
+// comparison, run by hand with Helm v3.21.3, was equal). Both sides are non-empty, so two renders that failed alike
+// cannot pass.
 func TestTheAgentChartRendersAsBeforeUnlessTheOptInIsOn(t *testing.T) {
 	golden, err := os.ReadFile("testdata/argocd-agent-main.golden.yaml")
 	if err != nil {
@@ -67,31 +94,42 @@ func TestTheAgentChartRendersAsBeforeUnlessTheOptInIsOn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%s", err, got)
 	}
-	if len(golden) < 1000 || len(got) < 1000 || !strings.Contains(got, "kind: Deployment") || !strings.Contains(string(golden), "kind: Deployment") {
-		t.Fatalf("a render is empty or not the chart's: golden %d bytes, got %d bytes", len(golden), len(got))
+	want, have := decodeDocs(t, string(golden)), decodeDocs(t, got)
+	if len(want) < 8 || len(have) < 8 {
+		t.Fatalf("a render is empty or not the chart's: golden %d documents, got %d", len(want), len(have))
 	}
-	if got != string(golden) {
-		t.Fatalf("the default render differs from main's (%d bytes against %d); first difference at byte %d", len(got), len(golden), firstDiff(got, string(golden)))
+	for _, k := range []string{"Deployment/<nil>/clearance-argocd-agent", "ClusterRole/<nil>/clearance-argocd-agent", "Role/argocd/clearance-argocd-agent-applications"} {
+		if want[k] == nil || have[k] == nil {
+			t.Fatalf("%s is missing from a render", k)
+		}
+	}
+	for k, w := range want {
+		if h, ok := have[k]; !ok {
+			t.Errorf("%s is in main's render and not in the default one", k)
+		} else if !reflect.DeepEqual(w, h) {
+			t.Errorf("%s differs from main's", k)
+		}
+	}
+	for k := range have {
+		if _, ok := want[k]; !ok {
+			t.Errorf("%s is in the default render and not in main's", k)
+		}
 	}
 	// Explicitly off is the same as unset.
 	off, err := helmAgent(t, "--set", "optIn.enabled=false")
-	if err != nil || off != got {
+	if err != nil || !reflect.DeepEqual(decodeDocs(t, off), have) {
 		t.Fatalf("optIn.enabled=false renders differently from the default: %v", err)
+	}
+	// The comparison can see a difference: with the opt-in on the render is not main's.
+	on, err := helmAgent(t, "--set", "optIn.enabled=true")
+	if err != nil || reflect.DeepEqual(decodeDocs(t, on), want) {
+		t.Fatalf("the opt-in render equals main's, so this comparison proves nothing: %v", err)
 	}
 	for _, no := range []string{"--optin", "applicationsets", "resourceNames", "watch, patch"} {
 		if strings.Contains(got, no) {
 			t.Errorf("the default render has %q", no)
 		}
 	}
-}
-
-func firstDiff(a, b string) int {
-	for i := 0; i < len(a) && i < len(b); i++ {
-		if a[i] != b[i] {
-			return i
-		}
-	}
-	return min(len(a), len(b))
 }
 
 func verbsOf(rule any) []string {
