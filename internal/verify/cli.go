@@ -20,6 +20,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	trustRoot := fs.String("trust-root", "", "attestations: a Sigstore TrustedRoot JSON (`clearance trust-root build`), or Fulcio certificates (PEM) with --rekor-key. Without it keyless attestations are not checked")
 	rekorKey := fs.String("rekor-key", "", "attestations: Rekor's public key (PEM), with a PEM --trust-root")
 	attestKey := fs.String("attest-key", "", "attestations: the public key (PEM) or JWKS that verifies a static-key attestation")
+	recipientKeys := fs.String("recipient-keys", "", "acceptance receipts: the recipients' public keys (PEM, or a JWKS), as the recipients gave them to you. Without it each receipt's own copy of the key is used and reported as taken from the packet")
 	identity := fs.String("identity", "", "attestations: the identity the signing certificate must name. Without --identity and --issuer the signer is read from each attestation and reported as unpinned")
 	issuer := fs.String("issuer", "", "attestations: the OIDC issuer the signing certificate must record")
 	seen := fs.String("seen-file", "", "the local note of checkpoints seen (default: <user config dir>/clearance/verify-seen.json)")
@@ -68,7 +69,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	}
 	if !read("log-keys", *logKeys, &o.LogKeys, &o.LogKeysSrc) || !read("witness-policy", *policy, &o.WitnessPolicy, &o.WitnessPolicySrc) ||
 		!read("trust-root", *trustRoot, &o.TrustRoot, &o.TrustRootSrc) || !read("rekor-key", *rekorKey, &o.RekorKey, nil) ||
-		!read("attest-key", *attestKey, &o.AttestKeys, &o.AttestKeysSrc) {
+		!read("attest-key", *attestKey, &o.AttestKeys, &o.AttestKeysSrc) || !read("recipient-keys", *recipientKeys, &o.RecipientKeys, &o.RecipientKeysSrc) {
 		return 2
 	}
 	if (o.Identity == "") != (o.Issuer == "") {

@@ -128,9 +128,13 @@ func CSVs(pk *Packet) (map[string][]byte, error) {
 	do(put("policy-changes.csv", []string{"seq", "ts", "kind", "name", "ref", "version", "digest", "detail"}, rows))
 	rows = nil
 	for _, r := range pk.Acceptances.Receipts {
-		rows = append(rows, []string{r.PacketID, r.Engagement, strings.Join(r.Mappings, " "), r.Checkpoint, r.Verdict})
+		cp := ""
+		if r.Checkpoint != nil {
+			cp = fmt.Sprintf("%s %d %s", r.Checkpoint.Origin, r.Checkpoint.Size, r.Checkpoint.Root)
+		}
+		rows = append(rows, []string{r.PacketID, r.Engagement, strings.Join(r.Mappings, " "), cp, r.Verdict, r.Recipient, r.SignedAt, itoa(len(r.Notes)), fmt.Sprint(r.Seq)})
 	}
-	do(put("acceptances.csv", []string{"packet_id", "engagement", "framework_mapping_versions", "checkpoint", "verdict"}, rows))
+	do(put("acceptances.csv", []string{"packet_id", "engagement", "framework_mapping_versions", "checkpoint", "verdict", "recipient", "signed_at", "control_notes", "seq"}, rows))
 	return out, err
 }
 

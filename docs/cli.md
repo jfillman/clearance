@@ -176,6 +176,9 @@ URLs.
 | `exceptions resolve <seq>... --as STATE [--cause C] [--note N]` | one seq: `POST /v1/observations/{seq}/resolution` |
 | `exceptions resolve --from-file F --as ...` | the seqs in a file: one per line, a JSON array, or `exceptions list -o jsonl` output; `-` is stdin |
 | `exceptions resolve --all-matching [--scope --kind --tool --app --since --until] --as ...` | every exception the exceptions-list filters match (resolvable kinds; at most 2000) |
+| `packet publish <dir>` | `POST /v1/packets` (admin): publish a `clearance packet` directory ([assurance.md](assurance.md)) |
+| `packet deliver <pk-id> --recipient R --for 168h` | `POST /v1/packets/{id}/deliveries` (admin): prints the recipient's credential once |
+| `receipt pull`, `receipt sign`, `receipt submit` | the recipient's side, no account: read a packet under a credential, sign a receipt with your own key, send it |
 | `breakglass open --cluster C --env E [--app A] --ttl 30m --reason R` | `POST /v1/breakglass` (admin) |
 | `breakglass close <id> [--yes]`, `breakglass list` | close a window early; the windows open now (admin) |
 

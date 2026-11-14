@@ -9,6 +9,21 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Added
+
+- P-1: **assurance providers, acceptance receipts and recipient access** ([docs/assurance.md](docs/assurance.md)). A new provider class
+  (`class: "assurance"` in `CLEARANCE_PROVIDERS`: a name and registered ECDSA P-256 keys, no principals: never an account).
+  `POST /v1/packets` (an admin publishes a `clearance packet` directory as a bundle; the id is the content address of its manifest),
+  `POST /v1/packets/{id}/deliveries` (the subscriber names a recipient, a scope and a window; a `packet.deliver` record; the answer
+  carries a time-boxed, audience-bound credential signed by the core's own key, once, never stored), `GET /v1/packets/{id}` (always
+  credentialed; every read is a `packet.fetch` record written before the answer; an expired, not-yet-good or wrong-scope credential is
+  refused with its rule and the refusal is a record) and `POST /v1/packets/{id}/receipts` (a DSSE acceptance receipt signed by the
+  recipient's registered key: packet id and digest, engagement, framework and mapping versions, checkpoint, verdict, per-control notes;
+  recorded as `packet.receipt`). The next packet's Acceptances section carries every prior receipt and `clearance verify` checks each
+  offline (signature, printed fields, record, checkpoint consistency; `--recipient-keys`). `clearance packet publish|deliver` (admin) and
+  `clearance receipt pull|sign|submit` (the recipient's side, no account). Store: `clearance_packets` (memory and Postgres).
+  Gate evidence: `go test ./internal/server -run TestP1` (a fake assurance provider end to end, including the GRC-lead-forwards-unchanged case).
+
 ## [0.47.1] - 2026-11-13
 
 ### Added

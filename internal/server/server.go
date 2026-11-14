@@ -113,6 +113,9 @@ type Server struct {
 	// check and the write it guards are one step (O-1: POST /v1/records de-duplicates).
 	eventMu sync.Mutex
 
+	// refused limits how many refusals of one packet delivery are written to the chain an hour (P-1).
+	refused refusals
+
 	// targetsMu serializes target publishes: the held-digest check and the write it guards are one step.
 	targetsMu sync.Mutex
 }
@@ -174,6 +177,13 @@ func unauthenticated(r *http.Request) bool {
 		return true // the payload's HMAC signature authenticates it (githubapp.App.Accept)
 	case r.Method == http.MethodPost && r.URL.Path == hcprun.Path:
 		return true // the payload's HMAC signature authenticates it (hcprun.Service.Accept)
+	}
+	// The recipient's two packet routes: the credential the delivery minted, or the receipt's own signature, is what
+	// authenticates them (assurance.go); no bearer token of the authenticator's is asked of a recipient.
+	for _, rt := range Routes() {
+		if (rt.Auth == AuthCredential || rt.Auth == AuthRecipientKey) && rt.Method == r.Method && rt.matches(r.URL.Path) {
+			return true
+		}
 	}
 	return false
 }

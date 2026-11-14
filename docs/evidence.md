@@ -134,6 +134,13 @@ func Stored(r map[string]any) map[string]any
   `args_sha256`, `result` and so the subject, because the core decided the pin but did not fetch the file. The
   Python gateway's loader, which fetched it, wrote the same fields verified; the Go core's are tagged for what it
   knows.
+- Packets and recipients (P-1, [assurance.md](assurance.md)), sealed by the core, `boundary` `deployment`, `target` `packet:<id>`: `packet.publish`
+  (`packet` {id, digest, size, view, from, to, mappings, chain, checkpoint?}; `principal` the admin, `initiator`, `delegate`), `packet.deliver`
+  (`packet` {id, digest}, `delivery` {recipient, scope, from, to, engagement?}; its seq is the delivery id `dl-<seq>`), `packet.fetch`
+  (`principal` `recipient:<name>`, `decision` allow or deny, `rule` the refusal's `PK-*` rule, `delivery`, `fetch` {part?, scope, bytes}) and
+  `packet.receipt` (`packet`, `delivery`, `receipt` {verdict, engagement, payload_sha256, key_id, key, envelope}: the DSSE envelope as received,
+  `args_sha256` its payload digest). The core verifies the signature and bindings itself; the recipient's words (verdict, notes) are the
+  recipient's, signed. Additive: no schema change.
 - Targets a provider publishes (PUT /v1/targets/{source}): `targets.load`, one per changed set, sealed by the core with
   `caller`. `principal` is `provider:<name>`, `target` is `targets:<source>`, `args_sha256` is the set's digest (sha256
   of its canonical JSON, sorted by id) and `result` says how many targets and the digest it replaced. Verified: `provider`,

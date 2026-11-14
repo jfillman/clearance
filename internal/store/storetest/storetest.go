@@ -53,6 +53,7 @@ func Run(t *testing.T, open Opener) {
 		{"SigningKeys", testSigningKeys},
 		{"Feeds", testFeeds},
 		{"Attestations", testAttestations},
+		{"Packets", testPackets},
 		{"Breakglass", testBreakglass},
 		{"Concurrent", testConcurrent},
 		{"CancelledContext", testCancelled},
@@ -1092,5 +1093,47 @@ func testLedgerCheckpoints(t *testing.T, open Opener) {
 	}
 	if held, _ := led.LedgerCheckpoint(bg); held.Size != 5 || held.Root != root("c") {
 		t.Fatalf("%+v", held)
+	}
+}
+
+func testPackets(t *testing.T, open Opener) {
+	s := open(t, nil)
+	if _, err := s.Packet(bg, "pk-none"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("no packet: %v", err)
+	}
+	pk := store.Packet{ID: "pk-0123456789abcdef0123456789abcdef", Digest: strings.Repeat("ab", 32), Meta: json.RawMessage(`{"view":"packet"}`), Bundle: []byte(`{"schema":"x"}`)}
+	if err := s.Atomic(bg, func(tx store.Tx) error {
+		if err := tx.PutPacket(bg, pk); err != nil {
+			return err
+		}
+		got, err := tx.Packet(bg, pk.ID)
+		if err != nil || string(got.Bundle) != string(pk.Bundle) {
+			t.Errorf("a transaction reads its own write: %v %v", got, err)
+		}
+		return errors.New("roll back")
+	}); err == nil {
+		t.Fatal("want the rollback error")
+	}
+	if _, err := s.Packet(bg, pk.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a rolled-back packet is not kept: %v", err)
+	}
+	if err := s.Atomic(bg, func(tx store.Tx) error { return tx.PutPacket(bg, pk) }); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Packet(bg, pk.ID)
+	if err != nil || got.Digest != pk.Digest || got.Size != int64(len(pk.Bundle)) || string(got.Bundle) != string(pk.Bundle) || got.CreatedAt.IsZero() {
+		t.Fatalf("packet: %+v %v", got, err)
+	}
+	if strings.ReplaceAll(string(got.Meta), " ", "") != `{"view":"packet"}` {
+		t.Fatalf("meta: %s", got.Meta)
+	}
+	// The id is the content's address: a second put leaves the first row.
+	other := pk
+	other.Bundle = []byte(`{"schema":"y"}`)
+	if err := s.Atomic(bg, func(tx store.Tx) error { return tx.PutPacket(bg, other) }); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Packet(bg, pk.ID); string(got.Bundle) != string(pk.Bundle) {
+		t.Fatalf("a packet is immutable: %s", got.Bundle)
 	}
 }

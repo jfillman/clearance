@@ -68,6 +68,8 @@ func init() {
 	reg("breakglass open", "open a break-glass window (admin; always interactive)", (*personcli.Env).BreakglassOpen)
 	reg("breakglass close", "close a break-glass window early (admin)", (*personcli.Env).BreakglassClose)
 	reg("breakglass list", "the break-glass windows open now (admin)", (*personcli.Env).BreakglassList)
+	reg("packet publish", "publish a packet directory to the core (admin)", (*personcli.Env).PacketPublish)
+	reg("packet deliver", "open a published packet to a registered recipient for a window; prints the credential once (admin)", (*personcli.Env).PacketDeliver)
 	reg("attest get", "a change's attestation summary", (*personcli.Env).AttestGet)
 	reg("attest download", "save a change's attestation bundle (-o file)", (*personcli.Env).AttestDownload)
 	reg("exceptions list", "the exceptions (--scope --kind --since)", (*personcli.Env).ExceptionsList)

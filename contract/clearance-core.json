@@ -883,6 +883,95 @@
         ],
         "type": "object"
       },
+      "Delivery": {
+        "properties": {
+          "credential": {
+            "type": "string"
+          },
+          "engagement": {
+            "type": "string"
+          },
+          "fetch": {
+            "type": "string"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "packet_id": {
+            "type": "string"
+          },
+          "recipient": {
+            "type": "string"
+          },
+          "scope": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "window": {
+            "$ref": "#/components/schemas/DeliveryWindow"
+          }
+        },
+        "required": [
+          "credential",
+          "fetch",
+          "hash",
+          "id",
+          "packet_id",
+          "recipient",
+          "scope",
+          "seq",
+          "window"
+        ],
+        "type": "object"
+      },
+      "DeliveryRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "engagement": {
+            "type": "string"
+          },
+          "recipient": {
+            "type": "string"
+          },
+          "scope": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "window": {
+            "$ref": "#/components/schemas/DeliveryWindow"
+          }
+        },
+        "required": [
+          "recipient",
+          "window"
+        ],
+        "type": "object"
+      },
+      "DeliveryWindow": {
+        "additionalProperties": false,
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "to"
+        ],
+        "type": "object"
+      },
       "Effect": {
         "additionalProperties": false,
         "properties": {
@@ -2438,6 +2527,178 @@
         ],
         "type": "object"
       },
+      "PacketBundle": {
+        "properties": {
+          "files": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "schema": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "files",
+          "schema"
+        ],
+        "type": "object"
+      },
+      "PacketCheckpointRef": {
+        "properties": {
+          "origin": {
+            "type": "string"
+          },
+          "root": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "origin",
+          "root",
+          "size"
+        ],
+        "type": "object"
+      },
+      "PacketError": {
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "rule": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "PacketLinks": {
+        "properties": {
+          "deliveries": {
+            "type": "string"
+          },
+          "fetch": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "deliveries",
+          "fetch"
+        ],
+        "type": "object"
+      },
+      "PacketMeta": {
+        "properties": {
+          "assertions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "chain_count": {
+            "type": "integer"
+          },
+          "chain_head": {
+            "type": "string"
+          },
+          "checkpoint": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PacketCheckpointRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "controls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "from": {
+            "type": "string"
+          },
+          "mappings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "receipts": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "assertions",
+          "chain_count",
+          "chain_head",
+          "controls",
+          "from",
+          "mappings",
+          "receipts",
+          "to",
+          "view"
+        ],
+        "type": "object"
+      },
+      "PacketPublished": {
+        "properties": {
+          "created": {
+            "type": "boolean"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "links": {
+            "$ref": "#/components/schemas/PacketLinks"
+          },
+          "packet": {
+            "$ref": "#/components/schemas/PacketMeta"
+          },
+          "seq": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "size": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "created",
+          "digest",
+          "id",
+          "links",
+          "packet",
+          "seq",
+          "size"
+        ],
+        "type": "object"
+      },
       "PinSource": {
         "additionalProperties": false,
         "properties": {
@@ -2958,6 +3219,37 @@
           "head",
           "ok",
           "policy"
+        ],
+        "type": "object"
+      },
+      "ReceiptRecorded": {
+        "properties": {
+          "hash": {
+            "type": "string"
+          },
+          "packet_id": {
+            "type": "string"
+          },
+          "payload_sha256": {
+            "type": "string"
+          },
+          "recipient": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "verdict": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "hash",
+          "packet_id",
+          "payload_sha256",
+          "recipient",
+          "seq",
+          "verdict"
         ],
         "type": "object"
       },
@@ -5051,6 +5343,414 @@
         "summary": "A person (an admin, CLEARANCE_ADMINS, or a delegate naming one in the on-behalf-of header) sets how an observed change ended: state (reverted, ratified, declared-break-glass, still-live) and, for reverted, its cause (agent-caused, policy-triggered, human-initiated, automated-remediation, requirement-changed, external-dependency, unattributed), with an optional note. Recorded as a resolution record about the observation, naming the person (principal, initiator, resolution.by). Append-only: an edit is another record about the same seq, and the newest wins when it is read; the earlier ones stay in the chain. The seq may also be a gate exception (deploy.exception of kind out-of-band, drift, untraced-apply or digest-mismatch), resolved in the scope of its destination (cluster, else workspace backend/key#name); attempted-refused and monitoring-protection exceptions are not resolved this way. The call may carry X-Clearance-Via (cli, web, slack, api, or a name from CLEARANCE_VIAS_EXTRA) and X-Clearance-Surface-Ref (at most 512 bytes of printable text), recorded as claimed `surface` {via, ref}; a bad value is 400 (DG-VIA, DG-SURFACE-REF). A delegate naming the person may forward their sign-in time in X-Clearance-Auth-Time (unix seconds), which CLEARANCE_FRESH_AUTH_DELEGATES=require demands.",
         "x-clearance-auth": "bearer",
         "x-clearance-max-body": 16384
+      }
+    },
+    "/v1/packets": {
+      "post": {
+        "operationId": "publishPacket",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "description": "packet.Bundle: {schema: clearance.packet-bundle/v1, files: {path: base64}} (`clearance packet publish` makes it)",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PacketPublished"
+                }
+              }
+            },
+            "description": "the packet's id and digest, and whether it was new"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is not valid (strict decoding, or a field the route refuses)"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no bearer token, or one the authenticator refused"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the request conflicts with what is recorded"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is over the route's cap"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the store could not record it: treat as unreachable (fail closed)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "An admin (CLEARANCE_ADMINS, or a delegate naming one) publishes an evidence packet the packet job wrote, as a bundle (the packet directory as one JSON document). The core checks every file against the manifest, that the packet was read from this chain (its head is the hash the core holds at that count), and keeps it. The packet's id is the content's address (pk- and the first 32 hex digits of the SHA-256 of MANIFEST.json): the same packet again is the same id and records nothing; a new one is one packet.publish record.",
+        "x-clearance-auth": "bearer",
+        "x-clearance-max-body": 67112960
+      }
+    },
+    "/v1/packets/{id}": {
+      "get": {
+        "operationId": "getPacket",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "read one part of the packet (summary or evidence); it must be in the credential's scope",
+            "in": "query",
+            "name": "part",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PacketBundle"
+                }
+              }
+            },
+            "description": "the bundle (cut to the credential's scope)"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "an unknown query parameter or part"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PacketError"
+                }
+              }
+            },
+            "description": "no credential, one the core did not issue, or an expired one (PK-EXPIRED)"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PacketError"
+                }
+              }
+            },
+            "description": "another packet, a part outside the scope, not yet good, or a recipient no longer registered"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PacketError"
+                }
+              }
+            },
+            "description": "the core does not hold the packet"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PacketError"
+                }
+              }
+            },
+            "description": "this delivery has been refused too often this hour (the refusals past the cap are not recorded)"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the store could not record it: treat as unreachable (fail closed)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The recipient reads the packet (the bundle) under the credential its delivery returned, in the bearer header. No Clearance account. The credential is checked for its signature (anything the core did not sign is a bare 401); then every answer is a packet.fetch record, written before the answer: an allowed read before a byte is served, and a refusal (PK-EXPIRED, PK-NOT-YET, PK-SCOPE for another packet or a part outside its scope, PK-RECIPIENT, PK-GONE) with its rule.",
+        "x-clearance-auth": "packet-credential",
+        "x-clearance-credential": "a packet access credential, minted by POST /v1/packets/{id}/deliveries (not an authenticator token)",
+        "x-clearance-max-body": 65536
+      }
+    },
+    "/v1/packets/{id}/deliveries": {
+      "post": {
+        "operationId": "deliverPacket",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeliveryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Delivery"
+                }
+              }
+            },
+            "description": "the delivery and its credential"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is not valid (strict decoding, or a field the route refuses)"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no bearer token, or one the authenticator refused"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such resource"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is over the route's cap"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the store could not record it: treat as unreachable (fail closed)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "An admin opens a published packet to one registered assurance provider (a recipient) for a window, scoped to parts of it (summary, evidence). The delivery is a packet.deliver record naming the person, the recipient, the scope and the window; the answer carries the time-boxed credential the recipient presents to GET /v1/packets/{id}: once, never stored. The subscriber hands it over; Clearance submits nothing to anyone.",
+        "x-clearance-auth": "bearer",
+        "x-clearance-max-body": 8192
+      }
+    },
+    "/v1/packets/{id}/receipts": {
+      "post": {
+        "operationId": "acceptReceipt",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "description": "a DSSE envelope: {payloadType, payload (base64 of the receipt), signatures: [{keyid, sig}]} (`clearance receipt sign` makes it)",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReceiptRecorded"
+                }
+              }
+            },
+            "description": "the record"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is not valid (strict decoding, or a field the route refuses)"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such resource"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is over the route's cap"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the store could not record it: treat as unreachable (fail closed)"
+          }
+        },
+        "security": [],
+        "summary": "The recipient's acceptance receipt: a DSSE envelope (application/vnd.clearance.acceptance-receipt.v1+json) signed with a key the recipient registered, naming the packet, the delivery, the engagement, the framework and mapping versions, the checkpoint, the verdict (accepted, accepted-with-notes, questioned, rejected) and control notes keyed to the mapping's rows. The signature is the authentication. The core checks the key, the delivery and that the receipt binds this packet's digest, mappings and checkpoint, then records it (packet.receipt). A later packet carries it in its Acceptances section.",
+        "x-clearance-auth": "recipient-signature",
+        "x-clearance-max-body": 262144
       }
     },
     "/v1/provenance": {

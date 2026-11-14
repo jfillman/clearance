@@ -4,7 +4,7 @@ An auditor asks one question about a period: what changed, who or what cleared i
 and how do I know you would have seen it. The packet is the answer for a date range and scope, built from the evidence
 chain and nothing else, in three forms and with the originals needed to check it without asking Clearance.
 
-Status: **Built** (C-5; the offline verifier is C-4, built: [verify.md](verify.md)). Run it as a job: `clearance packet`.
+Status: **Built** (C-5; the offline verifier is C-4, built: [verify.md](verify.md); handing a packet to a recipient is P-1: [assurance.md](assurance.md)). Run it as a job: `clearance packet`.
 
 ## What you get
 
@@ -152,12 +152,12 @@ signatures), how many carried records are under it, the proofs, the attestation 
 be read), and the OSCAL file. If the store holds no witnessed checkpoint the section begins "NOT CHECKPOINTED" and says
 what that does and does not show.
 
-**Acceptances.** The signed acceptance receipts assurance recipients return for a packet (package P-1): packet id,
-engagement, framework and mapping versions, checkpoint, verdict and per-control notes; later packets carry the prior
-receipts. P-1 does not exist yet, so the section prints that no receipt has been recorded and nothing else: no content
-is inferred from the chain. `acceptances` in the JSON is `{status, statement, receipts[]}` (`status` is `none-recorded`
-until receipts exist, and `packet.Params.Receipts` is where P-1 will hand them in), and `csv/acceptances.csv` has the
-receipt columns, empty for now. A `ratified` or `declared-break-glass` resolution and each break-glass window are
+**Acceptances.** The signed acceptance receipts assurance recipients returned for earlier packets ([assurance.md](assurance.md), package P-1):
+packet id, engagement, framework and mapping versions, checkpoint, verdict and per-control notes, each exactly as the recipient
+signed it, with the registered key the core checked it with and the chain record (`packet.receipt`) that holds it. The packet reads
+them from the chain; nothing is inferred. `acceptances` in the JSON is `{status, statement, receipts[]}` (`status` is
+`none-recorded` until a receipt exists), `csv/acceptances.csv` has one row a receipt, and `clearance verify` checks each signature
+offline. A `ratified` or `declared-break-glass` resolution and each break-glass window are
 **Exceptions** rows (the resolution column, and the `break-glass` class). An observation row shows its **newest**
 resolution with the person (or provider) who wrote it (`resolved_by`, `resolution_seq`, the cause, and the person's note as `resolution_note`: in full in `packet.json`, cut to 200 characters in the CSV and the PDF): a person's edit
 in Tower is a newer record about the same seq and replaces the collector's in the packet, the earlier records staying

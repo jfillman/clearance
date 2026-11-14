@@ -61,6 +61,7 @@ The core knows its providers from `CLEARANCE_PROVIDERS` (`server.Provider`):
   observed role below). `"kinds": []` writes none: a targets-only (or definitions-only) publisher registers
   `{"name": "...", "version": "...", "principals": [...], "kinds": [], "targets": ["<source>"]}`. Absent `kinds`
   stays "all", even beside `targets`.
+- `class: "assurance"` (P-1) makes it a **recipient** of evidence packets instead of an enforcement point: a name, a version and `keys` (ECDSA P-256 public keys, PEM) and nothing else (no `principals`, `kinds`, `targets` or `definitions`; it is never a caller and `POST /v1/records` refuses it). [assurance.md](assurance.md).
 - `definitions: true` lets it publish its cluster-pinned agent definitions (`PUT /v1/definitions`, below). At most
   one provider has it.
 - `targets: ["<source>", ...]` lets it publish the declared targets of those sources (`PUT /v1/targets/{source}`, below).

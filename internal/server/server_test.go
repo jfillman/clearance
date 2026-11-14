@@ -251,6 +251,8 @@ func TestAuthenticationIsRequiredExceptWhereSigned(t *testing.T) {
 		switch rt.Auth {
 		case server.AuthBearer, server.AuthProvider:
 			a.want(t, 401, "a bearer token is required")
+		case server.AuthCredential:
+			a.want(t, 401, "a packet credential is required") // its own credential, never the authenticator's
 		default:
 			if a.status == 401 {
 				t.Errorf("%s %s asked for a bearer token", rt.Method, rt.Path)
