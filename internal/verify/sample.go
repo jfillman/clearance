@@ -64,15 +64,9 @@ func VerifySample(file, packetDir string, opts Options) *Report {
 	c.samplePopulation(doc)
 	c.sampleSelection(doc)
 	c.samplePacket(doc, packetDir)
-	rep.note("The sampling record (packet.sample, record %s) was written when the sample was drawn, after the checkpoint these proofs are under, so no proof here covers it: it names the record to read on the core that drew the sample.", recordedWords(doc))
+	c.sampleRecordCheck(doc)
+	rep.note("What exit 0 proves: the records and proofs are under the checkpoint (as far as the log keys and witness policy you supplied vouch for it), the population is the packet's, the selection is the one the rule draws from that population and the seed, and the core's own packet.sample record, read from the core, names this draw. What it does not prove: that the review of these records was right; that the seed was chosen after the packet's digest was fixed (that is for whoever agreed the seed); or, without --sample-record, that the core ever drew this sample.")
 	return rep
-}
-
-func recordedWords(d *sampling.Document) string {
-	if d.Recorded == nil {
-		return "(none named)"
-	}
-	return fmt.Sprintf("%d, %s", d.Recorded.Seq, short8(d.Recorded.Hash))
 }
 
 // loadSample reads and parses the sample document. A file it cannot read or that is not a sample document is a failed
@@ -106,8 +100,8 @@ func (c *ctx) loadSample(file string) *sampling.Document {
 	if !sampling.IsHex64(d.Packet.Digest) || d.Packet.ID != "pk-"+d.Packet.Digest[:min(32, len(d.Packet.Digest))] {
 		bad = append(bad, "the packet id is not derived from the packet digest")
 	}
-	if d.Recorded == nil || d.Recorded.Seq < 0 || !sampling.IsHex64(d.Recorded.Hash) {
-		bad = append(bad, "the sample names no sampling record (packet.sample): a sample the core did not record is not one it drew")
+	if d.Recorded == nil || d.Recorded.Seq < 0 || !sampling.IsHex64(d.Recorded.Hash) || len(d.Recorded.Record) == 0 {
+		bad = append(bad, "the sample carries no sampling record (packet.sample): a sample the core did not record is not one it drew")
 	}
 	if len(bad) > 0 {
 		chk.Status, chk.Detail, chk.Findings = Fail, fmt.Sprintf("%d problem(s)", len(bad)), bad
@@ -165,6 +159,9 @@ func (c *ctx) samplePopulation(d *sampling.Document) {
 	if sha, err := sampling.PopulationSHA256(p.Changes); err != nil || sha != p.SHA256 {
 		bad = append(bad, "the rows do not hash to the population digest it states")
 	}
+	if want := sampling.ClearedExcluded(p.Changes); !reflect.DeepEqual(want, nonNil(p.ClearedExcluded)) {
+		bad = append(bad, fmt.Sprintf("it states cleared-but-excluded counts %v; the rows give %v", p.ClearedExcluded, want))
+	}
 	seenID, seenSeq := map[string]bool{}, map[int64]bool{}
 	for i, r := range p.Changes {
 		switch {
@@ -192,7 +189,13 @@ func (c *ctx) samplePopulation(d *sampling.Document) {
 	if len(bad) > 0 {
 		chk.Status, chk.Detail, chk.Findings = Fail, fmt.Sprintf("%d problem(s)", len(bad)), bad
 	} else {
-		chk.Status, chk.Detail = Pass, fmt.Sprintf("%d changes, %d cleared, %d eligible: the rows hash to the digest it states", all, cleared, eligible)
+		chk.Status, chk.Detail = Pass, fmt.Sprintf("%d changes, %d cleared, %d in the frame (eligible): the rows hash to the digest it states", all, cleared, eligible)
+		if ex := sampling.ClearedExcluded(p.Changes); len(ex) > 0 {
+			chk.Detail += fmt.Sprintf("; cleared and excluded from the frame: %s", exclusionWords(ex))
+			if n := ex[sampling.ExcludedNoProof]; n > 0 {
+				chk.Findings = append(chk.Findings, fmt.Sprintf("%d cleared change(s) have no inclusion proof (cleared after the checkpoint) and could not be sampled: the sample is of the %d eligible changes, not of every cleared change", n, eligible))
+			}
+		}
 	}
 	c.rep.add(chk)
 }
@@ -202,13 +205,8 @@ func (c *ctx) sampleSelection(d *sampling.Document) {
 	chk := Check{Name: "sample: the selection is the one the rule draws"}
 	var bad []string
 	pr := d.Params
-	switch {
-	case pr.SeedSource == sampling.SeedDefault && pr.Seed != "":
-		bad = append(bad, "the seed source is the default and a seed is given")
-	case pr.SeedSource == sampling.SeedSupplied && !sampling.ValidSeed(pr.Seed):
-		bad = append(bad, "the supplied seed is not a valid seed")
-	case pr.SeedSource != sampling.SeedDefault && pr.SeedSource != sampling.SeedSupplied:
-		bad = append(bad, fmt.Sprintf("the seed source is %q", pr.SeedSource))
+	if !sampling.ValidSeed(pr.Seed) {
+		bad = append(bad, "the seed is missing or not a valid seed: a sample is always drawn with a seed the caller chose")
 	}
 	eff := sampling.EffectiveSeed(d.Packet.Digest, pr.Seed)
 	if hex.EncodeToString(eff) != d.EffectiveSeed {
@@ -264,16 +262,9 @@ func (c *ctx) sampleSelection(d *sampling.Document) {
 	if len(bad) > 0 {
 		chk.Status, chk.Detail, chk.Findings = Fail, fmt.Sprintf("%d problem(s)", len(bad)), bad
 	} else {
-		chk.Status, chk.Detail = Pass, fmt.Sprintf("%d of %d eligible changes, %s, seed %s (%s): redrawn from the population, the same records, each the clearing record of its change", pr.N, d.Population.Eligible, pr.Stratify, seedWords(pr), pr.SeedSource)
+		chk.Status, chk.Detail = Pass, fmt.Sprintf("%d of %d eligible changes, %s, seed %q: redrawn from the population, the same records, each the clearing record of its change", pr.N, d.Population.Eligible, pr.Stratify, pr.Seed)
 	}
 	c.rep.add(chk)
-}
-
-func seedWords(p sampling.Params) string {
-	if p.Seed == "" {
-		return "(the default)"
-	}
-	return p.Seed
 }
 
 func emptyStrata(s []sampling.Stratum) []sampling.Stratum {
@@ -393,9 +384,99 @@ func canonOf(raw []byte) ([]byte, error) {
 
 // sampleUsage is the part of the usage text about samples.
 var sampleUsage = strings.TrimSpace(`
-usage: clearance verify --sample <file> [--packet <packet-dir>] [flags]
+usage: clearance verify --sample <file> [--packet <packet-dir>] [--sample-record <file>] [flags]
 
 Checks a sample of a packet's cleared changes (the answer of GET /v1/packets/{id}/sample) offline: every record's hash,
 every inclusion proof against the checkpoint, the checkpoint's signatures, the population's digest, and that the sample is
 the one the rule draws from the population and the seed. With --packet it also checks the sample against the packet it was
 drawn from. Exit codes are the packet's: 0 verified, 1 failed, 2 nothing failed but something could not be established.`)
+
+// sampleRecordCheck is the check that the core drew this sample. The packet.sample record is written after the checkpoint the
+// proofs are under, so nothing in the sample proves the core wrote it, and a document anyone can assemble offline (the rule is
+// public) carries a record anyone can make up. What can show it is the record as the core serves it, which the caller reads from
+// the core and gives with --sample-record: GET /v1/evidence/{seq} on the core, for the seq the sample names. Without it the
+// check is NOT CHECKED, never a pass.
+func (c *ctx) sampleRecordCheck(d *sampling.Document) {
+	chk := Check{Name: "sample: the core's packet.sample record"}
+	own := checkSamplingRecord(d, d.Recorded.Record)
+	if len(own) > 0 {
+		chk.Status, chk.Detail, chk.Findings = Fail, "the record the sample carries is not the record of this draw", own
+		c.rep.add(chk)
+		return
+	}
+	if len(c.opts.SampleRecord) == 0 {
+		chk.Status = NotChecked
+		chk.Detail = fmt.Sprintf("no --sample-record was given: the record the sample carries (seq %d) is consistent with the draw, and nothing here shows the core wrote it. "+
+			"Read record %d from the core (GET /v1/evidence/%d, or ask the subscriber) and pass it with --sample-record", d.Recorded.Seq, d.Recorded.Seq, d.Recorded.Seq)
+		c.rep.add(chk)
+		return
+	}
+	bad := checkSamplingRecord(d, c.opts.SampleRecord)
+	if !sameJSON(c.opts.SampleRecord, d.Recorded.Record) {
+		bad = append(bad, "the record you supplied is not the record the sample carries")
+	}
+	if len(bad) > 0 {
+		chk.Status, chk.Detail, chk.Findings = Fail, fmt.Sprintf("%d problem(s)", len(bad)), bad
+		c.rep.add(chk)
+		return
+	}
+	chk.Status = Pass
+	chk.Detail = fmt.Sprintf("record %d (%s), supplied by you (%s), is the core's packet.sample record of this draw: same packet, delivery, seed, population digest and records", d.Recorded.Seq, short8(d.Recorded.Hash), c.opts.SampleRecordSrc)
+	c.rep.add(chk)
+}
+
+// checkSamplingRecord says what is wrong with raw as the packet.sample record of d: its hash, its seq, what kind of record it
+// is and that the draw it states is d's.
+func checkSamplingRecord(d *sampling.Document, raw []byte) []string {
+	r, problem := parseRecordLine(1, raw)
+	if problem != "" {
+		return []string{"the record does not hash to the hash it states, or is not a record"}
+	}
+	var bad []string
+	if r.seq != d.Recorded.Seq || r.computed != d.Recorded.Hash {
+		bad = append(bad, fmt.Sprintf("it is record %d (%s); the sample names record %d (%s)", r.seq, short8(r.computed), d.Recorded.Seq, short8(d.Recorded.Hash)))
+	}
+	str := func(m map[string]any, k string) string { v, _ := m[k].(string); return v }
+	sub := func(k string) map[string]any { m, _ := r.m[k].(map[string]any); return m }
+	pk, dl, sm := sub("packet"), sub("delivery"), sub("sample")
+	if r.m["tool"] != "packet.sample" || r.m["decision"] != "allow" {
+		bad = append(bad, "it is not an allowed packet.sample record")
+	}
+	if str(pk, "id") != d.Packet.ID || str(dl, "id") != d.Delivery || str(dl, "recipient") != d.Recipient {
+		bad = append(bad, "it is a sampling of another packet, delivery or recipient")
+	}
+	if str(sm, "method") != d.Method || str(sm, "population_sha256") != d.Population.SHA256 || str(sm, "effective_seed") != d.EffectiveSeed ||
+		str(sm, "seed") != d.Params.Seed || str(sm, "stratify") != d.Params.Stratify {
+		bad = append(bad, "its method, population digest, seed or stratification are not the sample's")
+	}
+	if n, ok := intOf(sm["n"]); !ok || n != int64(d.Params.N) {
+		bad = append(bad, "its n is not the sample's")
+	}
+	sel, _ := sm["selected"].([]any)
+	if len(sel) != len(d.Selected) {
+		bad = append(bad, "it names a different number of sampled records")
+	} else {
+		for i, v := range sel {
+			if n, ok := intOf(v); !ok || n != d.Selected[i].Seq {
+				bad = append(bad, "it names other sampled records than the sample carries")
+				break
+			}
+		}
+	}
+	return bad
+}
+
+func nonNil(m map[string]int) map[string]int {
+	if m == nil {
+		return map[string]int{}
+	}
+	return m
+}
+
+func exclusionWords(m map[string]int) string {
+	var out []string
+	for _, k := range sortedKeys(m) {
+		out = append(out, fmt.Sprintf("%s %d", k, m[k]))
+	}
+	return strings.Join(out, ", ")
+}

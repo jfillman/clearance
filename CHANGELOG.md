@@ -29,13 +29,13 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   packet credential (both parts in its scope; no new scope) returns a sample of the packet's cleared changes (uniform, or `tier-month`
   proportional), each with its clearing record and an inclusion proof against the packet's witnessed checkpoint, and the population it
   was drawn from (every change of the packet, with why any is not in the frame, and its SHA-256). The selection is public and reproducible
-  (an effective seed bound to the packet's digest; the core's default seed when none is given, so the recipient does not have to choose).
+  (an effective seed bound to the packet's digest; `seed` is required: it is the auditor's, chosen after the digest is fixed, because any default would be something the packet's builder could grind for).
   The sampling is a `packet.sample` record written before the answer; the same request again is served from it and writes nothing; per
   delivery, 20 distinct samples, plus P-1's hourly read and refusal caps (429, nothing written past a cap). The core checks the stored packet's
-  records and proofs before it samples and refuses a packet with no witnessed checkpoint (409). `clearance verify --sample F [--packet dir]`
-  checks a sample offline and fails on a missing or extra record, a missing or invalid proof, a record outside the population, a population
+  records and proofs before it samples and refuses a packet with no witnessed checkpoint (409). `clearance verify --sample F [--packet dir] [--sample-record R]`
+  checks a sample offline (exit 0 needs the core's own `packet.sample` record, which the sample also carries; without it NOT CHECKED) and fails on a missing or extra record, a missing or invalid proof, a record outside the population, a population
   that does not match its digest or the packet, and a selection the rule does not draw; `clearance receipt sample` is the recipient's side.
-  Gate evidence: `go test ./internal/server -run TestP2SamplingGate -count=1` (a 25-record sample of a 30-day lab packet, through the real
+  The cleared changes that could not be sampled (no inclusion proof) are counted in the document and reported by the verifier. Gate evidence: `go test ./internal/server -run TestP2SamplingGate -count=1` (a 25-record sample of a 30-day lab packet, through the real
   HTTP server, verified offline).
 
 ## [0.47.1] - 2026-11-13

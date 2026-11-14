@@ -5,7 +5,7 @@
 // The selection is a function of public inputs only: the packet's population, the packet's digest, the seed the caller
 // gave (or none), the size and the stratification. Anyone holding those redraws the same sample, byte for byte.
 //
-//	effective seed = SHA-256("clearance.sample-seed/v1" 0x00 packet digest (hex) 0x00 seed)
+//	effective seed = SHA-256("clearance.sample-seed/v1" 0x00 packet digest (hex) 0x00 seed)   (the seed is required)
 //	key(record)    = SHA-256(effective seed || big-endian 64-bit seq of the record's clear record)
 //
 // Uniform: the n eligible changes with the smallest keys. Stratified (tier-month): the eligible changes are grouped by
@@ -44,10 +44,6 @@ const (
 	MaxN       = 100
 	MaxSeedLen = 64
 
-	// SeedDefault and SeedSupplied say where the seed came from.
-	SeedDefault  = "default"
-	SeedSupplied = "supplied"
-
 	// MaxDocument caps a sample document a reader will parse.
 	MaxDocument = 32 << 20
 )
@@ -70,8 +66,9 @@ func ValidSeed(s string) bool {
 // ValidStratify says whether s is a stratification.
 func ValidStratify(s string) bool { return s == StratifyNone || s == StratifyTierMonth }
 
-// EffectiveSeed binds the caller's seed (empty when none was given) to the packet, so a seed chosen for one packet means
-// nothing for another.
+// EffectiveSeed binds the caller's seed to the packet, so a seed chosen for one packet means nothing for another. The seed
+// is always the caller's: there is no default, because any default is a function of the packet alone and so something the
+// party who builds the packet can grind for.
 func EffectiveSeed(packetDigest, seed string) []byte {
 	h := sha256.New()
 	h.Write([]byte(SeedMethod))
@@ -321,12 +318,11 @@ type PacketRef struct {
 	To     string `json:"to"`
 }
 
-// Params are what the caller asked for and where the seed came from.
+// Params are what the caller asked for. The seed is the caller's: the auditor chooses it after the packet's digest is fixed.
 type Params struct {
-	N          int    `json:"n"`
-	Seed       string `json:"seed"`
-	SeedSource string `json:"seed_source"`
-	Stratify   string `json:"stratify"`
+	N        int    `json:"n"`
+	Seed     string `json:"seed"`
+	Stratify string `json:"stratify"`
 }
 
 // Checkpoint is the ledger checkpoint every proof is against, with the note and the keys it is checked under (the
@@ -346,7 +342,21 @@ type PopulationDoc struct {
 	Cleared  int    `json:"cleared"`
 	Eligible int    `json:"eligible"`
 	SHA256   string `json:"sha256"`
-	Changes  []Row  `json:"changes"`
+	// ClearedExcluded counts the cleared changes that are not in the frame, by reason (no-inclusion-proof,
+	// unreadable-timestamp): changes that were cleared and could not be sampled.
+	ClearedExcluded map[string]int `json:"cleared_excluded"`
+	Changes         []Row          `json:"changes"`
+}
+
+// ClearedExcluded counts the cleared changes of the population that are not eligible, by reason. Never nil.
+func ClearedExcluded(rows []Row) map[string]int {
+	out := map[string]int{}
+	for _, r := range rows {
+		if r.ClearSeq != nil && !r.Eligible {
+			out[r.Excluded]++
+		}
+	}
+	return out
 }
 
 // Proof is one record's inclusion proof (the packet's own entry shape).
@@ -368,12 +378,14 @@ type Item struct {
 	Proof  Proof           `json:"proof"`
 }
 
-// Recorded names the ledger record the core wrote for the sampling (packet.sample). It was written before the sample
-// was served and after the checkpoint the proofs are against, so it is a pointer to read on the core, not something a
-// proof here covers.
+// Recorded is the ledger record the core wrote for the sampling (packet.sample), written before the sample was served,
+// with the record itself as the core stored it. It is after the checkpoint the proofs are against, so nothing in the
+// document proves the core wrote it: the verifier checks the copy here is consistent with the draw, and compares it with
+// a copy the caller got from the core itself (`clearance verify --sample-record`).
 type Recorded struct {
-	Seq  int64  `json:"seq"`
-	Hash string `json:"hash"`
+	Seq    int64           `json:"seq"`
+	Hash   string          `json:"hash"`
+	Record json.RawMessage `json:"record"`
 }
 
 // Document is the sample as served and as `clearance verify --sample` reads it.

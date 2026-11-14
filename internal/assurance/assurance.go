@@ -121,8 +121,8 @@ func (c *Client) Pull(ctx context.Context, packetID, credential, part string) (*
 	return b, nil
 }
 
-// SampleRequest is what a sample call asks for (P-2): zero N is the core's default (25), an empty Seed the core's default
-// seed, an empty Stratify uniform.
+// SampleRequest is what a sample call asks for (P-2): zero N is the core's default (25), an empty Stratify uniform. The Seed
+// is required: the auditor chooses it once the packet's digest is fixed.
 type SampleRequest struct {
 	N        int
 	Seed     string
@@ -132,13 +132,14 @@ type SampleRequest struct {
 // Sample draws a sample of a packet's cleared changes under a credential. The document is parsed and its packet checked to
 // be the one asked for; the raw bytes are returned too, to write to a file for `clearance verify --sample`.
 func (c *Client) Sample(ctx context.Context, packetID, credential string, r SampleRequest) (*sampling.Document, []byte, error) {
+	if !sampling.ValidSeed(r.Seed) {
+		return nil, nil, errors.New("assurance: a sample needs a seed (1 to 64 letters, digits, dots, underscores or hyphens)")
+	}
 	q := url.Values{}
 	if r.N != 0 {
 		q.Set("n", fmt.Sprint(r.N))
 	}
-	if r.Seed != "" {
-		q.Set("seed", r.Seed)
-	}
+	q.Set("seed", r.Seed)
 	if r.Stratify != "" {
 		q.Set("stratify", r.Stratify)
 	}

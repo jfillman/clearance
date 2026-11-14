@@ -13,6 +13,7 @@ import (
 	"github.com/jfillman/clearance/internal/cli"
 	"github.com/jfillman/clearance/internal/packet"
 	"github.com/jfillman/clearance/internal/receipt"
+	"github.com/jfillman/clearance/internal/sampling"
 )
 
 // The recipient's commands (P-1, docs/assurance.md): for a firm that has no system to pull a packet and sign a receipt
@@ -83,14 +84,14 @@ func receiptSample(ctx context.Context, args []string, stdout, stderr io.Writer)
 	id := fs.String("packet", "", "the packet id (pk-...), from the subscriber")
 	credFile := fs.String("credential-file", "", "a file holding the credential (- for stdin; default $"+credentialEnv+"): never a flag value")
 	n := fs.Int("n", 0, "the sample size, 1 to 100 (default 25)")
-	seed := fs.String("seed", "", "a seed (letters, digits, . _ -; at most 64): the same packet, seed, n and stratify draw the same sample. Omitted, the core's default seed")
+	seed := fs.String("seed", "", "REQUIRED: a seed you choose once the packet's digest is fixed (letters, digits, . _ -; at most 64): the same packet, seed, n and stratify draw the same sample")
 	stratify := fs.String("stratify", "", "none (uniform, the default) or tier-month")
 	out := fs.String("out", "", "write the sample document here (default stdout)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if *core == "" || !packet.ValidID(*id) || fs.NArg() > 0 {
-		fmt.Fprintln(stderr, "usage: clearance receipt sample --core <url> --packet <pk-id> [--n N] [--seed S] [--stratify none|tier-month] [--credential-file <file>|-] [--out file]")
+	if *core == "" || !packet.ValidID(*id) || !sampling.ValidSeed(*seed) || fs.NArg() > 0 {
+		fmt.Fprintln(stderr, "usage: clearance receipt sample --core <url> --packet <pk-id> --seed S [--n N] [--stratify none|tier-month] [--credential-file <file>|-] [--out file]")
 		return 2
 	}
 	cred, err := readCredential(*credFile, os.Stdin)
@@ -111,8 +112,8 @@ func receiptSample(ctx context.Context, args []string, stdout, stderr io.Writer)
 		fmt.Fprintln(stderr, "receipt sample:", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "sample of %d of %d eligible changes of packet %s (%s, seed %s): %s\nverify it with: clearance verify --sample %s --packet <the packet directory>\n",
-		len(doc.Selected), doc.Population.Eligible, doc.Packet.ID, doc.Params.Stratify, doc.Params.SeedSource, *out, *out)
+	fmt.Fprintf(stdout, "sample of %d of %d eligible changes of packet %s (%s, seed %s): %s\nverify it with: clearance verify --sample %s --packet <the packet directory> --sample-record <record %d, read from the core>\n",
+		len(doc.Selected), doc.Population.Eligible, doc.Packet.ID, doc.Params.Stratify, doc.Params.Seed, *out, *out, doc.Recorded.Seq)
 	return 0
 }
 

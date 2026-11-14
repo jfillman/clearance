@@ -54,6 +54,10 @@ type Options struct {
 	// own carried key (SELF-VOUCHED).
 	RecipientKeys    map[string][]byte
 	RecipientKeysSrc map[string]string
+	// SampleRecord is the packet.sample record of a sample as the core serves it (GET /v1/evidence/{seq}), for `--sample`: what
+	// the sample's record is compared with. Empty: the check that the core drew the sample is NOT CHECKED.
+	SampleRecord    []byte
+	SampleRecordSrc string
 	// SeenFile is the local note of checkpoints seen (the weak-witness behaviour). Empty: none is kept.
 	SeenFile string
 	Now      func() time.Time

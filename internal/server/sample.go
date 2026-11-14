@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -64,9 +65,19 @@ type sampleFrame struct {
 }
 
 type samplers struct {
-	mu   sync.Mutex
-	byID map[string]*sampleFrame
+	mu    sync.Mutex
+	byID  map[string]*sampleFrame
+	order []string          // insertion order: the oldest is evicted first
+	bad   map[string]badEnd // packets that failed buildFrame, until the time
 }
+
+type badEnd struct {
+	until time.Time
+	err   error
+}
+
+// badFrameTTL is how long a packet that failed buildFrame is refused without being read again.
+const badFrameTTL = 30 * time.Second
 
 func (c *samplers) get(id, digest string) *sampleFrame {
 	c.mu.Lock()
@@ -80,17 +91,62 @@ func (c *samplers) get(id, digest string) *sampleFrame {
 func (c *samplers) put(id string, f *sampleFrame) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.byID == nil || len(c.byID) >= samplerCacheSize {
+	if c.byID == nil {
 		c.byID = map[string]*sampleFrame{}
+	}
+	if _, ok := c.byID[id]; !ok {
+		for len(c.order) >= samplerCacheSize {
+			delete(c.byID, c.order[0])
+			c.order = c.order[1:]
+		}
+		c.order = append(c.order, id)
 	}
 	c.byID[id] = f
 }
 
-// sampleRecorded is a sampling the chain already holds.
+// failed remembers that a packet did not check, for badFrameTTL; known says whether it is remembered now.
+func (c *samplers) failed(key string, err error, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.bad == nil || len(c.bad) > 256 {
+		c.bad = map[string]badEnd{}
+	}
+	c.bad[key] = badEnd{until: now.Add(badFrameTTL), err: err}
+}
+
+func (c *samplers) known(key string, now time.Time) (error, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e, ok := c.bad[key]; ok && now.Before(e.until) {
+		return e.err, true
+	}
+	return nil, false
+}
+
+// sampleRecorded is a sampling the chain already holds: its record as the core stored it, and what the draw was.
 type sampleRecorded struct {
-	seq    int64
-	hash   string
-	sha256 string
+	seq      int64
+	hash     string
+	record   json.RawMessage // the canonical record, served back with the sample
+	method   string
+	popSHA   string
+	effSeed  string
+	selected []int64
+}
+
+// sameDraw says whether the recorded draw is the draw now computed: the same rule, population, effective seed and records.
+// It is what makes a repeat idempotent; the document's byte-exact hash is not, so a later change to the document's shape
+// does not turn every earlier sampling into a refusal.
+func (r sampleRecorded) sameDraw(d *sampling.Document) bool {
+	if r.method != d.Method || r.popSHA != d.Population.SHA256 || r.effSeed != d.EffectiveSeed || len(r.selected) != len(d.Selected) {
+		return false
+	}
+	for i, it := range d.Selected {
+		if r.selected[i] != it.Seq {
+			return false
+		}
+	}
+	return true
 }
 
 // sampleIndex is the samplings the chain holds, by (packet, delivery, n, seed, stratify), and how many each delivery has
@@ -102,6 +158,26 @@ type sampleIndex struct {
 
 func sampleKey(packetID, delivery string, n int, seed, stratify string) string {
 	return strings.Join([]string{packetID, delivery, strconv.Itoa(n), seed, stratify}, "\x00")
+}
+
+func recordedOf(r store.Record) (sampleRecorded, bool) {
+	sm, _ := r["sample"].(map[string]any)
+	seq, _ := gate.SeqInt(r["seq"])
+	canonical, err := canon.Canonical(map[string]any(r))
+	if err != nil {
+		return sampleRecorded{}, false
+	}
+	out := sampleRecorded{seq: seq, hash: fmt.Sprint(r["hash"]), record: canonical, method: fmt.Sprint(sm["method"]),
+		popSHA: fmt.Sprint(sm["population_sha256"]), effSeed: fmt.Sprint(sm["effective_seed"])}
+	sel, _ := sm["selected"].([]any)
+	for _, v := range sel {
+		n, err := strconv.ParseInt(fmt.Sprint(v), 10, 64)
+		if err != nil {
+			return sampleRecorded{}, false
+		}
+		out.selected = append(out.selected, n)
+	}
+	return out, true
 }
 
 func (s *Server) sampleIdx(ctx context.Context) (*sampleIndex, error) {
@@ -126,10 +202,13 @@ func (s *Server) sampleIdx(ctx context.Context) (*sampleIndex, error) {
 			if err != nil {
 				continue
 			}
-			seq, _ := gate.SeqInt(r["seq"])
-			k := sampleKey(fmt.Sprint(pk["id"]), fmt.Sprint(dl["id"]), n, fmt.Sprint(sm["seed_input"]), fmt.Sprint(sm["stratify"]))
+			rec, ok := recordedOf(r)
+			if !ok {
+				continue
+			}
+			k := sampleKey(fmt.Sprint(pk["id"]), fmt.Sprint(dl["id"]), n, fmt.Sprint(sm["seed"]), fmt.Sprint(sm["stratify"]))
 			if _, ok := idx.by[k]; !ok {
-				idx.by[k] = sampleRecorded{seq: seq, hash: fmt.Sprint(r["hash"]), sha256: fmt.Sprint(sm["sample_sha256"])}
+				idx.by[k] = rec
 				idx.delivery[fmt.Sprint(dl["id"])]++
 			}
 		}
@@ -143,41 +222,41 @@ func (s *Server) sampleIdx(ctx context.Context) (*sampleIndex, error) {
 	return idx, nil
 }
 
-// sampleParams validates the query before anything else happens: only n, seed and stratify, each once, each in range.
-func sampleParams(r *http.Request) (p sampling.Params, seedInput string, msg string) {
+// sampleParams validates the query before anything else happens: only n, seed and stratify, each once, each in range, and
+// the seed is required. The raw query is parsed strictly, so a malformed pair is refused, not dropped.
+func sampleParams(r *http.Request) (p sampling.Params, msg string) {
 	if len(r.URL.RawQuery) > maxSampleQuery {
-		return p, "", fmt.Sprintf("the query is over %d bytes", maxSampleQuery)
+		return p, fmt.Sprintf("the query is over %d bytes", maxSampleQuery)
 	}
-	q := r.URL.Query()
+	q, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		return p, "the query is malformed"
+	}
 	for k, vs := range q {
 		if (k != "n" && k != "seed" && k != "stratify") || len(vs) != 1 {
-			return p, "", "the query parameters are n, seed and stratify, each at most once"
+			return p, "the query parameters are n, seed and stratify, each at most once"
 		}
 	}
 	p.N = sampling.DefaultN
-	if v := q.Get("n"); q.Has("n") {
+	if q.Has("n") {
+		v := q.Get("n")
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 1 || n > sampling.MaxN || strconv.Itoa(n) != v {
-			return p, "", fmt.Sprintf("n is a whole number from 1 to %d", sampling.MaxN)
+			return p, fmt.Sprintf("n is a whole number from 1 to %d", sampling.MaxN)
 		}
 		p.N = n
 	}
 	p.Stratify = sampling.StratifyNone
 	if q.Has("stratify") {
 		if p.Stratify = q.Get("stratify"); !sampling.ValidStratify(p.Stratify) {
-			return p, "", "stratify is " + sampling.StratifyNone + " or " + sampling.StratifyTierMonth
+			return p, "stratify is " + sampling.StratifyNone + " or " + sampling.StratifyTierMonth
 		}
 	}
-	p.SeedSource = sampling.SeedDefault
-	if q.Has("seed") {
-		seedInput = q.Get("seed")
-		if !sampling.ValidSeed(seedInput) {
-			return p, "", fmt.Sprintf("seed is 1 to %d letters, digits, dots, underscores or hyphens", sampling.MaxSeedLen)
-		}
-		p.SeedSource = sampling.SeedSupplied
+	if !q.Has("seed") || !sampling.ValidSeed(q.Get("seed")) {
+		return p, fmt.Sprintf("seed is required: 1 to %d letters, digits, dots, underscores or hyphens, chosen by the auditor once the packet's digest is fixed", sampling.MaxSeedLen)
 	}
-	p.Seed = seedInput
-	return p, seedInput, ""
+	p.Seed = q.Get("seed")
+	return p, ""
 }
 
 // buildFrame reads a packet's population, its carried records and its proofs, and checks them all: every record hashes to
@@ -343,7 +422,7 @@ func (f *sampleFrame) document(claims *token.AccessClaims, p sampling.Params) (*
 	}
 	d := &sampling.Document{Schema: sampling.Schema, Method: sampling.Method, Packet: f.ref, Delivery: claims.Subject, Recipient: claims.Recipient,
 		Params: p, EffectiveSeed: hex.EncodeToString(eff), Checkpoint: f.cp, Strata: strata,
-		Population: sampling.PopulationDoc{Count: f.count[0], Cleared: f.count[1], Eligible: f.count[2], SHA256: f.popSHA, Changes: f.rows}}
+		Population: sampling.PopulationDoc{Count: f.count[0], Cleared: f.count[1], Eligible: f.count[2], SHA256: f.popSHA, ClearedExcluded: sampling.ClearedExcluded(f.rows), Changes: f.rows}}
 	byseq := map[int64]string{}
 	for _, r := range f.rows {
 		if r.ClearSeq != nil {
@@ -371,9 +450,9 @@ func (s *Server) sampleEvent(c *token.AccessClaims, id, decision, rule, result s
 	return ev
 }
 
-// getSample is GET /v1/packets/{id}/sample. The order is P-1's: the path id and the query are validated first (nothing
-// reaches a record or an answer unchecked), then the credential's signature (anything the core did not sign is a bare 401
-// and writes nothing), then every refusal is a record with its rule, then the caps, and an allowed sample is a record
+// getSample is GET /v1/packets/{id}/sample. The order is P-1's: the path id is validated first, then the credential's
+// signature (anything the core did not sign is a bare 401 and writes nothing), then the query (nothing reaches a record or an
+// answer unchecked), then every refusal is a record with its rule, then the caps, and an allowed sample is a record
 // written before a byte is served.
 func (s *Server) getSample(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -382,13 +461,15 @@ func (s *Server) getSample(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "no such packet")
 		return
 	}
-	params, seedInput, msg := sampleParams(r)
-	if msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
-		return
-	}
 	claims, ok := s.credentialClaims(w, r)
 	if !ok {
+		return
+	}
+	// The query is validated before anything is read or written; a credential the core did not sign is nobody and is
+	// refused first, whatever its query.
+	params, msg := sampleParams(r)
+	if msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 	now := s.opt.Clock()
@@ -422,9 +503,9 @@ func (s *Server) getSample(w http.ResponseWriter, r *http.Request) {
 		s.refuseSample(w, r, claims, id, rule, msg, status, now)
 		return
 	}
-	frame := s.samplerFor(b)
+	frame, ferr := s.samplerFor(b, now)
 	if frame == nil {
-		writeError(w, http.StatusConflict, errNoCheckpoint.Error()+", or the stored packet does not check: nothing was sampled")
+		writeError(w, http.StatusConflict, ferr.Error()+": nothing was sampled")
 		return
 	}
 	doc, err := frame.document(claims, params)
@@ -432,15 +513,12 @@ func (s *Server) getSample(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	sha, err := doc.SHA256()
-	if err != nil {
-		s.log.ErrorContext(ctx, "sample: the sample could not be hashed", "packet", id, "error", err.Error())
-		writeError(w, http.StatusServiceUnavailable, "the sample could not be built")
+	// The answer must be one the verifier will read: refuse before recording what cannot be served.
+	if n, err := encodedSize(doc); err != nil || n > s.sampleMaxBytes() {
+		writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("this sample would be over %d bytes (the most `clearance verify --sample` reads): ask for a smaller n", s.sampleMaxBytes()))
 		return
 	}
-	// One writer at a time: the check for a sample already drawn and the record that would be its first are one step. The
-	// lock is not held while the answer is written.
-	rec, created, status, msg, rule := s.recordSampling(ctx, claims, id, doc, params, seedInput, sha, now)
+	rec, created, status, msg, rule := s.recordSampling(ctx, claims, id, doc, params, now)
 	if status != 0 {
 		if status == http.StatusTooManyRequests {
 			w.Header().Set("Retry-After", "3600")
@@ -454,33 +532,63 @@ func (s *Server) getSample(w http.ResponseWriter, r *http.Request) {
 	s.serveSample(w, doc, created)
 }
 
+func (s *Server) sampleMaxBytes() int {
+	if s.sampleMax > 0 {
+		return s.sampleMax
+	}
+	return sampling.MaxDocument
+}
+
+// recordReserve stands in for the record the answer will carry (a few KB: its selected seqs are at most 100), so the size
+// is checked before the record is written.
+const recordReserve = 16 << 10
+
+func encodedSize(doc *sampling.Document) (int, error) {
+	d := *doc
+	d.Recorded = &sampling.Recorded{Hash: strings.Repeat("0", 64), Record: json.RawMessage(`"` + strings.Repeat("x", recordReserve) + `"`)}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(&d); err != nil {
+		return 0, err
+	}
+	return buf.Len(), nil
+}
+
 // recordSampling finds the record that already holds this sampling or writes it (one record, before anything is served).
-// A non-zero status is the refusal to answer with.
-func (s *Server) recordSampling(ctx context.Context, claims *token.AccessClaims, id string, doc *sampling.Document, params sampling.Params, seedInput, sha string, now time.Time) (rec *sampling.Recorded, created bool, status int, msg, rule string) {
+// The index is consulted before the document is canonicalised. A non-zero status is the refusal to answer with.
+func (s *Server) recordSampling(ctx context.Context, claims *token.AccessClaims, id string, doc *sampling.Document, params sampling.Params, now time.Time) (rec *sampling.Recorded, created bool, status int, msg, rule string) {
 	s.sampleMu.Lock()
 	defer s.sampleMu.Unlock()
 	idx, err := s.sampleIdx(ctx)
 	if err != nil {
 		return nil, false, http.StatusServiceUnavailable, "the store could not be read", ""
 	}
-	k := sampleKey(id, claims.Subject, params.N, seedInput, params.Stratify)
+	k := sampleKey(id, claims.Subject, params.N, params.Seed, params.Stratify)
 	if have, ok := idx.by[k]; ok {
-		if have.sha256 != sha {
-			// The chain holds a sampling under these parameters that is not this sample: serve nothing rather than a sample
-			// the record does not describe.
-			s.log.ErrorContext(ctx, "sample: the recorded sampling is not the sample drawn now", "packet", id, "seq", have.seq)
-			return nil, false, http.StatusServiceUnavailable, "the recorded sampling does not match the sample: it was not served", ""
+		if !have.sameDraw(doc) {
+			// The chain holds a sampling under these parameters that is not the draw these inputs give now (another rule, a
+			// different population, other records): a real inconsistency. Serve nothing rather than a sample the record
+			// does not describe.
+			s.log.ErrorContext(ctx, "sample: the recorded draw differs from the draw now computed", "packet", id, "seq", have.seq,
+				"recorded_method", have.method, "method", doc.Method, "same_population", have.popSHA == doc.Population.SHA256, "same_seed", have.effSeed == doc.EffectiveSeed)
+			return nil, false, http.StatusServiceUnavailable, "the recorded sampling is not the draw these inputs give: it was not served", ""
 		}
-		return &sampling.Recorded{Seq: have.seq, Hash: have.hash}, false, 0, "", ""
+		return &sampling.Recorded{Seq: have.seq, Hash: have.hash, Record: have.record}, false, 0, "", ""
 	}
 	if idx.delivery[claims.Subject] >= MaxSamplesPerDelivery {
 		return nil, false, http.StatusTooManyRequests, fmt.Sprintf("this delivery has drawn %d samples: ask the subscriber for a new delivery", MaxSamplesPerDelivery), RuleSampleLimit
+	}
+	sha, err := doc.SHA256()
+	if err != nil {
+		s.log.ErrorContext(ctx, "sample: the sample could not be hashed", "packet", id, "error", err.Error())
+		return nil, false, http.StatusServiceUnavailable, "the sample could not be built", ""
 	}
 	selected := make([]any, len(doc.Selected))
 	for i, it := range doc.Selected {
 		selected[i] = json.Number(strconv.FormatInt(it.Seq, 10))
 	}
-	sm := map[string]any{"id": sampling.HexID(sha), "n": json.Number(strconv.Itoa(params.N)), "seed_input": seedInput, "seed_source": params.SeedSource,
+	sm := map[string]any{"id": sampling.HexID(sha), "n": json.Number(strconv.Itoa(params.N)), "seed": params.Seed,
 		"stratify": params.Stratify, "effective_seed": doc.EffectiveSeed, "method": sampling.Method, "sample_sha256": sha, "population_sha256": doc.Population.SHA256,
 		"population": json.Number(strconv.Itoa(doc.Population.Count)), "eligible": json.Number(strconv.Itoa(doc.Population.Eligible)),
 		"checkpoint_size": json.Number(strconv.FormatInt(doc.Checkpoint.Size, 10)), "selected": selected}
@@ -492,14 +600,20 @@ func (s *Server) recordSampling(ctx context.Context, claims *token.AccessClaims,
 		return err
 	})
 	if err != nil {
+		// The commit may have happened before the error: drop the index, so the next request reads the chain for this key
+		// before it writes again.
+		s.sampled = nil
 		s.log.ErrorContext(ctx, "sample: the sampling could not be recorded", "packet", id, "error", err.Error())
 		return nil, false, http.StatusServiceUnavailable, "the sampling could not be recorded, so it was not served", ""
 	}
-	seq, _ := gate.SeqInt(r["seq"])
-	h := fmt.Sprint(r["hash"])
-	idx.by[k] = sampleRecorded{seq: seq, hash: h, sha256: sha}
+	have, ok := recordedOf(r)
+	if !ok {
+		s.sampled = nil
+		return nil, false, http.StatusServiceUnavailable, "the sampling record could not be read back, so it was not served", ""
+	}
+	idx.by[k] = have
 	idx.delivery[claims.Subject]++
-	return &sampling.Recorded{Seq: seq, Hash: h}, true, 0, "", ""
+	return &sampling.Recorded{Seq: have.seq, Hash: have.hash, Record: have.record}, true, 0, "", ""
 }
 
 func (s *Server) serveSample(w http.ResponseWriter, doc *sampling.Document, created bool) {
@@ -518,18 +632,23 @@ func (s *Server) serveSample(w http.ResponseWriter, doc *sampling.Document, crea
 	_, _ = w.Write(buf.Bytes())
 }
 
-// samplerFor is the packet's checked sampling frame, built once and cached, or nil when the packet cannot be sampled.
-func (s *Server) samplerFor(b *packet.Bundle) *sampleFrame {
+// samplerFor is the packet's checked sampling frame, built once and cached; a packet that does not check is remembered
+// for a short while and refused without being read again. It returns the reason when there is no frame.
+func (s *Server) samplerFor(b *packet.Bundle, now time.Time) (*sampleFrame, error) {
 	if f := s.samplers.get(b.ID, b.Digest); f != nil {
-		return f
+		return f, nil
+	}
+	if err, ok := s.samplers.known(b.ID+"|"+b.Digest, now); ok {
+		return nil, err
 	}
 	f, err := buildFrame(b)
 	if err != nil {
 		s.log.Warn("sample: a packet cannot be sampled", "packet", b.ID, "reason", err.Error())
-		return nil
+		s.samplers.failed(b.ID+"|"+b.Digest, err, now)
+		return nil, err
 	}
 	s.samplers.put(b.ID, f)
-	return f
+	return f, nil
 }
 
 // refuseSample records a refusal of a credential the core signed, then answers it, as a refused read is (the same cap:

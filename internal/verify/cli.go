@@ -26,6 +26,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	issuer := fs.String("issuer", "", "attestations: the OIDC issuer the signing certificate must record")
 	seen := fs.String("seen-file", "", "the local note of checkpoints seen (default: <user config dir>/clearance/verify-seen.json)")
 	sample := fs.String("sample", "", "check a sample file (the answer of GET /v1/packets/{id}/sample) instead of a packet directory")
+	sampleRecord := fs.String("sample-record", "", "with --sample: the core's packet.sample record the sample names (GET /v1/evidence/{seq} on the core), which the sample's own copy is compared with. Without it the check that the core drew the sample is NOT CHECKED (exit 2)")
 	samplePacket := fs.String("packet", "", "with --sample: the packet directory the sample was drawn from, which the sample is then checked against")
 	noSeen := fs.Bool("no-seen", false, "neither read nor write the note of checkpoints seen")
 	fs.Usage = func() {
@@ -45,12 +46,12 @@ func Main(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "verify: --sample takes a file, not a packet directory (use --packet <dir> for the packet it was drawn from)")
 			return 2
 		}
-	} else if *samplePacket != "" {
-		fmt.Fprintln(stderr, "verify: --packet goes with --sample")
+	} else if *samplePacket != "" || *sampleRecord != "" {
+		fmt.Fprintln(stderr, "verify: --packet and --sample-record go with --sample")
 		return 2
 	}
 	if *sample != "" {
-		return verifySampleMain(*sample, *samplePacket, [2]string{*logKeys, *policy}, stdout, stderr)
+		return verifySampleMain(*sample, *samplePacket, [3]string{*logKeys, *policy, *sampleRecord}, stdout, stderr)
 	}
 	if dir == "" && fs.NArg() == 1 {
 		dir = fs.Arg(0)
@@ -129,13 +130,13 @@ func (r *recipientFlag) String() string     { return strings.Join(*r, ",") }
 func (r *recipientFlag) Set(v string) error { *r = append(*r, v); return nil }
 
 // verifySampleMain is `clearance verify --sample`; trust is the paths of the log keys and the witness policy.
-func verifySampleMain(sample, packetDir string, trust [2]string, stdout, stderr io.Writer) int {
+func verifySampleMain(sample, packetDir string, trust [3]string, stdout, stderr io.Writer) int {
 	var o Options
 	for _, in := range []struct {
 		flag, path string
 		into       *[]byte
 		src        *string
-	}{{"log-keys", trust[0], &o.LogKeys, &o.LogKeysSrc}, {"witness-policy", trust[1], &o.WitnessPolicy, &o.WitnessPolicySrc}} {
+	}{{"log-keys", trust[0], &o.LogKeys, &o.LogKeysSrc}, {"witness-policy", trust[1], &o.WitnessPolicy, &o.WitnessPolicySrc}, {"sample-record", trust[2], &o.SampleRecord, &o.SampleRecordSrc}} {
 		if in.path == "" {
 			continue
 		}

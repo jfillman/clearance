@@ -149,6 +149,9 @@ under the same credential, caps and record-before-serve ordering: see [sampling.
 
 ## Known limits
 
+- **A leaked credential can use up a delivery's caps** (reads and refusals per hour; the sampling call's 20 distinct samples)
+  and so lock the real recipient out of that delivery. It cannot read more than the recipient could. Remedy: the subscriber creates
+  a new delivery for the same recipient and packet, which has fresh caps; keep windows short (there is no revocation).
 - The refusal and read counters are per core replica (the core is one replica) and per wall-clock hour.
 - No credential revocation: keep windows short. The credential verifies against the core's token keys: the key in use and keys
   retired within the last 24 hours plus the longest credential life (30 days) are accepted, so a retired key keeps verifying

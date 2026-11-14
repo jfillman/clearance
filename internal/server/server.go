@@ -131,6 +131,8 @@ type Server struct {
 	sampleMu sync.Mutex
 	sampled  *sampleIndex
 	samplers samplers
+	// sampleMax caps the encoded sample (0: sampling.MaxDocument); a test lowers it.
+	sampleMax int
 
 	// targetsMu serializes target publishes: the held-digest check and the write it guards are one step.
 	targetsMu sync.Mutex

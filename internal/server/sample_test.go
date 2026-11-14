@@ -23,6 +23,7 @@ import (
 	"golang.org/x/mod/sumdb/note"
 
 	"github.com/jfillman/clearance/internal/assurance"
+	"github.com/jfillman/clearance/internal/canon"
 	"github.com/jfillman/clearance/internal/evidence"
 	"github.com/jfillman/clearance/internal/ledger"
 	"github.com/jfillman/clearance/internal/packet"
@@ -152,7 +153,10 @@ type p2lab struct {
 	denied   int     // gate-api changes that were never cleared
 }
 
-func p2Lab(t *testing.T, readsPerHour int) *p2lab {
+func p2Lab(t *testing.T, readsPerHour int) *p2lab { return p2LabOn(t, readsPerHour, "") }
+
+// p2LabOn is the lab on the memory store (dsn "") or on a scratch Postgres database.
+func p2LabOn(t *testing.T, readsPerHour int, dsn string) *p2lab {
 	t.Helper()
 	a, b := newFakeRecipient(t, "lab-auditor"), newFakeRecipient(t, "lab-grc-hub")
 	var base []map[string]any
@@ -162,7 +166,7 @@ func p2Lab(t *testing.T, readsPerHour int) *p2lab {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := config(t, "")
+	cfg := config(t, dsn)
 	cfg.Providers = ps
 	s := signer(t)
 	cfg.Signer, cfg.TokenIssuer, cfg.TokenTTL = s, "clearance", 15*time.Minute
@@ -250,6 +254,29 @@ func (l *p2lab) trust() verify.Options {
 	return verify.Options{LogKeys: []byte(l.vkey + "\n"), LogKeysSrc: "log.pub", WitnessPolicy: l.policy, WitnessPolicySrc: "policy.txt"}
 }
 
+// coreRecord is a record as the core serves it (what an auditor reads with GET /v1/evidence/{seq}, or is handed by the subscriber).
+func (l *p2lab) coreRecord(t *testing.T, seq int64) []byte {
+	t.Helper()
+	for _, r := range l.f.records() {
+		if n, _ := r["seq"].(json.Number).Int64(); n == seq {
+			b, err := json.Marshal(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return b
+		}
+	}
+	t.Fatalf("no record %d", seq)
+	return nil
+}
+
+// trustFor is trust() with the core's own packet.sample record of doc, which is what lets a verification be exit 0.
+func (l *p2lab) trustFor(t *testing.T, doc *sampling.Document) verify.Options {
+	o := l.trust()
+	o.SampleRecord, o.SampleRecordSrc = l.coreRecord(t, doc.Recorded.Seq), "record.json"
+	return o
+}
+
 func failedChecks(rep *verify.Report) []string {
 	var out []string
 	for _, c := range rep.Checks {
@@ -268,7 +295,7 @@ func TestP2SamplingGate(t *testing.T) {
 	l := p2Lab(t, -1)
 	d := l.deliver(t)
 	doc, raw := l.sample(t, d.Credential, assurance.SampleRequest{N: 25, Seed: "fy26-q4"})
-	if len(doc.Selected) != 25 || doc.Params.N != 25 || doc.Params.SeedSource != sampling.SeedSupplied {
+	if len(doc.Selected) != 25 || doc.Params.N != 25 || doc.Params.Seed != "fy26-q4" {
 		t.Fatalf("%d records, %+v", len(doc.Selected), doc.Params)
 	}
 	// The population is printed with the sample: every change of the packet, and why any is not in the frame.
@@ -285,7 +312,7 @@ func TestP2SamplingGate(t *testing.T) {
 	}
 	// Offline, against the log's key and the packet, with nothing asked of the core: the file and the directory.
 	file := writeSample(t, raw)
-	rep := verify.VerifySample(file, l.dir, l.trust())
+	rep := verify.VerifySample(file, l.dir, l.trustFor(t, doc))
 	if rep.ExitCode() != 0 || !rep.Complete() {
 		var b strings.Builder
 		rep.Write(&b)
@@ -298,8 +325,22 @@ func TestP2SamplingGate(t *testing.T) {
 	keys, pol := filepath.Join(t.TempDir(), "log.pub"), filepath.Join(t.TempDir(), "policy.txt")
 	_ = os.WriteFile(keys, []byte(l.vkey+"\n"), 0o644)
 	_ = os.WriteFile(pol, l.policy, 0o644)
-	if code := verify.Main([]string{"--sample", file, "--packet", l.dir, "--log-keys", keys, "--witness-policy", pol}, &out, io.Discard); code != 0 {
+	recFile := filepath.Join(t.TempDir(), "record.json")
+	_ = os.WriteFile(recFile, l.coreRecord(t, doc.Recorded.Seq), 0o644)
+	if code := verify.Main([]string{"--sample", file, "--packet", l.dir, "--log-keys", keys, "--witness-policy", pol, "--sample-record", recFile}, &out, io.Discard); code != 0 {
 		t.Fatalf("clearance verify --sample exited %d:\n%s", code, out.String())
+	}
+	// The cleared changes that could not be sampled are counted and reported as a finding, not a failure.
+	if doc.Population.ClearedExcluded[sampling.ExcludedNoProof] != 2 || len(doc.Population.ClearedExcluded) != 1 {
+		t.Fatalf("%v", doc.Population.ClearedExcluded)
+	}
+	pc := checkNamed(t, rep, "sample: the population")
+	if pc.Status != verify.Pass || len(pc.Findings) != 1 || !strings.Contains(pc.Findings[0], "2 cleared change(s) have no inclusion proof") || !strings.Contains(pc.Detail, "no-inclusion-proof 2") {
+		t.Fatalf("%+v", pc)
+	}
+	// Without the core's own record the verifier cannot say the core drew the sample: NOT CHECKED, exit 2, not a pass.
+	if rep := verify.VerifySample(file, l.dir, l.trust()); rep.ExitCode() != 2 || rep.Failed() || checkNamed(t, rep, "sample: the core's packet.sample record").Status != verify.NotChecked {
+		t.Fatalf("exit %d, failed %v", rep.ExitCode(), failedChecks(rep))
 	}
 	// Without the log's key the checkpoint is the sample's own claim: not a pass.
 	if rep := verify.VerifySample(file, l.dir, verify.Options{}); rep.ExitCode() != 2 || rep.Failed() {
@@ -316,7 +357,7 @@ func TestP2SamplingGate(t *testing.T) {
 	if !slices.Equal(seqsOf(doc), seqsOf(again)) || again.EffectiveSeed != doc.EffectiveSeed || d2.Credential == d.Credential {
 		t.Fatal("the same seed drew a different sample")
 	}
-	if c := verify.VerifySample(writeSample(t, raw2), l.dir, l.trust()); c.ExitCode() != 0 {
+	if c := verify.VerifySample(writeSample(t, raw2), l.dir, l.trustFor(t, again)); c.ExitCode() != 0 {
 		t.Fatal("the reproduced sample does not verify")
 	}
 	other, _ := l.sample(t, d.Credential, assurance.SampleRequest{N: 25, Seed: "fy26-q5"})
@@ -326,7 +367,7 @@ func TestP2SamplingGate(t *testing.T) {
 
 	// A record outside the scope cannot be sampled. Ask for every eligible change: exactly the eligible ones come back,
 	// never another app's, a record with no proof, or a change that was never cleared.
-	full, _ := l.sample(t, d.Credential, assurance.SampleRequest{N: 40})
+	full, _ := l.sample(t, d.Credential, assurance.SampleRequest{N: 40, Seed: "all"})
 	if got := seqsOf(full); !slices.Equal(got, l.eligible) {
 		t.Fatalf("the full sample is %v, the eligible clear records are %v", got, l.eligible)
 	}
@@ -336,7 +377,7 @@ func TestP2SamplingGate(t *testing.T) {
 		}
 	}
 	// And a sample larger than the eligible population is refused, not padded.
-	l.f.do("GET", "/v1/packets/"+l.id+"/sample?n=41", d.Credential, nil).want(t, 400, "40")
+	l.f.do("GET", "/v1/packets/"+l.id+"/sample?n=41&seed=x", d.Credential, nil).want(t, 400, "40")
 }
 
 // -- query and path validation ----------------------------------------------------------------------------------
@@ -351,8 +392,12 @@ func TestP2QueryIsValidatedBeforeAnythingIsRecorded(t *testing.T) {
 		"seed=", "seed=a%20b", "seed=a%00b", "seed=a%0ab", "seed=%C3%A9", "seed=a/b", "seed=..%2Fx", "seed=%3Cscript%3E", "seed=" + strings.Repeat("a", 65),
 		"stratify=x", "stratify=", "stratify=tier", "stratify=TIER-MONTH", "stratify=tier-month,none",
 		"packet=pk-00000000000000000000000000000000", "seq=5", "change=ch-0000000000000001", "part=evidence", "n=5&n=6", "seed=a&seed=b", "stratify=none&stratify=none",
+		"seed=ok;n=5", "seed=ok&n=%zz", "seed=ok&%", "seed=ok&n=5&=x",
 		"x=" + strings.Repeat("a", 300), "n=5&" + strings.Repeat("a", 300) + "=1",
 	} {
+		if !strings.Contains(q, "seed") {
+			q = "seed=ok&" + q
+		}
 		a := f(l, "/v1/packets/"+l.id+"/sample?"+q, d.Credential)
 		if a.status != 400 {
 			t.Errorf("?%.40s: status %d %v", q, a.status, a.body)
@@ -376,7 +421,7 @@ func TestP2APathThatIsNotAPacketIDWritesNoRecord(t *testing.T) {
 	d := l.deliver(t)
 	before := len(l.f.records())
 	for _, id := range []string{"x", "pk-zz", strings.Repeat("a", 3000), "pk-" + strings.Repeat("A", 32), "%00%01bad", "%ff%fe", "pk-0123456789abcdef0123456789abcdef%0a"} {
-		if a := f(l, "/v1/packets/"+id+"/sample", d.Credential); a.status != 404 && a.status != 400 {
+		if a := f(l, "/v1/packets/"+id+"/sample?seed=s", d.Credential); a.status != 404 && a.status != 400 {
 			t.Errorf("%.30s: %d", id, a.status)
 		}
 	}
@@ -428,13 +473,13 @@ func TestP2CredentialAndScopeAreP1s(t *testing.T) {
 			t.Fatal("a refusal records a sample")
 		}
 	}
-	path := "/v1/packets/" + l.id + "/sample"
+	path := "/v1/packets/" + l.id + "/sample?seed=s"
 	refused(mint(token.AccessClaims{Subject: "dl-1", IssuedAt: now.Add(-2 * time.Hour).Unix(), NotBefore: now.Add(-2 * time.Hour).Unix(), Expires: now.Add(-time.Hour).Unix()}), path, 401, server.RulePacketExpired)
 	refused(mint(token.AccessClaims{Subject: "dl-1", IssuedAt: now.Unix(), NotBefore: now.Add(time.Hour).Unix(), Expires: now.Add(2 * time.Hour).Unix()}), path, 403, server.RulePacketNotYet)
 	// A sample reads the population (summary) and the records and proofs (evidence): a credential cut to one part is refused.
 	refused(mint(token.AccessClaims{Subject: "dl-1", Scope: []string{packet.PartSummary}}), path, 403, server.RulePacketScope)
 	refused(mint(token.AccessClaims{Subject: "dl-1", Scope: []string{packet.PartEvidence}}), path, 403, server.RulePacketScope)
-	refused(d.Credential, "/v1/packets/pk-00000000000000000000000000000000/sample", 403, server.RulePacketScope)
+	refused(d.Credential, "/v1/packets/pk-00000000000000000000000000000000/sample?seed=s", 403, server.RulePacketScope)
 	refused(mint(token.AccessClaims{Subject: "dl-1", Recipient: "nobody"}), path, 403, server.RulePacketRecipient)
 	// A real delivery cut to the summary is refused the same way, through the real route.
 	sd := l.deliver(t, packet.PartSummary)
@@ -450,7 +495,7 @@ func TestP2CredentialAndScopeAreP1s(t *testing.T) {
 		t.Fatal("a credential the core did not sign wrote a record")
 	}
 	// An allowed sample is recorded as the recipient, not as a Clearance principal.
-	l.sample(t, d.Credential, assurance.SampleRequest{N: 3})
+	l.sample(t, d.Credential, assurance.SampleRequest{N: 3, Seed: "s"})
 	rs := l.sampleRecords()
 	if last := rs[len(rs)-1]; last["decision"] != "allow" || last["principal"] != "recipient:"+l.rcp.name {
 		t.Fatalf("%v", last)
@@ -473,7 +518,7 @@ func TestP2ARepeatRequestIsIdempotent(t *testing.T) {
 	if string(raw1) != string(raw2) || len(l.sampleRecords()) != 1 {
 		t.Fatalf("a repeat differs or wrote a record (%d)", len(l.sampleRecords()))
 	}
-	if again.Recorded == nil || *again.Recorded != *first.Recorded {
+	if again.Recorded == nil || again.Recorded.Seq != first.Recorded.Seq || again.Recorded.Hash != first.Recorded.Hash || string(again.Recorded.Record) != string(first.Recorded.Record) {
 		t.Fatal("a repeat names a different record")
 	}
 	var wg sync.WaitGroup
@@ -563,12 +608,12 @@ func TestP2CapsGive429AndWriteNothing(t *testing.T) {
 		Packet: l.id, Digest: l.bundle.Digest, Recipient: l.rcp.name, Scope: []string{"summary", "evidence"},
 		IssuedAt: now.Add(-2 * time.Hour).Unix(), NotBefore: now.Add(-2 * time.Hour).Unix(), Expires: now.Add(-time.Hour).Unix()})
 	for i := 0; i < 70; i++ {
-		f(l, "/v1/packets/"+l.id+"/sample", expired)
+		f(l, "/v1/packets/"+l.id+"/sample?seed=s", expired)
 	}
 	if n := len(l.sampleRecords()); n != 60 {
 		t.Fatalf("%d refusals recorded, want 60", n)
 	}
-	f(l, "/v1/packets/"+l.id+"/sample", expired).want(t, 429, "")
+	f(l, "/v1/packets/"+l.id+"/sample?seed=s", expired).want(t, 429, "")
 }
 
 // -- packets that cannot be sampled ------------------------------------------------------------------------------
@@ -581,7 +626,7 @@ func TestP2APacketWithNoCheckpointIsNotSampled(t *testing.T) {
 	f0.do("POST", "/v1/packets", "user:admin", b.JSON).want(t, 200, "")
 	d := f0.deliver(t, b.ID, map[string]any{"recipient": auditor.name, "window": map[string]any{"to": time.Now().Add(time.Hour).UTC().Format(time.RFC3339)}})
 	before := len(f0.records())
-	f0.do("GET", "/v1/packets/"+b.ID+"/sample", d.Credential, nil).want(t, 409, "checkpoint")
+	f0.do("GET", "/v1/packets/"+b.ID+"/sample?seed=s", d.Credential, nil).want(t, 409, "checkpoint")
 	if len(f0.records()) != before {
 		t.Fatal("a refused sampling wrote a record")
 	}
@@ -619,7 +664,7 @@ func TestP2AStoredPacketThatDoesNotCheckIsNotSampled(t *testing.T) {
 	l.f.do("POST", "/v1/packets", "user:admin", forged.JSON).want(t, 200, "")
 	d := l.f.deliver(t, forged.ID, map[string]any{"recipient": l.rcp.name, "window": l.window})
 	before := len(l.f.records())
-	l.f.do("GET", "/v1/packets/"+forged.ID+"/sample", d.Credential, nil).want(t, 409, "")
+	l.f.do("GET", "/v1/packets/"+forged.ID+"/sample?seed=s", d.Credential, nil).want(t, 409, "")
 	if len(l.f.records()) != before {
 		t.Fatal("a packet whose proof does not verify was sampled")
 	}
@@ -635,21 +680,16 @@ func sha256Hex(b []byte) string {
 func TestP2SelectionIsReproducibleAndHonest(t *testing.T) {
 	l := p2Lab(t, -1)
 	d := l.deliver(t)
-	// No seed: the core's default, a function of the packet alone, so the recipient does not choose the sample. It is the same
-	// for every delivery and recorded as the default.
-	a, _ := l.sample(t, d.Credential, assurance.SampleRequest{N: 25})
-	b, _ := l.sample(t, l.deliver(t).Credential, assurance.SampleRequest{N: 25})
-	if a.Params.SeedSource != sampling.SeedDefault || a.Params.Seed != "" || !slices.Equal(seqsOf(a), seqsOf(b)) || a.EffectiveSeed != b.EffectiveSeed {
-		t.Fatalf("%+v", a.Params)
+	// The seed is the auditor's: the same seed draws the same sample for every delivery, another seed another sample, and a
+	// seed means nothing on another packet (it is bound to this packet's digest).
+	a, _ := l.sample(t, d.Credential, assurance.SampleRequest{N: 25, Seed: "mine"})
+	b, _ := l.sample(t, l.deliver(t).Credential, assurance.SampleRequest{N: 25, Seed: "mine"})
+	c, _ := l.sample(t, d.Credential, assurance.SampleRequest{N: 25, Seed: "yours"})
+	if !slices.Equal(seqsOf(a), seqsOf(b)) || a.EffectiveSeed != b.EffectiveSeed || slices.Equal(seqsOf(a), seqsOf(c)) {
+		t.Fatal("a seed does not fix the sample")
 	}
-	want := hex.EncodeToString(sampling.EffectiveSeed(l.bundle.Digest, ""))
-	if a.EffectiveSeed != want {
-		t.Fatal("the default seed is not the packet-bound default")
-	}
-	// A supplied seed is the recipient's, and says so; a seed does not carry over to another packet (it is bound to the digest).
-	c, _ := l.sample(t, d.Credential, assurance.SampleRequest{N: 25, Seed: "mine"})
-	if c.Params.SeedSource != sampling.SeedSupplied || slices.Equal(seqsOf(a), seqsOf(c)) || c.EffectiveSeed == hex.EncodeToString(sampling.EffectiveSeed(strings.Repeat("0", 64), "mine")) {
-		t.Fatalf("%+v", c.Params)
+	if a.EffectiveSeed != hex.EncodeToString(sampling.EffectiveSeed(l.bundle.Digest, "mine")) || a.EffectiveSeed == hex.EncodeToString(sampling.EffectiveSeed(strings.Repeat("0", 64), "mine")) {
+		t.Fatal("the effective seed is not bound to the packet digest")
 	}
 	// Stratified: proportional by tier and month, every stratum printed, the sizes add to n.
 	s, _ := l.sample(t, d.Credential, assurance.SampleRequest{N: 25, Seed: "mine", Stratify: sampling.StratifyTierMonth})
@@ -671,7 +711,7 @@ func TestP2SelectionIsReproducibleAndHonest(t *testing.T) {
 	}
 	// And the stratified sample verifies offline.
 	_, raw := l.sample(t, d.Credential, assurance.SampleRequest{N: 25, Seed: "mine", Stratify: sampling.StratifyTierMonth})
-	if rep := verify.VerifySample(writeSample(t, raw), l.dir, l.trust()); rep.ExitCode() != 0 {
+	if rep := verify.VerifySample(writeSample(t, raw), l.dir, l.trustFor(t, s)); rep.ExitCode() != 0 {
 		t.Fatal(failedChecks(rep))
 	}
 	// A sample is not a way to read more than the packet gives: the recipient already holds every one of these records in the
@@ -706,15 +746,15 @@ func TestP2TheVerifierFailsWhenAnythingIsMissingOrAltered(t *testing.T) {
 	l := p2Lab(t, -1)
 	d := l.deliver(t)
 	_, raw := l.sample(t, d.Credential, assurance.SampleRequest{N: 25, Seed: "fy26-q4"})
-	if rep := verify.VerifySample(writeSample(t, raw), l.dir, l.trust()); rep.ExitCode() != 0 {
-		t.Fatal("the untouched sample does not verify")
-	}
 	load := func() *sampling.Document {
 		var doc sampling.Document
 		if err := json.Unmarshal(raw, &doc); err != nil {
 			t.Fatal(err)
 		}
 		return &doc
+	}
+	if rep := verify.VerifySample(writeSample(t, raw), l.dir, l.trustFor(t, load())); rep.ExitCode() != 0 {
+		t.Fatal("the untouched sample does not verify")
 	}
 	// The packet's own record and proof of a clear record the sample did not draw, for a swapped-in record.
 	carried := map[int64]json.RawMessage{}
@@ -782,7 +822,7 @@ func TestP2TheVerifierFailsWhenAnythingIsMissingOrAltered(t *testing.T) {
 		{"a checkpoint root that is not the log's", func(d *sampling.Document) { d.Checkpoint.Root = p2hex('c') }, "ledger: inclusion proofs", true},
 		{"a checkpoint note from another log", func(d *sampling.Document) { d.Checkpoint.Note = "x\n1\nAAAA\n\n— other AAAA\n" }, "ledger", true},
 		{"a different seed than the one the sample was drawn with", func(d *sampling.Document) { d.Params.Seed = "fy26-q5" }, "sample: the selection", true},
-		{"a seed passed off as the default", func(d *sampling.Document) { d.Params.SeedSource = sampling.SeedDefault }, "sample: the selection", true},
+		{"the seed removed", func(d *sampling.Document) { d.Params.Seed = "" }, "sample: the selection", true},
 		{"a different n", func(d *sampling.Document) { d.Params.N = 10 }, "sample: the selection", true},
 		{"a different stratification", func(d *sampling.Document) { d.Params.Stratify = sampling.StratifyTierMonth }, "sample: the selection", true},
 		{"a population row edited (digest not fixed)", func(d *sampling.Document) { d.Population.Changes[0].State = "tampered" }, "sample: the population", true},
@@ -836,6 +876,45 @@ func TestP2TheVerifierFailsWhenAnythingIsMissingOrAltered(t *testing.T) {
 			t.Errorf("%s: the failing checks are %v, want one starting %q", c.name, failedChecks(rep), c.check)
 		}
 	}
+	// The core's own record. A sample assembled offline (the rule is public) with a made-up `recorded` is consistent with
+	// itself and is never exit 0; a record the caller read from the core that disagrees with the sample fails.
+	fab := load()
+	fake := map[string]any{"seq": json.Number("99999"), "prev_hash": p2hex('0'), "ts": "2026-11-09T06:00:00Z", "tool": "packet.sample", "decision": "allow",
+		"packet": map[string]any{"id": fab.Packet.ID}, "delivery": map[string]any{"id": fab.Delivery, "recipient": fab.Recipient, "packet": fab.Packet.ID},
+		"sample": map[string]any{"method": fab.Method, "population_sha256": fab.Population.SHA256, "effective_seed": fab.EffectiveSeed, "seed": fab.Params.Seed,
+			"stratify": fab.Params.Stratify, "n": json.Number("25"), "selected": func() []any {
+				var o []any
+				for _, it := range fab.Selected {
+					o = append(o, json.Number(fmt.Sprint(it.Seq)))
+				}
+				return o
+			}()}}
+	cb, _ := canon.Canonical(fake)
+	fake["hash"] = canon.SHA256Hex(cb)
+	fb, _ := json.Marshal(fake)
+	fab.Recorded = &sampling.Recorded{Seq: 99999, Hash: fake["hash"].(string), Record: fb}
+	fabRaw, _ := json.Marshal(fab)
+	if rep := verify.VerifySample(writeSample(t, fabRaw), l.dir, l.trust()); rep.ExitCode() != 2 || rep.Failed() || checkNamed(t, rep, "sample: the core's packet.sample record").Status != verify.NotChecked {
+		t.Errorf("a fabricated recorded: exit %d, failed %v", rep.ExitCode(), failedChecks(rep))
+	}
+	withReal := l.trust()
+	withReal.SampleRecord, withReal.SampleRecordSrc = l.coreRecord(t, load().Recorded.Seq), "record.json"
+	if rep := verify.VerifySample(writeSample(t, fabRaw), l.dir, withReal); rep.ExitCode() != 1 {
+		t.Errorf("a fabricated recorded checked against the core's real record: exit %d", rep.ExitCode())
+	}
+	// Records the caller might be handed that are not this sampling's: another sampling's, an altered one, a record of another kind.
+	_, otherRaw := l.sample(t, d.Credential, assurance.SampleRequest{N: 25, Seed: "another"})
+	var otherDoc sampling.Document
+	_ = json.Unmarshal(otherRaw, &otherDoc)
+	altered := strings.Replace(string(l.coreRecord(t, load().Recorded.Seq)), `"allow"`, `"deny"`, 1)
+	for name, rec := range map[string][]byte{"another sampling's record": l.coreRecord(t, otherDoc.Recorded.Seq), "an altered record": []byte(altered), "not a record": []byte("{}"),
+		"the packet's clear record": carried[l.eligible[0]]} {
+		o := l.trust()
+		o.SampleRecord, o.SampleRecordSrc = rec, "record.json"
+		if rep := verify.VerifySample(writeSample(t, raw), l.dir, o); rep.ExitCode() != 1 || checkNamed(t, rep, "sample: the core's packet.sample record").Status != verify.Fail {
+			t.Errorf("%s: exit %d", name, rep.ExitCode())
+		}
+	}
 	// The wrong packet directory; a file that is not a sample; one that is not there; keys that are not the log's.
 	other := filepath.Join(t.TempDir(), "other")
 	if err := os.MkdirAll(other, 0o755); err != nil {
@@ -856,5 +935,158 @@ func TestP2TheVerifierFailsWhenAnythingIsMissingOrAltered(t *testing.T) {
 	wrong.LogKeys = []byte(vk + "\n")
 	if rep := verify.VerifySample(writeSample(t, raw), l.dir, wrong); rep.ExitCode() != 1 {
 		t.Errorf("keys that are not the log's: exit %d", rep.ExitCode())
+	}
+}
+
+// -- the seed is the auditor's --------------------------------------------------------------------------------------
+
+// There is no default seed: a seed that is a function of the packet alone is one the packet's builder can grind for. No seed
+// is 400 and writes nothing.
+func TestP2ASeedIsRequired(t *testing.T) {
+	l := p2Lab(t, -1)
+	d := l.deliver(t)
+	before := len(l.f.records())
+	for _, q := range []string{"", "n=5", "stratify=tier-month", "n=5&stratify=none", "seed", "seed="} {
+		a := f(l, "/v1/packets/"+l.id+"/sample?"+q, d.Credential).want(t, 400, "seed is required")
+		_ = a
+	}
+	if _, _, err := l.cl.Sample(context.Background(), l.id, d.Credential, assurance.SampleRequest{N: 5}); err == nil {
+		t.Fatal("the client sent a sample call with no seed")
+	}
+	if len(l.f.records()) != before {
+		t.Fatal("a call with no seed wrote a record")
+	}
+	var doc sampling.Document
+	_, raw := l.sample(t, d.Credential, assurance.SampleRequest{N: 5, Seed: "s"})
+	_ = json.Unmarshal(raw, &doc)
+	if strings.Contains(string(raw), "seed_source") {
+		t.Fatal("the document still has a seed source")
+	}
+}
+
+// -- a leaked credential cannot lock a recipient out for good ----------------------------------------------------------
+
+// The caps are per delivery: when a leaked credential has spent them, the subscriber's remedy is a new delivery for the same
+// recipient and packet, which has fresh sample slots, read budget and refusal budget.
+func TestP2ANewDeliveryHasFreshCaps(t *testing.T) {
+	l := p2Lab(t, 25)
+	old := l.deliver(t)
+	for i := 0; i < server.MaxSamplesPerDelivery; i++ {
+		l.sample(t, old.Credential, assurance.SampleRequest{N: 5, Seed: fmt.Sprint("x", i)})
+	}
+	f(l, "/v1/packets/"+l.id+"/sample?n=5&seed=more", old.Credential).want(t, 429, "") // the slots are spent
+	for i := 0; i < 10; i++ {
+		f(l, "/v1/packets/"+l.id+"/sample?n=5&seed=more", old.Credential).want(t, 429, "") // and the read budget (25 an hour) too
+	}
+	fresh := l.deliver(t)
+	for i := 0; i < server.MaxSamplesPerDelivery; i++ {
+		l.sample(t, fresh.Credential, assurance.SampleRequest{N: 5, Seed: fmt.Sprint("y", i)})
+	}
+	if _, _, err := l.cl.Sample(context.Background(), l.id, fresh.Credential, assurance.SampleRequest{N: 5, Seed: "y0"}); err != nil {
+		t.Fatal("a sample already drawn is served again", err)
+	}
+}
+
+// -- the index and what a repeat is ---------------------------------------------------------------------------------
+
+// A repeat is the same draw, not the same bytes: a sampling the chain holds whose document digest is not today's (the document's
+// shape changed since) is served; one whose draw differs (other records, another rule) is a real inconsistency and is refused.
+func TestP2ARepeatIsTheSameDrawNotTheSameBytes(t *testing.T) {
+	l := p2Lab(t, -1)
+	d := l.deliver(t)
+	first, _ := l.sample(t, d.Credential, assurance.SampleRequest{N: 5, Seed: "drawn"})
+	resample := func(d2 server.Delivery, mut func(sm map[string]any)) {
+		sm := map[string]any{"n": json.Number("5"), "seed": "drawn", "stratify": "none", "effective_seed": first.EffectiveSeed, "method": first.Method,
+			"population_sha256": first.Population.SHA256, "sample_sha256": p2hex('7'), "selected": func() []any {
+				var o []any
+				for _, it := range first.Selected {
+					o = append(o, json.Number(fmt.Sprint(it.Seq)))
+				}
+				return o
+			}()}
+		mut(sm)
+		l.f.p2add(t, store.Event{"ts": time.Now().UTC().Format(time.RFC3339), "task_id": nil, "session": nil, "parent": nil, "principal": "recipient:" + l.rcp.name, "agent": nil,
+			"tool": server.ToolPacketSample, "tier": nil, "decision": "allow", "rule": nil, "target": "packet:" + l.id, "args_sha256": l.bundle.Digest, "boundary": "deployment",
+			"result": "written by hand", "packet": map[string]any{"id": l.id}, "delivery": map[string]any{"id": d2.ID, "recipient": l.rcp.name, "packet": l.id}, "sample": sm})
+	}
+	same, differs := l.deliver(t), l.deliver(t)
+	resample(same, func(map[string]any) {})
+	resample(differs, func(sm map[string]any) { sm["population_sha256"] = p2hex('8') })
+	l.f.core.Server.ResetSampleIndexForTest()
+	before := len(l.f.records())
+	got, _, err := l.cl.Sample(context.Background(), l.id, same.Credential, assurance.SampleRequest{N: 5, Seed: "drawn"})
+	if err != nil || !slices.Equal(seqsOf(got), seqsOf(first)) || got.Recorded.Seq != int64(before-2) {
+		t.Fatalf("a recorded draw with another document digest was not served: %v", err)
+	}
+	if _, _, err := l.cl.Sample(context.Background(), l.id, differs.Credential, assurance.SampleRequest{N: 5, Seed: "drawn"}); !isStatus(err, 503) {
+		t.Fatalf("a recorded draw that is not the draw now computed was served: %v", err)
+	}
+	if len(l.f.records()) != before {
+		t.Fatal("a repeat wrote a record")
+	}
+}
+
+// -- sizes ---------------------------------------------------------------------------------------------------------
+
+// A sample the verifier would refuse to read is not served and not recorded.
+func TestP2ASampleOverTheSizeCapIsRefusedBeforeItIsRecorded(t *testing.T) {
+	l := p2Lab(t, -1)
+	d := l.deliver(t)
+	l.f.core.Server.SetSampleMaxForTest(12000)
+	before := len(l.f.records())
+	f(l, "/v1/packets/"+l.id+"/sample?n=25&seed=big", d.Credential).want(t, 413, "over 12000 bytes")
+	if len(l.f.records()) != before {
+		t.Fatal("a sample too large to serve was recorded")
+	}
+	l.f.core.Server.SetSampleMaxForTest(0)
+	l.sample(t, d.Credential, assurance.SampleRequest{N: 25, Seed: "big"})
+}
+
+// -- a write that may have committed -------------------------------------------------------------------------------
+
+// A write that failed before commit is not served and writes nothing. One that failed after it (the commit happened, the answer
+// was lost) is not served either, but the retry finds the record and does not write a second one.
+func TestP2AFailedWriteIsNotServedAndARetryDoesNotDuplicate(t *testing.T) {
+	l := p2Lab(t, -1)
+	d := l.deliver(t)
+	l.f.core.Server.FailAtomicForTest("before")
+	f(l, "/v1/packets/"+l.id+"/sample?n=5&seed=a", d.Credential).want(t, 503, "not served")
+	if n := len(l.sampleRecords()); n != 0 {
+		t.Fatalf("%d records after a write that failed before commit", n)
+	}
+	l.sample(t, d.Credential, assurance.SampleRequest{N: 5, Seed: "a"})
+	if n := len(l.sampleRecords()); n != 1 {
+		t.Fatalf("%d records", n)
+	}
+	l.f.core.Server.FailAtomicForTest("after")
+	f(l, "/v1/packets/"+l.id+"/sample?n=5&seed=b", d.Credential).want(t, 503, "not served")
+	if n := len(l.sampleRecords()); n != 2 {
+		t.Fatalf("%d records after a write that committed and failed", n)
+	}
+	got, _ := l.sample(t, d.Credential, assurance.SampleRequest{N: 5, Seed: "b"})
+	if n := len(l.sampleRecords()); n != 2 || got.Recorded.Seq != int64(len(l.f.records())-1) {
+		t.Fatalf("the retry wrote a second record for the same sampling (%d)", n)
+	}
+}
+
+// -- Postgres ------------------------------------------------------------------------------------------------------
+
+// The same flow on the Postgres store (CLEARANCE_TEST_DSN): a sample drawn through the real server, recorded, repeated for
+// nothing, read back after the index is rebuilt from the chain, and verified offline with the record read from the core.
+func TestP2SamplingOnPostgres(t *testing.T) {
+	l := p2LabOn(t, -1, pgDSN(t))
+	d := l.deliver(t)
+	doc, raw := l.sample(t, d.Credential, assurance.SampleRequest{N: 25, Seed: "pg"})
+	if len(doc.Selected) != 25 || len(l.sampleRecords()) != 1 {
+		t.Fatal(len(doc.Selected), len(l.sampleRecords()))
+	}
+	l.sample(t, d.Credential, assurance.SampleRequest{N: 25, Seed: "pg"})
+	l.f.core.Server.ResetSampleIndexForTest()
+	again, _ := l.sample(t, d.Credential, assurance.SampleRequest{N: 25, Seed: "pg"})
+	if len(l.sampleRecords()) != 1 || again.Recorded.Hash != doc.Recorded.Hash {
+		t.Fatal("a repeat on Postgres wrote a record or named another")
+	}
+	if rep := verify.VerifySample(writeSample(t, raw), l.dir, l.trustFor(t, doc)); rep.ExitCode() != 0 {
+		t.Fatal(failedChecks(rep))
 	}
 }

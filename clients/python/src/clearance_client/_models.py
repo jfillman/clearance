@@ -2193,13 +2193,11 @@ class SamplingParams(Model):
     _FIELDS: ClassVar[tuple[Field, ...]] = (
         Field("n", "n", ("int",), True),
         Field("seed", "seed", ("str",), True),
-        Field("seed_source", "seed_source", ("str",), True),
         Field("stratify", "stratify", ("str",), True),
     )
 
     n: int
     seed: str
-    seed_source: str
     stratify: str
 
 
@@ -2211,6 +2209,7 @@ class SamplingPopulationDoc(Model):
     _FIELDS: ClassVar[tuple[Field, ...]] = (
         Field("changes", "changes", ("list", ("ref", "SamplingRow")), True),
         Field("cleared", "cleared", ("int",), True),
+        Field("cleared_excluded", "cleared_excluded", ("map", ("int",)), True),
         Field("count", "count", ("int",), True),
         Field("eligible", "eligible", ("int",), True),
         Field("sha256", "sha256", ("str",), True),
@@ -2218,6 +2217,7 @@ class SamplingPopulationDoc(Model):
 
     changes: list[SamplingRow]
     cleared: int
+    cleared_excluded: dict[str, int]
     count: int
     eligible: int
     sha256: str
@@ -2250,10 +2250,12 @@ class SamplingRecorded(Model):
     _STRICT: ClassVar[bool] = False
     _FIELDS: ClassVar[tuple[Field, ...]] = (
         Field("hash", "hash", ("str",), True),
+        Field("record", "record", ("any",), True),
         Field("seq", "seq", ("int",), True),
     )
 
     hash: str
+    record: Any
     seq: int
 
 

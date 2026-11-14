@@ -94,7 +94,7 @@ of its manifest (that packet is not here): whoever holds it can.
 the same way: every record's hash, every inclusion proof under the checkpoint, the checkpoint's signatures and the witness policy,
 the population's digest, that the selection is the one the rule draws from the population and seed, and, with `--packet`, that the
 sample is of that packet. A missing proof, a missing or extra record, or a record outside the population **fails**; without the
-log keys or the packet the result is SELF-VOUCHED or NOT CHECKED (exit 2), never a pass.
+log keys, the packet or the core's own `packet.sample` record (`--sample-record`) the result is SELF-VOUCHED or NOT CHECKED (exit 2), never a pass.
 
 ## No checkpoint: "NOT CHECKPOINTED"
 
