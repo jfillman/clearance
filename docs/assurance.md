@@ -142,6 +142,11 @@ signed before the window began or in the future.
 record's seq and hash; the records themselves are carried too, so they have inclusion proofs when checkpointed.
 `clearance verify` checks each receipt offline ([verify.md](verify.md#acceptance-receipts)).
 
+## Sampling a packet
+
+A recipient with both parts in its scope can draw a sample of the packet's cleared changes with an inclusion proof per record,
+under the same credential, caps and record-before-serve ordering: see [sampling.md](sampling.md).
+
 ## Known limits
 
 - The refusal and read counters are per core replica (the core is one replica) and per wall-clock hour.

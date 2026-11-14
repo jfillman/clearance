@@ -179,6 +179,7 @@ URLs.
 | `packet publish <dir>` | `POST /v1/packets` (admin): publish a `clearance packet` directory ([assurance.md](assurance.md)) |
 | `packet deliver <pk-id> --recipient R --for 168h` | `POST /v1/packets/{id}/deliveries` (admin): prints the recipient's credential once |
 | `receipt pull`, `receipt sign`, `receipt submit` | the recipient's side, no account: read a packet under a credential, sign a receipt with your own key, send it |
+| `receipt sample --packet pk-.. [--n --seed --stratify] --out F` | the recipient's side: `GET /v1/packets/{id}/sample`, a sample of the packet's cleared changes with an inclusion proof per record ([sampling.md](sampling.md)); check it with `clearance verify --sample F --packet <dir>` |
 | `breakglass open --cluster C --env E [--app A] --ttl 30m --reason R` | `POST /v1/breakglass` (admin) |
 | `breakglass close <id> [--yes]`, `breakglass list` | close a window early; the windows open now (admin) |
 

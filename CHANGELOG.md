@@ -25,6 +25,18 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   Reads are capped per delivery (`CLEARANCE_PACKET_READS_PER_HOUR`, default 60; chart `core.packetReadsPerHour`); resubmitting a signed receipt is idempotent;
   `clearance verify --recipient-keys <recipient>=<file>` binds keys to recipients.
   Gate evidence: `go test ./internal/server -run TestP1` (a fake assurance provider end to end, including the GRC-lead-forwards-unchanged case).
+- P-2: **the sampling call** ([docs/sampling.md](docs/sampling.md)). `GET /v1/packets/{id}/sample?n=&seed=&stratify=` under the P-1
+  packet credential (both parts in its scope; no new scope) returns a sample of the packet's cleared changes (uniform, or `tier-month`
+  proportional), each with its clearing record and an inclusion proof against the packet's witnessed checkpoint, and the population it
+  was drawn from (every change of the packet, with why any is not in the frame, and its SHA-256). The selection is public and reproducible
+  (an effective seed bound to the packet's digest; the core's default seed when none is given, so the recipient does not have to choose).
+  The sampling is a `packet.sample` record written before the answer; the same request again is served from it and writes nothing; per
+  delivery, 20 distinct samples, plus P-1's hourly read and refusal caps (429, nothing written past a cap). The core checks the stored packet's
+  records and proofs before it samples and refuses a packet with no witnessed checkpoint (409). `clearance verify --sample F [--packet dir]`
+  checks a sample offline and fails on a missing or extra record, a missing or invalid proof, a record outside the population, a population
+  that does not match its digest or the packet, and a selection the rule does not draw; `clearance receipt sample` is the recipient's side.
+  Gate evidence: `go test ./internal/server -run TestP2SamplingGate -count=1` (a 25-record sample of a 30-day lab packet, through the real
+  HTTP server, verified offline).
 
 ## [0.47.1] - 2026-11-13
 

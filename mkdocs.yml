@@ -15,6 +15,7 @@ nav:
   - The evidence packet (C-5): packet.md
   - Verifying a packet offline (C-4): verify.md
   - Assurance providers and receipts (P-1): assurance.md
+  - The sampling call (P-2): sampling.md
   - The provider protocol and conformance: provider-protocol.md
   - The observation pipeline (O-2): observe-pipeline.md
   - The Kubernetes audit collector (O-3): observe-k8s.md

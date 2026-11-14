@@ -88,6 +88,14 @@ inclusion proofs bind it; when it is not carried the check is **NOT CHECKED**, s
 later, the same root at the same size: a different root is a **FORK**). It cannot check that the receipted packet's id is the digest
 of its manifest (that packet is not here): whoever holds it can.
 
+## Samples
+
+`clearance verify --sample sample.json [--packet dir]` checks a sample of a packet's cleared changes ([sampling.md](sampling.md))
+the same way: every record's hash, every inclusion proof under the checkpoint, the checkpoint's signatures and the witness policy,
+the population's digest, that the selection is the one the rule draws from the population and seed, and, with `--packet`, that the
+sample is of that packet. A missing proof, a missing or extra record, or a record outside the population **fails**; without the
+log keys or the packet the result is SELF-VOUCHED or NOT CHECKED (exit 2), never a pass.
+
 ## No checkpoint: "NOT CHECKPOINTED"
 
 A packet from a deployment whose ledger is off, or has not yet published a witnessed checkpoint, has no checkpoint,

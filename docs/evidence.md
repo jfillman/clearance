@@ -139,7 +139,9 @@ func Stored(r map[string]any) map[string]any
   (`packet` {id, digest}, `delivery` {recipient, scope, from, to, engagement?}; its seq is the delivery id `dl-<seq>`), `packet.fetch`
   (`principal` `recipient:<name>`, `decision` allow or deny, `rule` the refusal's `PK-*` rule, `delivery`, `fetch` {part?, scope, bytes}) and
   `packet.receipt` (`packet`, `delivery`, `receipt` {verdict, engagement, payload_sha256, key_id, key, envelope}: the DSSE envelope as received,
-  `args_sha256` its payload digest). The core verifies the signature and bindings itself; the recipient's words (verdict, notes) are the
+  `args_sha256` its payload digest), and, from P-2 ([sampling.md](sampling.md)), `packet.sample` (`principal` `recipient:<name>`, `decision` allow or deny,
+  `rule` the refusal's `PK-*` rule, `delivery`; an allowed one carries `sample` {id, n, seed_input, seed_source, stratify, effective_seed, method,
+  sample_sha256, population_sha256, population, eligible, checkpoint_size, selected: the sampled clearing-record seqs}). The core verifies the signature and bindings itself; the recipient's words (verdict, notes) are the
   recipient's, signed. Additive: no schema change.
 - Targets a provider publishes (PUT /v1/targets/{source}): `targets.load`, one per changed set, sealed by the core with
   `caller`. `principal` is `provider:<name>`, `target` is `targets:<source>`, `args_sha256` is the set's digest (sha256

@@ -157,7 +157,7 @@ type PacketError struct {
 }
 
 var packetVerified = union(evidence.ProviderVerified, "ts", "tool", "decision", "rule", "target", "principal", "initiator", "args_sha256",
-	"result", "packet", "delivery", "receipt", "fetch", "delegate", "task_id", "session", "parent", "agent", "tier")
+	"result", "packet", "delivery", "receipt", "fetch", "sample", "delegate", "task_id", "session", "parent", "agent", "tier")
 
 // hourly counts events per key in the wall-clock hour (a refusal, or an allowed read, of one delivery). It is per
 // replica and per wall-clock hour: a known limit.
@@ -540,6 +540,66 @@ func bearer(r *http.Request) string {
 	return ""
 }
 
+// credentialClaims reads the packet credential from the bearer header and checks its form, its signature against the
+// core's keys and its issuer: anything the core did not sign is a bare 401 and writes nothing (the caller is nobody).
+// It has written the refusal when ok is false.
+func (s *Server) credentialClaims(w http.ResponseWriter, r *http.Request) (*token.AccessClaims, bool) {
+	cred := bearer(r)
+	if cred == "" {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="clearance-packet"`)
+		writeError(w, http.StatusUnauthorized, "a packet credential is required (the one the delivery returned)")
+		return nil, false
+	}
+	g := s.opt.Gate
+	if g == nil {
+		writeError(w, http.StatusNotFound, "this core keeps no packets")
+		return nil, false
+	}
+	_, issuer, err := g.Credentials()
+	if err != nil {
+		if !gateFail(w, err) {
+			writeError(w, http.StatusServiceUnavailable, "no signer")
+		}
+		return nil, false
+	}
+	keys, err := s.accessKeys(r)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "the store could not be read")
+		return nil, false
+	}
+	claims, err := token.ParseAccess(cred, keys)
+	if err != nil || claims.Issuer != issuer {
+		writeError(w, http.StatusUnauthorized, "not a packet credential this core issued")
+		return nil, false
+	}
+	return claims, true
+}
+
+// loadBundle returns the validated packet a credential names, from the cache or the store. A packet the core does not
+// hold (or holds under another digest) is a PK-GONE refusal for the caller to record; fail is true when the answer has
+// already been written (the store could not be read).
+func (s *Server) loadBundle(w http.ResponseWriter, r *http.Request, id, digest string) (b *packet.Bundle, rule, msg string, status int, fail bool) {
+	if b = s.bundles.get(id, digest); b != nil {
+		return b, "", "", 0, false
+	}
+	ctx := r.Context()
+	pk, err := s.opt.Store.Packet(ctx, id)
+	switch {
+	case errors.Is(err, store.ErrNotFound) || (err == nil && pk.Digest != digest):
+		return nil, RulePacketGone, "the core does not hold the packet this credential names", http.StatusNotFound, false
+	case err != nil:
+		writeError(w, http.StatusServiceUnavailable, "the store could not be read")
+		return nil, "", "", 0, true
+	}
+	if b, err = packet.LoadBundle(pk.Bundle); err != nil {
+		s.log.ErrorContext(ctx, "packet: the stored bundle is unreadable", "packet", id, "error", err.Error())
+		writeError(w, http.StatusServiceUnavailable, "the stored packet could not be read")
+		return nil, "", "", 0, true
+	}
+	s.bundles.put(b)
+	return b, "", "", 0, false
+}
+
 // getPacket is GET /v1/packets/{id}: the recipient reads the packet under the credential its delivery minted. The
 // credential is checked for its signature first (something the core did not sign is a bare 401 and nothing is
 // recorded: the caller is nobody). From there every answer is a record, written before the answer: an allowed read
@@ -564,32 +624,8 @@ func (s *Server) getPacket(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "part is "+strings.Join(packet.Parts, " or "))
 		return
 	}
-	cred := bearer(r)
-	if cred == "" {
-		w.Header().Set("WWW-Authenticate", `Bearer realm="clearance-packet"`)
-		writeError(w, http.StatusUnauthorized, "a packet credential is required (the one the delivery returned)")
-		return
-	}
-	g := s.opt.Gate
-	if g == nil {
-		writeError(w, http.StatusNotFound, "this core keeps no packets")
-		return
-	}
-	_, issuer, err := g.Credentials()
-	if err != nil {
-		if !gateFail(w, err) {
-			writeError(w, http.StatusServiceUnavailable, "no signer")
-		}
-		return
-	}
-	keys, err := s.accessKeys(r)
-	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "the store could not be read")
-		return
-	}
-	claims, err := token.ParseAccess(cred, keys)
-	if err != nil || claims.Issuer != issuer {
-		writeError(w, http.StatusUnauthorized, "not a packet credential this core issued")
+	claims, ok := s.credentialClaims(w, r)
+	if !ok {
 		return
 	}
 	id := r.PathValue("id")
@@ -614,22 +650,9 @@ func (s *Server) getPacket(w http.ResponseWriter, r *http.Request) {
 	}
 	var b *packet.Bundle
 	if rule == "" {
-		if b = s.bundles.get(id, claims.Digest); b == nil {
-			pk, err := s.opt.Store.Packet(ctx, id)
-			switch {
-			case errors.Is(err, store.ErrNotFound) || (err == nil && pk.Digest != claims.Digest):
-				rule, msg, status = RulePacketGone, "the core does not hold the packet this credential names", http.StatusNotFound
-			case err != nil:
-				writeError(w, http.StatusServiceUnavailable, "the store could not be read")
-				return
-			default:
-				if b, err = packet.LoadBundle(pk.Bundle); err != nil {
-					s.log.ErrorContext(ctx, "packet: the stored bundle is unreadable", "packet", id, "error", err.Error())
-					writeError(w, http.StatusServiceUnavailable, "the stored packet could not be read")
-					return
-				}
-				s.bundles.put(b)
-			}
+		var fail bool
+		if b, rule, msg, status, fail = s.loadBundle(w, r, id, claims.Digest); fail {
+			return
 		}
 	}
 	if rule != "" {
