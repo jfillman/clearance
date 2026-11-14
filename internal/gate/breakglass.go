@@ -190,7 +190,7 @@ func (s *Service) OpenBreakglass(ctx context.Context, p authn.Principal, req Bre
 	if !nameRx.MatchString(req.Cluster) || !nameRx.MatchString(req.Env) || (req.App != nil && !nameRx.MatchString(*req.App)) {
 		return nil, gerr("DG-BREAKGLASS-SCOPE", "cluster, env (and app) are names", "", 400)
 	}
-	if !s.Protects(req.Cluster, req.Env) {
+	if !s.ProtectsEnv(ctx, req.Cluster, req.Env) {
 		return nil, gerr("DG-BREAKGLASS-SCOPE", req.Cluster+"/"+req.Env+" is not a protected environment: there is no glass to break",
 			"", 400)
 	}

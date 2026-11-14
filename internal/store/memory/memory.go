@@ -33,6 +33,7 @@ type Store struct {
 	changes map[string]store.Change
 	defs    []store.Definition
 	targets map[string]store.TargetSet
+	protect map[string]store.ProtectionSet
 	tokens  map[string]store.Token
 	keys    map[string]store.SigningKey
 	feeds   map[string]store.Feed
@@ -53,7 +54,7 @@ var ErrTxDone = errors.New("memory: transaction is finished")
 
 // New returns an empty store.
 func New() *Store {
-	return &Store{head: evidence.Start, changes: map[string]store.Change{}, targets: map[string]store.TargetSet{}, tokens: map[string]store.Token{},
+	return &Store{head: evidence.Start, changes: map[string]store.Change{}, targets: map[string]store.TargetSet{}, protect: map[string]store.ProtectionSet{}, tokens: map[string]store.Token{},
 		keys: map[string]store.SigningKey{}, feeds: map[string]store.Feed{}, atts: map[string]store.Attestation{}, packets: map[string]store.Packet{}, glass: map[string]store.Breakglass{}}
 }
 
@@ -119,6 +120,9 @@ func (s *Store) Atomic(ctx context.Context, fn func(tx store.Tx) error) (err err
 	for src, ts := range t.targets {
 		s.targets[src] = ts
 	}
+	for c, p := range t.protect {
+		s.protect[c] = p
+	}
 	for id, tk := range t.tokens {
 		s.tokens[id] = tk
 	}
@@ -152,6 +156,7 @@ type tx struct {
 	changes map[string]store.Change
 	defs    *[]store.Definition
 	targets map[string]store.TargetSet
+	protect map[string]store.ProtectionSet
 	tokens  map[string]store.Token
 	feeds   map[string]store.Feed
 	atts    map[string]store.Attestation
@@ -239,6 +244,38 @@ func (t *tx) PutTargets(ctx context.Context, ts store.TargetSet) error {
 	}
 	t.targets[ts.Source] = ts
 	return nil
+}
+
+func (t *tx) PutProtection(ctx context.Context, p store.ProtectionSet) error {
+	if err := t.lock(); err != nil {
+		return err
+	}
+	defer t.mu.Unlock()
+	if !json.Valid(p.Doc) {
+		return errors.New("memory: protection doc is not JSON")
+	}
+	now := time.Now().UTC()
+	p.Doc = bytes.Clone(p.Doc)
+	p.ReportedAt, p.ChangedAt = now, now
+	prior, ok := t.protect[p.Cluster]
+	if !ok {
+		prior, ok = t.s.committedProtection(p.Cluster)
+	}
+	if ok && prior.Digest == p.Digest {
+		p.ChangedAt = prior.ChangedAt
+	}
+	if t.protect == nil {
+		t.protect = map[string]store.ProtectionSet{}
+	}
+	t.protect[p.Cluster] = p
+	return nil
+}
+
+func (s *Store) committedProtection(cluster string) (store.ProtectionSet, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	p, ok := s.protect[cluster]
+	return p, ok
 }
 
 func (t *tx) PutToken(ctx context.Context, tk store.Token) error {
@@ -344,6 +381,7 @@ type view struct {
 	changes map[string]store.Change
 	defs    []store.Definition
 	targets map[string]store.TargetSet
+	protect map[string]store.ProtectionSet
 	tokens  map[string]store.Token
 	keys    map[string]store.SigningKey
 	feeds   map[string]store.Feed
@@ -379,11 +417,15 @@ func (s *Store) view() (view, error) {
 	for k, v := range s.targets {
 		targets[k] = v
 	}
+	protect := make(map[string]store.ProtectionSet, len(s.protect))
+	for k, v := range s.protect {
+		protect[k] = v
+	}
 	packets := make(map[string]store.Packet, len(s.packets))
 	for k, v := range s.packets {
 		packets[k] = v
 	}
-	return view{packets: packets, ledger: s.ledger, targets: targets, head: s.head, records: s.records[:len(s.records):len(s.records)], changes: maps(s.changes), defs: s.defs,
+	return view{packets: packets, ledger: s.ledger, targets: targets, protect: protect, head: s.head, records: s.records[:len(s.records):len(s.records)], changes: maps(s.changes), defs: s.defs,
 		tokens: tokens, keys: s.keys, feeds: feeds, atts: atts, glass: glass}, nil
 }
 
@@ -414,6 +456,9 @@ func (t *tx) view() (view, error) {
 	}
 	for src, ts := range t.targets {
 		v.targets[src] = ts
+	}
+	for c, p := range t.protect {
+		v.protect[c] = p
 	}
 	for id, tk := range t.tokens {
 		v.tokens[id] = tk
@@ -769,6 +814,33 @@ func (v view) targetSets() []store.TargetSet {
 		out = append(out, ts)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Source < out[j].Source })
+	return out
+}
+
+func (s *Store) Protections(ctx context.Context) ([]store.ProtectionSet, error) {
+	v, err := s.view()
+	if err != nil {
+		return nil, err
+	}
+	return v.protections(), nil
+}
+
+func (t *tx) Protections(ctx context.Context) ([]store.ProtectionSet, error) {
+	v, err := t.view()
+	if err != nil {
+		return nil, err
+	}
+	return v.protections(), nil
+}
+
+// protections orders by cluster, bytewise.
+func (v view) protections() []store.ProtectionSet {
+	out := make([]store.ProtectionSet, 0, len(v.protect))
+	for _, p := range v.protect {
+		p.Doc = bytes.Clone(p.Doc)
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Cluster < out[j].Cluster })
 	return out
 }
 

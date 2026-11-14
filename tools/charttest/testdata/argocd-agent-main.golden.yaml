@@ -1,0 +1,293 @@
+---
+# Source: clearance-argocd-agent/templates/deployment.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: clearance-argocd-agent
+  labels:
+    app.kubernetes.io/name: clearance-argocd-agent
+    app.kubernetes.io/instance: t
+    app.kubernetes.io/version: "0.0.0-dev"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: clearance-argocd-agent
+      app.kubernetes.io/instance: t
+  policyTypes: [Egress]
+  egress:
+    - to: [{namespaceSelector: {}}]
+      ports: [{port: 53, protocol: UDP}, {port: 53, protocol: TCP}]
+    - to:
+        - ipBlock: {cidr: 10.0.0.1/32}
+      ports: [{port: 443, protocol: TCP}, {port: 6443, protocol: TCP}]
+    - to:
+        - ipBlock: {cidr: 203.0.113.10/32}
+      ports:
+        - {port: 80, protocol: TCP}
+        - {port: 443, protocol: TCP}
+---
+# Source: clearance-argocd-agent/templates/rbac.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: clearance-argocd-agent
+  labels:
+    app.kubernetes.io/name: clearance-argocd-agent
+    app.kubernetes.io/instance: t
+    app.kubernetes.io/version: "0.0.0-dev"
+    app.kubernetes.io/managed-by: Helm
+automountServiceAccountToken: true
+---
+# Source: clearance-argocd-agent/templates/rbac.yaml
+# Cluster-wide: which namespaces are protected, and the grants (the agent's own CRD).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: clearance-argocd-agent
+  labels:
+    app.kubernetes.io/name: clearance-argocd-agent
+    app.kubernetes.io/instance: t
+    app.kubernetes.io/version: "0.0.0-dev"
+    app.kubernetes.io/managed-by: Helm
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [list]
+  - apiGroups: ["clearance.hangar.io"]
+    resources: [clearancegrants]
+    verbs: [get, list, create, patch, delete]
+  - apiGroups: ["clearance.hangar.io"]
+    resources: [clearancegrants/status]
+    verbs: [get, patch, update]
+---
+# Source: clearance-argocd-agent/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: clearance-argocd-agent
+  labels:
+    app.kubernetes.io/name: clearance-argocd-agent
+    app.kubernetes.io/instance: t
+    app.kubernetes.io/version: "0.0.0-dev"
+    app.kubernetes.io/managed-by: Helm
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: clearance-argocd-agent}
+subjects:
+  - {kind: ServiceAccount, name: clearance-argocd-agent, namespace: clearance-system}
+---
+# Source: clearance-argocd-agent/templates/rbac.yaml
+# The agent's own state (the feed epoch and seq, the outcomes and exceptions it reported).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: clearance-argocd-agent-state
+  labels:
+    app.kubernetes.io/name: clearance-argocd-agent
+    app.kubernetes.io/instance: t
+    app.kubernetes.io/version: "0.0.0-dev"
+    app.kubernetes.io/managed-by: Helm
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, create, patch]
+---
+# Source: clearance-argocd-agent/templates/rbac.yaml
+# Argo CD's Applications: read and watch only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: clearance-argocd-agent-applications
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: clearance-argocd-agent
+    app.kubernetes.io/instance: t
+    app.kubernetes.io/version: "0.0.0-dev"
+    app.kubernetes.io/managed-by: Helm
+rules:
+  - apiGroups: [argoproj.io]
+    resources: [applications]
+    verbs: [get, list, watch]
+---
+# Source: clearance-argocd-agent/templates/rbac.yaml
+# Read the workloads of a protected namespace (the exception scan, the outcome's stamps). No Secret, no write.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: clearance-argocd-agent-scan
+  namespace: app-web-prod
+  labels:
+    app.kubernetes.io/name: clearance-argocd-agent
+    app.kubernetes.io/instance: t
+    app.kubernetes.io/version: "0.0.0-dev"
+    app.kubernetes.io/managed-by: Helm
+rules:
+  - apiGroups: [""]
+    resources: [services, configmaps, serviceaccounts]
+    verbs: [list]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, daemonsets]
+    verbs: [list]
+  - apiGroups: [batch]
+    resources: [cronjobs, jobs]
+    verbs: [list]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies, ingresses]
+    verbs: [list]
+  - apiGroups: [argoproj.io]
+    resources: [rollouts]
+    verbs: [list]
+---
+# Source: clearance-argocd-agent/templates/rbac.yaml
+# Read the workloads of a protected namespace (the exception scan, the outcome's stamps). No Secret, no write.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: clearance-argocd-agent-scan
+  namespace: app-api-prod
+  labels:
+    app.kubernetes.io/name: clearance-argocd-agent
+    app.kubernetes.io/instance: t
+    app.kubernetes.io/version: "0.0.0-dev"
+    app.kubernetes.io/managed-by: Helm
+rules:
+  - apiGroups: [""]
+    resources: [services, configmaps, serviceaccounts]
+    verbs: [list]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, daemonsets]
+    verbs: [list]
+  - apiGroups: [batch]
+    resources: [cronjobs, jobs]
+    verbs: [list]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies, ingresses]
+    verbs: [list]
+  - apiGroups: [argoproj.io]
+    resources: [rollouts]
+    verbs: [list]
+---
+# Source: clearance-argocd-agent/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: clearance-argocd-agent-state
+  labels:
+    app.kubernetes.io/name: clearance-argocd-agent
+    app.kubernetes.io/instance: t
+    app.kubernetes.io/version: "0.0.0-dev"
+    app.kubernetes.io/managed-by: Helm
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: clearance-argocd-agent-state}
+subjects:
+  - {kind: ServiceAccount, name: clearance-argocd-agent, namespace: clearance-system}
+---
+# Source: clearance-argocd-agent/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: clearance-argocd-agent-applications
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: clearance-argocd-agent
+    app.kubernetes.io/instance: t
+    app.kubernetes.io/version: "0.0.0-dev"
+    app.kubernetes.io/managed-by: Helm
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: clearance-argocd-agent-applications}
+subjects:
+  - {kind: ServiceAccount, name: clearance-argocd-agent, namespace: clearance-system}
+---
+# Source: clearance-argocd-agent/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: clearance-argocd-agent-scan
+  namespace: app-web-prod
+  labels:
+    app.kubernetes.io/name: clearance-argocd-agent
+    app.kubernetes.io/instance: t
+    app.kubernetes.io/version: "0.0.0-dev"
+    app.kubernetes.io/managed-by: Helm
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: clearance-argocd-agent-scan}
+subjects:
+  - {kind: ServiceAccount, name: clearance-argocd-agent, namespace: clearance-system}
+---
+# Source: clearance-argocd-agent/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: clearance-argocd-agent-scan
+  namespace: app-api-prod
+  labels:
+    app.kubernetes.io/name: clearance-argocd-agent
+    app.kubernetes.io/instance: t
+    app.kubernetes.io/version: "0.0.0-dev"
+    app.kubernetes.io/managed-by: Helm
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: clearance-argocd-agent-scan}
+subjects:
+  - {kind: ServiceAccount, name: clearance-argocd-agent, namespace: clearance-system}
+---
+# Source: clearance-argocd-agent/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clearance-argocd-agent
+  labels:
+    app.kubernetes.io/name: clearance-argocd-agent
+    app.kubernetes.io/instance: t
+    app.kubernetes.io/version: "0.0.0-dev"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  # One agent: two would each post the same outcome and exception.
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: clearance-argocd-agent
+      app.kubernetes.io/instance: t
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: clearance-argocd-agent
+        app.kubernetes.io/instance: t
+    spec:
+      serviceAccountName: clearance-argocd-agent
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: agent
+          image: ghcr.io/jfillman/clearance-argocd-agent:v0.0.0-dev
+          imagePullPolicy: IfNotPresent
+          args:
+            - --cluster=cluster-a
+            - --environment=prod
+            - --api-url=https://clearance-api.example.test
+            - --core-url=https://clearance.example.test
+            - --issuer=clearance
+            - --argocd-namespace=argocd
+            - --projects=tenants
+            - --grant-api=clearance.hangar.io/v1
+            - --grant-interval=30s
+            - --scan-interval=1m
+          env:
+            - name: POD_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            limits:
+              memory: 128Mi
+            requests:
+              cpu: 20m
+              memory: 32Mi
+          volumeMounts:
+            - {name: clearance-token, mountPath: /var/run/secrets/tokens, readOnly: true}
+      volumes:
+        # The agent's whole credential: a short-lived token bound to the audience the core checks, rotated by the
+        # kubelet and read fresh for each request. Nothing is stored.
+        - name: clearance-token
+          projected:
+            sources:
+              - serviceAccountToken: {path: clearance, audience: clearance, expirationSeconds: 3600}

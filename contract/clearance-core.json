@@ -2085,6 +2085,18 @@
         ],
         "type": "object"
       },
+      "GateProtectedPair": {
+        "additionalProperties": false,
+        "properties": {
+          "app": {
+            "type": "string"
+          },
+          "env": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "GateReason": {
         "properties": {
           "rule": {
@@ -2780,6 +2792,138 @@
         },
         "required": [
           "result"
+        ],
+        "type": "object"
+      },
+      "ProtectionCluster": {
+        "properties": {
+          "age_seconds": {
+            "type": "integer"
+          },
+          "changed_at": {
+            "type": "string"
+          },
+          "cluster": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "pairs": {
+            "items": {
+              "$ref": "#/components/schemas/GateProtectedPair"
+            },
+            "type": "array"
+          },
+          "reported_at": {
+            "type": "string"
+          },
+          "stale": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "age_seconds",
+          "changed_at",
+          "cluster",
+          "digest",
+          "pairs",
+          "reported_at",
+          "stale"
+        ],
+        "type": "object"
+      },
+      "ProtectionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "pairs": {
+            "items": {
+              "$ref": "#/components/schemas/GateProtectedPair"
+            },
+            "type": "array"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pairs"
+        ],
+        "type": "object"
+      },
+      "ProtectionResult": {
+        "properties": {
+          "added": {
+            "items": {
+              "$ref": "#/components/schemas/GateProtectedPair"
+            },
+            "type": "array"
+          },
+          "changed": {
+            "type": "boolean"
+          },
+          "cluster": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "pairs": {
+            "type": "integer"
+          },
+          "removed": {
+            "items": {
+              "$ref": "#/components/schemas/GateProtectedPair"
+            },
+            "type": "array"
+          },
+          "seq": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "static_removed": {
+            "items": {
+              "$ref": "#/components/schemas/GateProtectedPair"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "added",
+          "changed",
+          "cluster",
+          "digest",
+          "pairs",
+          "removed",
+          "seq",
+          "static_removed"
+        ],
+        "type": "object"
+      },
+      "ProtectionState": {
+        "properties": {
+          "clusters": {
+            "items": {
+              "$ref": "#/components/schemas/ProtectionCluster"
+            },
+            "type": "array"
+          },
+          "stale_after_seconds": {
+            "type": "integer"
+          },
+          "static": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "clusters",
+          "stale_after_seconds",
+          "static"
         ],
         "type": "object"
       },
@@ -6407,6 +6551,176 @@
         "x-clearance-auth": "packet-credential",
         "x-clearance-credential": "a packet access credential, minted by POST /v1/packets/{id}/deliveries (not an authenticator token)",
         "x-clearance-max-body": 65536
+      }
+    },
+    "/v1/protection": {
+      "get": {
+        "operationId": "getProtection",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtectionState"
+                }
+              }
+            },
+            "description": "the reported sets"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no bearer token, or one the authenticator refused"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such resource"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the store could not record it: treat as unreachable (fail closed)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The pairs each cluster's agent reported as protected, how old each report is, and whether it is stale (older than stale_after_seconds). Staleness is shown only: the core keeps acting on the last report.",
+        "x-clearance-auth": "provider",
+        "x-clearance-max-body": 65536
+      }
+    },
+    "/v1/protection/{cluster}": {
+      "put": {
+        "operationId": "reportProtection",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProtectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtectionResult"
+                }
+              }
+            },
+            "description": "what was held, and whether it changed"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is not valid (strict decoding, or a field the route refuses)"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no bearer token, or one the authenticator refused"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no such resource"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the body is over the route's cap"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the store could not record it: treat as unreachable (fail closed)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The app and environment pairs one cluster's agent reports as protected (an Application opted in with clearance.hangar.io/protect). The set replaces the one the core holds for that cluster and adds to CLEARANCE_PROTECTED_ENVIRONMENTS: the core protects a pair if the list or the report does. A changed set is one protection.report record naming the pairs added and removed; an unchanged one records nothing and renews the report's time. Only a provider whose `protection` list pairs the caller's principal with this cluster; a missing report never removes a pair.",
+        "x-clearance-auth": "provider",
+        "x-clearance-max-body": 1048576
       }
     },
     "/v1/provenance": {

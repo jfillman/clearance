@@ -80,6 +80,13 @@ CREATE TABLE IF NOT EXISTS clearance_targets (
   doc        jsonb       NOT NULL,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS clearance_protection (
+  cluster     text        PRIMARY KEY,
+  digest      text        NOT NULL,
+  doc         jsonb       NOT NULL,
+  reported_at timestamptz NOT NULL DEFAULT now(),
+  changed_at  timestamptz NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS clearance_tokens (
   change_id  text        PRIMARY KEY,
   cluster    text        NOT NULL,
@@ -620,6 +627,23 @@ func (t *tx) PutTargets(ctx context.Context, ts store.TargetSet) error {
 	return nil
 }
 
+func (t *tx) PutProtection(ctx context.Context, p store.ProtectionSet) error {
+	ctx = t.ctx // detached and bounded: see Store.Atomic
+	if err := t.lock(); err != nil {
+		return err
+	}
+	defer t.mu.Unlock()
+	ctx, cancel := deadline(ctx, t.s.opt)
+	defer cancel()
+	if _, err := t.tx.Exec(ctx, "INSERT INTO clearance_protection (cluster, digest, doc) VALUES ($1, $2, $3) "+
+		"ON CONFLICT (cluster) DO UPDATE SET changed_at = CASE WHEN clearance_protection.digest = EXCLUDED.digest "+
+		"THEN clearance_protection.changed_at ELSE now() END, digest = EXCLUDED.digest, doc = EXCLUDED.doc, reported_at = now()",
+		p.Cluster, p.Digest, string(p.Doc)); err != nil {
+		return fmt.Errorf("pg: put protection: %w", err)
+	}
+	return nil
+}
+
 func (t *tx) PutToken(ctx context.Context, tk store.Token) error {
 	ctx = t.ctx // detached and bounded: see Store.Atomic
 	if err := t.lock(); err != nil {
@@ -869,6 +893,16 @@ func (t *tx) Targets(ctx context.Context) ([]store.TargetSet, error) {
 	return targetSets(ctx, q, t.s.opt)
 }
 
+func (t *tx) Protections(ctx context.Context) ([]store.ProtectionSet, error) {
+	ctx = t.ctx // detached and bounded: see Store.Atomic
+	q, done, err := t.q()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	return protections(ctx, q, t.s.opt)
+}
+
 func (t *tx) Definitions(ctx context.Context) ([]store.Definition, error) {
 	ctx = t.ctx // detached and bounded: see Store.Atomic
 	q, done, err := t.q()
@@ -949,6 +983,10 @@ func (r *Reader) ChangesUndelivered(ctx context.Context) ([]store.Change, error)
 
 func (r *Reader) Targets(ctx context.Context) ([]store.TargetSet, error) {
 	return targetSets(ctx, r.pool, r.opt)
+}
+
+func (r *Reader) Protections(ctx context.Context) ([]store.ProtectionSet, error) {
+	return protections(ctx, r.pool, r.opt)
 }
 
 func (r *Reader) Definitions(ctx context.Context) ([]store.Definition, error) {
@@ -1411,6 +1449,27 @@ func targetSets(ctx context.Context, q querier, opt Options) ([]store.TargetSet,
 		}
 		t.Doc = []byte(doc)
 		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func protections(ctx context.Context, q querier, opt Options) ([]store.ProtectionSet, error) {
+	ctx, cancel := deadline(ctx, opt)
+	defer cancel()
+	rows, err := q.Query(ctx, `SELECT cluster, digest, doc::text, reported_at, changed_at FROM clearance_protection ORDER BY cluster COLLATE "C"`)
+	if err != nil {
+		return nil, fmt.Errorf("pg: %w", err)
+	}
+	defer rows.Close()
+	out := []store.ProtectionSet{}
+	for rows.Next() {
+		var p store.ProtectionSet
+		var doc string
+		if err := rows.Scan(&p.Cluster, &p.Digest, &doc, &p.ReportedAt, &p.ChangedAt); err != nil {
+			return nil, fmt.Errorf("pg: %w", err)
+		}
+		p.Doc = []byte(doc)
+		out = append(out, p)
 	}
 	return out, rows.Err()
 }

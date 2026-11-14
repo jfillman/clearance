@@ -32,7 +32,8 @@ argocd:
   projects: []
 
 # The namespaces labelled clearance.hangar.io/protected=true. The agent reads (never writes) workloads only in these
-# namespaces: one Role and RoleBinding per entry. It reads no Secret anywhere.
+# namespaces: one Role and RoleBinding per entry. It reads no Secret anywhere. With optIn.enabled the list is also the
+# only set of namespaces the agent may label: it gets get and patch on exactly these Namespace objects.
 protectedNamespaces: []
 
 # The ClearanceGrant CRD's group/version (G-ARGO-2).
@@ -48,6 +49,26 @@ waitJob:
 
 grantInterval: 30s
 scanInterval: 1m
+
+# The annotation opt-in (G-ARGO-10c). OFF: the agent does what it did before and its RBAC is what it was. On, the agent
+# switches an Application carrying clearance.hangar.io/protect: "true" to the Clearance plugin (its original sources
+# handed over as the plugin's `sources`), builds one merged ClearanceGrant per namespace from the cleared trees of every
+# such Application, labels the namespace protected once that grant is active, and reports the app/environment pairs
+# to the core. docs/gate.md, "Annotation opt-in", says what must be in place first: the core's provider entry for the
+# agent needs `protection`, a parent app-of-apps (or ApplicationSet) must ignore /spec/source and /spec/sources, and
+# every destination namespace must be named in protectedNamespaces (above).
+optIn:
+  enabled: false
+  # spec.source.plugin.name of the CMP a switched Application gets.
+  pluginName: clearance
+  # Applications that are never switched, whatever they carry (globs on the name or <namespace>/<name>). Clearance's
+  # own Applications belong here, so the gate can always be repaired through Argo CD.
+  denyApplications: [clearance, "clearance-*", "*-clearance"]
+  interval: 30s
+  # The protected pairs are reported again unchanged this often: the core's sign that the agent is alive.
+  reportEvery: 5m
+  # A merged grant over this many bytes is refused and reported; the namespace keeps its last good grant.
+  maxGrantBytes: 1500000
 
 # hangar-prod reaches the lab core over plain HTTP through a host alias to the other cluster's ingress.
 hostAliases: []

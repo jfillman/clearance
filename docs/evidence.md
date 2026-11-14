@@ -150,6 +150,13 @@ func Stored(r map[string]any) map[string]any
   of its canonical JSON, sorted by id) and `result` says how many targets and the digest it replaced. Verified: `provider`,
   `ts`, `caller`, `tool`, `decision`, `target`, `args_sha256` and `result`, because the core validated and addressed the
   body itself. It records that a source declared these targets, never that the declaration is true.
+- Protected pairs a cluster's agent reports (PUT /v1/protection/{cluster}, G-ARGO-10c): `protection.report`, one per changed set, sealed
+  by the core with `caller`. `principal` is `provider:<name>`, `target` is `protection:<cluster>`, `args_sha256` is the set's digest
+  (sha256 of its canonical JSON, sorted by app then env) and `result` says how many pairs, the digest it replaced, the pairs added
+  and removed (a removed pair that `CLEARANCE_PROTECTED_ENVIRONMENTS` still protects is marked) and the agent's reason, which is
+  claimed. Verified: `provider`, `ts`, `caller`, `tool`, `decision`, `target`, `args_sha256` and `result`, as for `targets.load`. It
+  records that an agent on that cluster said these pairs are protected, and that a pair was removed, never that the Application
+  is what the annotation says.
 - Errors: `ErrEnvelopeField` (an event set a reserved field), `ErrInvalid` (a value outside the schema),
   `ErrNotStorable` (a value Postgres jsonb would change).
 

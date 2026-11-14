@@ -16,6 +16,9 @@ import (
 type Core interface {
 	Record(ctx context.Context, req *client.RecordRequest) (*client.RecordRef, error)
 	Breakglass(ctx context.Context, cluster string) ([]Window, error)
+	// ReportProtection reports the cluster's protected app/environment pairs (PUT /v1/protection/{cluster}); only the
+	// opt-in (Config.OptIn) calls it.
+	ReportProtection(ctx context.Context, cluster string, req *client.ProtectionRequest) (*client.ProtectionResult, error)
 }
 
 // Window is an open break-glass window (GET /v1/breakglass).
@@ -52,6 +55,8 @@ type Config struct {
 	Wait          WaitPin    // the gate's own PreSync wait Job, which the scan does not report
 	// PolicyMarkers are the texts that mark an Argo CD sync message as the admission policy's refusal.
 	PolicyMarkers []string
+	// OptIn is the annotation opt-in (G-ARGO-10c); the zero value is off, and an agent with it off behaves as it did.
+	OptIn OptIn
 	// RepostOnStart posts each Application's last operation again on start. The core de-duplicates only records that
 	// carry source.event_id (O-1), which the agent does not send yet (docs/gate.md), so it is off; the state ConfigMap already stops a restart posting what was posted.
 	RepostOnStart bool
@@ -66,6 +71,7 @@ func (c *Config) Defaults() {
 	}
 	set(&c.GrantInterval, 30*time.Second)
 	set(&c.ScanInterval, time.Minute)
+	c.OptIn.defaults()
 	set(&c.ResyncEvery, 2*time.Minute)
 	if c.Issuer == "" {
 		c.Issuer = "clearance"
@@ -123,6 +129,10 @@ type Agent struct {
 	mu   sync.Mutex // the state, and the keys
 	st   State
 	keys keyCache
+
+	optS  *optState  // the opt-in's memory (the opt-in loop's own)
+	repMu sync.Mutex // rep
+	rep   report     // the last set of protected pairs the core took
 
 	protMu   sync.Mutex // the protected-namespace cache of handleApp
 	prot     map[string]map[string]string
@@ -217,6 +227,10 @@ func (a *Agent) Run(ctx context.Context) error {
 	tick(a.cfg.ScanInterval, "exceptions", a.ScanExceptions)
 	wg.Add(1)
 	go func() { defer wg.Done(); a.RunOutcomes(ctx) }()
+	if a.cfg.OptIn.Enabled {
+		wg.Add(1)
+		go func() { defer wg.Done(); a.RunOptIn(ctx) }()
+	}
 	wg.Wait()
 	return ctx.Err()
 }

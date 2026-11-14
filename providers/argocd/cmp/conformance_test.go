@@ -51,6 +51,18 @@ func (k *fakeArgo) DeleteGrant(context.Context, string, string) error { return e
 func (k *fakeArgo) SetGrantValid(context.Context, string, string, bool, string, time.Time) error {
 	return errors.New("not used")
 }
+func (k *fakeArgo) UpdateApplicationSource(context.Context, agent.Application, agent.SourceEdit) error {
+	return errors.New("not used")
+}
+func (k *fakeArgo) GetApplicationSet(context.Context, string) (agent.AppSet, error) {
+	return agent.AppSet{}, errors.New("not used")
+}
+func (k *fakeArgo) SetNamespaceProtected(context.Context, string, bool) error {
+	return errors.New("not used")
+}
+func (k *fakeArgo) ClusterScopes(context.Context) (map[string]bool, error) {
+	return nil, errors.New("not used")
+}
 func (k *fakeArgo) ListApplications(context.Context) ([]agent.Application, string, error) {
 	return nil, "1", nil
 }

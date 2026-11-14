@@ -18,7 +18,7 @@ CONTRACT_VERSION = "1.0.0"
 
 RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "run.finish", "human.answer", "session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome", "deploy.exception", "deploy.degraded", "federated.decision", "observation", "assessment", "resolution", "observation.health", "observation.verification", "grc.push", "grc.report")
 
-__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Delivery", "DeliveryRequest", "DeliveryWindow", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateBulkResolutionFailed", "GateBulkResolutionRecorded", "GateBulkResolutionRequest", "GateBulkResolutionResult", "GateBulkResolutionSkipped", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateReason", "GateRequirement", "GateResolutionRecorded", "GateResolutionRequest", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PacketBundle", "PacketCheckpointRef", "PacketError", "PacketLinks", "PacketMeta", "PacketPublished", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProvidedDefinition", "ProviderEvent", "Ready", "ReceiptRecorded", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "SamplingCheckpoint", "SamplingDocument", "SamplingItem", "SamplingPacketRef", "SamplingParams", "SamplingPopulationDoc", "SamplingProof", "SamplingRecorded", "SamplingRow", "SamplingStratum", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "StatementIssued", "StatementLinks", "StatementList", "StatementListItem", "StatementRequest", "StatementRevokeRequest", "StatementRevoked", "Subject", "SubjectProperties", "TargetsGate", "TargetsObserver", "TargetsRequest", "TargetsResult", "TargetsTarget", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
+__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Delivery", "DeliveryRequest", "DeliveryWindow", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateBulkResolutionFailed", "GateBulkResolutionRecorded", "GateBulkResolutionRequest", "GateBulkResolutionResult", "GateBulkResolutionSkipped", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateProtectedPair", "GateReason", "GateRequirement", "GateResolutionRecorded", "GateResolutionRequest", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PacketBundle", "PacketCheckpointRef", "PacketError", "PacketLinks", "PacketMeta", "PacketPublished", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProtectionCluster", "ProtectionRequest", "ProtectionResult", "ProtectionState", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProvidedDefinition", "ProviderEvent", "Ready", "ReceiptRecorded", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "SamplingCheckpoint", "SamplingDocument", "SamplingItem", "SamplingPacketRef", "SamplingParams", "SamplingPopulationDoc", "SamplingProof", "SamplingRecorded", "SamplingRow", "SamplingStratum", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "StatementIssued", "StatementLinks", "StatementList", "StatementListItem", "StatementRequest", "StatementRevokeRequest", "StatementRevoked", "Subject", "SubjectProperties", "TargetsGate", "TargetsObserver", "TargetsRequest", "TargetsResult", "TargetsTarget", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -1126,6 +1126,20 @@ class GatePlanSummary(Model):
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
+class GateProtectedPair(Model):
+    """Contract schema GateProtectedPair (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("app", "app", ("str",), False),
+        Field("env", "env", ("str",), False),
+    )
+
+    app: str | None = None
+    env: str | None = None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
 class GateReason(Model):
     """Contract schema GateReason."""
 
@@ -1695,6 +1709,86 @@ class Problem(Model):
     message: str
     pointer: str
     rule: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class ProtectionCluster(Model):
+    """Contract schema ProtectionCluster."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("age_seconds", "age_seconds", ("int",), True),
+        Field("changed_at", "changed_at", ("str",), True),
+        Field("cluster", "cluster", ("str",), True),
+        Field("digest", "digest", ("str",), True),
+        Field("pairs", "pairs", ("list", ("ref", "GateProtectedPair")), True),
+        Field("reported_at", "reported_at", ("str",), True),
+        Field("stale", "stale", ("bool",), True),
+    )
+
+    age_seconds: int
+    changed_at: str
+    cluster: str
+    digest: str
+    pairs: list[GateProtectedPair]
+    reported_at: str
+    stale: bool
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class ProtectionRequest(Model):
+    """Contract schema ProtectionRequest (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("pairs", "pairs", ("list", ("ref", "GateProtectedPair")), True),
+        Field("reason", "reason", ("str",), False),
+    )
+
+    pairs: list[GateProtectedPair]
+    reason: str | None = None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class ProtectionResult(Model):
+    """Contract schema ProtectionResult."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("added", "added", ("list", ("ref", "GateProtectedPair")), True),
+        Field("changed", "changed", ("bool",), True),
+        Field("cluster", "cluster", ("str",), True),
+        Field("digest", "digest", ("str",), True),
+        Field("pairs", "pairs", ("int",), True),
+        Field("removed", "removed", ("list", ("ref", "GateProtectedPair")), True),
+        Field("seq", "seq", ("nullable", ("int",)), True),
+        Field("static_removed", "static_removed", ("list", ("ref", "GateProtectedPair")), True),
+    )
+
+    added: list[GateProtectedPair]
+    changed: bool
+    cluster: str
+    digest: str
+    pairs: int
+    removed: list[GateProtectedPair]
+    seq: int | None
+    static_removed: list[GateProtectedPair]
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class ProtectionState(Model):
+    """Contract schema ProtectionState."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("clusters", "clusters", ("list", ("ref", "ProtectionCluster")), True),
+        Field("stale_after_seconds", "stale_after_seconds", ("int",), True),
+        Field("static", "static", ("list", ("str",)), True),
+    )
+
+    clusters: list[ProtectionCluster]
+    stale_after_seconds: int
+    static: list[str]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -2867,6 +2961,7 @@ MODELS: dict[str, type[Model]] = {
     "GateOutcomeRequest": GateOutcomeRequest,
     "GateOutcomeResult": GateOutcomeResult,
     "GatePlanSummary": GatePlanSummary,
+    "GateProtectedPair": GateProtectedPair,
     "GateReason": GateReason,
     "GateRequirement": GateRequirement,
     "GateResolutionRecorded": GateResolutionRecorded,
@@ -2896,6 +2991,10 @@ MODELS: dict[str, type[Model]] = {
     "PolicyRef": PolicyRef,
     "Preflight": Preflight,
     "Problem": Problem,
+    "ProtectionCluster": ProtectionCluster,
+    "ProtectionRequest": ProtectionRequest,
+    "ProtectionResult": ProtectionResult,
+    "ProtectionState": ProtectionState,
     "ProvenanceCheck": ProvenanceCheck,
     "ProvenanceCoauthorTrailer": ProvenanceCoauthorTrailer,
     "ProvenanceRecordSummary": ProvenanceRecordSummary,
@@ -2976,6 +3075,8 @@ OPERATIONS: dict[str, Operation] = {
     "deliverPacket": Operation("POST", "/v1/packets/{id}/deliveries", "bearer", 8192, DeliveryRequest, Delivery),
     "acceptReceipt": Operation("POST", "/v1/packets/{id}/receipts", "recipient-signature", 262144, None, ReceiptRecorded),
     "getPacketSample": Operation("GET", "/v1/packets/{id}/sample", "packet-credential", 65536, None, SamplingDocument),
+    "getProtection": Operation("GET", "/v1/protection", "provider", 65536, None, ProtectionState),
+    "reportProtection": Operation("PUT", "/v1/protection/{cluster}", "provider", 1048576, ProtectionRequest, ProtectionResult),
     "verifyProvenance": Operation("POST", "/v1/provenance", "bearer", 4194304, None, ProvenanceVerdict),
     "appendRecord": Operation("POST", "/v1/records", "provider", 262144, RecordRequest, RecordRef),
     "statementKeys": Operation("GET", "/v1/statement-keys", "none", 65536, None, TokenJWKS),

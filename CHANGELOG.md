@@ -9,6 +9,34 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Added
+
+- G-ARGO-10c: **annotation opt-in for the Argo CD gate** ([docs/gate.md](docs/gate.md#annotation-opt-in-g-argo-10c-built)). **Off by default**: with it off the agent
+  and the default render of `charts/clearance-argocd-agent` are exactly what they were (a golden render from `main` is in `tools/charttest`).
+  - argocd-agent (`--optin`, chart `optIn.enabled`): an Application annotated `clearance.hangar.io/protect: "true"` (exactly that
+    value) is switched to the Clearance plugin with its original sources as the plugin's `sources`, one JSON patch guarded by the
+    resourceVersion; removing the annotation puts the original back exactly (shape included). It builds **one merged `ClearanceGrant`
+    per namespace** (`clearance-merged`) from the newest live clearance of every switched Application's own destination namespace
+    (older ones carried), keyed by group, kind, name and rendered hash. Two Applications claiming one object, or a grant over
+    `--optin-max-grant-bytes` (1,500,000) or the CRD's 2000 objects, is a `deploy.exception` (once) and the last good grant stays.
+    The namespace is labelled protected only after its merged grant is read back active and valid, and unlabelled (only where the agent put
+    its `protected-by` marker) before the grant is removed. The cluster's discovery fills the plugin's `clusterScopedKinds`.
+    Never switched: Applications on the deny list (`--optin-deny`, default `clearance`, `clearance-*`, `*-clearance`), those whose parent
+    app-of-apps or ApplicationSet does not ignore `/spec/source` and `/spec/sources` (the agent checks the parent and reports the missing
+    entry; it never edits a parent), and those a plugin cannot carry. No write when nothing changed; failed writes back off; an Application
+    is written at most three times in ten minutes.
+  - core: **`PUT /v1/protection/{cluster}`** and `GET /v1/protection`. A cluster's agent reports the app and environment pairs it protects;
+    the core protects a pair if `CLEARANCE_PROTECTED_ENVIRONMENTS` (unchanged, still the static source) or the agent says so. Who may report
+    is the provider's new `protection` list (`<principal glob>=<cluster>`), so an agent cannot report for another cluster. A changed set is
+    one `protection.report` record (pairs added and removed, the agent's reason); an unchanged one only renews the report's time; an agent
+    that goes quiet leaves its last set in force and `GET /v1/protection` shows it stale after 15 minutes. New table
+    `clearance_protection`; `contract/clearance-core.json` and the Python client's models change (new route and types); the Go client has
+    `ReportProtection`.
+  - chart: with `optIn.enabled` the agent also gets `patch` on Applications, `get` on ApplicationSets and `get`, `patch` on the
+    `protectedNamespaces` Namespace objects only (`resourceNames`); `optIn.enabled` without `protectedNamespaces` is refused.
+  - admission test: the merged grant of a namespace two Applications share, and the label-after-grant order, against a real kube-apiserver.
+  - The plugin's cluster-scope rules moved to `internal/argosrc` so the agent and the plugin apply the same ones (no change in behaviour).
+
 ## [0.48.0] - 2026-11-14
 
 ### Fixed

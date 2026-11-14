@@ -153,6 +153,9 @@ func (a *Agent) fetchAndApply(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listing the grants: %w", err)
 	}
+	if a.cfg.OptIn.Enabled {
+		return a.reconcileMerged(ctx, v, desiredGrants(v.claims, a.now()), have)
+	}
 	return a.reconcile(ctx, desiredGrants(v.claims, a.now()), have)
 }
 

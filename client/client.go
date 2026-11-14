@@ -212,6 +212,21 @@ func (c *Client) PublishTargets(ctx context.Context, source string, req *Targets
 	return &out, nil
 }
 
+// ReportProtection replaces the core's reported protected pairs for cluster (the provider's `protection` list pairs
+// this caller with it). Reporting the same set again changes and records nothing, so it is retried as an evaluation is.
+func (c *Client) ReportProtection(ctx context.Context, cluster string, req *ProtectionRequest) (*ProtectionResult, error) {
+	body := *req
+	if body.Pairs == nil {
+		body.Pairs = []ProtectedPair{}
+	}
+	var out ProtectionResult
+	if err := c.call(ctx, call{op: "reportProtection", method: "PUT", path: "/v1/protection/" + url.PathEscape(cluster), body: &body,
+		retry: retryAny}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // RegisterChange registers (or re-evaluates) a change; the caller is a verifier. Registering is idempotent, so it
 // is retried as an evaluation is.
 func (c *Client) RegisterChange(ctx context.Context, req *ChangeRequest) (*Change, error) {

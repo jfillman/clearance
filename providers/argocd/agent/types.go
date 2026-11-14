@@ -32,6 +32,18 @@ const (
 	// renders onto the Rollout. The agent reads the stamp first.
 	AnnStampRelease = "clearance.hangar.io/release"
 
+	// AnnProtect is the opt-in (G-ARGO-10c): on an Application, exactly "true" asks for the Clearance plugin.
+	AnnProtect = "clearance.hangar.io/protect"
+	// AnnSwitched is written by the agent in the same patch that switches an Application to the plugin: the shape its
+	// original sources had ("source" or "sources"), which is how an Application is restored exactly.
+	AnnSwitched = "clearance.hangar.io/switched"
+	// LabelProtectedBy marks a namespace the agent labelled protected from an opt-in (and only those): the agent
+	// removes the label only where it put it. A namespace an operator labelled carries no marker and is never unlabelled.
+	LabelProtectedBy = "clearance.hangar.io/protected-by"
+	ProtectedByOptIn = "optin"
+	// LabelMerged marks the merged grant of a namespace (one per namespace, built from every protected Application).
+	LabelMerged = "clearance.hangar.io/merged"
+
 	LabelProtected   = "clearance.hangar.io/protected" // namespace: the gate protects it
 	LabelActive      = "clearance.hangar.io/active"    // grant: the one the admission policy reads
 	LabelManagedBy   = "app.kubernetes.io/managed-by"
@@ -130,13 +142,46 @@ type Application struct {
 	Namespace string
 	Name      string
 	Labels    map[string]string
-	UID       string
-	Project   string
-	DestNS    string
-	SyncState string
-	Health    string
-	Revisions []string // status.sync.revisions (or revision)
-	Op        *Operation
+	// Annotations, ResourceVersion, Source and Sources are what the opt-in path (G-ARGO-10c) reads and writes: the
+	// annotations, the version a write is guarded by, and spec.source / spec.sources exactly as stored (raw JSON, so
+	// restoring an Application gives back the very bytes it had).
+	Annotations     map[string]string
+	ResourceVersion string
+	Source          json.RawMessage   // spec.source (nil: absent)
+	Sources         []json.RawMessage // spec.sources (nil: absent)
+	Owners          []OwnerRef
+	// IgnoreDifferences and SyncOptions are the Application's own spec.ignoreDifferences and spec.syncPolicy.syncOptions:
+	// what a parent app-of-apps must say about its children (optin.go).
+	IgnoreDifferences []IgnoreDifference
+	SyncOptions       []string
+	UID               string
+	Project           string
+	DestNS            string
+	SyncState         string
+	Health            string
+	Revisions         []string // status.sync.revisions (or revision)
+	Op                *Operation
+}
+
+// OwnerRef is one metadata.ownerReferences entry.
+type OwnerRef struct {
+	Kind string
+	Name string
+}
+
+// IgnoreDifference is one entry of an Application's spec.ignoreDifferences (or an ApplicationSet's
+// ignoreApplicationDifferences, which has no group, kind or name).
+type IgnoreDifference struct {
+	Group, Kind, Name, Namespace string
+	JSONPointers                 []string
+	JQPathExpressions            []string
+}
+
+// AppSet is the slice of an ApplicationSet the agent reads: what a generated Application's parent says about
+// differences it ignores.
+type AppSet struct {
+	Namespace, Name              string
+	IgnoreApplicationDifferences []IgnoreDifference
 }
 
 // Operation is status.operationState.

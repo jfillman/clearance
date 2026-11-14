@@ -27,6 +27,14 @@ func env(k, d string) string {
 	return d
 }
 
+func envBool(k string) bool {
+	switch strings.ToLower(os.Getenv(k)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
 func list(s string) []string {
 	var out []string
 	for _, p := range strings.Split(s, ",") {
@@ -63,6 +71,12 @@ func run() error {
 		waitImage = fs.String("wait-image", env("CLEARANCE_WAIT_IMAGE", ""), "the pinned image of the gate's PreSync wait Job, as the admission policy's exemption has it (empty: the Job is reported as out-of-band)")
 		waitURL   = fs.String("wait-url", env("CLEARANCE_WAIT_URL", ""), "the core URL the wait Job polls (default --core-url)")
 		waitAlias = fs.String("wait-host-alias", env("CLEARANCE_WAIT_HOST_ALIAS", ""), "the wait Job's host alias, ip=host[,host] (empty: none)")
+		optIn     = fs.Bool("optin", envBool("CLEARANCE_OPTIN"), "the annotation opt-in (G-ARGO-10c): switch Applications carrying clearance.hangar.io/protect: \"true\" to the plugin, merge their grants per namespace, label the namespaces and report the protected pairs. Off: the agent does what it did before")
+		optPlugin = fs.String("optin-plugin-name", env("CLEARANCE_OPTIN_PLUGIN_NAME", "clearance"), "the plugin name a switched Application gets (the CMP's)")
+		optDeny   = fs.String("optin-deny", env("CLEARANCE_OPTIN_DENY", strings.Join(agent.DefaultDenyApps, ",")), "globs on an Application's name or <namespace>/<name> that are never switched (Clearance's own Applications), comma-separated")
+		optEvery  = fs.Duration("optin-interval", 30*time.Second, "how often the opt-in reconciles the Applications")
+		optReport = fs.Duration("optin-report-every", 5*time.Minute, "how often the protected pairs are reported again unchanged")
+		optBytes  = fs.Int("optin-max-grant-bytes", 1_500_000, "a merged grant over this many bytes is refused and reported")
 		showVer   = fs.Bool("version", false, "print the version")
 	)
 	if err := fs.Parse(os.Args[1:]); err != nil {
@@ -98,7 +112,10 @@ func run() error {
 	}
 	a, err := agent.New(agent.Config{Cluster: *cluster, Environment: *environ, Issuer: *issuer, Version: version,
 		GrantInterval: *grantEvry, ScanInterval: *scanEvry, ArgoNamespace: *argoNS, Projects: list(*projects),
-		StateNS: *stateNS, RepostOnStart: *repost, Wait: agent.WaitPin{Image: *waitImage, URL: *waitURL, HostAlias: *waitAlias}},
+		StateNS: *stateNS, RepostOnStart: *repost,
+		OptIn: agent.OptIn{Enabled: *optIn, PluginName: *optPlugin, DenyApps: list(*optDeny), Interval: *optEvery,
+			ReportEvery: *optReport, MaxGrantBytes: *optBytes},
+		Wait: agent.WaitPin{Image: *waitImage, URL: *waitURL, HostAlias: *waitAlias}},
 		kube, &agent.HTTPFeeds{Base: *apiURL, Token: tok},
 		&agent.HTTPCore{Client: cc, Feeds: agent.HTTPFeeds{Base: *coreURL, Token: tok}}, nil,
 		slog.New(slog.NewJSONHandler(os.Stderr, nil)))

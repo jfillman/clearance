@@ -285,7 +285,7 @@ func (s *Service) Register(ctx context.Context, p authn.Principal, body any) (*C
 		return nil, gerr("DG-PROTECTED", "protected: false is refused: Clearance decides which environments it protects",
 			"Drop the field; a change to an environment the deployment does not protect is cleared at tier 0 (unprotected).", 400)
 	}
-	req.Protected = s.Protects(req.Cluster, req.Env)
+	req.Protected = s.ProtectsApp(ctx, req.Cluster, req.App, req.Env)
 	if s.Config.UnboundTree == UnboundRefuse && req.Kind() != KindTerraformPlan && Unbound(req.TreeDigest) {
 		return nil, gerr("DG-UNBOUND", "treeDigest is a placeholder, not the digest of the rendered tree",
 			"Send the manifest-tree digest of what will be applied (`clearance register` computes it; docs/gate.md, The manifest-tree digest).", 400)

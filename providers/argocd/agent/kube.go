@@ -30,12 +30,33 @@ type Kube interface {
 	ListApplications(ctx context.Context) (apps []Application, rv string, err error)
 	WatchApplications(ctx context.Context, rv string, fn func(Application)) error
 
+	// UpdateApplicationSource is the one write the opt-in path makes to an Application (G-ARGO-10c): it sets spec.source,
+	// spec.sources and the switched annotation as e says (nil / empty: the field is absent afterwards) and touches
+	// nothing else. It is guarded by app.ResourceVersion: if the Application changed since the agent read it, it
+	// fails with ErrConflict and the next pass starts from what is there.
+	UpdateApplicationSource(ctx context.Context, app Application, e SourceEdit) error
+	// GetApplicationSet reads one ApplicationSet of the Argo CD namespace (ErrNotFound when there is none).
+	GetApplicationSet(ctx context.Context, name string) (AppSet, error)
+	// SetNamespaceProtected puts the protected label (with the agent's marker) on a namespace, or takes both off.
+	// One patch either way. Taking it off is refused (ErrNotOurs) when the namespace carries no marker.
+	SetNamespaceProtected(ctx context.Context, namespace string, protected bool) error
+	// ClusterScopes is the cluster's discovery: kind -> cluster-scoped, from every API resource it serves (a kind
+	// served in two groups with different scopes is left out: ambiguous).
+	ClusterScopes(ctx context.Context) (map[string]bool, error)
+
 	// ListObjects are the objects of one kind in one namespace.
 	ListObjects(ctx context.Context, res Resource, namespace string) ([]ObjectDetail, error)
 
 	// GetData and PutData keep the agent's state in a ConfigMap.
 	GetData(ctx context.Context, namespace, name string) (map[string]string, error)
 	PutData(ctx context.Context, namespace, name string, data map[string]string) error
+}
+
+// SourceEdit is the new spec.source, spec.sources and switched annotation of an Application.
+type SourceEdit struct {
+	Source   json.RawMessage
+	Sources  []json.RawMessage
+	Switched string
 }
 
 // ObjectDetail is an Object with the last-applied configuration Argo CD (client-side apply) left on it.
