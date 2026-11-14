@@ -145,7 +145,11 @@ func TestMapReadsOnlyTheIndexedRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	synthChain(t, dsn, 60000, 30*24*time.Hour)
-	rd := openReader(t, dsn)
+	rdr, err := pg.OpenReader(bg, dsn, pg.Options{MaxConns: 4, Logger: quiet})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rd := &PG{R: rdr}
 	h := newHarness(t, backend{"perf", func(*testing.T, world) (Store, string) { return rd, dsn }}, world{},
 		func(o *Options) { o.Clock = func() time.Time { return mapNow } })
 	conn, err := pgx.Connect(bg, dsn)
@@ -173,6 +177,8 @@ func TestMapReadsOnlyTheIndexedRecords(t *testing.T) {
 		}
 		return seq, idx
 	}
+	st.Close() // a backend reports its scan counts when its session ends: the writer's go before the snapshot, the reader's before the check
+	time.Sleep(time.Second)
 	seq0, idx0 := scans()
 	start := time.Now()
 	m := h.ok("/v1/map", "audit")
@@ -180,6 +186,7 @@ func TestMapReadsOnlyTheIndexedRecords(t *testing.T) {
 	if len(sub(m, "nodes")["targets"].([]any)) == 0 {
 		t.Fatalf("the synthetic registry produced an empty map: %v", m)
 	}
+	rdr.Close()
 	want := []string{"clearance_evidence_gate", "clearance_evidence_obs_ts", "clearance_evidence_health"}
 	var seq1 int64
 	var idx1 map[string]int64
