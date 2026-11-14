@@ -944,7 +944,7 @@ func TestTheAPIListsChangesThePersonMayClearOrOwns(t *testing.T) {
 			}
 		}
 		page := h.ok("/v1/clearances?limit=1", "audit")
-		if page["next"] != "2026-11-01T11:00:00+00:00" || items(page)[0]["id"] != "c-2" {
+		if page["next"] != "2026-11-01T11:00:00+00:00,c-2" || items(page)[0]["id"] != "c-2" {
 			t.Errorf("page: %v", page)
 		}
 		if p := h.ok("/v1/clearances?after="+url.QueryEscape("2026-11-01T11:00:00+00:00"), "audit"); len(items(p)) != 1 || items(p)[0]["id"] != "c-1" {

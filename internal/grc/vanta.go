@@ -27,8 +27,8 @@ type Vanta struct {
 	// Base is the API origin ("https://api.vanta.com"): from configuration only, https (http on loopback in tests).
 	Base     string
 	ClientID string
-	// SecretFile is read when a token is minted (never cached, never logged); Secret is the lab fallback.
-	SecretFile, Secret string
+	// SecretFile is read when a token is minted (never cached, never logged). There is no plaintext fallback.
+	SecretFile string
 	// EvidenceResourceID and ReportResourceID are the ids of the two custom resources defined in Vanta's developer
 	// console. The report is off when its id is empty.
 	EvidenceResourceID, ReportResourceID string
@@ -38,22 +38,55 @@ type Vanta struct {
 	mu    sync.Mutex
 	token string
 	exp   time.Time
+	// reqMu serialises requests, so the evidence and report loops share one token without minting over each other
+	// (Vanta keeps one token per application). A retry's wait is outside it.
+	reqMu sync.Mutex
 }
 
 // VantaScope is the scope a token asks for: write its own resources, nothing else.
 const VantaScope = "connectors.self:write-resource"
 
-// NewVanta checks the URL and returns a target whose client never follows a redirect (the token and the payload go
-// to the configured host only).
-func NewVanta(base, clientID, secretFile, secret, evidenceRes, reportRes string) (*Vanta, error) {
+// VantaOption changes how a Vanta target is built.
+type VantaOption func(*vantaOpts)
+
+type vantaOpts struct {
+	loopback bool
+	client   *http.Client
+}
+
+// InsecureLoopbackForTest lets the hub URL be http on a loopback host, for a fake in a test. It is an option of the
+// constructor, not a setting: nothing in the environment or a config file reaches it.
+func InsecureLoopbackForTest() VantaOption { return func(o *vantaOpts) { o.loopback = true } }
+
+// WithHTTPClient replaces the default client (no proxy, no redirects, 30 second timeout).
+func WithHTTPClient(c *http.Client) VantaOption { return func(o *vantaOpts) { o.client = c } }
+
+// NewHTTPClient is the client every outbound call uses: it never follows a redirect (a token and a payload go to the
+// configured host only), and it ignores the environment's proxy settings unless useProxy is set.
+func NewHTTPClient(useProxy bool) *http.Client {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	if !useProxy {
+		tr.Proxy = nil
+	}
+	return &http.Client{Timeout: 30 * time.Second, Transport: tr,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+}
+
+// NewVanta checks the URL (https; nothing else unless InsecureLoopbackForTest) and returns the target.
+func NewVanta(base, clientID, secretFile, evidenceRes, reportRes string, opts ...VantaOption) (*Vanta, error) {
+	var o vantaOpts
+	for _, f := range opts {
+		f(&o)
+	}
 	base = strings.TrimRight(base, "/")
-	if err := CheckURL(base, "CLEARANCE_GRC_VANTA_BASE_URL", true); err != nil {
+	if err := CheckURL(base, "CLEARANCE_GRC_VANTA_BASE_URL", o.loopback); err != nil {
 		return nil, err
 	}
-	return &Vanta{Base: base, ClientID: clientID, SecretFile: secretFile, Secret: secret,
-		EvidenceResourceID: evidenceRes, ReportResourceID: reportRes,
-		HTTP: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
-		Now:  time.Now}, nil
+	if o.client == nil {
+		o.client = NewHTTPClient(false)
+	}
+	return &Vanta{Base: base, ClientID: clientID, SecretFile: secretFile,
+		EvidenceResourceID: evidenceRes, ReportResourceID: reportRes, HTTP: o.client, Now: time.Now}, nil
 }
 
 // CheckURL is the outbound-URL rule: an absolute https URL with a host and no credentials, query or fragment; http
@@ -73,19 +106,19 @@ func isLoopback(h string) bool { return h == "localhost" || h == "127.0.0.1" || 
 
 func (v *Vanta) Name() string { return "vanta" }
 
+// ReportEnabled is true when a report resource is configured.
+func (v *Vanta) ReportEnabled() bool { return v.ReportResourceID != "" }
+
 func (v *Vanta) err(class string, status int, retry bool) *Error {
 	return &Error{Target: "vanta", Class: class, Status: status, Retryable: retry}
 }
 
 func (v *Vanta) secret() string {
-	if v.SecretFile != "" {
-		b, err := os.ReadFile(v.SecretFile)
-		if err != nil {
-			return ""
-		}
-		return strings.TrimSpace(string(b))
+	b, err := os.ReadFile(v.SecretFile)
+	if err != nil {
+		return ""
 	}
-	return v.Secret
+	return strings.TrimSpace(string(b))
 }
 
 // bearer returns a live token, minting one when there is none (one per sync run: Vanta limits /oauth/token and a new
@@ -219,6 +252,8 @@ func (v *Vanta) sync(ctx context.Context, resourceID string, items []Item) error
 	if err != nil {
 		return v.err("config", 0, false)
 	}
+	v.reqMu.Lock()
+	defer v.reqMu.Unlock()
 	for attempt := 0; ; attempt++ {
 		tok, err := v.bearer(ctx)
 		if err != nil {

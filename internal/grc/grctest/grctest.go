@@ -155,6 +155,12 @@ type API struct {
 	Changes []gate.Change
 	// PageSize forces pagination (0: one page).
 	PageSize int
+	// Override, when set, is served as-is with a 200 (an answer that is not a page); Extra are raw items appended to
+	// every page's items (records that will not parse); Gets counts the list calls; Query is the last one's query.
+	Override string
+	Extra    []json.RawMessage
+	Gets     int
+	Query    string
 }
 
 // NewAPI starts one.
@@ -174,8 +180,14 @@ func (a *API) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.Gets++
+	a.Query = r.URL.RawQuery
+	if a.Override != "" {
+		w.Write([]byte(a.Override))
+		return
+	}
 	q := r.URL.Query()
-	var items []json.RawMessage
+	items := []json.RawMessage{}
 	for _, c := range a.Changes {
 		if (q.Get("state") != "" && c.State != q.Get("state")) || (q.Get("env") != "" && c.Env != q.Get("env")) {
 			continue
@@ -188,6 +200,7 @@ func (a *API) serve(w http.ResponseWriter, r *http.Request) {
 		b, _ := json.Marshal(c)
 		items = append(items, b)
 	}
+	items = append(items, a.Extra...)
 	var next *string
 	if a.PageSize > 0 {
 		start, _ := strconv.Atoi(q.Get("after"))

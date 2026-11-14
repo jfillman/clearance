@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -41,6 +42,88 @@ const (
 	KindGRCPush   = "grc.push"
 	KindGRCReport = "grc.report"
 )
+
+// GRCReasons are every reason a failed grc.push or grc.report carries (a failure class of the pusher, or a refusal it chose).
+var GRCReasons = []string{"auth", "rate-limited", "unavailable", "rejected", "bad-response", "network", "config", "unknown",
+	"shrink-refused", "truncated", "unreadable-source", "source"}
+
+var (
+	grcTarget = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}\z`)
+	grcID     = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}\z`)
+)
+
+// checkGRC holds a grc.push or grc.report to its shape: the core does not take a provider's word for what these may
+// carry. A result is pushed or failed (a failure names its reason), the hub a plain name, the change only an id, the
+// destination only the hub, an https link and two counts, the source only the hub and an event id. Nothing else.
+func checkGRC(kind string, e *ProviderEvent) error {
+	bad := func(f string, a ...any) error { return fmt.Errorf("a %s record: "+f, append([]any{kind}, a...)...) }
+	if e.Result == nil || (*e.Result != "pushed" && *e.Result != "failed") {
+		return bad("result is pushed or failed")
+	}
+	if e.Target == nil || !grcTarget.MatchString(*e.Target) {
+		return bad("target is a hub's name (lowercase letters, digits, . _ -)")
+	}
+	switch {
+	case *e.Result == "failed" && (e.Reason == nil || !slices.Contains(GRCReasons, *e.Reason)):
+		return bad("a failure's reason is one of %v", GRCReasons)
+	case *e.Result == "pushed" && e.Reason != nil:
+		return bad("a push that landed carries no reason")
+	}
+	if e.Change != nil {
+		id, _ := e.Change["id"].(string)
+		if len(e.Change) != 1 || !grcID.MatchString(id) || kind != KindGRCPush {
+			return bad("change is {id}, an identifier, on a %s only", KindGRCPush)
+		}
+	}
+	if d := e.Destination; d != nil {
+		for k, v := range d {
+			switch k {
+			case "hub":
+				if h, ok := v.(string); !ok || h != *e.Target {
+					return bad("destination.hub is the target")
+				}
+			case "link":
+				if l, ok := v.(string); !ok || len(l) > 512 || !strings.HasPrefix(l, "https://") {
+					return bad("destination.link is an https URL")
+				}
+			case "items", "left":
+				if !isCount(v) {
+					return bad("destination.%s is a count", k)
+				}
+			default:
+				return bad("destination carries hub, link, items and left only")
+			}
+		}
+	}
+	if src := e.Source; src != nil {
+		for k, v := range src {
+			if _, ok := v.(string); !ok || (k != "name" && k != "event_id") {
+				return bad("source is {name, event_id}")
+			}
+		}
+		if n, _ := src["name"].(string); n != *e.Target {
+			return bad("source.name is the target")
+		}
+	}
+	if e.Subject != nil || e.Initiator != nil || e.Effect != nil || e.Outcome != nil || e.Exception != nil || e.Outage != nil ||
+		e.Session != nil || e.TaskID != nil || e.Principal != nil || e.Agent != nil || e.Tool != nil || e.Decision != nil || e.Rule != nil ||
+		e.Coverage != nil || e.Tier != nil || e.Intent != nil || e.Scope != nil || e.Resource != nil || e.Release != nil {
+		return bad("carries only target, result, reason, change, args_sha256, destination and source")
+	}
+	return nil
+}
+
+// isCount is a non-negative whole number, however the decoder held it.
+func isCount(v any) bool {
+	switch n := v.(type) {
+	case float64:
+		return n >= 0 && n == float64(int64(n))
+	case json.Number:
+		i, err := n.Int64()
+		return err == nil && i >= 0
+	}
+	return false
+}
 
 // isGRCKind is a kind only a provider that names it may write.
 func isGRCKind(k string) bool { return k == KindGRCPush || k == KindGRCReport }
@@ -384,6 +467,9 @@ func (s *Server) records(w http.ResponseWriter, r *http.Request) {
 	}
 	if err == nil && body.Kind == FederatedKind {
 		err = checkFederated(&body.Record)
+	}
+	if err == nil && isGRCKind(body.Kind) {
+		err = checkGRC(body.Kind, &body.Record)
 	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

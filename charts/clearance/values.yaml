@@ -577,6 +577,15 @@ grc:
   maxAttempts: ""
   backoffBase: ""
   backoffMax: ""
+  # What guards the hub's full-replace set (docs/grc-push.md): the least a push may be as a fraction of the last one
+  # sent ("": 0.8); how long an unchanged set is held back before it is sent again ("": 6h); how long a loop may keep
+  # failing before /readyz fails ("": 30m). allowShrink lets a push replace the hub's set with an empty or much smaller
+  # one: leave it false. useProxy turns the environment's HTTP proxy settings on for the outbound calls.
+  minSetRatio: ""
+  resendEvery: ""
+  unreadyAfter: ""
+  allowShrink: false
+  useProxy: false
   resources:
     requests: {cpu: 25m, memory: 32Mi}
     limits: {memory: 128Mi}
@@ -648,9 +657,11 @@ networkPolicy:
   # API, a foreign cluster's JWKS.
   extraEgress: []
   grc:
-    # The hub's API is on the internet: 443 to anywhere outside the private ranges. Narrow it where the cluster has an
-    # egress proxy or FQDN policy: set this to false and use extraEgress.
+    # The hub's API: by default 443 to any public address (outside the private ranges), because a NetworkPolicy has no
+    # host names. Pin it to the hub's published addresses with cidrs (it then replaces that rule), or, with an egress proxy
+    # or FQDN policy, set internet to false and use extraEgress. There is no Postgres rule: the push keeps no state.
     internet: true
+    cidrs: []
     extraEgress: []
   slack:
     # NetworkPolicyPeers allowed to reach the link pages (and /slack/* on the events transport): the Gateway's namespace.

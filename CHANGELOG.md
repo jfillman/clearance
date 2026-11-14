@@ -9,6 +9,12 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Fixed
+
+- clearance-api: the changes list's cursor is now `<updated_at>,<id>` (the list orders by updated_at then id), so changes that share a second
+  are no longer dropped between pages (the old cursor was a bare time and skipped the rest of its boundary second). A bare-time cursor from an
+  older client still works, meaning strictly older. `GET /v1/clearances` and `awaiting=me`; both stores.
+
 ### Added
 
 - P-1: **assurance providers, acceptance receipts and recipient access** ([docs/assurance.md](docs/assurance.md)). A new provider class
@@ -29,12 +35,16 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 - P-4: **GRC push, Vanta first** ([docs/grc-push.md](docs/grc-push.md)). `clearance-grc` (`cmd/clearance-grc`, its own image `ghcr.io/jfillman/clearance-grc`)
   sends a summary of each cleared production change, and a daily coverage report, to Vanta as custom-resource evidence items that link back to the
   change in Clearance; the signed record stays in Clearance and the hub holds a pointer. Off unless `CLEARANCE_GRC_TARGET` is set. Only the documented
-  fields leave (origin, tier, approver kind and count, a digest of the approvers, the cleared digest, policy version, control ids, the link; counts for the
+  fields leave (origin, tier, approver kind and count, the cleared digest, policy version, control ids, the link; counts for the
   report), held by a test on the outbound bodies. Idempotent (a stable item id; the hub replaces its set; the ledger record carries an event id the core
   de-duplicates), bounded retries with backoff and `Retry-After`, a failure is a `grc.push` record and never blocks the decision path, https and
   config-only URLs, capped response bodies, no token or secret in records, logs or errors. Behind a `Target` interface so a second hub is a new
   implementation. New record kinds `grc.push` and `grc.report`, written only by a provider that names them. Chart: `grc.enabled` (off by default), a
   Deployment, service account and NetworkPolicy; adds the service account to `api.notifiers` and registers it as the provider of those two kinds.
+  The hub replaces its whole set on every push, so the service never sends one it cannot vouch for: it refuses and records an empty or much
+  smaller set (`CLEARANCE_GRC_MIN_SET_RATIO`, `CLEARANCE_GRC_ALLOW_SHRINK`), an unreadable or truncated read, and keeps every change that was
+  cleared in the window whatever state it is in now. No approver identity is sent (kind and count only). The core checks the shape of
+  `grc.push` and `grc.report` records. `/healthz` and `/readyz` are separate. The chart's grc policy has no Postgres rule and can pin the hub's CIDRs.
   Gate evidence against fakes: `go test ./internal/server -run TestP4GRCPush`. Written against Vanta's public documentation and not yet run against a tenant
   (the assumptions and the owner's sandbox steps are in the doc).
 

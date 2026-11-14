@@ -20,35 +20,93 @@ import (
 // the paths, the proposer's or an approver's name, the checks or the reasons. docs/grc-push.md prints this table and
 // a test holds the outbound payload to it.
 var EvidenceFields = map[string]string{
-	"origin":           "who made the change: person, agent or automation (the proposer's kind, never a name)",
-	"tier":             "the clearance tier, 0 to 3",
-	"state":            "the change's state (always cleared: only cleared changes are sent)",
-	"app":              "the application's name",
-	"env":              "the environment's name",
-	"approver_kind":    "person when every approval was checked to be a person, mixed or none otherwise",
-	"approver_count":   "how many approvals the change carries",
-	"approvers_sha256": "SHA-256 of the sorted approver identities: it identifies them without naming them",
-	"change_digest":    "the digest of what was cleared (the manifest tree or saved plan), SHA-256",
-	"policy_version":   "the policy bundle version that decided the tier",
-	"controls":         "the hub control identifiers this evidence is mapped to, framework/version:control",
-	"cleared_at":       "when the change was cleared, RFC 3339 UTC",
+	"origin":         "who made the change: person, agent or automation (the proposer's kind, never a name)",
+	"tier":           "the clearance tier, 0 to 3",
+	"state":          "the change's current state: cleared, or superseded or exception when it was cleared and has since been replaced or flagged",
+	"app":            "the application's name",
+	"env":            "the environment's name",
+	"approver_kind":  "person when every approval was checked to be a person, mixed or none otherwise",
+	"approver_count": "how many approvals the change carries",
+	"change_digest":  "the digest of what was cleared (the manifest tree or saved plan), SHA-256",
+	"policy_version": "the policy bundle version that decided the tier",
+	"controls":       "the hub control identifiers this evidence is mapped to, framework/version:control",
+	"cleared_at":     "when the change was cleared, RFC 3339 UTC (the last approval or, for a policy clearance, registration, once it has been superseded)",
 }
 
 // ReportFields are every property a coverage report item carries.
 var ReportFields = map[string]string{
 	"period":            "the UTC day the counts are for, YYYY-MM-DD",
 	"env":               "the environment the counts are for",
-	"changes_total":     "changes decided in the period in these states",
-	"changes_cleared":   "of them, cleared",
+	"changes_total":     "changes decided in the period, in every state counted here",
+	"changes_cleared":   "of them, cleared (including those since superseded or flagged as an exception)",
 	"changes_denied":    "of them, denied",
-	"changes_exception": "of them, ended as an exception",
+	"changes_exception": "of them, never cleared and ended as an exception",
 	"changes_degraded":  "of them, ended degraded",
+	"changes_other":     "of them, expired or superseded without ever being cleared",
 	"cleared_tier0":     "cleared changes at tier 0",
 	"cleared_tier1":     "cleared changes at tier 1",
 	"cleared_tier2":     "cleared changes at tier 2",
 	"cleared_tier3":     "cleared changes at tier 3",
 	"cleared_by_people": "cleared changes whose every approval was checked to be a person",
 	"controls":          "the hub control identifiers this report is mapped to",
+}
+
+// Change is the part of a change this service reads: a slim decode of clearance-api's change JSON, so a page of
+// thousands of changes is never held whole in memory, and nothing else of a change can reach an item.
+type Change struct {
+	ID            string       `json:"id"`
+	App           string       `json:"app"`
+	Env           string       `json:"env"`
+	ProposerKind  string       `json:"proposer_kind"`
+	TreeDigest    string       `json:"tree_digest"`
+	PolicyVersion string       `json:"policy_version"`
+	Tier          int          `json:"tier"`
+	State         string       `json:"state"`
+	CreatedAt     gate.PyTime  `json:"created_at"`
+	UpdatedAt     gate.PyTime  `json:"updated_at"`
+	DecidedAt     *gate.PyTime `json:"decided_at"`
+	ClearedBy     *string      `json:"cleared_by"`
+	Approvals     []Approval   `json:"approvals"`
+}
+
+// Approval is the part of an approval read: its kind and time, never the person.
+type Approval struct {
+	At   string `json:"at"`
+	Kind string `json:"kind,omitempty"`
+}
+
+// WasCleared is true for a change that was ever cleared. cleared_by is set when it is (by policy or by people) and
+// no transition clears it again, so it survives the move to superseded or exception, which state alone would hide.
+func (c Change) WasCleared() bool { return c.ClearedBy != nil && *c.ClearedBy != "" }
+
+// ClearedAt is when the change was cleared. While it is cleared, decided_at is that time; the move to superseded or
+// exception overwrites decided_at with the later time, so then it is the last approval's time, or, for a clearance by
+// policy (which happens at registration), created_at.
+func (c Change) ClearedAt() time.Time {
+	if c.State == gate.StateCleared && c.DecidedAt != nil {
+		return c.DecidedAt.Time.UTC()
+	}
+	var last time.Time
+	for _, a := range c.Approvals {
+		if t, err := time.Parse(time.RFC3339Nano, a.At); err == nil && t.After(last) {
+			last = t
+		}
+	}
+	if !last.IsZero() {
+		return last.UTC()
+	}
+	return c.CreatedAt.Time.UTC()
+}
+
+// DecidedTime is when the change reached its present state, for the report's day.
+func (c Change) DecidedTime() time.Time {
+	if c.WasCleared() {
+		return c.ClearedAt()
+	}
+	if c.DecidedAt != nil {
+		return c.DecidedAt.Time.UTC()
+	}
+	return c.UpdatedAt.Time.UTC()
 }
 
 var safeID = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
@@ -86,20 +144,17 @@ func (b Builder) Link(id string) (string, bool) {
 }
 
 // Evidence is the item for one cleared change; ok is false when it cannot be sent (an unusable id or no decision time).
-func (b Builder) Evidence(c gate.Change) (Item, bool) {
+func (b Builder) Evidence(c Change) (Item, bool) {
 	link, ok := b.Link(c.ID)
-	if !ok || c.DecidedAt == nil || c.State != gate.StateCleared {
+	if !ok || !c.WasCleared() {
 		return Item{}, false
 	}
-	ids := make([]string, 0, len(c.Approvals))
 	people := 0
 	for _, a := range c.Approvals {
-		ids = append(ids, a.Person)
 		if a.Kind == "person" {
 			people++
 		}
 	}
-	sort.Strings(ids)
 	kind := "none"
 	switch {
 	case len(c.Approvals) == 0:
@@ -115,8 +170,8 @@ func (b Builder) Evidence(c gate.Change) (Item, bool) {
 		Props: map[string]any{
 			"origin": orNone(c.ProposerKind), "tier": int64(c.Tier), "state": c.State, "app": c.App, "env": c.Env,
 			"approver_kind": kind, "approver_count": int64(len(c.Approvals)),
-			"approvers_sha256": sha(strings.Join(ids, "\n")), "change_digest": c.TreeDigest,
-			"policy_version": c.PolicyVersion, "controls": b.Controls, "cleared_at": c.DecidedAt.Time.UTC(),
+			"change_digest":  c.TreeDigest,
+			"policy_version": c.PolicyVersion, "controls": b.Controls, "cleared_at": c.ClearedAt(),
 		},
 	}, true
 }
@@ -160,22 +215,21 @@ func SetDigest(items []Item) string {
 // Day is a change's UTC day for the report.
 func Day(t time.Time) string { return t.UTC().Format("2006-01-02") }
 
-// Reports builds one coverage report item per UTC day and environment from the changes decided in the window.
+// Reports builds one coverage report item per UTC day and environment from the changes whose decision falls on or
+// after from (a day boundary, so no edge day is partial). A change that was ever cleared counts as cleared whatever
+// state it is in now; no state is left uncounted (expired and a never-cleared supersession are changes_other).
 // Counts only: no change, person or path appears in one.
-func (b Builder) Reports(changes []gate.Change) []Item {
+func (b Builder) Reports(changes []Change, from time.Time) []Item {
 	type key struct{ day, env string }
 	type tally struct {
-		total, cleared, denied, exception, degraded, people int64
-		tiers                                               [4]int64
+		total, cleared, denied, exception, degraded, other, people int64
+		tiers                                                      [4]int64
 	}
 	by := map[key]*tally{}
 	for _, c := range changes {
-		var when time.Time
-		switch {
-		case c.DecidedAt != nil:
-			when = c.DecidedAt.Time
-		default:
-			when = c.UpdatedAt.Time
+		when := c.DecidedTime()
+		if when.Before(from) {
+			continue
 		}
 		k := key{Day(when), c.Env}
 		t := by[k]
@@ -183,8 +237,9 @@ func (b Builder) Reports(changes []gate.Change) []Item {
 			t = &tally{}
 			by[k] = t
 		}
-		switch c.State {
-		case gate.StateCleared:
+		t.total++
+		switch {
+		case c.WasCleared():
 			t.cleared++
 			if c.Tier >= 0 && c.Tier <= 3 {
 				t.tiers[c.Tier]++
@@ -196,23 +251,22 @@ func (b Builder) Reports(changes []gate.Change) []Item {
 			if all {
 				t.people++
 			}
-		case gate.StateDenied:
+		case c.State == gate.StateDenied:
 			t.denied++
-		case gate.StateException:
+		case c.State == gate.StateException:
 			t.exception++
-		case gate.StateDegraded:
+		case c.State == gate.StateDegraded:
 			t.degraded++
 		default:
-			continue
+			t.other++
 		}
-		t.total++
 	}
 	var out []Item
 	for k, t := range by {
 		out = append(out, Item{
 			ID: "clearance-coverage-" + k.env + "-" + k.day, Title: fmt.Sprintf("Change coverage, %s, %s", k.env, k.day), Link: b.LinkBase,
 			Props: map[string]any{"period": k.day, "env": k.env, "changes_total": t.total, "changes_cleared": t.cleared,
-				"changes_denied": t.denied, "changes_exception": t.exception, "changes_degraded": t.degraded,
+				"changes_denied": t.denied, "changes_exception": t.exception, "changes_degraded": t.degraded, "changes_other": t.other,
 				"cleared_tier0": t.tiers[0], "cleared_tier1": t.tiers[1], "cleared_tier2": t.tiers[2], "cleared_tier3": t.tiers[3],
 				"cleared_by_people": t.people, "controls": b.Controls},
 		})

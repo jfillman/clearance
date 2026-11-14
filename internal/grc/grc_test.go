@@ -39,6 +39,8 @@ type fakeCore struct {
 	Recs []map[string]any
 	seen map[string]bool
 	Down bool
+	// Status, when set, answers a record with a status (by its change id), for a core that refuses one item.
+	Status func(changeID string) int
 }
 
 func newFakeCore() *fakeCore {
@@ -54,6 +56,12 @@ func newFakeCore() *fakeCore {
 		b, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(b, &in)
 		rec, _ := in["record"].(map[string]any)
+		if ch, ok := rec["change"].(map[string]any); ok && c.Status != nil {
+			if st := c.Status(fmt.Sprint(ch["id"])); st != 0 {
+				http.Error(w, "no", st)
+				return
+			}
+		}
 		dup := false
 		if src, ok := rec["source"].(map[string]any); ok {
 			k := fmt.Sprint(in["kind"], src["name"], src["event_id"])
@@ -80,6 +88,18 @@ func (c *fakeCore) kinds(kind string) []map[string]any {
 	return out
 }
 
+// items are the per-change grc.push records that landed (not the set's batch record, not a failure).
+func (c *fakeCore) items() []map[string]any {
+	var out []map[string]any
+	for _, r := range c.kinds("grc.push") {
+		rec := r["record"].(map[string]any)
+		if _, ok := rec["change"]; ok && rec["result"] == "pushed" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 func (c *fakeCore) raw() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -90,12 +110,16 @@ func (c *fakeCore) raw() string {
 func change(id, env, state string, tier int, ago time.Duration) gate.Change {
 	at := now.Add(-ago)
 	d := gate.PyTime{Time: at}
-	return gate.Change{ID: id, App: "shop", Env: env, Cluster: "sentinel-cluster", Repo: "sentinel-org/sentinel-repo", PR: 4242,
+	c := gate.Change{ID: id, App: "shop", Env: env, Cluster: "sentinel-cluster", Repo: "sentinel-org/sentinel-repo", PR: 4242,
 		Proposer: "user:sentinel-proposer", ProposerKind: "person", Paths: []string{"sentinel/path/deploy.yaml"},
 		TreeDigest: strings.Repeat("ab", 32), PolicyVersion: "v7", Tier: tier, State: state,
-		Checks:    map[string]string{"sentinel-check": "pass"},
+		Checks:    map[string]string{"sentinel-check": "pass"}, //
 		Approvals: []gate.Approval{{Person: "user:sentinel-approver", Role: "owner", At: at.Format(time.RFC3339), Kind: "person"}},
-		CreatedAt: d, UpdatedAt: d, DecidedAt: &d, ClearedBy: strp("user:sentinel-approver")}
+		CreatedAt: d, UpdatedAt: d, DecidedAt: &d}
+	if state == gate.StateCleared {
+		c.ClearedBy = strp("people")
+	}
+	return c
 }
 
 func strp(s string) *string { return &s }
@@ -123,7 +147,7 @@ func newRig(t *testing.T) *rig {
 		"CLEARANCE_GRC_VANTA_REPORT_RESOURCE_ID": repRes, "CLEARANCE_API_URL": r.api.URL, "CLEARANCE_URL": r.core.URL,
 		"CLEARANCE_GRC_SA_TOKEN_FILE": tok, "CLEARANCE_GRC_LINK_BASE": linkBase, "CLEARANCE_GRC_BACKOFF_BASE": "1s", "CLEARANCE_GRC_BACKOFF_MAX": "30s",
 	}
-	cfg, err := grc.ConfigFromEnv(func(k string) string { return env[k] })
+	cfg, err := grc.ConfigFromEnv(func(k string) string { return env[k] }, grc.ConfigLoopbackForTest())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +157,7 @@ func newRig(t *testing.T) *rig {
 
 func (r *rig) service(t *testing.T) *grc.Service {
 	t.Helper()
-	v, err := grc.NewVanta(r.cfg.VantaBaseURL, r.cfg.VantaClientID, r.cfg.VantaSecretFile, "", r.cfg.VantaEvidenceResource, r.cfg.VantaReportResource)
+	v, err := grc.NewVanta(r.cfg.VantaBaseURL, r.cfg.VantaClientID, r.cfg.VantaSecretFile, r.cfg.VantaEvidenceResource, r.cfg.VantaReportResource, grc.InsecureLoopbackForTest())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +249,7 @@ func TestAChangeBecomesAnEvidenceItemWithALinkBack(t *testing.T) {
 		t.Fatalf("properties: %v", p)
 	}
 	// The ledger holds a grc.push for it, naming the change and the digest sent, and the link.
-	recs := r.core.kinds("grc.push")
+	recs := r.core.items()
 	if len(recs) != 1 {
 		t.Fatalf("%d grc.push records", len(recs))
 	}
@@ -295,10 +319,11 @@ func TestNothingButDocumentedFieldsLeaves(t *testing.T) {
 	if len(tr) != 4 || tr["scope"] != grc.VantaScope || tr["grant_type"] != "client_credentials" {
 		t.Fatalf("%v", tr)
 	}
-	// The approver is a hash, not a name.
+	// No approver identity, in any form, not even a hash: the kind and the count only.
 	p, _ := r.hub.Item(evRes, "clearance-change-chg-1")
-	if h := p["customProperties"].(map[string]any)["approvers_sha256"].(string); len(h) != 64 {
-		t.Fatalf("approvers: %q", h)
+	props := p["customProperties"].(map[string]any)
+	if _, has := props["approvers_sha256"]; has || props["approver_count"] != float64(1) || props["approver_kind"] != "person" {
+		t.Fatalf("approvers: %v", props)
 	}
 }
 
@@ -332,10 +357,11 @@ func TestLinkIsBuiltFromConfigAndAnUnsafeIdIsNotSent(t *testing.T) {
 	r := newRig(t)
 	bad := change("x/../y", "prod", gate.StateCleared, 1, time.Hour)
 	r.api.Set(bad)
-	if err := r.service(t).PushOnce(context.Background()); err != nil {
-		t.Fatal(err)
+	// Nothing sendable is an empty set, which is refused (never PUT as empty): see TestEmptyAndShrinkGuards.
+	if err := r.service(t).PushOnce(context.Background()); err == nil {
+		t.Fatal("an empty set was pushed")
 	}
-	if r.hub.Items(evRes) != 0 {
+	if r.hub.Puts != 0 {
 		t.Fatal("a change with an unsafe id was sent")
 	}
 }
@@ -363,7 +389,7 @@ func TestPushIsIdempotent(t *testing.T) {
 	if r.hub.Puts != 2 || r.hub.Items(evRes) != 2 {
 		t.Fatalf("puts %d items %d", r.hub.Puts, r.hub.Items(evRes))
 	}
-	if n := len(r.core.kinds("grc.push")); n != 2 {
+	if n := len(r.core.items()); n != 2 {
 		t.Fatalf("%d grc.push records after a restart, want 2", n)
 	}
 	// The hub itself taking the same body twice (a duplicate submission) is the same set.
@@ -380,8 +406,8 @@ func TestPushIsIdempotent(t *testing.T) {
 	if err := s2.PushOnce(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if r.hub.Items(evRes) != 2 || len(r.core.kinds("grc.push")) != 3 {
-		t.Fatalf("items %d records %d", r.hub.Items(evRes), len(r.core.kinds("grc.push")))
+	if r.hub.Items(evRes) != 2 || len(r.core.items()) != 3 {
+		t.Fatalf("items %d records %d", r.hub.Items(evRes), len(r.core.items()))
 	}
 }
 
@@ -404,7 +430,7 @@ func TestRetriesWithBackoffAndHonoursRetryAfter(t *testing.T) {
 			t.Errorf("sleep %d = %s, want within [%s, %s]", i+1, d, hi/2, hi)
 		}
 	}
-	if r.hub.Items(evRes) != 1 || len(r.core.kinds("grc.push")) != 1 {
+	if r.hub.Items(evRes) != 1 || len(r.core.items()) != 1 {
 		t.Fatal("the push did not land after the retries")
 	}
 	if len(r.core.kinds("grc.push")[0]["record"].(map[string]any)) == 0 || strings.Contains(r.core.raw(), `"failed"`) {
@@ -540,16 +566,16 @@ func TestPaginationAndTheItemCap(t *testing.T) {
 	if r.hub.Items(evRes) != 7 {
 		t.Fatalf("%d items across pages", r.hub.Items(evRes))
 	}
+	// A cap that trims the set refuses the cycle: the hub keeps what it has, and the refusal is a record.
 	r.cfg.MaxItems = 3
-	r2 := r.service(t)
-	if err := r2.PushOnce(context.Background()); err != nil {
-		t.Fatal(err)
+	puts := r.hub.Puts
+	err := r.service(t).PushOnce(context.Background())
+	var rf *grc.Refusal
+	if !errors.As(err, &rf) || rf.Reason != grc.ReasonTruncated || r.hub.Puts != puts || r.hub.Items(evRes) != 7 {
+		t.Fatalf("a capped read was pushed: %v", err)
 	}
-	if r.hub.Items(evRes) != 3 {
-		t.Fatalf("cap: %d items", r.hub.Items(evRes))
-	}
-	if _, ok := r.hub.Item(evRes, "clearance-change-chg-0"); !ok {
-		t.Fatal("the cap keeps the newest")
+	if f := r.core.kinds("grc.push"); f[len(f)-1]["record"].(map[string]any)["reason"] != "truncated" {
+		t.Fatal("the truncation is not a record")
 	}
 }
 
@@ -599,7 +625,7 @@ func TestLedgerDownDoesNotLoseTheRecordAndRetriesNextCycle(t *testing.T) {
 	if err := s.PushOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.core.kinds("grc.push")) != 1 {
+	if len(r.core.items()) != 1 {
 		t.Fatal("the record was not written once the core was back")
 	}
 }

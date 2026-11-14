@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -23,39 +24,43 @@ var version = "dev"
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	os.Exit(run(ctx))
+	os.Exit(run(ctx, os.Args[1:], os.Getenv, os.Stdout, os.Stderr))
 }
 
-func run(ctx context.Context) int {
-	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "--version") {
-		fmt.Println("clearance-grc", version)
+// run is main with its inputs: 0 is a clean stop (or off), 2 a configuration it refuses.
+func run(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer, opts ...grc.ConfigOption) int {
+	log := slog.New(slog.NewJSONHandler(stderr, nil))
+	if len(args) > 0 && (args[0] == "version" || args[0] == "--version") {
+		fmt.Fprintln(stdout, "clearance-grc", version)
 		return 0
 	}
-	cfg, err := grc.ConfigFromEnv(os.Getenv)
+	cfg, err := grc.ConfigFromEnv(getenv, opts...)
 	if errors.Is(err, grc.ErrOff) {
-		fmt.Fprintln(os.Stderr, "clearance-grc:", err, "(nothing is sent)")
+		fmt.Fprintln(stderr, "clearance-grc:", err, "(nothing is sent)")
 		return 0
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "clearance-grc:", err)
+		fmt.Fprintln(stderr, "clearance-grc:", err)
 		return 2
 	}
-	target, err := grc.NewVanta(cfg.VantaBaseURL, cfg.VantaClientID, cfg.VantaSecretFile, cfg.VantaSecret, cfg.VantaEvidenceResource, cfg.VantaReportResource)
+	vopts := []grc.VantaOption{grc.WithHTTPClient(grc.NewHTTPClient(cfg.UseProxy))}
+	if cfg.AllowLoopback() {
+		vopts = append(vopts, grc.InsecureLoopbackForTest())
+	}
+	target, err := grc.NewVanta(cfg.VantaBaseURL, cfg.VantaClientID, cfg.VantaSecretFile, cfg.VantaEvidenceResource, cfg.VantaReportResource, vopts...)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "clearance-grc:", err)
+		fmt.Fprintln(stderr, "clearance-grc:", err)
 		return 2
 	}
 	svc := grc.NewService(cfg, target, log)
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	srv := &http.Server{Addr: cfg.Listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: cfg.Listen, Handler: svc.Mux(), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("health listener stopped", "error", err.Error())
 		}
 	}()
-	log.Info("clearance-grc starting", "version", version, "target", target.Name(), "envs", cfg.Envs, "interval", cfg.Interval.String())
+	log.Info("clearance-grc starting", "version", version, "target", target.Name(), "envs", cfg.Envs, "interval", cfg.Interval.String(),
+		"allow_shrink", cfg.AllowShrink)
 	svc.Run(ctx)
 	sd, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

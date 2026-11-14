@@ -67,10 +67,16 @@ spec:
             - {name: CLEARANCE_GRC_SA_TOKEN_FILE, value: /var/run/secrets/tokens/clearance}
             - {name: CLEARANCE_GRC_ENVS, value: {{ include "clearance.csv" $g.envs | quote }}}
             - {name: CLEARANCE_GRC_MAPPINGS, value: {{ include "clearance.csv" $g.mappings | quote }}}
-            {{- range $k, $env := dict "interval" "CLEARANCE_GRC_INTERVAL" "reportInterval" "CLEARANCE_GRC_REPORT_INTERVAL" "window" "CLEARANCE_GRC_WINDOW" "maxItems" "CLEARANCE_GRC_MAX_ITEMS" "maxAttempts" "CLEARANCE_GRC_MAX_ATTEMPTS" "backoffBase" "CLEARANCE_GRC_BACKOFF_BASE" "backoffMax" "CLEARANCE_GRC_BACKOFF_MAX" }}
+            {{- range $k, $env := dict "interval" "CLEARANCE_GRC_INTERVAL" "reportInterval" "CLEARANCE_GRC_REPORT_INTERVAL" "window" "CLEARANCE_GRC_WINDOW" "maxItems" "CLEARANCE_GRC_MAX_ITEMS" "maxAttempts" "CLEARANCE_GRC_MAX_ATTEMPTS" "backoffBase" "CLEARANCE_GRC_BACKOFF_BASE" "backoffMax" "CLEARANCE_GRC_BACKOFF_MAX" "minSetRatio" "CLEARANCE_GRC_MIN_SET_RATIO" "resendEvery" "CLEARANCE_GRC_RESEND_EVERY" "unreadyAfter" "CLEARANCE_GRC_UNREADY_AFTER" }}
             {{- with index $g $k }}
             - {name: {{ $env }}, value: {{ . | quote }}}
             {{- end }}
+            {{- end }}
+            {{- if $g.allowShrink }}
+            - {name: CLEARANCE_GRC_ALLOW_SHRINK, value: "true"}
+            {{- end }}
+            {{- if $g.useProxy }}
+            - {name: CLEARANCE_GRC_USE_PROXY, value: "true"}
             {{- end }}
             {{- with $g.extraEnv }}
             {{- toYaml . | nindent 12 }}
@@ -79,11 +85,16 @@ spec:
             httpGet: {path: /healthz, port: http}
             periodSeconds: 5
             failureThreshold: 12
+          # Liveness is the process; readiness is the loops (a vendor outage unreadies the pod, it does not restart it).
           livenessProbe:
             httpGet: {path: /healthz, port: http}
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 15
+            timeoutSeconds: 3
           resources:
             {{- toYaml $g.resources | nindent 12 }}
           securityContext:

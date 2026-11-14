@@ -3,6 +3,7 @@ package server_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/jfillman/clearance/internal/grc"
 	"github.com/jfillman/clearance/internal/grc/grctest"
 	"github.com/jfillman/clearance/internal/server"
+	"github.com/jfillman/clearance/internal/store"
 )
 
 const grcPrincipal = "clearance/grc"
@@ -47,12 +49,12 @@ func grcFixture(t *testing.T) (*fixture, *grctest.Vanta, *grctest.API, func() *g
 		"CLEARANCE_API_URL": api.URL, "CLEARANCE_URL": f.srv.URL, "CLEARANCE_GRC_SA_TOKEN_FILE": tok,
 		"CLEARANCE_GRC_LINK_BASE": "https://clearance.example.com", "CLEARANCE_GRC_BACKOFF_BASE": "1ms", "CLEARANCE_GRC_BACKOFF_MAX": "2ms",
 		"CLEARANCE_GRC_MAX_ATTEMPTS": "3"}
-	gcfg, err := grc.ConfigFromEnv(func(k string) string { return env[k] })
+	gcfg, err := grc.ConfigFromEnv(func(k string) string { return env[k] }, grc.ConfigLoopbackForTest())
 	if err != nil {
 		t.Fatal(err)
 	}
 	mk := func() *grc.Service {
-		v, err := grc.NewVanta(gcfg.VantaBaseURL, gcfg.VantaClientID, gcfg.VantaSecretFile, "", gcfg.VantaEvidenceResource, gcfg.VantaReportResource)
+		v, err := grc.NewVanta(gcfg.VantaBaseURL, gcfg.VantaClientID, gcfg.VantaSecretFile, gcfg.VantaEvidenceResource, gcfg.VantaReportResource, grc.InsecureLoopbackForTest())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -72,6 +74,20 @@ func (f *fixture) clearedChange(t *testing.T, head string) gate.Change {
 	ch, err := gate.FromRecord(b)
 	if err != nil || ch.State != "cleared" || ch.DecidedAt == nil {
 		t.Fatalf("%v %+v", err, ch)
+	}
+	return *ch
+}
+
+// stored is a change as the gate holds it now (gate.Change's own JSON, as clearance-api serves it): its state moves on.
+func (f *fixture) stored(t *testing.T, id string) gate.Change {
+	t.Helper()
+	row, err := f.core.Store.Change(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch, err := gate.FromRecord(row.Record)
+	if err != nil {
+		t.Fatal(err)
 	}
 	return *ch
 }
@@ -109,9 +125,9 @@ func TestP4GRCPush(t *testing.T) {
 	if props["origin"] != "person" || props["tier"] == nil || props["approver_kind"] != "person" || props["change_digest"] != strings.Repeat("c", 64) {
 		t.Fatalf("%v", props)
 	}
-	pushes := f.toolRecords(server.KindGRCPush)
+	pushes := f.itemPushes()
 	if len(pushes) != 1 {
-		t.Fatalf("%d grc.push records in the chain", len(pushes))
+		t.Fatalf("%d per-change grc.push records in the chain", len(pushes))
 	}
 	if p := pushes[0]["provider"].(map[string]any); p["name"] != "clearance-grc" {
 		t.Fatalf("%v", p)
@@ -124,7 +140,7 @@ func TestP4GRCPush(t *testing.T) {
 	if err := mk().PushOnce(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if hub.Items("res-ev") != 1 || len(f.toolRecords(server.KindGRCPush)) != 1 {
+	if hub.Items("res-ev") != 1 || len(f.itemPushes()) != 1 || len(f.toolRecords(server.KindGRCPush)) != 2 {
 		t.Fatalf("a restart duplicated: items %d records %d", hub.Items("res-ev"), len(f.toolRecords(server.KindGRCPush)))
 	}
 
@@ -137,8 +153,13 @@ func TestP4GRCPush(t *testing.T) {
 	}
 
 	// The hub is down: the push fails, is bounded, and is a record; the core's decision path is not touched.
+	// Registering the next head supersedes the first change at the real core. It was cleared and deployed: it is
+	// still evidence, so it must still be in the set the hub is given.
 	ch2 := f.clearedChange(t, strings.Repeat("b", 40))
-	api.Set(ch, ch2)
+	if now := f.stored(t, ch.ID); now.State != "superseded" || now.ClearedBy == nil {
+		t.Fatalf("the first change is %q, want superseded", now.State)
+	}
+	api.Set(f.stored(t, ch.ID), f.stored(t, ch2.ID))
 	for i := 0; i < 10; i++ {
 		hub.Fail = append(hub.Fail, grctest.Failure{Status: 503})
 	}
@@ -166,12 +187,15 @@ func TestP4GRCPush(t *testing.T) {
 		t.Fatal("the decision path was affected")
 	}
 	hub.Fail = nil
-	api.Set(ch, ch2, ch3)
+	api.Set(f.stored(t, ch.ID), f.stored(t, ch2.ID), f.stored(t, ch3.ID))
 	if err := svc.PushOnce(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if hub.Items("res-ev") != 3 {
-		t.Fatalf("%d items after recovery", hub.Items("res-ev"))
+		t.Fatalf("%d items after recovery: the superseded changes are evidence too", hub.Items("res-ev"))
+	}
+	if it, _ := hub.Item("res-ev", "clearance-change-"+ch.ID); it == nil || it["customProperties"].(map[string]any)["state"] != "superseded" {
+		t.Fatalf("the superseded change: %v", it)
 	}
 
 	// No credential or token in the chain, and none in anything sent to the hub beyond the token exchange itself.
@@ -189,4 +213,60 @@ func TestP4GRCPush(t *testing.T) {
 		}
 	}
 	_ = time.Second
+}
+
+func (f *fixture) itemPushes() []store.Record {
+	var out []store.Record
+	for _, r := range f.toolRecords(server.KindGRCPush) {
+		if r["change"] != nil && r["result"] == "pushed" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// The core holds grc.push and grc.report to their shape; it does not trust the provider's word.
+func TestGRCRecordsAreCheckedByTheCore(t *testing.T) {
+	f, _, _, _ := grcFixture(t)
+	post := func(kind string, rec map[string]any) answer {
+		return f.do("POST", "/v1/records", grcPrincipal, map[string]any{"provider": "clearance-grc", "kind": kind, "record": rec})
+	}
+	good := func() map[string]any {
+		return map[string]any{"target": "vanta", "result": "pushed", "change": map[string]any{"id": "ch-1"},
+			"args_sha256": strings.Repeat("a", 64), "source": map[string]any{"name": "vanta", "event_id": "e1"},
+			"destination": map[string]any{"hub": "vanta", "link": "https://c.example/changes/ch-1", "items": 3, "left": 1}}
+	}
+	post("grc.push", good()).want(t, 200, "")
+	for name, edit := range map[string]func(map[string]any){
+		"result outside the set":        func(r map[string]any) { r["result"] = "ok" },
+		"a failure with no reason":      func(r map[string]any) { r["result"] = "failed" },
+		"a failure, a made-up reason":   func(r map[string]any) { r["result"] = "failed"; r["reason"] = "because" },
+		"a success with a reason":       func(r map[string]any) { r["reason"] = "auth" },
+		"a target that is not a name":   func(r map[string]any) { r["target"] = "Vanta Inc!" },
+		"a change id that is a path":    func(r map[string]any) { r["change"] = map[string]any{"id": "../x"} },
+		"a change with more than an id": func(r map[string]any) { r["change"] = map[string]any{"id": "a", "repo": "o/r"} },
+		"a destination with a secret":   func(r map[string]any) { r["destination"] = map[string]any{"hub": "vanta", "token": "x"} },
+		"a link that is not https":      func(r map[string]any) { r["destination"] = map[string]any{"hub": "vanta", "link": "http://x"} },
+		"a negative count":              func(r map[string]any) { r["destination"] = map[string]any{"hub": "vanta", "items": -1} },
+		"a source for another hub":      func(r map[string]any) { r["source"] = map[string]any{"name": "drata", "event_id": "e"} },
+		"a principal":                   func(r map[string]any) { r["principal"] = "user:x" },
+		"a rule":                        func(r map[string]any) { r["rule"] = "GATE-1" },
+	} {
+		r := good()
+		edit(r)
+		if a := post("grc.push", r); a.status != 400 {
+			t.Errorf("%s: status %d, want 400", name, a.status)
+		}
+	}
+	// A report names no change.
+	rep := good()
+	post("grc.report", rep).want(t, 400, "change")
+	delete(rep, "change")
+	rep["source"] = map[string]any{"name": "vanta", "event_id": "r1"}
+	post("grc.report", rep).want(t, 200, "")
+	// Every failure class the pusher uses is one the core takes.
+	for i, reason := range grc.Reasons {
+		post("grc.push", map[string]any{"target": "vanta", "result": "failed", "reason": reason,
+			"source": map[string]any{"name": "vanta", "event_id": fmt.Sprint("f", i)}}).want(t, 200, "")
+	}
 }

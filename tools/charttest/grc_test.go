@@ -37,6 +37,10 @@ func TestGRCRendersHardenedWithItsSecretAsAFile(t *testing.T) {
 		}
 	}
 	d := find(objs, "Deployment", "t-clearance-grc")
+	// liveness is the process, readiness is the loops: a vendor outage must not restart the pod
+	if get(container(t, d), "livenessProbe", "httpGet", "path") != "/healthz" || get(container(t, d), "readinessProbe", "httpGet", "path") != "/readyz" {
+		t.Errorf("probes: %v %v", get(container(t, d), "livenessProbe"), get(container(t, d), "readinessProbe"))
+	}
 	if get(d, "spec", "replicas") != 1 || get(d, "spec", "template", "spec", "automountServiceAccountToken") != false {
 		t.Errorf("one replica, no API token: %v", get(d, "spec"))
 	}
@@ -106,6 +110,34 @@ func TestGRCNetworkPolicy(t *testing.T) {
 	}
 	if !core || !api || !hub {
 		t.Errorf("egress core %v api %v hub %v", core, api, hub)
+	}
+	// no Postgres rule, with or without cnpg: the push keeps no state
+	for _, extra := range [][]string{nil, {"--set", "cnpg.enabled=true"}, {"--set-json", `networkPolicy.postgres.to=[{"ipBlock":{"cidr":"10.1.0.0/16"}}]`}} {
+		np := find(render(t, append([]string{"-f", valuesFile("grc-values.yaml")}, extra...)...), "NetworkPolicy", "t-clearance-grc")
+		for _, r := range get(np, "spec", "egress").([]any) {
+			for _, p := range get(r, "ports").([]any) {
+				if get(p, "port") == 5432 || get(p, "port") == float64(5432) {
+					t.Errorf("the grc policy has a Postgres rule with %v", extra)
+				}
+			}
+			for _, p := range get(r, "to").([]any) {
+				if get(p, "podSelector", "matchLabels", "cnpg.io/cluster") != nil {
+					t.Errorf("the grc policy reaches the database pods with %v", extra)
+				}
+			}
+		}
+	}
+	// the hub's egress is any public host on 443 by default, and the pinned addresses when given
+	pinned := find(render(t, "-f", valuesFile("grc-values.yaml"), "--set-json", `networkPolicy.grc.cidrs=["203.0.113.0/24"]`), "NetworkPolicy", "t-clearance-grc")
+	var pin, open bool
+	for _, r := range get(pinned, "spec", "egress").([]any) {
+		for _, p := range get(r, "to").([]any) {
+			pin = pin || get(p, "ipBlock", "cidr") == "203.0.113.0/24"
+			open = open || get(p, "ipBlock", "cidr") == "0.0.0.0/0"
+		}
+	}
+	if !pin || open {
+		t.Errorf("pinned: cidr %v, still open to the internet %v", pin, open)
 	}
 	for _, name := range []string{"t-clearance-core", "t-clearance-api"} {
 		var found bool

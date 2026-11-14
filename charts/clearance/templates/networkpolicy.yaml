@@ -1,4 +1,4 @@
-{{- define "clearance.npEgress" -}}
+{{- define "clearance.npEgressDNS" -}}
 {{- $np := .Values.networkPolicy -}}
 # DNS
 - to:
@@ -9,6 +9,10 @@
   ports:
     - {protocol: UDP, port: 53}
     - {protocol: TCP, port: 53}
+{{- end -}}
+{{- define "clearance.npEgress" -}}
+{{- $np := .Values.networkPolicy -}}
+{{- include "clearance.npEgressDNS" . }}
 # Postgres
 {{- if or $np.postgres.to .Values.cnpg.enabled }}
 - to:
@@ -225,8 +229,9 @@ spec:
 {{- end }}
 {{- if .Values.grc.enabled }}
 ---
-# clearance-grc: no ingress (the health probe is the kubelet's), egress to DNS, the core and the api of this release, and
-# the hub (443 outside the private ranges) or what networkPolicy.grc.extraEgress adds. No Postgres: it keeps no state.
+# clearance-grc: no ingress (the probes are the kubelet's), egress to DNS, the core and the api of this release, and the
+# hub: 443 to any public address by default, or to networkPolicy.grc.cidrs when you pin it, plus extraEgress. No Postgres
+# rule at all (it keeps no state), whatever cnpg.enabled is.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -241,7 +246,7 @@ spec:
   policyTypes: [Ingress, Egress]
   ingress: []
   egress:
-    {{- include "clearance.npEgress" . | nindent 4 }}
+    {{- include "clearance.npEgressDNS" . | nindent 4 }}
     - to:
         - podSelector:
             matchLabels:
@@ -251,7 +256,15 @@ spec:
               {{- include "clearance.selector" (dict "ctx" . "component" "api") | nindent 14 }}
       ports:
         - {protocol: TCP, port: 8080}
-    {{- if $np.grc.internet }}
+    {{- if $np.grc.cidrs }}
+    # The hub's API, pinned to the addresses you named
+    - to:
+        {{- range $np.grc.cidrs }}
+        - ipBlock: {cidr: {{ . | quote }}}
+        {{- end }}
+      ports:
+        - {protocol: TCP, port: 443}
+    {{- else if $np.grc.internet }}
     # The hub's API, on the internet
     - to:
         - ipBlock:
