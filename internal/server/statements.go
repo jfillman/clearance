@@ -142,8 +142,6 @@ type stmtIndex struct {
 	synced time.Time
 }
 
-func (x *stmtIndex) get(id string) *stmtEntry { return x.byID[id] }
-
 // refresh reads the chain from next on and folds in every statement.issue and statement.revoke. The caller holds x.mu.
 func (s *Server) refreshStatements(ctx context.Context, x *stmtIndex) error {
 	if x.byID == nil {
