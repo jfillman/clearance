@@ -68,7 +68,7 @@ type StatementOptions struct {
 	// page, which holds the packet). With neither, checks 3 to 6 are NOT CHECKED.
 	PacketDir   string
 	PacketFiles map[string][]byte
-	// Status is a signed status envelope (GET /s/{id}/status.json) and StatusMaxAge how old it may be (default 24h), or Live
+	// Status is a signed status envelope (GET /s/{id}/status.json) and StatusMaxAge how old it may be (default DefaultStatusMaxAge, one hour), or Live
 	// the core's own answer. With neither, check 7 is NOT CHECKED.
 	Status       []byte
 	StatusSrc    string
