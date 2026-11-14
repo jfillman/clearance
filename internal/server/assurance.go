@@ -692,6 +692,12 @@ func (s *Server) getPacket(w http.ResponseWriter, r *http.Request) {
 		s.refusePacketRead(w, r, claims, id, part, RulePacketRevoked, "this delivery was revoked at "+rv.at+": ask the subscriber for a new delivery", http.StatusForbidden, now)
 		return
 	}
+	// The window is checked again under the gate with a fresh reading of the clock: a credential that expired while this read waited is refused.
+	now = s.opt.Clock()
+	if rule, msg, status := credentialWindowRule(claims, now); rule != "" {
+		s.refusePacketRead(w, r, claims, id, part, rule, msg, status, now)
+		return
+	}
 	// Recorded before a byte is served: a read that could not be recorded is not made.
 	err = s.opt.Store.Atomic(ctx, func(tx store.Tx) error {
 		_, err := tx.Append(ctx, s.fetchEvent(claims, id, part, scope, "allow", "", fmt.Sprintf("packet %s read by %s (%s, %d bytes)", id, claims.Recipient, strings.Join(scope, "+"), len(body)), now, len(body)), s.coreWriter(packetVerified))
@@ -709,6 +715,17 @@ func (s *Server) getPacket(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Clearance-Packet-Scope", strings.Join(scope, ","))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
+}
+
+// credentialWindowRule is the refusal for a credential outside its window at now ("" when it is inside).
+func credentialWindowRule(c *token.AccessClaims, now time.Time) (rule, msg string, status int) {
+	switch {
+	case now.Before(time.Unix(c.NotBefore, 0)):
+		return RulePacketNotYet, "this credential is not good until " + pycompat.ISO(time.Unix(c.NotBefore, 0)), http.StatusForbidden
+	case !now.Before(time.Unix(c.Expires, 0)):
+		return RulePacketExpired, "this credential expired at " + pycompat.ISO(time.Unix(c.Expires, 0)) + ": ask the subscriber for a new delivery", http.StatusUnauthorized
+	}
+	return "", "", 0
 }
 
 func (s *Server) fetchEvent(c *token.AccessClaims, id, part string, scope []string, decision, rule, result string, now time.Time, n int) store.Event {
@@ -938,6 +955,9 @@ func checkReceiptBinding(pl *receipt.Payload, pk store.Packet, meta packet.Meta,
 	return ""
 }
 
+// receiptPageSize is how many records one read of the chain takes when the receipt index is built (a variable so a test can make it short).
+var receiptPageSize = 5000
+
 // receiptWarm is closed once the receipt index has been read.
 func (s *Server) receiptWarm() chan struct{} {
 	s.receiptsReadyOnce.Do(func() { s.receiptsReady = make(chan struct{}) })
@@ -966,9 +986,13 @@ func (s *Server) receiptIndex(ctx context.Context) (map[string]ReceiptRecorded, 
 	if s.receipts != nil {
 		return s.receipts, nil
 	}
-	idx := map[string]ReceiptRecorded{}
-	const page = 5000
-	for from := int64(0); ; {
+	// A scan that fails part-way keeps what it read (receiptsPart) and resumes at receiptsNext: it never restarts from seq 0.
+	if s.receiptsPart == nil {
+		s.receiptsPart = map[string]ReceiptRecorded{}
+	}
+	idx := s.receiptsPart
+	page := receiptPageSize
+	for from := s.receiptsNext; ; {
 		recs, err := s.opt.Store.Records(ctx, from, page)
 		if err != nil {
 			return nil, err
@@ -992,6 +1016,7 @@ func (s *Server) receiptIndex(ctx context.Context) (map[string]ReceiptRecorded, 
 		}
 		last, _ := gate.SeqInt(recs[len(recs)-1]["seq"])
 		from = last + 1
+		s.receiptsNext = from
 	}
 	s.receipts = idx
 	return idx, nil

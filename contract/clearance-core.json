@@ -2469,6 +2469,29 @@
         ],
         "type": "object"
       },
+      "IndexStatus": {
+        "properties": {
+          "failed_attempts": {
+            "type": "integer"
+          },
+          "receipts": {
+            "type": "boolean"
+          },
+          "revocations": {
+            "type": "boolean"
+          },
+          "warm": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "failed_attempts",
+          "receipts",
+          "revocations",
+          "warm"
+        ],
+        "type": "object"
+      },
       "LedgerStatus": {
         "properties": {
           "chain": {
@@ -3257,6 +3280,16 @@
           },
           "head": {
             "type": "integer"
+          },
+          "indexes": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/IndexStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "ledger": {
             "oneOf": [

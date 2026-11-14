@@ -14,9 +14,11 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/jfillman/clearance/internal/canon"
 	"github.com/jfillman/clearance/internal/core"
 	"github.com/jfillman/clearance/internal/receipt"
 	"github.com/jfillman/clearance/internal/server"
@@ -32,6 +34,27 @@ type hookStore struct {
 	head   func(ctx context.Context) error
 	packet func(ctx context.Context, id string) error
 	atomic func(ctx context.Context) error
+	// records, when set, is called before each Records read with its arguments; an error fails the read.
+	records func(ctx context.Context, from int64, limit int) error
+	// sigKeys counts SigningKeys reads.
+	sigKeys atomic.Int64
+}
+
+func (s *hookStore) Records(ctx context.Context, from int64, limit int) ([]store.Record, error) {
+	s.mu.Lock()
+	h := s.records
+	s.mu.Unlock()
+	if h != nil {
+		if err := h(ctx, from, limit); err != nil {
+			return nil, err
+		}
+	}
+	return s.Store.Records(ctx, from, limit)
+}
+
+func (s *hookStore) SigningKeys(ctx context.Context, since time.Time) ([]store.SigningKey, error) {
+	s.sigKeys.Add(1)
+	return s.Store.SigningKeys(ctx, since)
 }
 
 func (s *hookStore) hooks() (func(context.Context) error, func(context.Context, string) error, func(context.Context) error) {
@@ -555,5 +578,338 @@ func TestARevokedTokenKeyIsRevokedForStatementsToo(t *testing.T) {
 	}
 	if code, out := l.offline(t, re.ID, nil); code != 0 {
 		t.Logf("offline verify of the reissue exited %d (inputs the lab does not supply may be missing):\n%s", code, out)
+	}
+}
+
+// TestAnotherProcessSeesAStatementKeyRevocationOnItsLoopTick (second-round review 1): a server object that serves the verify page but did not take
+// the revoke learns of it from the statement loop's re-read of the signing keys' revoked flags (driven here by hand), not from a request: its page
+// shows the failed check after the tick, and the anonymous requests before and after cause no read of the signing keys.
+func TestAnotherProcessSeesAStatementKeyRevocationOnItsLoopTick(t *testing.T) {
+	l := p3Lab(t, p3opts{})
+	f := l.f
+	ctx := context.Background()
+	st := l.issue(t, l.req())
+	hs := &hookStore{Store: f.core.Store}
+	b, err := server.New(ctx, server.Options{Store: hs, Engine: f.core.Engine, Auth: core.DevAuthenticator(), Providers: f.core.Config.Providers, Version: "test", MaxClockSkew: -1,
+		Gate: f.core.Gate, Statements: server.StatementOptions{LogKeys: []byte(l.vkey + "\n"), WitnessPolicy: l.policy, ClientPerMinute: 6000, ClientBurst: 1000,
+			GlobalPerMinute: 60000, GlobalBurst: 10000, TrustedProxyHops: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bs := httptest.NewServer(b.VerifyHandler())
+	t.Cleanup(func() { bs.Close(); b.StopStatements() })
+	get := func(path string) (int, string) {
+		resp, err := http.Get(bs.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(raw)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if code, _ := get("/s/" + st.ID); code == 200 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("B's statement index never warmed")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// Rotate and revoke on A. B has not been told.
+	nk := signer(t)
+	njwk, _ := token.PublicJWK(nk.Public())
+	raw, _ := json.Marshal(njwk)
+	if err := f.core.Store.Atomic(ctx, func(tx store.Tx) error {
+		return tx.UseSigningKey(ctx, store.SigningKey{KeyID: njwk.Kid, JWK: raw}, time.Now())
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.core.Gate.Tokens.Signer = nk
+	oldKid := l.coreKey.KeyID()
+	f.do("POST", "/v1/keys/"+oldKid+"/revoke", "user:admin", map[string]any{"reason": "key exposed"}).want(t, 200, "")
+	before := hs.sigKeys.Load()
+	if code, body := get("/s/" + st.ID); code != 200 || strings.Contains(body, "signing key revoked") {
+		t.Fatalf("B before its tick: %d", code)
+	}
+	if _, body := get("/s/" + st.ID + "/keys.json"); !strings.Contains(body, oldKid) {
+		t.Fatalf("B publishes the key until its tick: %s", body)
+	}
+	_, _ = get("/s/" + st.ID + "/status.json")
+	if n := hs.sigKeys.Load() - before; n != 0 {
+		t.Fatalf("anonymous requests on B read the signing keys %d time(s)", n)
+	}
+	if err := b.SyncRevokedStatementKeysForTest(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if hs.sigKeys.Load()-before != 1 {
+		t.Fatalf("one tick reads the signing keys once: %d", hs.sigKeys.Load()-before)
+	}
+	mark := hs.sigKeys.Load()
+	if code, body := get("/s/" + st.ID); code != 200 || !strings.Contains(body, "signing key revoked; the issuer must reissue this statement") || strings.Contains(body, "VERIFIED") {
+		t.Fatalf("B after its tick: %d\n%s", code, body)
+	}
+	if _, body := get("/s/" + st.ID + "/keys.json"); strings.Contains(body, oldKid) {
+		t.Fatalf("B still publishes the revoked key: %s", body)
+	}
+	if hs.sigKeys.Load() != mark {
+		t.Fatal("anonymous requests on B read the signing keys after the tick")
+	}
+}
+
+// TestAWarmUpThatNeverFinishesIsReportedAndResumes (second-round review 2): the core stays ready while an index cannot be read, /readyz says
+// the indexes are not warm and counts the failed attempts, and the receipt index resumes where it stopped.
+func TestAWarmUpThatNeverFinishesIsReportedAndResumes(t *testing.T) {
+	l := newRevLab(t, "", nil)
+	l.deliver(t, l.auditor, 0)
+	hs := &hookStore{Store: l.f.core.Store}
+	hs.records = func(ctx context.Context, from int64, limit int) error {
+		if limit == 2000 { // the revocation index's page
+			return errFlaky
+		}
+		return nil
+	}
+	srv := l.serverOn(t, hs, &fakeClock{t: time.Now()})
+	type ready struct {
+		OK      bool `json:"ok"`
+		Indexes *struct {
+			Warm           bool  `json:"warm"`
+			Revocations    bool  `json:"revocations"`
+			Receipts       bool  `json:"receipts"`
+			FailedAttempts int64 `json:"failed_attempts"`
+		} `json:"indexes"`
+	}
+	readyz := func() (int, ready) {
+		rec := serve(srv.Handler(), context.Background(), "GET", "/readyz", "", nil)
+		var r ready
+		_ = json.Unmarshal(rec.Body.Bytes(), &r)
+		return rec.Code, r
+	}
+	deadline := time.Now().Add(6 * time.Second)
+	for {
+		code, r := readyz()
+		if code != 200 || !r.OK || r.Indexes == nil {
+			t.Fatalf("the core must stay ready: %d %+v", code, r)
+		}
+		if r.Indexes.FailedAttempts >= 1 {
+			if r.Indexes.Warm || r.Indexes.Revocations {
+				t.Fatalf("%+v", r.Indexes)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a failing warm-up is never counted")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	hs.mu.Lock()
+	hs.records = nil
+	hs.mu.Unlock()
+	deadline = time.Now().Add(6 * time.Second)
+	for {
+		_, r := readyz()
+		if r.Indexes != nil && r.Indexes.Warm {
+			if r.Indexes.FailedAttempts < 1 {
+				t.Fatal("the failed attempts are kept")
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("not warm after the store answered: %+v", r.Indexes)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestTheReceiptIndexResumesWhereItStopped (second-round review 2): a scan that fails part-way continues at the seq it reached.
+func TestTheReceiptIndexResumesWhereItStopped(t *testing.T) {
+	l := newRevLab(t, "", nil)
+	d := l.deliver(t, l.auditor, 0)
+	l.submit(l.receiptFor(t, l.auditor, d.ID, receipt.Accepted, time.Now())).want(t, 200, "")
+	defer server.SetReceiptPageSizeForTest(2)()
+	var mu sync.Mutex
+	var froms []int64
+	calls := 0
+	hs := &hookStore{Store: l.f.core.Store}
+	hs.records = func(ctx context.Context, from int64, limit int) error {
+		if limit != 2 {
+			return nil
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		calls++
+		froms = append(froms, from)
+		if calls == 2 {
+			return errFlaky // the second page fails once
+		}
+		return nil
+	}
+	srv := l.serverOn(t, hs, &fakeClock{t: time.Now()})
+	deadline := time.Now().Add(8 * time.Second)
+	for {
+		rec := serve(srv.Handler(), context.Background(), "GET", "/readyz", "", nil)
+		var r struct {
+			Indexes struct {
+				Receipts bool `json:"receipts"`
+			} `json:"indexes"`
+		}
+		_ = json.Unmarshal(rec.Body.Bytes(), &r)
+		if r.Indexes.Receipts {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the receipt index never warmed")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(froms) < 3 || froms[0] != 0 || froms[1] != 2 || froms[2] != 2 {
+		t.Fatalf("a failed page is retried where it stopped, not from seq 0: %v", froms)
+	}
+}
+
+// TestACredentialThatExpiresWhileAReadWaitsIsRefused (second-round review 4): the window is checked again under the gate with a fresh clock.
+// The read route is tested: the packet is one the instance has not cached, so the slow phase is real. (The sample route has the same re-check; a
+// lab packet has no checkpoint, so its sample is refused 409 before the gate and cannot show it here.)
+func TestACredentialThatExpiresWhileAReadWaitsIsRefused(t *testing.T) {
+	l := newRevLab(t, "", nil)
+	hs := &hookStore{Store: l.f.core.Store}
+	clk := &fakeClock{t: time.Now()}
+	c := l.instance(t, hs, clk)
+	for _, route := range []string{""} {
+		_, b := l.f.buildPacket(t)
+		id := l.f.do("POST", "/v1/packets", "user:admin", b.JSON).want(t, 200, "").body["id"].(string)
+		d := l.f.deliver(t, id, map[string]any{"recipient": l.auditor.name, "window": l.window(0)})
+		slow := newBlocker()
+		hs.set(nil, func(ctx context.Context, pid string) error {
+			if pid == id {
+				return slow.wait(ctx)
+			}
+			return nil
+		}, nil)
+		clk.mu.Lock()
+		clk.t = time.Now()
+		clk.mu.Unlock()
+		type res struct {
+			st   int
+			body map[string]any
+		}
+		out := make(chan res, 1)
+		go func() { st, body := rawDo(c, "GET", "/v1/packets/"+id+route, d.Credential, nil); out <- res{st, body} }()
+		<-slow.entered
+		clk.Advance(3 * time.Hour) // the credential's window (one hour) ends while the read waits
+		slow.free()
+		r := <-out
+		if r.st != 401 || r.body["rule"] != server.RulePacketExpired {
+			t.Fatalf("route %q: served or refused wrongly after expiry: %d %v", route, r.st, r.body)
+		}
+	}
+}
+
+// TestARecipientWithNoDeliveryCannotHaveAKeyBackdated and TestAsOfIsWholeSeconds (second-round review 5).
+func TestARecipientWithNoDeliveryCannotHaveAKeyBackdated(t *testing.T) {
+	l := newRevLab(t, "", nil)
+	path := "/v1/assurance/recipients/" + l.grc.name + "/keys/" + l.grc.signer.KeyID() + "/revoke"
+	back := time.Now().Add(-48 * time.Hour).UTC().Format(time.RFC3339)
+	l.f.do("POST", path, "user:admin", map[string]any{"reason": "r", "as_of": back, "backdate": true}).want(t, 422, "no delivery")
+	l.f.do("POST", path, "user:admin", map[string]any{"reason": "r", "as_of": back}).want(t, 422, "no delivery")
+	if l.f.countTool(server.ToolRecipientKeyRevoke) != 0 {
+		t.Fatal("a refused revocation was recorded")
+	}
+	l.f.do("POST", path, "user:admin", map[string]any{"reason": "r", "as_of": time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)}).want(t, 200, "")
+}
+
+func TestAsOfIsWholeSeconds(t *testing.T) {
+	a := newAgedLab(t, 72*time.Hour)
+	now := time.Now()
+	a.at(now)
+	// A receipt the core recorded 24 hours ago (record time), signed then.
+	a.at(now.Add(-24 * time.Hour))
+	a.inst.do("POST", "/v1/packets/"+a.id+"/receipts", "", a.receiptFor(t, a.auditor, a.d.ID, receipt.Accepted, now.Add(-24*time.Hour))).want(t, 200, "")
+	a.at(now)
+	frac := now.Add(-26 * time.Hour).UTC().Truncate(time.Second).Add(900 * time.Millisecond).Format(time.RFC3339Nano)
+	// More than a day back without backdate: the count uses the same whole second the record will carry.
+	r := a.inst.do("POST", a.keyPath(), "user:admin", map[string]any{"reason": "r", "as_of": frac}).want(t, 409, "")
+	if r.body["affected_receipts"] != float64(1) {
+		t.Fatalf("%v", r.body)
+	}
+	ok := a.inst.do("POST", a.keyPath(), "user:admin", map[string]any{"reason": "r", "as_of": frac, "backdate": true}).want(t, 200, "")
+	want := now.Add(-26 * time.Hour).UTC().Truncate(time.Second).Format(time.RFC3339)
+	if ok.body["as_of"] != want {
+		t.Fatalf("the stored as_of is whole seconds: %v, want %s", ok.body["as_of"], want)
+	}
+	rec := a.f.toolRecords(server.ToolRecipientKeyRevoke)[0]
+	if rv, _ := rec["revocation"].(map[string]any); rv["as_of"] != want {
+		t.Fatalf("%v", rv)
+	}
+}
+
+// TestACarriedReceiptRecordWithNoReadableTimeFails (second-round review 3): the verifier does not fall back to the signer's signed_at when the
+// receipt's record is carried but its time is unreadable. The record is re-hashed and the section's record_hash updated, as a forger would, so
+// the only thing wrong with the packet is the time.
+func TestACarriedReceiptRecordWithNoReadableTimeFails(t *testing.T) {
+	a := newAgedLab(t, 48*time.Hour)
+	dir := a.packetWithRevocation(t, -24*time.Hour, -20*time.Hour)
+	if c := a.verifyDir(t, dir); c.Status != verify.Pass {
+		t.Fatalf("the baseline: %+v", c)
+	}
+	p := filepath.Join(dir, "evidence", "records.jsonl")
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	var newHash string
+	var seq float64
+	for _, ln := range strings.Split(strings.TrimRight(string(raw), "\n"), "\n") {
+		if strings.Contains(ln, `"tool":"packet.receipt"`) {
+			dec := json.NewDecoder(strings.NewReader(ln))
+			dec.UseNumber()
+			var m map[string]any
+			if err := dec.Decode(&m); err != nil {
+				t.Fatal(err)
+			}
+			m["ts"] = "garbage"
+			delete(m, "hash")
+			c, err := canon.Canonical(m)
+			if err != nil {
+				t.Fatal(err)
+			}
+			newHash = canon.SHA256Hex(c)
+			m["hash"] = newHash
+			b, _ := json.Marshal(m)
+			ln = string(b)
+			n, _ := m["seq"].(json.Number).Float64()
+			seq = n
+		}
+		lines = append(lines, ln)
+	}
+	if newHash == "" {
+		t.Fatal("no receipt record carried")
+	}
+	out := strings.Join(lines, "\n") + "\n"
+	_ = os.WriteFile(p, []byte(out), 0o644)
+	editPacketJSON(t, dir, func(doc map[string]any) {
+		for _, r := range doc["acceptances"].(map[string]any)["receipts"].([]any) {
+			if rm := r.(map[string]any); rm["seq"] == seq {
+				rm["record_hash"] = newHash
+			}
+		}
+	})
+	// editPacketJSON rewrote the manifest for packet.json; the records file changed too.
+	var man struct {
+		Schema string            `json:"schema"`
+		Files  map[string]string `json:"files"`
+	}
+	mb, _ := os.ReadFile(filepath.Join(dir, "MANIFEST.json"))
+	_ = json.Unmarshal(mb, &man)
+	man.Files["evidence/records.jsonl"] = sha256hex([]byte(out))
+	mb, _ = json.Marshal(man)
+	_ = os.WriteFile(filepath.Join(dir, "MANIFEST.json"), mb, 0o644)
+	c := a.verifyDir(t, dir)
+	if c.Status != verify.Fail || !strings.Contains(strings.Join(c.Findings, "\n"), "no readable time") {
+		t.Fatalf("%+v", c)
 	}
 }

@@ -18,7 +18,7 @@ CONTRACT_VERSION = "1.0.0"
 
 RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "run.finish", "human.answer", "session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome", "deploy.exception", "deploy.degraded", "federated.decision", "observation", "assessment", "resolution", "observation.health", "observation.verification", "grc.push", "grc.report")
 
-__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BackdateRefusal", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Delivery", "DeliveryRequest", "DeliveryRevoked", "DeliveryWindow", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateBulkResolutionFailed", "GateBulkResolutionRecorded", "GateBulkResolutionRequest", "GateBulkResolutionResult", "GateBulkResolutionSkipped", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateReason", "GateRequirement", "GateResolutionRecorded", "GateResolutionRequest", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PacketBundle", "PacketCheckpointRef", "PacketError", "PacketLinks", "PacketMeta", "PacketPublished", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProvidedDefinition", "ProviderEvent", "Ready", "ReceiptRecorded", "RecipientKeyRevokeRequest", "RecipientKeyRevoked", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "RevokeRequest", "SamplingCheckpoint", "SamplingDocument", "SamplingItem", "SamplingPacketRef", "SamplingParams", "SamplingPopulationDoc", "SamplingProof", "SamplingRecorded", "SamplingRow", "SamplingStratum", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "StatementIssued", "StatementLinks", "StatementList", "StatementListItem", "StatementRequest", "StatementRevokeRequest", "StatementRevoked", "Subject", "SubjectProperties", "TargetsGate", "TargetsObserver", "TargetsRequest", "TargetsResult", "TargetsTarget", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenKeyRevoked", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
+__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BackdateRefusal", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Delivery", "DeliveryRequest", "DeliveryRevoked", "DeliveryWindow", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateBulkResolutionFailed", "GateBulkResolutionRecorded", "GateBulkResolutionRequest", "GateBulkResolutionResult", "GateBulkResolutionSkipped", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateReason", "GateRequirement", "GateResolutionRecorded", "GateResolutionRequest", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "IndexStatus", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PacketBundle", "PacketCheckpointRef", "PacketError", "PacketLinks", "PacketMeta", "PacketPublished", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProvidedDefinition", "ProviderEvent", "Ready", "ReceiptRecorded", "RecipientKeyRevokeRequest", "RecipientKeyRevoked", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "RevokeRequest", "SamplingCheckpoint", "SamplingDocument", "SamplingItem", "SamplingPacketRef", "SamplingParams", "SamplingPopulationDoc", "SamplingProof", "SamplingRecorded", "SamplingRow", "SamplingStratum", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "StatementIssued", "StatementLinks", "StatementList", "StatementListItem", "StatementRequest", "StatementRevokeRequest", "StatementRevoked", "Subject", "SubjectProperties", "TargetsGate", "TargetsObserver", "TargetsRequest", "TargetsResult", "TargetsTarget", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenKeyRevoked", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -1424,6 +1424,24 @@ class Hold(Model):
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
+class IndexStatus(Model):
+    """Contract schema IndexStatus."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("failed_attempts", "failed_attempts", ("int",), True),
+        Field("receipts", "receipts", ("bool",), True),
+        Field("revocations", "revocations", ("bool",), True),
+        Field("warm", "warm", ("bool",), True),
+    )
+
+    failed_attempts: int
+    receipts: bool
+    revocations: bool
+    warm: bool
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
 class LedgerStatus(Model):
     """Contract schema LedgerStatus."""
 
@@ -1967,6 +1985,7 @@ class Ready(Model):
         Field("degraded", "degraded", ("list", ("str",)), False),
         Field("error", "error", ("str",), False),
         Field("head", "head", ("int",), True),
+        Field("indexes", "indexes", ("nullable", ("ref", "IndexStatus")), False),
         Field("ledger", "ledger", ("nullable", ("ref", "LedgerStatus")), False),
         Field("ok", "ok", ("bool",), True),
         Field("policy", "policy", ("ref", "PolicyRef"), True),
@@ -1976,6 +1995,7 @@ class Ready(Model):
     degraded: list[str] | None = None
     error: str | None = None
     head: int
+    indexes: IndexStatus | None = None
     ledger: LedgerStatus | None = None
     ok: bool
     policy: PolicyRef
@@ -3008,6 +3028,7 @@ MODELS: dict[str, type[Model]] = {
     "HcprunAnswer": HcprunAnswer,
     "Health": Health,
     "Hold": Hold,
+    "IndexStatus": IndexStatus,
     "LedgerStatus": LedgerStatus,
     "LedgerWitnessStatus": LedgerWitnessStatus,
     "Limits": Limits,

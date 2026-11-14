@@ -918,6 +918,17 @@ type Ready struct {
 	Attestation Attestation `json:"attestation"`
 	// Ledger is the evidence ledger's status (C-3); absent when the ledger is off.
 	Ledger *LedgerStatus `json:"ledger,omitempty"`
+	// Indexes says whether the revocation and receipt indexes the packet routes rely on have been read; until they have those routes
+	// answer 503 with Retry-After while the core stays ready.
+	Indexes *IndexStatus `json:"indexes,omitempty"`
+}
+
+// IndexStatus is the state of the indexes the core reads in the background at start.
+type IndexStatus struct {
+	Warm           bool  `json:"warm"`
+	Revocations    bool  `json:"revocations"`
+	Receipts       bool  `json:"receipts"`
+	FailedAttempts int64 `json:"failed_attempts"`
 }
 
 // LedgerStatus is the evidence ledger's status in GET /readyz (C-3).

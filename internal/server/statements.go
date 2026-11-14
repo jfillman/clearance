@@ -175,6 +175,9 @@ type stmtIndex struct {
 // statementPageSize is how many records one read of the chain takes (a variable so a test can make a short chain long).
 var statementPageSize = 2000
 
+// statementKeyEvery is how often the statement loop re-reads the signing keys' revoked flags.
+const statementKeyEvery = time.Minute
+
 var (
 	errStatementsCold  = errors.New("the statement index is not warm yet")
 	errStatementsStale = errors.New("the statement index is older than it may be served")
@@ -413,11 +416,21 @@ func (s *Server) statementLoop(lctx context.Context) {
 			s.StartStatements()
 		}
 	}()
-	var lastLog time.Time
+	var lastLog, lastKeys time.Time
 	for {
 		rctx, c := context.WithTimeout(lctx, statementRefreshTimeout)
 		err := s.refreshForWrite(rctx)
 		c()
+		// Once a minute, the revoked flags of the signing keys: a key revoked by another process stops verifying statements here too.
+		if now := time.Now(); now.Sub(lastKeys) >= statementKeyEvery && lctx.Err() == nil {
+			kctx, kc := context.WithTimeout(lctx, statementRefreshTimeout)
+			if kerr := s.syncRevokedStatementKeys(kctx); kerr != nil {
+				s.log.Warn("statements: the signing keys' revoked flags could not be read; trying again", "error", kerr.Error())
+			} else {
+				lastKeys = now
+			}
+			kc()
+		}
 		wait := statementTailEvery
 		if err != nil && lctx.Err() == nil {
 			wait = 2 * time.Second
@@ -529,6 +542,23 @@ func (s *Server) markStatementKeyRevoked(kid string) {
 	clear(c.by)
 	c.order = nil
 	c.mu.Unlock()
+}
+
+// syncRevokedStatementKeys re-reads the signing-key table's revoked flags and marks every key revoked since the last read, as this process's own
+// revocation does (and drops the cached checks). It is how a process that serves the verify page but did not take the revoke learns of it:
+// the statement loop calls it about once a minute (never a request), so another process sees a key revocation within one loop tick plus the
+// 5-minute max-age of /s/<id>/keys.json.
+func (s *Server) syncRevokedStatementKeys(ctx context.Context) error {
+	rows, err := s.opt.Store.SigningKeys(ctx, time.Time{})
+	if err != nil {
+		return err
+	}
+	for _, k := range rows {
+		if k.RevokedAt != nil && !s.statementKeyRevokedNow(k.KeyID) {
+			s.markStatementKeyRevoked(k.KeyID)
+		}
+	}
+	return nil
 }
 
 func (s *Server) statementKeyRevokedNow(kid string) bool {

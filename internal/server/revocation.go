@@ -289,13 +289,20 @@ func (s *Server) startWarm() {
 	go func() {
 		for s.life.Err() == nil {
 			ok := true
-			if err := s.warmRevocations(s.life); err != nil {
-				s.log.Warn("revocation: reading the revocation index failed; trying again", "error", err.Error())
-				ok = false
-			}
-			if err := s.warmReceipts(s.life); err != nil {
-				s.log.Warn("receipts: reading the receipt index failed; trying again", "error", err.Error())
-				ok = false
+			for _, step := range []struct {
+				what string
+				fn   func(context.Context) error
+			}{{"revocation", s.warmRevocations}, {"receipt", s.warmReceipts}} {
+				if err := step.fn(s.life); err != nil {
+					s.warmFails.Add(1)
+					ok = false
+					// A core that cannot read its indexes refuses the packet routes (503) while staying ready: say so loudly once it has gone on for a minute.
+					if time.Since(s.warmSince) > time.Minute {
+						s.log.Error("the "+step.what+" index has not been read for over a minute: credentialed and revoke routes answer 503", "error", err.Error(), "failed_attempts", s.warmFails.Load())
+					} else {
+						s.log.Warn("reading the "+step.what+" index failed; trying again", "error", err.Error())
+					}
+				}
 			}
 			if ok {
 				return
@@ -664,8 +671,7 @@ func (s *Server) revokeRecipientKey(w http.ResponseWriter, r *http.Request) {
 	if !decodeRevoke(w, r, &req, "{reason, as_of?, backdate?}") || badReason(w, req.Reason) {
 		return
 	}
-	// The as-of time keeps the core's own precision for "now" (a receipt recorded in the same second before the revoke is not after it).
-	now := s.opt.Clock().UTC()
+	now := s.opt.Clock().UTC().Truncate(time.Second) // whole seconds at the door: the stored as_of, the affected count and the verifier use one instant
 	asOf := now
 	if req.AsOf != "" {
 		t, err := time.Parse(time.RFC3339, req.AsOf)
@@ -702,7 +708,7 @@ func (s *Server) revokeRecipientKey(w http.ResponseWriter, r *http.Request) {
 	first, hasFirst := x.firstDelivery[name]
 	affected := 0
 	for _, rr := range x.keyReceipts[k] {
-		if !rr.recorded.Before(asOf) || !rr.signed.Before(asOf) {
+		if !rr.recorded.Before(asOf) { // the verifier judges a carried receipt by the core's record time
 			affected++
 		}
 	}
@@ -714,7 +720,12 @@ func (s *Server) revokeRecipientKey(w http.ResponseWriter, r *http.Request) {
 	}
 	// The bounds on a back-dated as-of: more than a day back only when asked, and never before the core recorded the first delivery to this
 	// recipient (the core does not record when a key was registered: until a delivery, no credential of the recipient's existed).
-	if asOf.Before(now.Add(-BackdateAfter)) && !req.Backdate {
+	backdated := asOf.Before(now.Add(-BackdateAfter)) // compared in whole seconds
+	if !hasFirst && backdated {
+		writeJSON(w, http.StatusUnprocessableEntity, PacketError{Error: "the core has recorded no delivery to " + name + ": no receipt can exist, so there is nothing to back-date (an as_of within 24 hours is accepted)"})
+		return
+	}
+	if backdated && !req.Backdate {
 		writeJSON(w, http.StatusConflict, BackdateRefusal{Error: "as_of is more than " + BackdateAfter.String() + " before now: send backdate: true to mean it. " +
 			strconv.Itoa(affected) + " receipt(s) already recorded with this key would fail verification", Rule: "PK-BACKDATE", AffectedReceipts: affected})
 		return
@@ -732,7 +743,7 @@ func (s *Server) revokeRecipientKey(w http.ResponseWriter, r *http.Request) {
 			"result":    fmt.Sprintf("key %s of recipient %s revoked as of %s: %s", kid, name, pycompat.ISO(asOf), req.Reason),
 			"initiator": initiator(sub), "delegate": viaString(sub.Via),
 			"revocation": map[string]any{"kind": "recipient-key", "recipient": name, "key_id": kid, "as_of": pycompat.ISO(asOf),
-				"recorded_at": pycompat.ISO(now), "backdated": asOf.Before(now.Add(-BackdateAfter)), "reason": req.Reason}},
+				"recorded_at": pycompat.ISO(now), "backdated": backdated, "reason": req.Reason}},
 			s.coreWriter(revocationVerified))
 		return err
 	})

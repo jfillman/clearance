@@ -194,13 +194,19 @@ func (c *ctx) acceptancesCheck() {
 			tie := rv.asOf.Equal(rv.recorded) // not back-dated: a receipt recorded in the same second before the revocation is before it
 			late := func(t time.Time) bool { return t.After(rv.asOf) || (t.Equal(rv.asOf) && !tie) }
 			signed, serr := time.Parse(time.RFC3339, pl.SignedAt)
-			rcAt, haveRec := time.Time{}, false
+			rcAt, haveRec, recBad := time.Time{}, false, false
 			if cr, ok := bySeq[r.Seq]; ok {
+				// The receipt's record is carried: its time is the bound. A record with no readable time fails the receipt; it never falls
+				// back to the signer's signed_at (the fallback is for a receipt whose record is not carried at all).
 				if t, err := time.Parse(time.RFC3339, fmt.Sprint(cr.m["ts"])); err == nil {
 					rcAt, haveRec = t, true
+				} else {
+					recBad = true
 				}
 			}
 			switch {
+			case recBad:
+				bad = append(bad, fmt.Sprintf("%s: its carried record %d has no readable time (%v), so it cannot be placed before or after the revocation of key %s: not trusted", name, r.Seq, bySeq[r.Seq].m["ts"], short8(kid)))
 			case haveRec && late(rcAt):
 				bad = append(bad, fmt.Sprintf("%s: the core recorded it at %s with key %s, which was revoked as of %s (record %d, recorded by the core at %s): a receipt recorded with a revoked key is not trusted, whatever signed_at says", name, rcAt.UTC().Format(time.RFC3339), short8(kid), asOfS, rv.seq, recS))
 			case !haveRec && (serr != nil || late(signed)):

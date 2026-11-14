@@ -57,7 +57,7 @@ The contract is [`contract/clearance-core.json`](https://github.com/jfillman/cle
 | `POST /v1/definitions/review` | a verifier, a person, or a delegate naming one | Would Clearance load this agent definition, and how much more may its agent do (the definition-change tier). Stateless, unrecorded. |
 | `POST /v1/provenance` | a verifier | The agent-identity and agent-scope verdicts for a pull request, recorded as `provenance.verify`. |
 | `POST /v1/github/webhook` | GitHub (HMAC signature, no bearer token) | The Clearance GitHub App ([provenance-app.md](provenance-app.md)). |
-| `GET /healthz`, `GET /readyz` | anyone | Up; the store answers and the policy is loaded. |
+| `GET /healthz`, `GET /readyz` | anyone | Up; the store answers and the policy is loaded. `/readyz` also reports `indexes` `{warm, revocations, receipts, failed_attempts}`: the packet routes answer 503 until the indexes they rely on are read, but the core stays ready ([assurance.md](assurance.md#revocation)). |
 
 Every request has a body cap per route (`Content-Length` checked first, then `MaxBytesReader`; 8 MiB for an
 evaluation, 64 KiB by default). The core's own routes decode JSON strictly (unknown fields and trailing data are

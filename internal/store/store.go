@@ -74,8 +74,8 @@ type Token struct {
 // SigningKey is one row of clearance_signing_keys: a token verification key the core has signed with (GET
 // /v1/keys). RetiredAt is set when the core started with another key. RevokedAt is set when an admin revoked the
 // key: a revoked key verifies no clearance token, packet credential or grant feed (GET /v1/keys stops serving it), and
-// UseSigningKey refuses it for good. Only a retired key can be revoked. The statement keys (GET /v1/statement-keys)
-// are read from the same rows and ignore RevokedAt: they are a separate set with their own rules.
+// UseSigningKey refuses it for good. Only a retired key can be revoked. The statement keys (GET /v1/statement-keys) are read from the same
+// rows and a revoked key is left out of them too (a revoked key is revoked for statements); otherwise they are a separate set with their own rules.
 type SigningKey struct {
 	KeyID     string
 	JWK       json.RawMessage

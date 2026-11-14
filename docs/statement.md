@@ -141,6 +141,9 @@ HTML, and verifies it offline. **The hosted proof on the production hostname is 
 - **A revoked token key is revoked for statements.** When an admin revokes a retired token signing key (`POST /v1/keys/{kid}/revoke`,
   [assurance.md](assurance.md#one-of-the-cores-token-keys)), it leaves `GET /v1/statement-keys`, `/s/<id>/keys.json` serves no key for a statement it signed, and the page of
   such a statement shows the signature check failed with "signing key revoked; the issuer must reissue this statement": never a pass, and the statement's content is not shown.
+  The process that took the revoke applies it at once; another process serving the page learns of it from the statement loop's re-read of the signing keys' revoked flags
+  (about once a minute, never started by an anonymous request, no store call from an anonymous request), so it sees the revocation within one loop tick plus the 5-minute `max-age` of
+  `keys.json`; a verifier that caches `keys.json` may trust a revoked statement key for that long.
   The revoke's answer lists the standing statements the key signed. Reissue: revoke each statement, then `reissue` it under the key in use (the same request without
   `reissue` is 409 and says so). A statement a retired key signed that was NOT revoked with it verifies as before.
 - **Issuing and revoking are authenticated, admin-gated, idempotent and recorded before they answer.** `statement.issue` and

@@ -188,7 +188,10 @@ new). A store that cannot be read refuses the request (503): a revocation that c
 
 **At start.** The core reads the revocation index (and the receipt index) in the background, a page at a time. Until it has, credentialed routes
 (read, sample, receipt) and the revoke routes wait up to two seconds and then answer 503 with Retry-After: never a scan inside a request, never a
-read served on state that was not read. A read that fails part-way resumes where it stopped and the index counts as read only after the last page.
+read served on state that was not read. A read that fails part-way resumes where it stopped (the revocation index and the receipt index both) and the index counts as read only
+after the last page. **An urgent delivery or recipient-key revoke during this warm-up is refused 503 with Retry-After until the indexes are warm**; a token-signing-key revoke does
+not wait (it needs no index). The core stays ready meanwhile (it is one replica that serves everything else): `GET /readyz` carries `indexes` `{warm, revocations, receipts,
+failed_attempts}`, and a warm-up that has failed for over a minute is logged at error level on every further failed attempt.
 
 **Replicas.** The Postgres store takes a single-writer advisory lock, so a second Clearance process cannot serve credentialed reads today. The
 one-second bound across processes therefore matters only at a failover (the new process reads the chain before it serves); the test that exercises it
@@ -199,11 +202,14 @@ not that two processes work. The token-key check reads the key table on every re
 
 A key is revoked **as of** a time. `as_of` is RFC 3339 and defaults to now. The rules, in the order the core applies them:
 
+- whole seconds: the core truncates `as_of` (and "now") to whole seconds at the door, so the stored value, the 409 count and the verifier use one instant, and the 24-hour boundary
+  below is compared in whole seconds;
 - not more than the core's clock-skew allowance (5 minutes) after the core's clock: 400;
 - more than 24 hours before now only with `backdate: true`; without it the answer is 409 `PK-BACKDATE` saying how many receipts already recorded with the
   key would fail verification (`affected_receipts`). `clearance packet revoke-key --as-of T --backdate` shows that count in its confirmation;
 - not before the first delivery the core recorded to that recipient: 422. The core does not record when a key was registered (the keys come from
-  `CLEARANCE_PROVIDERS`), so the first delivery is the earliest time the core can say a credential of the recipient existed.
+  `CLEARANCE_PROVIDERS`), so the first delivery is the earliest time the core can say a credential of the recipient existed. A recipient the core has recorded **no delivery**
+  to has no receipt in the chain, so a back-dated revocation (more than 24 hours back) for it is refused 422 ("nothing to back-date"); an `as_of` within 24 hours is accepted.
 
 The first revocation of a key stands: a repeat is the first answer, whatever `as_of` it carries; nothing un-revokes or moves it. The record carries both `as_of` and
 `recorded_at`, the core's own time. Removing the key from `CLEARANCE_PROVIDERS` does not undo the revocation; the key must be a registered key of that recipient.
@@ -234,7 +240,7 @@ The core signs clearance tokens, packet credentials and grant feeds with one key
 retired keys in `GET /v1/keys` for 24 hours, plus 30 days for credentials. Revoking a **retired** key (`POST /v1/keys/{kid}/revoke`) commits the record
 and the key's revoked flag together. From then:
 
-- a packet credential it signed is an unknown key: a bare 401, nothing written. The check reads the key table on every request, so it holds at once, and a read that
+- a packet credential it signed is an unknown key: a bare 401, nothing written. The check reads the key table on every request, so it holds at once in every process, and a read that
   passed the check just before is recorded before the revocation (the gate above);
 - `GET /v1/keys` (the core's and clearance-api's) leaves the key out. It is omitted, not flagged: a verifier that does not know a flag would go on trusting a flagged
   key, and one that does not find the `kid` refuses what it signed. A verifier that caches `GET /v1/keys` (the grant-sync agent: 5 minutes; the response says `max-age=300`)
@@ -247,7 +253,10 @@ The key **in use** is refused (409): rotate first (start the core with another k
 `clearance verify --statement` fails closed on a statement it signed), `/s/<id>/keys.json` serves no key for it, and the hosted page of a statement it signed shows
 the signature check **failed** with the reason "signing key revoked; the issuer must reissue this statement" (never a pass). The answer to the revoke lists the ids of the
 statements that stood (`statements`; the CLI prints them): revoke each (`POST /v1/statements/{id}/revoke`) and issue it again with `reissue` under the key in use. The same
-request without that is refused 409 and says so. The revoked state is read with the key table's row once and kept; this process's own revocation updates it at once.
+request without that is refused 409 and says so. The revoked state is read with the key table's row once and kept; the process that took the revoke updates it at once. **Another process** that serves the verify page
+learns of it from the statement loop, which re-reads the signing keys' revoked flags about once a minute (the loop starts only from the start-up pass when statements exist, an admin issue, revoke
+or list, or the verify listener, never from an anonymous request, and an anonymous request makes no store call for this): it sees a key revocation within one loop tick plus the 5-minute
+`max-age` of `/s/<id>/keys.json`. Because `keys.json` is cacheable for 5 minutes, a verifier that caches it may trust a revoked statement key for that long.
 
 **Clearance tokens and the grant feed signed by the revoked key.** They are short-lived (15 minutes) and re-issued: a key that is no longer in use has had every
 live token re-signed at the first refresh after the rotation (`gate.Service.Refresh` re-issues a token signed by any key but the one in use, and a read of a token does

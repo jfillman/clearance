@@ -308,3 +308,15 @@ func (s *Server) waitWarmForTest() {
 		}
 	}
 }
+
+// SyncRevokedStatementKeysForTest is one tick of the statement loop's re-read of the signing keys' revoked flags.
+func (s *Server) SyncRevokedStatementKeysForTest(ctx context.Context) error {
+	return s.syncRevokedStatementKeys(ctx)
+}
+
+// SetReceiptPageSizeForTest makes the receipt index's pages n records long; the returned func restores it.
+func SetReceiptPageSizeForTest(n int) func() {
+	old := receiptPageSize
+	receiptPageSize = n
+	return func() { receiptPageSize = old }
+}

@@ -546,6 +546,11 @@ func (s *Server) getSample(w http.ResponseWriter, r *http.Request) {
 		s.refuseSample(w, r, claims, id, RulePacketRevoked, "this delivery was revoked at "+rv.at+": ask the subscriber for a new delivery", http.StatusForbidden, now)
 		return
 	}
+	now = s.opt.Clock() // the window is checked again under the gate, with a fresh reading of the clock
+	if rule, msg, status := credentialWindowRule(claims, now); rule != "" {
+		s.refuseSample(w, r, claims, id, rule, msg, status, now)
+		return
+	}
 	rec, created, status, msg, rule := s.recordSampling(ctx, claims, id, doc, params, now)
 	if status != 0 {
 		if status == http.StatusTooManyRequests {

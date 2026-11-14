@@ -26,6 +26,10 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   carries `recorded_at`; `clearance verify` also reads revocations from the carried records, fails a packet that omits one it carries, and judges a receipt by the core's record
   time, not `signed_at`; a revoked token key is revoked for verification statements too (`/v1/statement-keys`, the hosted page, the revoke answer lists the statements to reissue);
   revoke reasons refuse control, format and separator characters.
+  Second review round: another process serving the verify page learns of a token-key revocation from the statement loop's once-a-minute re-read of the signing keys' revoked flags;
+  `/readyz` reports `indexes` (warm, failed attempts) and a warm-up failing for over a minute is logged at error level, the receipt index resuming where it stopped; a carried receipt record
+  with no readable time fails the receipt in `clearance verify`; a credential's window is checked again under the revocation gate with a fresh clock; `as_of` is whole seconds, the affected count
+  is by record time, and a back-dated revoke for a recipient with no recorded delivery is refused.
 
 ## [0.48.0] - 2026-11-14
 

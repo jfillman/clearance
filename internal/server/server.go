@@ -133,6 +133,12 @@ type Server struct {
 	// receiptsReady is closed once the receipt index has been read (in the background, from start).
 	receiptsReady     chan struct{}
 	receiptsReadyOnce sync.Once
+	// receiptsPart and receiptsNext are the receipt index's scan so far (guarded by receiptMu): a failed read resumes there.
+	receiptsPart map[string]ReceiptRecorded
+	receiptsNext int64
+	// warmFails counts the failed attempts to read the revocation and receipt indexes; warmSince is when New started reading them.
+	warmFails atomic.Int64
+	warmSince time.Time
 
 	// sampleMu serializes samplings (P-2) and guards sampled, the index of samplings the chain already holds, so asking for a
 	// sample already drawn writes nothing. samplers keeps the checked sampling frame of the last few packets.
@@ -190,6 +196,7 @@ func New(ctx context.Context, opt Options) (*Server, error) {
 		}
 	}
 	s.mountServices()
+	s.warmSince = time.Now()
 	s.startWarm()
 	if opt.DevRecords {
 		s.mux.HandleFunc("GET "+DevRecordsPath, s.devRecords)
@@ -474,7 +481,7 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 			degraded = append(degraded, b.Name)
 		}
 	}
-	ready := Ready{OK: true, Policy: pol, Head: seq, Degraded: degraded, Attestation: s.opt.Attestation}
+	ready := Ready{OK: true, Policy: pol, Head: seq, Degraded: degraded, Attestation: s.opt.Attestation, Indexes: s.indexStatus()}
 	if s.opt.Ledger != nil {
 		st := s.opt.Ledger.Status(ctx)
 		ready.Ledger = &st
@@ -501,6 +508,32 @@ type Ready struct {
 	// whether a tier 3 change would wait. Absent when the ledger is off. Never unready: an outage of the ledger holds
 	// tier 3 changes, it does not take the core out of service.
 	Ledger *ledger.Status `json:"ledger,omitempty"`
+	// Indexes says whether the revocation and receipt indexes the packet routes rely on have been read. Until they have, those routes answer
+	// 503 with Retry-After, but the core stays ready (it is one replica and serves everything else); a warm-up that never finishes shows
+	// here as warm false and a growing failed_attempts, and in the log at error level after the first minute.
+	Indexes *IndexStatus `json:"indexes,omitempty"`
+}
+
+// IndexStatus is the state of the indexes the core reads in the background at start.
+type IndexStatus struct {
+	Warm           bool  `json:"warm"`
+	Revocations    bool  `json:"revocations"`
+	Receipts       bool  `json:"receipts"`
+	FailedAttempts int64 `json:"failed_attempts"`
+}
+
+func (s *Server) indexStatus() *IndexStatus {
+	isWarm := func(ch chan struct{}) bool {
+		select {
+		case <-ch:
+			return true
+		default:
+			return false
+		}
+	}
+	st := &IndexStatus{Revocations: isWarm(s.rev.warmChan()), Receipts: isWarm(s.receiptWarm()), FailedAttempts: s.warmFails.Load()}
+	st.Warm = st.Revocations && st.Receipts
+	return st
 }
 
 // Attestation is the change attestation signer's status: whether it runs, with which backend, or why it is off.

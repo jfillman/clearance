@@ -87,7 +87,7 @@ func FuzzRevokeBodies(f *testing.F) {
 	f.Add([]byte(`{"reason":"a\u0000b","extra":1}`))
 	f.Fuzz(func(t *testing.T, raw []byte) {
 		var a RevokeRequest
-		if strictDecode(bytes.NewReader(raw), &a) == nil && cleanText(a.Reason, MaxRevokeReason) {
+		if strictDecode(bytes.NewReader(raw), &a) == nil && cleanTextStrict(a.Reason, MaxRevokeReason) {
 			if !utf8.ValidString(a.Reason) || utf8.RuneCountInString(a.Reason) > MaxRevokeReason {
 				t.Fatalf("an accepted reason is not valid or too long: %q", a.Reason)
 			}
