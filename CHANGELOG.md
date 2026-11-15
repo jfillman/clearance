@@ -9,7 +9,7 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
-## [0.49.0] - 2026-11-14
+## [0.50.0] - 2026-11-15
 
 ### Added
 
@@ -23,6 +23,22 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   (`DG-SOURCE-LIMIT`), and a registration is all or nothing (its transaction rolls back on any error). A verifier `app-<app>-cicd/<sa>` registers manifest trees for `<app>` only (`DG-VERIFIER-APP`;
   `CLEARANCE_VERIFIER_APP_BINDING=off`). Aliases (`CLEARANCE_APPROVER_ALIASES`) are honoured. Records of a change with a set carry `change.people` (digest, count, names); a refused clear is a `deploy.refuse` record (own
   budget). Break-glass is not source-aware. A change whose tree holds no author, merger or promoter is also behind the target's people records that hold one, written within its hold window (bounded; past it a clear is refused `DG-PEOPLE-WINDOW`), and at clear time approvals from people now behind the change are set aside (`set_aside`). Returned as `source` and `also_behind` on reads. Requests without it behave as before. Go and Python clients updated.
+
+### Changed
+
+- **Upgrading from 0.49.0: read this before rolling out** (the rule is [docs/gate.md](docs/gate.md#the-people-behind-a-change-built)).
+  - **Who can no longer clear.** Even when no registrar sends `source`, the proposer of any change on a manifest tree can no longer clear *any* change on that tree (the Argo CD plugin's `pr 0` registration included), and
+    a proposer is compared as the approver rules compare names (case, `user:` prefix). A deployment where one person proposes and clears every change (a lab with one owner) has nobody eligible for those changes: add a second person
+    to the owner group (and, for tier 3, one to an outside group) before rolling out, or plan on break-glass, which is not source-aware.
+  - **Registrars.** A verifier named `app-<app>-cicd/<sa>` can now register manifest trees for `<app>` only (`DG-VERIFIER-APP`, 403). Check that no pipeline registers for an app other than the one of its namespace; `gate.verifierAppBinding: "off"` (`CLEARANCE_VERIFIER_APP_BINDING=off`) turns the check off.
+  - **Schema.** One new table, `clearance_tree_people`, and one partial index, created by the core on start with `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` (no data migration, no change to an existing table, nothing to apply first).
+  - **Rolling back to 0.49.0.** Safe for the database: 0.49.0 never reads the table and ignores the new fields of a stored change (`source`, `also_behind`) and the new record kinds (`deploy.people`, `deploy.refuse`). The rule is lost while it runs (back to
+    the exact-match proposer check), the table keeps what it recorded and is used again when 0.50.0 returns. The records written stay in the chain.
+  - **Glidepath.** Until the Glidepath change that resolves source authors, mergers and the promoter from GitHub ships (jfillman/glidepath#247), the people a registration names are its proposer only; `source` is optional and a registrar that omits it behaves as before.
+
+## [0.49.0] - 2026-11-14
+
+### Added
 
 - **Revocation of the W6 assurance surface** ([docs/assurance.md](docs/assurance.md#revocation)); the Cloud spec's access-grant revoke now has its core half.
   `POST /v1/packets/{id}/deliveries/{delivery}/revoke` (admin; `packet.revoke` record before the answer, idempotent): every read and sample under the delivery's credential is
@@ -1635,7 +1651,8 @@ What the Autopilot gateway needs of the core before the hangar-dev cutover (R-3e
   scope, narrow-only limits, CEL policy, sessions, the hash-chained audit log and the gateway; the Hangar pack's
   `glidepath.*` and `airframe.*` tools over glidepath-api and a GET-only Kubernetes adapter.
 
-[Unreleased]: https://github.com/jfillman/clearance/compare/v0.49.0...HEAD
+[Unreleased]: https://github.com/jfillman/clearance/compare/v0.50.0...HEAD
+[0.50.0]: https://github.com/jfillman/clearance/compare/v0.49.0...v0.50.0
 [0.49.0]: https://github.com/jfillman/clearance/compare/v0.48.0...v0.49.0
 [0.48.0]: https://github.com/jfillman/clearance/compare/v0.47.1...v0.48.0
 [0.47.1]: https://github.com/jfillman/clearance/compare/v0.47.0...v0.47.1
