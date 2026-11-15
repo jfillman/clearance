@@ -78,9 +78,13 @@ type Change struct {
 	ProposerKind string  `json:"proposer_kind"`
 	Agent        *string `json:"agent"`
 	TaskID       *string `json:"task_id"`
-	// Source is the people behind the change as the verifier sent them (request source); fixed at registration and
+	// Source is the people behind the change as the verifier sent them (request source); grow-only (never shrinks) and
 	// absent on changes registered without it.
-	Source           *SourcePeople     `json:"source,omitempty"`
+	Source *SourcePeople `json:"source,omitempty"`
+	// AlsoBehind is who else is excluded from clearing it, added after the first registration (another proposer, another
+	// promoter): the set only grows. PeopleNotes counts the people and refused-clear records written (bounded).
+	AlsoBehind       []Behind          `json:"also_behind,omitempty"`
+	PeopleNotes      int               `json:"people_notes,omitempty"`
 	Owner            string            `json:"owner"`
 	Protected        bool              `json:"protected"`
 	TreeDigest       string            `json:"tree_digest"`

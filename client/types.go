@@ -610,6 +610,12 @@ type ChangeRequest struct {
 	Subject *PlanSubject `json:"subject,omitempty"`
 }
 
+// BehindPerson is a person added to a change's excluded set after its first registration (Role: proposer or promoter).
+type BehindPerson struct {
+	Role   string `json:"role"`
+	Person string `json:"person"`
+}
+
 // SourcePeople is request.source: the openers of the source pull requests a release bundles, the people who merged
 // them and the promoter, each a principal (user:<name>, as proposer). At most 64 authors and 64 mergers, no
 // duplicates. None of them, nor the proposer, can clear the change.
@@ -721,7 +727,11 @@ type Change struct {
 	Agent        *string `json:"agent"`
 	TaskID       *string `json:"task_id"`
 	// Source is the people behind the change as registered; nil for a change registered without them.
-	Source           *SourcePeople     `json:"source,omitempty"`
+	Source *SourcePeople `json:"source,omitempty"`
+	// AlsoBehind is who else is excluded from clearing it, added after the first registration; PeopleNotes counts the
+	// people and refused-clear records written for the change.
+	AlsoBehind       []BehindPerson    `json:"also_behind,omitempty"`
+	PeopleNotes      int               `json:"people_notes,omitempty"`
 	Owner            string            `json:"owner"`
 	Protected        bool              `json:"protected"`
 	TreeDigest       string            `json:"tree_digest"`

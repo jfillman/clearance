@@ -730,19 +730,46 @@ oversize list, an unknown key or a malformed entry is a 400, like any other malf
   and `user:dev` are one person. The proposer check now compares the same way; before this it was an exact string
   comparison, so a proposer registered as `Dana` did not stop `user:dana`. Nothing treats a bot specially: a
   `dependabot[bot]` login is a name like any other (a `person`-kind proposer that is a bot is a separate decision).
-- **Fixed at registration.** Registering the same change again (same repository, pull request and head) must send the
-  same proposer and the same set (order, case and the `user:` prefix do not matter): anything else, including leaving
-  `source` out, is `DG-IMMUTABLE` (409), whether the change is still holding or already decided. Before this the
-  proposer sent on a re-registration was silently ignored; both are strict now. A new head is a new change and carries
-  its own set. A change registered before this field existed is not given one afterwards; a new head carries it.
+- **The set only grows.** The excluded people of a change are the union of every proposer and every `source` entry
+  ever registered for it. A re-registration (a re-run, a `/retest` by another person, a second registrar) may add
+  people and never removes any: a shorter set, or none, is accepted and has no effect, and is recorded
+  (`deploy.people`, "omitted N name(s)"). A different `proposer` on a re-registration is added to the set ("a further
+  proposer") and the first proposer stays the displayed one; a different promoter is added the same way. This applies
+  to a change that was already holding before this field existed. A decided change keeps its state but its set still
+  grows. A new head is a new change and starts from its own set (and the same tree's, below). The stored lists are
+  bounded (512 each; past it `DG-SOURCE-LIMIT`, 409).
+- **Across changes on one tree.** The exclusion is per change, but a tree can be registered twice: the Argo CD plugin
+  registers the merged tree as `pr 0` (proposer `system:argocd-cmp`, no set) while the pull request's change may still
+  hold. So the people behind every **holding or cleared (not superseded) change on the same tree** are one set: a
+  registration takes the union of them, and when a later registration brings people, the holding changes on that tree
+  gain them too. "The same tree" is what the by-tree lookup keys on: the same app, environment, cluster and
+  repository, a manifest tree (or definition release) with the same bound tree digest, whatever the pull request or
+  head. A terraform plan and a placeholder tree have no such key. Either order works (the pull request's change first,
+  or the plugin's), and a gained name is a `deploy.people` record on the change that gained it.
+- **Aliases.** The comparison goes through `CLEARANCE_APPROVER_ALIASES` as the tier 3 distinct-approver rule does, so a
+  person with two aliased identities is excluded under both.
+- **Precondition.** The rule matches the clearing person (`user:<name>`, the name from `CLEARANCE_OIDC_USER_CLAIM`)
+  with the names the verifier sent. It works only when the two are the same name: the source system's login (a GitHub
+  login) equals the sign-in name, or an alias maps them. A sign-in whose name is an email address never matches a
+  login (`user:erin@example.com` is not `erin`); with such a deployment configure the user claim to a login-shaped
+  claim, or aliases, or the rule excludes no one.
+- **Break-glass is not source-aware.** An excluded admin can still open break-glass; that is recorded as break-glass
+  (`breakglass.open`), not as a clear. Unchanged by this rule.
 - **Who may supply it.** Only a verifier, because only a verifier may register a change (`CLEARANCE_VERIFIERS`): a
   person at the CLI or in the UI cannot register, so cannot name `source` for their own benefit. The set can only
   narrow who may clear; a verifier that leaves it out gets today's behaviour, so the verifier is trusted to send what
   it resolved from authenticated facts (Glidepath: the GitHub pull request openers and merge actors, not commit text).
-- **Stored, returned, recorded.** The set is in the change's record, so it is returned as `source` on every read
-  (`GET /v1/clearances`, `/{id}`, both APIs; absent when none) and the Go and Python clients model it. It is covered by
-  the `deploy.request` record's `args_sha256` (the digest of the registration body) and is not copied into the record's
-  fields, so the record's shape is unchanged. **It is not in the clearance token**: a consumer of the token verifies
+- **Stored, returned, recorded.** The set is in the change's record, so it is returned as `source` (plus
+  `also_behind`, the people added later) on every read (`GET /v1/clearances`, `/{id}`, both APIs; absent when none)
+  and the Go and Python clients model it. A change that has a set carries it in its records: the `change` object of
+  `deploy.request`, `deploy.clear` and `deploy.people` has `people: {digest, count, excluded}` (the sorted names by
+  role, listed when there are at most 64, else the digest and count only), so an auditor with only the packet sees who
+  was excluded and which version of the set a clear was checked against (`deploy.clear`'s `change.people.digest`). A
+  change without a set records exactly what it did before; old records stay valid (`change` is a free object). A
+  refused clear is a `deploy.refuse` record (decision `deny`, rule `DG-PROPOSER`, the person and the role that
+  excluded them), at most 32 people records and refusals per change. The packet reads `deploy.request`,
+  `deploy.clear` and `deploy.deny` for a change's state and ignores `deploy.people` and `deploy.refuse`, so neither
+  is mistaken for a state. **It is not in the clearance token**: a consumer of the token verifies
   *what* was cleared and *who cleared it* (`approvals`, `provenance.proposer`), and up to 129 more names would grow a
   credential every Argo CD agent and admission policy carries, for no decision they make. There is no database column:
   the change row's `record` is jsonb.
@@ -975,7 +1002,7 @@ partial index `clearance_evidence_exceptions`. Filters: `tool`, `kind` (an excep
 | `unprotected` | a change's reason (tier 0) | the environment is not on `CLEARANCE_PROTECTED_ENVIRONMENTS` |
 | `DG-POLICY` (outage) | `clearance.yaml` | an `outage:` entry that loosens the baseline, or not a tier 0 to 3 |
 | `DG-PROPOSER` | clear, 403 | the person is the proposer, a source author or merger, or the promoter ([the people behind a change](#the-people-behind-a-change-built)) |
-| `DG-IMMUTABLE` | `POST /v1/clearances`, 409 | a re-registration sends another proposer or another `source` set |
+| `DG-SOURCE-LIMIT` | `POST /v1/clearances`, 409 | the change's stored people would pass 512 authors or mergers |
 | `DG-BREAKGLASS` | `POST /v1/breakglass`, `/close`, 403 | not an admin |
 | `DG-RESOLUTION` | `POST /v1/observations/{seq}/resolution`, 403 | not an admin |
 | `DG-BREAKGLASS-TTL` | `POST /v1/breakglass`, 400 | the TTL is not a Go duration from 1m to the deployment's maximum (at most 4h) |

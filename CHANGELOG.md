@@ -14,9 +14,10 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 - **The people behind a change cannot clear it** ([docs/gate.md](docs/gate.md#the-people-behind-a-change-built)). A registration may carry `source: {authors, mergers, promoter}` (principals as `proposer`;
   at most 64 authors and 64 mergers, no duplicates; verifier only, since only a verifier registers). The proposer, a source author or merger and the promoter cannot clear the change at tier 2 or tier 3
   (`DG-PROPOSER`, naming the roles that excluded them); this closes the steer of making someone else, or a bot, the proposer and then clearing one's own release. Deny, break-glass and the token are
-  unchanged (the set is not in the token). Names compare as the approver rules do (case, `user:` prefix): the proposer check now does too (it was an exact string match). The proposer and the set are
-  fixed at registration: re-registering with another proposer (which was silently ignored) or another set is `DG-IMMUTABLE` (409). Returned as `source` on reads, covered by the `deploy.request` record's
-  `args_sha256`; no migration (the change record is jsonb). Requests without it behave as before. Go and Python clients updated.
+  unchanged (the set is not in the token). Names compare as the approver rules do (case, `user:` prefix): the proposer check now does too (it was an exact string match). The set only grows: a re-registration adds its proposer (the first stays displayed; others are "a further proposer") and its
+  set, never removes (an omission is recorded as `deploy.people`); it is also the union across every holding or cleared change on the same tree (app, env, cluster, repo, manifest-tree digest), so the Argo CD
+  plugin's `pr 0` registration cannot be cleared by the pull request's authors. Aliases (`CLEARANCE_APPROVER_ALIASES`) are honoured. Records of a change with a set carry `change.people` (digest, count, names);
+  a refused clear is a `deploy.refuse` record (bounded). Break-glass is not source-aware. Returned as `source` and `also_behind` on reads; no migration (the change record is jsonb). Requests without it behave as before. Go and Python clients updated.
 
 - **Revocation of the W6 assurance surface** ([docs/assurance.md](docs/assurance.md#revocation)); the Cloud spec's access-grant revoke now has its core half.
   `POST /v1/packets/{id}/deliveries/{delivery}/revoke` (admin; `packet.revoke` record before the answer, idempotent): every read and sample under the delivery's credential is

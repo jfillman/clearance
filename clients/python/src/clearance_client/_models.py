@@ -18,7 +18,7 @@ CONTRACT_VERSION = "1.0.0"
 
 RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "run.finish", "human.answer", "session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome", "deploy.exception", "deploy.degraded", "federated.decision", "observation", "assessment", "resolution", "observation.health", "observation.verification", "grc.push", "grc.report")
 
-__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BackdateRefusal", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Delivery", "DeliveryRequest", "DeliveryRevoked", "DeliveryWindow", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateBulkResolutionFailed", "GateBulkResolutionRecorded", "GateBulkResolutionRequest", "GateBulkResolutionResult", "GateBulkResolutionSkipped", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateProtectedPair", "GateReason", "GateRequirement", "GateResolutionRecorded", "GateResolutionRequest", "GateResource", "GateSourcePeople", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "IndexStatus", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PacketBundle", "PacketCheckpointRef", "PacketError", "PacketLinks", "PacketMeta", "PacketPublished", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProtectionCluster", "ProtectionRequest", "ProtectionResult", "ProtectionState", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProvidedDefinition", "ProviderEvent", "Ready", "ReceiptRecorded", "RecipientKeyRevokeRequest", "RecipientKeyRevoked", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "RevokeRequest", "SamplingCheckpoint", "SamplingDocument", "SamplingItem", "SamplingPacketRef", "SamplingParams", "SamplingPopulationDoc", "SamplingProof", "SamplingRecorded", "SamplingRow", "SamplingStratum", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "StatementIssued", "StatementLinks", "StatementList", "StatementListItem", "StatementRequest", "StatementRevokeRequest", "StatementRevoked", "Subject", "SubjectProperties", "TargetsGate", "TargetsObserver", "TargetsRequest", "TargetsResult", "TargetsTarget", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenKeyRevoked", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
+__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BackdateRefusal", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Delivery", "DeliveryRequest", "DeliveryRevoked", "DeliveryWindow", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBehind", "GateBreakglass", "GateBreakglassRequest", "GateBulkResolutionFailed", "GateBulkResolutionRecorded", "GateBulkResolutionRequest", "GateBulkResolutionResult", "GateBulkResolutionSkipped", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateProtectedPair", "GateReason", "GateRequirement", "GateResolutionRecorded", "GateResolutionRequest", "GateResource", "GateSourcePeople", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "IndexStatus", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PacketBundle", "PacketCheckpointRef", "PacketError", "PacketLinks", "PacketMeta", "PacketPublished", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProtectionCluster", "ProtectionRequest", "ProtectionResult", "ProtectionState", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProvidedDefinition", "ProviderEvent", "Ready", "ReceiptRecorded", "RecipientKeyRevokeRequest", "RecipientKeyRevoked", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "RevokeRequest", "SamplingCheckpoint", "SamplingDocument", "SamplingItem", "SamplingPacketRef", "SamplingParams", "SamplingPopulationDoc", "SamplingProof", "SamplingRecorded", "SamplingRow", "SamplingStratum", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "StatementIssued", "StatementLinks", "StatementList", "StatementListItem", "StatementRequest", "StatementRevokeRequest", "StatementRevoked", "Subject", "SubjectProperties", "TargetsGate", "TargetsObserver", "TargetsRequest", "TargetsResult", "TargetsTarget", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenKeyRevoked", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -562,6 +562,20 @@ class GateApproval(Model):
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
+class GateBehind(Model):
+    """Contract schema GateBehind."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("person", "person", ("str",), True),
+        Field("role", "role", ("str",), True),
+    )
+
+    person: str
+    role: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
 class GateBreakglass(Model):
     """Contract schema GateBreakglass."""
 
@@ -727,6 +741,7 @@ class GateChange(Model):
     _FIELDS: ClassVar[tuple[Field, ...]] = (
         Field("admission", "admission", ("nullable", ("ref", "GateAdmission")), False),
         Field("agent", "agent", ("nullable", ("str",)), True),
+        Field("also_behind", "also_behind", ("list", ("ref", "GateBehind")), False),
         Field("app", "app", ("str",), True),
         Field("approvals", "approvals", ("list", ("ref", "GateApproval")), True),
         Field("base", "base", ("str",), True),
@@ -754,6 +769,7 @@ class GateChange(Model):
         Field("owner", "owner", ("str",), True),
         Field("paths", "paths", ("list", ("str",)), True),
         Field("paths_count", "paths_count", ("int",), True),
+        Field("people_notes", "people_notes", ("int",), False),
         Field("policy_ref", "policy_ref", ("str",), False),
         Field("policy_version", "policy_version", ("str",), True),
         Field("pr", "pr", ("int",), True),
@@ -778,6 +794,7 @@ class GateChange(Model):
 
     admission: GateAdmission | None = None
     agent: str | None
+    also_behind: list[GateBehind] | None = None
     app: str
     approvals: list[GateApproval]
     base: str
@@ -805,6 +822,7 @@ class GateChange(Model):
     owner: str
     paths: list[str]
     paths_count: int
+    people_notes: int | None = None
     policy_ref: str | None = None
     policy_version: str
     pr: int
@@ -835,6 +853,7 @@ class GateChangeWithAuditSeq(Model):
     _FIELDS: ClassVar[tuple[Field, ...]] = (
         Field("admission", "admission", ("nullable", ("ref", "GateAdmission")), False),
         Field("agent", "agent", ("nullable", ("str",)), True),
+        Field("also_behind", "also_behind", ("list", ("ref", "GateBehind")), False),
         Field("app", "app", ("str",), True),
         Field("approvals", "approvals", ("list", ("ref", "GateApproval")), True),
         Field("audit_seq", "audit_seq", ("int",), True),
@@ -863,6 +882,7 @@ class GateChangeWithAuditSeq(Model):
         Field("owner", "owner", ("str",), True),
         Field("paths", "paths", ("list", ("str",)), True),
         Field("paths_count", "paths_count", ("int",), True),
+        Field("people_notes", "people_notes", ("int",), False),
         Field("policy_ref", "policy_ref", ("str",), False),
         Field("policy_version", "policy_version", ("str",), True),
         Field("pr", "pr", ("int",), True),
@@ -887,6 +907,7 @@ class GateChangeWithAuditSeq(Model):
 
     admission: GateAdmission | None = None
     agent: str | None
+    also_behind: list[GateBehind] | None = None
     app: str
     approvals: list[GateApproval]
     audit_seq: int
@@ -915,6 +936,7 @@ class GateChangeWithAuditSeq(Model):
     owner: str
     paths: list[str]
     paths_count: int
+    people_notes: int | None = None
     policy_ref: str | None = None
     policy_version: str
     pr: int
@@ -3116,6 +3138,7 @@ MODELS: dict[str, type[Model]] = {
     "GateAdmission": GateAdmission,
     "GateAppliedChange": GateAppliedChange,
     "GateApproval": GateApproval,
+    "GateBehind": GateBehind,
     "GateBreakglass": GateBreakglass,
     "GateBreakglassRequest": GateBreakglassRequest,
     "GateBulkResolutionFailed": GateBulkResolutionFailed,

@@ -319,8 +319,13 @@ func (s *Service) Register(ctx context.Context, p authn.Principal, body any) (*C
 			return err
 		}
 		if existing != nil {
-			if err := sameSource(existing, req); err != nil {
+			// The people behind a change only grow: a re-registration adds its proposer and set, never removes.
+			changed, err := s.mergePeople(ctx, tx, w, existing, req, p.ID, false)
+			if err != nil {
 				return err
+			}
+			if changed && existing.State != StateHolding {
+				w.put(existing)
 			}
 		}
 		if existing != nil && existing.State != StateHolding {
@@ -386,9 +391,12 @@ func (s *Service) Register(ctx context.Context, p authn.Principal, body any) (*C
 				w.record("policy", nil, "deploy.expire", old, "allow", nil, "superseded by "+pycompat.Truncate(req.Head, 7), map[string]any{"by": req.Head})
 			}
 			ch = Open(req, c, w.now, p.ID)
+			if _, err := s.mergePeople(ctx, tx, w, ch, req, p.ID, true); err != nil {
+				return err
+			}
 			ch.State = ""
 			w.opened(ch, to)
-			w.record(p.ID, nil, "deploy.request", ch, "allow", nil, c.Why, body)
+			w.record(p.ID, nil, "deploy.request", ch, "allow", nil, c.Why, body, map[string]any{"change": ch.recordChange()})
 		} else {
 			ch = existing
 			ch.Checks, ch.Tier, ch.Reasons, ch.UpdatedAt = copyChecks(req.Checks), c.Tier, append([]Reason(nil), c.Reasons...), now
@@ -563,6 +571,11 @@ func (s *Service) Clear(ctx context.Context, p authn.Principal, changeID, onBeha
 		}
 		role, err := RoleFor(person, groups, c)
 		if err != nil {
+			var ge *Error
+			if errors.As(err, &ge) && ge.Rule == "DG-PROPOSER" {
+				// A refused clear is a record (who tried, which role excluded them), bounded per change.
+				w.refused(c, person, via, ge)
+			}
 			return err
 		}
 		if err := checkApproverDistinct(c, person, who, sessionDigest(who.iss, who.sid), onBehalfOf != ""); err != nil {
@@ -610,6 +623,7 @@ func (s *Service) Clear(ctx context.Context, p authn.Principal, changeID, onBeha
 		if waiting != "" {
 			extra["evidence"] = map[string]any{"assurance": AssuranceWaiting, "detail": waiting}
 		}
+		extra["change"] = c.recordChange() // the set this clear was checked against (change.people.digest)
 		rec := w.record(person, via, "deploy.clear", c, "allow", nil, result, map[string]any{"role": role}, extra)
 		out = Decided{c.View(), recordSeq(rec)}
 		return nil
@@ -728,3 +742,85 @@ func lower(s string) string { return strings.ToLower(s) }
 
 // PolicyView is Gateway.gate_policy_view.
 func (s *Service) PolicyView() PolicyView { return s.Policy.View() }
+
+// treeKey is what "the same tree" means for the people rule, as clearedByTree keys it: a manifest-tree change (or a
+// definition release) of the same app, environment, cluster and repository with the same bound tree digest, whatever
+// its pull request or head. "" for a terraform plan or a placeholder tree.
+func treeKey(c *Change) string {
+	if (c.Subject != nil && c.Subject.Kind != KindManifestTree) || Unbound(c.TreeDigest) {
+		return ""
+	}
+	return c.App + "|" + c.Env + "|" + c.Cluster + "|" + c.Repo + "|" + bareHex(c.TreeDigest)
+}
+
+// mergePeople makes the people behind ch the union of what it has, what req brings, and every other holding or
+// cleared (not superseded) change on the same tree has; holding changes on that tree gain the union too, so the
+// Argo CD plugin's pr 0 registration of a tree a pull request's change already holds cannot be cleared by that
+// pull request's author. It only adds. It records what was added, and a re-registration that left stored names out.
+func (s *Service) mergePeople(ctx context.Context, tx store.Tx, w *writer, ch *Change, req ChangeRequest, principal string, fresh bool) (bool, error) {
+	changed := false
+	if n := ch.omitted(req); n > 0 && ch.PeopleNotes < MaxPeopleNotes {
+		changed = true
+		w.note(ch, principal, fmt.Sprintf("people: the registration omitted %d name(s) the change has; kept (the set only grows)", n))
+	}
+	union := ch.peopleOf().union(requestPeople(req))
+	var peers []*Change
+	if key := treeKey(ch); key != "" {
+		holding, err := loadAll(tx.ChangesHolding(ctx))
+		if err != nil {
+			return false, err
+		}
+		cleared, err := loadAll(tx.ChangesCleared(ctx, ch.App, ch.Env))
+		if err != nil {
+			return false, err
+		}
+		for _, o := range append(holding, cleared...) {
+			if o.ID != ch.ID && treeKey(o) == key && (o.State == StateHolding || o.State == StateCleared) {
+				peers = append(peers, o)
+				union = union.union(o.peopleOf())
+			}
+		}
+	}
+	added, err := ch.absorb(union)
+	if err != nil {
+		return false, err
+	}
+	if len(added) > 0 {
+		changed = true
+		if !fresh {
+			w.note(ch, principal, "people: added "+strings.Join(added, ", "))
+		}
+	}
+	for _, o := range peers {
+		if o.State != StateHolding {
+			continue
+		}
+		if added, err := o.absorb(union); err != nil {
+			return false, err
+		} else if len(added) > 0 {
+			w.note(o, "policy", "people: gained "+strings.Join(added, ", ")+" from the same tree ("+ch.ID+")")
+			w.put(o)
+		}
+	}
+	return changed, nil
+}
+
+// note records a growth of (or an omission from) a change's people, as deploy.people, bounded per change.
+func (w *writer) note(c *Change, principal, result string) {
+	if c.PeopleNotes >= MaxPeopleNotes {
+		return
+	}
+	c.PeopleNotes++
+	w.record(principal, nil, "deploy.people", c, "allow", nil, result, map[string]any{"change": c.recordChange()})
+}
+
+// refused records a clear the people rule refused, as deploy.refuse (decision deny, rule DG-PROPOSER), bounded per
+// change; the packet reads deploy.request, deploy.clear and deploy.deny, so this is not mistaken for a state.
+func (w *writer) refused(c *Change, person string, via *string, ge *Error) {
+	if c.PeopleNotes >= MaxPeopleNotes {
+		return
+	}
+	c.PeopleNotes++
+	w.record(person, via, "deploy.refuse", c, "deny", strp(ge.Rule), ge.Message, map[string]any{"rule": ge.Rule}, map[string]any{"change": c.recordChange()})
+	w.put(c)
+}

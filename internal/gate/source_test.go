@@ -13,6 +13,8 @@ import (
 
 	"github.com/jfillman/clearance/internal/authn"
 	"github.com/jfillman/clearance/internal/gate"
+	"github.com/jfillman/clearance/internal/vocab"
+	"github.com/jfillman/clearance/internal/vocab/vocabtest"
 )
 
 // srcGroups: dev and lead are in the owner group, sec is in the outside group, lead2 is in both.
@@ -260,40 +262,170 @@ func TestWithoutASetNothingChanges(t *testing.T) {
 
 // -- immutability ----------------------------------------------------------------------------------------------------
 
-func TestTheSetAndTheProposerAreFixedAtRegistration(t *testing.T) {
+func names(xs []string) string { return strings.Join(xs, ",") }
+
+// A re-registration may add people, never remove them; a different proposer is added to the excluded set.
+func TestThePeopleOnlyGrow(t *testing.T) {
 	f := newSrcGate(t)
-	first := change(map[string]any{"objects": replicas, "source": src([]string{"dev", "bob"}, []string{"lead"}, "dana")})
-	cid := f.register(t, "ci", first).ID
-	// the same set, in another order and spelling, is the same set (a re-run)
-	same := change(map[string]any{"objects": replicas, "source": src([]string{"user:BOB", "dev"}, []string{"lead"}, "user:dana")})
-	if out := f.register(t, "ci", same); out.ID != cid {
-		t.Fatal(out.ID)
+	cid := f.register(t, "ci", change(map[string]any{"objects": replicas, "source": src([]string{"dev", "bob"}, []string{"lead"}, "dana")})).ID
+	// a shrink has no effect and is recorded
+	out := f.register(t, "ci", change(map[string]any{"objects": replicas, "source": src([]string{"dev"}, nil, "")}))
+	if names(out.Source.Authors) != "dev,bob" || names(out.Source.Mergers) != "lead" || out.Source.Promoter != "dana" {
+		t.Fatal("the set shrank:", out.Source)
 	}
-	for name, over := range map[string]map[string]any{
-		"shrunk":       {"source": src([]string{"dev"}, []string{"lead"}, "dana")},
-		"emptied":      {"source": nil, "proposer": "user:dana"},
-		"grown":        {"source": src([]string{"dev", "bob", "eve"}, []string{"lead"}, "dana")},
-		"moved role":   {"source": src([]string{"dev", "bob"}, []string{"lead"}, "")},
-		"new proposer": {"proposer": "user:eve"},
-	} {
-		over["objects"] = replicas
-		if _, ok := over["source"]; !ok && name != "emptied" {
-			over["source"] = src([]string{"dev", "bob"}, []string{"lead"}, "dana")
-		}
-		_, err := f.svc.Register(f.ctx, principals["ci"], change(over))
-		if rule(err) != "DG-IMMUTABLE" {
-			t.Errorf("%s: %v", name, err)
+	if n := len(f.records(t, "deploy.people")); n != 1 || !strings.Contains(f.records(t, "deploy.people")[0]["result"].(string), "omitted") {
+		t.Fatal("the shrink attempt is not recorded:", f.records(t, "deploy.people"))
+	}
+	// no source at all is the same: kept
+	if out := f.register(t, "ci", change(map[string]any{"objects": replicas})); names(out.Source.Authors) != "dev,bob" {
+		t.Fatal(out.Source)
+	}
+	// growth works while holding; spelling does not add a duplicate
+	out = f.register(t, "ci", change(map[string]any{"objects": replicas, "source": src([]string{"User:DEV", "eve"}, []string{"lead"}, "dana")}))
+	if names(out.Source.Authors) != "dev,bob,eve" {
+		t.Fatal(out.Source)
+	}
+	// a different proposer is added, the first stays displayed
+	out = f.register(t, "ci", change(map[string]any{"objects": replicas, "proposer": "user:zed", "source": src([]string{"dev"}, nil, "")}))
+	if out.Proposer != "user:dana" || len(out.AlsoBehind) != 1 || out.AlsoBehind[0] != (gate.Behind{"proposer", "user:zed"}) {
+		t.Fatal(out.Proposer, out.AlsoBehind)
+	}
+	// a /retest by another promoter adds a promoter
+	out = f.register(t, "ci", change(map[string]any{"objects": replicas, "source": src(nil, nil, "lead")}))
+	if len(out.AlsoBehind) != 2 || out.AlsoBehind[1] != (gate.Behind{"promoter", "lead"}) {
+		t.Fatal(out.AlsoBehind)
+	}
+	for _, who := range []string{"eve", "bob", "lead", "dana"} {
+		if _, err := f.svc.Clear(f.ctx, person(who), cid, ""); rule(err) != "DG-PROPOSER" {
+			t.Errorf("%s: %v", who, err)
 		}
 	}
-	// and it is refused after the change was decided too
-	if _, err := f.svc.Clear(f.ctx, person("erin"), cid, ""); rule(err) != "" {
+	_, err := f.svc.Clear(f.ctx, person("zed"), cid, "")
+	if rule(err) != "DG-PROPOSER" || !strings.Contains(msg(err), "further proposer") {
 		t.Fatal(err)
 	}
-	if _, err := f.svc.Register(f.ctx, principals["ci"], change(map[string]any{"objects": replicas})); rule(err) != "DG-IMMUTABLE" {
-		t.Fatal("a decided change's set was dropped:", err)
+	if _, err := f.svc.Clear(f.ctx, person("erin"), cid, ""); err != nil {
+		t.Fatal(err)
 	}
-	if got := f.get(t, cid); got.Source == nil || len(got.Source.Authors) != 2 {
-		t.Fatal(got.Source)
+	// decided: the state does not change, the set still grows
+	out = f.register(t, "ci", change(map[string]any{"objects": replicas, "source": src([]string{"late"}, nil, "")}))
+	if out.State != "cleared" || names(f.get(t, cid).Source.Authors) != "dev,bob,eve,late" {
+		t.Fatal(out.State, f.get(t, cid).Source)
+	}
+}
+
+// A change already holding when this shipped (no set) is re-registered with one: it gains it, with no refusal.
+func TestAChangeHoldingAtUpgradeGainsTheSet(t *testing.T) {
+	f := newSrcGate(t)
+	cid := f.register(t, "ci", change(map[string]any{"objects": replicas})).ID
+	if _, err := f.svc.Register(f.ctx, principals["ci"], change(map[string]any{"objects": replicas, "source": src([]string{"dev"}, nil, "")})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.Clear(f.ctx, person("dev"), cid, ""); rule(err) != "DG-PROPOSER" {
+		t.Fatal(err)
+	}
+}
+
+// The same tree registered again as pr 0 (the Argo CD plugin) must not be clearable by the PR's authors, whichever
+// registers first.
+func TestTheSetFollowsATreeAcrossChanges(t *testing.T) {
+	plugin := func() map[string]any {
+		return change(map[string]any{"objects": replicas, "pr": json.Number("0"), "proposer": "system:argocd-cmp", "head": strings.Repeat("9", 40)})
+	}
+	pr := func() map[string]any {
+		return change(map[string]any{"objects": replicas, "source": src([]string{"dev"}, []string{"lead"}, "")})
+	}
+	for _, order := range []string{"pr first", "plugin first"} {
+		t.Run(order, func(t *testing.T) {
+			f := newSrcGate(t)
+			var prID, pluginID string
+			if order == "pr first" {
+				prID = f.register(t, "ci", pr()).ID
+				pluginID = f.register(t, "ci", plugin()).ID
+			} else {
+				pluginID = f.register(t, "ci", plugin()).ID
+				prID = f.register(t, "ci", pr()).ID
+			}
+			if prID == pluginID {
+				t.Fatal("one change")
+			}
+			for _, who := range []string{"dev", "lead", "dana"} {
+				if _, err := f.svc.Clear(f.ctx, person(who), pluginID, ""); rule(err) != "DG-PROPOSER" {
+					t.Errorf("%s cleared the plugin's change: %v", who, err)
+				}
+			}
+			if out, err := f.svc.Clear(f.ctx, person("erin"), pluginID, ""); err != nil || out.State != "cleared" {
+				t.Fatal(out, err)
+			}
+		})
+	}
+	// another tree is untouched
+	f := newSrcGate(t)
+	f.register(t, "ci", change(map[string]any{"objects": replicas, "source": src([]string{"dev"}, nil, "")}))
+	other := f.register(t, "ci", change(map[string]any{"objects": replicas, "pr": json.Number("0"), "head": strings.Repeat("8", 40),
+		"treeDigest": strings.Repeat("ab", 32), "proposer": "system:argocd-cmp"}))
+	if _, err := f.svc.Clear(f.ctx, person("dev"), other.ID, ""); err != nil {
+		t.Fatal("a different tree took the set:", err)
+	}
+}
+
+func TestAnAliasOfAPersonBehindTheChangeIsExcluded(t *testing.T) {
+	v := vocabtest.Lab()
+	v.ApproverAliases = [][]string{{"user:dev", "user:erin"}}
+	vocab.Set(v)
+	t.Cleanup(func() { vocab.Set(vocabtest.Lab()) })
+	f := newSrcGate(t)
+	cid := f.register(t, "ci", change(map[string]any{"objects": replicas, "source": src([]string{"dev"}, nil, "")})).ID
+	if _, err := f.svc.Clear(f.ctx, person("erin"), cid, ""); rule(err) != "DG-PROPOSER" {
+		t.Fatal("the alias of an author cleared:", err)
+	}
+}
+
+// The exclusion matches names, so an email-form identity does not match a login: documented, and tested so that it
+// is a known limit.
+func TestAnEmailFormIdentityDoesNotMatchALogin(t *testing.T) {
+	f := newSrcGate(t)
+	cid := f.register(t, "ci", change(map[string]any{"objects": replicas, "source": src([]string{"erin"}, nil, "")})).ID
+	f.svc.Directory = emailGroups{}
+	p := authn.Principal{ID: "user:erin@example.com", Kind: authn.KindPerson}
+	if _, err := f.svc.Clear(f.ctx, p, cid, ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type emailGroups struct{}
+
+func (emailGroups) Groups(context.Context, string) []string { return []string{owner} }
+
+// Evidence: a refused clear is a record, bounded; the request and clear records carry the excluded set.
+func TestTheRecordsSayWhoWasExcluded(t *testing.T) {
+	f := newSrcGate(t)
+	cid := f.register(t, "ci", change(map[string]any{"objects": replicas, "source": src([]string{"dev"}, []string{"lead"}, "")})).ID
+	req := f.records(t, "deploy.request")[0]["change"].(map[string]any)["people"].(map[string]any)
+	if req["digest"] == "" || fmt.Sprint(req["count"]) != "3" {
+		t.Fatal(req)
+	}
+	for i := 0; i < gate.MaxPeopleNotes+5; i++ {
+		f.svc.Clear(f.ctx, person("dev"), cid, "")
+	}
+	refusals := f.records(t, "deploy.refuse")
+	if len(refusals) != gate.MaxPeopleNotes || refusals[0]["rule"] != "DG-PROPOSER" || refusals[0]["principal"] != "user:dev" ||
+		!strings.Contains(refusals[0]["result"].(string), "source author") || refusals[0]["decision"] != "deny" {
+		t.Fatal(len(refusals), refusals[0])
+	}
+	// a change without them records what it always did
+	g := newSrcGate(t)
+	g.register(t, "ci", change(map[string]any{"objects": replicas}))
+	if _, has := g.records(t, "deploy.request")[0]["change"].(map[string]any)["people"]; has {
+		t.Fatal("people in a record of a change without a set")
+	}
+	out, err := f.svc.Clear(f.ctx, person("erin"), cid, "")
+	if err != nil || out.State != "cleared" {
+		t.Fatal(out, err)
+	}
+	clr := f.records(t, "deploy.clear")
+	if clr[len(clr)-1]["change"].(map[string]any)["people"].(map[string]any)["digest"] != req["digest"] {
+		t.Fatal("the clear does not name the set version it checked")
 	}
 }
 

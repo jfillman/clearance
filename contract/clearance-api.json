@@ -513,6 +513,12 @@
               "null"
             ]
           },
+          "also_behind": {
+            "items": {
+              "$ref": "#/components/schemas/GateBehind"
+            },
+            "type": "array"
+          },
           "app": {
             "type": "string"
           },
@@ -660,6 +666,9 @@
             "type": "array"
           },
           "paths_count": {
+            "type": "integer"
+          },
+          "people_notes": {
             "type": "integer"
           },
           "policy_ref": {
@@ -1545,6 +1554,21 @@
         "required": [
           "outside",
           "owner"
+        ],
+        "type": "object"
+      },
+      "GateBehind": {
+        "properties": {
+          "person": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "person",
+          "role"
         ],
         "type": "object"
       },
@@ -2530,6 +2554,12 @@
               "null"
             ]
           },
+          "also_behind": {
+            "items": {
+              "$ref": "#/components/schemas/GateBehind"
+            },
+            "type": "array"
+          },
           "app": {
             "type": "string"
           },
@@ -2683,6 +2713,9 @@
             "type": "array"
           },
           "paths_count": {
+            "type": "integer"
+          },
+          "people_notes": {
             "type": "integer"
           },
           "policy_ref": {

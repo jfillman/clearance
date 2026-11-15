@@ -1192,6 +1192,21 @@
         ],
         "type": "object"
       },
+      "GateBehind": {
+        "properties": {
+          "person": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "person",
+          "role"
+        ],
+        "type": "object"
+      },
       "GateBreakglass": {
         "properties": {
           "app": {
@@ -1489,6 +1504,12 @@
               "null"
             ]
           },
+          "also_behind": {
+            "items": {
+              "$ref": "#/components/schemas/GateBehind"
+            },
+            "type": "array"
+          },
           "app": {
             "type": "string"
           },
@@ -1626,6 +1647,9 @@
             "type": "array"
           },
           "paths_count": {
+            "type": "integer"
+          },
+          "people_notes": {
             "type": "integer"
           },
           "policy_ref": {
@@ -5192,7 +5216,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "description": "gate.ChangeRequest, schemas/change-request.schema.json (docs/gate.md): app, env, cluster, repo, pr, head, base, proposer, proposerKind, source ({authors, mergers, promoter}: the people behind the change, none of whom may clear it; fixed at registration), owner, protected, treeDigest, paths, linesChanged, objects, checks, policy, policyCommit, admission, agent, taskId, definition, subject (a saved Terraform plan: kind terraform-plan, planDigest, planJsonDigest, workspace, versions, summary, targeted, variableSetDigest, resources); unknown fields are refused. protected: false is refused (DG-PROTECTED): Clearance decides protection from CLEARANCE_PROTECTED_ENVIRONMENTS, and clears a change elsewhere at tier 0 (unprotected)",
+                "description": "gate.ChangeRequest, schemas/change-request.schema.json (docs/gate.md): app, env, cluster, repo, pr, head, base, proposer, proposerKind, source ({authors, mergers, promoter}: the people behind the change, none of whom may clear it; grow-only: a re-registration adds, never removes), owner, protected, treeDigest, paths, linesChanged, objects, checks, policy, policyCommit, admission, agent, taskId, definition, subject (a saved Terraform plan: kind terraform-plan, planDigest, planJsonDigest, workspace, versions, summary, targeted, variableSetDigest, resources); unknown fields are refused. protected: false is refused (DG-PROTECTED): Clearance decides protection from CLEARANCE_PROTECTED_ENVIRONMENTS, and clears a change elsewhere at tier 0 (unprotected)",
                 "type": "object"
               }
             }
