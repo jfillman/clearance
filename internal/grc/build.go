@@ -71,8 +71,23 @@ type Change struct {
 
 // Approval is the part of an approval read: its kind and time, never the person.
 type Approval struct {
-	At   string `json:"at"`
-	Kind string `json:"kind,omitempty"`
+	At       string `json:"at"`
+	Kind     string `json:"kind,omitempty"`
+	SetAside string `json:"set_aside,omitempty"`
+}
+
+// Counts is gate.Approval.Counts for the slim decode: the report counts the approvals the token does.
+func (a Approval) Counts() bool { return gate.Approval{SetAside: a.SetAside}.Counts() }
+
+// counted are the approvals that count.
+func (c Change) counted() []Approval {
+	out := make([]Approval, 0, len(c.Approvals))
+	for _, a := range c.Approvals {
+		if a.Counts() {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // WasCleared is true for a change that was ever cleared. cleared_by is set when it is (by policy or by people) and
@@ -149,16 +164,16 @@ func (b Builder) Evidence(c Change) (Item, bool) {
 	if !ok || !c.WasCleared() {
 		return Item{}, false
 	}
-	people := 0
-	for _, a := range c.Approvals {
+	people, counted := 0, c.counted()
+	for _, a := range counted {
 		if a.Kind == "person" {
 			people++
 		}
 	}
 	kind := "none"
 	switch {
-	case len(c.Approvals) == 0:
-	case people == len(c.Approvals):
+	case len(counted) == 0:
+	case people == len(counted):
 		kind = "person"
 	default:
 		kind = "mixed"
@@ -169,7 +184,7 @@ func (b Builder) Evidence(c Change) (Item, bool) {
 		Link:  link,
 		Props: map[string]any{
 			"origin": orNone(c.ProposerKind), "tier": int64(c.Tier), "state": c.State, "app": c.App, "env": c.Env,
-			"approver_kind": kind, "approver_count": int64(len(c.Approvals)),
+			"approver_kind": kind, "approver_count": int64(len(counted)),
 			"change_digest":  c.TreeDigest,
 			"policy_version": c.PolicyVersion, "controls": b.Controls, "cleared_at": c.ClearedAt(),
 		},
@@ -244,8 +259,8 @@ func (b Builder) Reports(changes []Change, from time.Time) []Item {
 			if c.Tier >= 0 && c.Tier <= 3 {
 				t.tiers[c.Tier]++
 			}
-			all := len(c.Approvals) > 0
-			for _, a := range c.Approvals {
+			all := len(c.counted()) > 0
+			for _, a := range c.counted() {
 				all = all && a.Kind == "person"
 			}
 			if all {

@@ -1315,7 +1315,7 @@ func (t *tx) TreePeopleForTarget(ctx context.Context, target string, since time.
 func (v view) treePeopleForTarget(target string, since time.Time, limit int) []store.TreePeople {
 	var out []store.TreePeople
 	for _, tp := range v.trees {
-		if tp.Target == target && !tp.UpdatedAt.Before(since) {
+		if tp.Target == target && tp.HasSource && !tp.UpdatedAt.Before(since) {
 			tp.Record = bytes.Clone(tp.Record)
 			out = append(out, tp)
 		}

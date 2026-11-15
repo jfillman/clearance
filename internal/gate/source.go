@@ -368,16 +368,8 @@ func (t TreeRecord) union(p people) (TreeRecord, bool, error) {
 	return out, grew, nil
 }
 
-// nobodyBut is whether the record holds no author, merger or promoter and no proposer but who (a change with no people
-// of its own).
-func (t TreeRecord) nobodyBut(proposer string) bool {
-	if len(t.Authors)+len(t.Mergers)+len(t.Promoters) > 0 {
-		return false
-	}
-	for _, p := range t.Proposers {
-		if !sameName(p, proposer) {
-			return false
-		}
-	}
-	return true
+// noPeopleOfItsOwn is whether the record holds no author, merger or promoter. Proposers, however many, are not people of
+// its own: a release bot or the plugin proposes and excludes nobody who could clear.
+func (t TreeRecord) noPeopleOfItsOwn() bool {
+	return len(t.Authors)+len(t.Mergers)+len(t.Promoters) == 0
 }

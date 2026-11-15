@@ -830,7 +830,7 @@ func (t *treeState) save(ctx context.Context, tx store.Tx, now time.Time) error 
 	if err != nil {
 		return err
 	}
-	return tx.PutTreePeople(ctx, store.TreePeople{Key: t.key, Target: t.target, UpdatedAt: now, Record: raw})
+	return tx.PutTreePeople(ctx, store.TreePeople{Key: t.key, Target: t.target, UpdatedAt: now, HasSource: !t.rec.noPeopleOfItsOwn(), Record: raw})
 }
 
 func readTree(ctx context.Context, r store.Reader, key string) (TreeRecord, error) {
@@ -865,8 +865,8 @@ func (s *Service) unionTree(ctx context.Context, r store.Reader, req ChangeReque
 
 // recheckPeople is what a clear stands on: the people behind the change as they are now, and the approvals that still
 // count under them. It gives the change the tree's record as it is (a registration since the change's last one may have
-// added people); when the change has no people of its own beyond its proposer (its tree's record holds nobody else, or it
-// is a placeholder tree's), every other people record of its target written or grown within its hold window is behind it
+// added people); when the change has no people of its own (its tree's record holds no author, merger or promoter; proposers do not
+// count), every other people record of its target written or grown within its hold window is behind it
 // too (the plugin's pr 0 change for a tree that is not the pull request's), a read bounded at MaxTargetRecords: past it
 // the clear is refused (DG-PEOPLE-WINDOW). Then each approval from a person now behind the change is set aside (kept in
 // the history, not counted, with a record saying why). It persists what it changed.
@@ -884,7 +884,7 @@ func (s *Service) recheckPeople(ctx context.Context, tx store.Tx, w *writer, c *
 		return err
 	}
 	changed := len(added) > 0
-	if rec.nobodyBut(c.Proposer) {
+	if rec.noPeopleOfItsOwn() {
 		since := w.now.Add(-holdWindow(c))
 		rows, err := tx.TreePeopleForTarget(ctx, targetKey(c.App, c.Env, c.Cluster, c.Repo), since, MaxTargetRecords+1)
 		if err != nil {

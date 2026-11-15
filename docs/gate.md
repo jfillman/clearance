@@ -770,8 +770,12 @@ oversize list, an unknown key or a malformed entry is a 400, like any other malf
   registration carried a placeholder tree), a change with no people of its own (its tree's record holds nobody but its
   own proposer, or its tree is a placeholder's) is also behind **every person in the people records of the same target
   (app, environment, cluster, repository) written or grown within its hold window** (its TTL, 7 days by default),
-  read at clear time with one indexed read of at most 64 records; past 64 the clear is refused (`DG-PEOPLE-WINDOW`) and
-  the message names break-glass. The window is a conservative stand-in, not an identity: outside it, or for another
+  read at clear time with one indexed read of at most 64 records. Only records that hold an author, merger or promoter
+  are read or counted (a partial index on them; proposer-only records, which exclude nobody who could clear, never
+  fill it), and the rule applies whenever the tree's own record holds no author, merger or promoter, however many
+  proposers it has. Past 64 such records in the window the clear is refused (`DG-PEOPLE-WINDOW`) and the message names
+  break-glass; a registrar that can name people for the app (below) can cause that for that app's target, one record per
+  distinct tree or placeholder head, until they age out of the window. The window is a conservative stand-in, not an identity: outside it, or for another
   target, nothing is excluded. A placeholder tree has a people record of its own per head, and a held change never
   rebinds its digest (its id is the repository, pull request and head, and a registration of a change that already holds
   changes only its checks and tier), so a change that registered with a placeholder tree stays under that rule.
@@ -780,6 +784,10 @@ oversize list, an unknown key or a malformed entry is a 400, like any other malf
   say) is set aside: it stays in the change's history (`set_aside` says why), is not counted, is not in the token or the
   clear record, and its seat is open again; a `deploy.people` record says why. Changes already cleared stay cleared: the
   check runs while a change holds.
+- **Who can bar a person.** A registrar can name any valid principal as an author, merger or promoter, and so bar that
+  person from clearing that deploy and set their approval aside. Which registrars: a bound `app-<app>-cicd` principal,
+  for its own app only; the Argo CD plugin principal and `infra-*` principals, for any app; an OIDC workflow, for its
+  repository. It is permanent for that tree (no admin removal).
 - **What sends the set.** Glidepath's gate sends only `proposer` today; `source.authors`, `source.mergers` and
   `source.promoter` need the Glidepath change that resolves them from GitHub (jfillman/glidepath#247, not merged at the
   time of writing). Until it ships, what is excluded is the proposer of every change on a tree and the window above, not
@@ -800,7 +808,7 @@ oversize list, an unknown key or a malformed entry is a 400, like any other malf
 - **Stored, returned, recorded.** The tree's people are in `clearance_tree_people` (a small table created with
   `CREATE TABLE IF NOT EXISTS`, a primary-key index only, nothing added to the evidence table). The change's snapshot is
   in its record, so it is returned as `source` (plus `also_behind`, the people added later) on every read
-  (`GET /v1/clearances`, `/{id}`, both APIs; absent when none) and the Go and Python clients model it. Slack and
+  (`GET /v1/clearances`, `/{id}`, both APIs; absent when none) and the Go and Python clients model it. Slack (which counts only approvals that count, and says when one was set aside) and
   `awaiting=me` read the snapshot, so they can lag a registration made since; the core decides on the clear. A change
   that has a set (or more than one proposer on its tree) carries it in its records: the `change` object of
   `deploy.request`, `deploy.clear`, `deploy.people` has `people: {digest, count, excluded}` (the sorted names by role,

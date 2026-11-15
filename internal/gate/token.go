@@ -119,7 +119,7 @@ func (t *Tokens) Claims(c *Change, nonce string, now, exp time.Time) token.Claim
 	sort.Strings(images)
 	approvals := make([]token.Approval, 0, len(c.Approvals))
 	for _, a := range c.Approvals {
-		if a.SetAside != "" {
+		if !a.Counts() {
 			continue // an approval set aside is history, not a clearance
 		}
 		approvals = append(approvals, a.claim())

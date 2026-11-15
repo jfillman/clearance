@@ -139,10 +139,11 @@ CREATE INDEX IF NOT EXISTS clearance_evidence_app ON clearance_evidence ((record
 CREATE TABLE IF NOT EXISTS clearance_tree_people (
   key        text        PRIMARY KEY,
   target     text        NOT NULL DEFAULT '',
+  has_source boolean     NOT NULL DEFAULT false,
   record     jsonb       NOT NULL,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS clearance_tree_people_target ON clearance_tree_people (target, updated_at);
+CREATE INDEX IF NOT EXISTS clearance_tree_people_window ON clearance_tree_people (target, updated_at) WHERE has_source;
 CREATE TABLE IF NOT EXISTS clearance_breakglass (
   id         text        PRIMARY KEY,
   cluster    text        NOT NULL,
@@ -1639,21 +1640,22 @@ func treePeopleOne(ctx context.Context, q querier, opt Options, key string) (sto
 	defer cancel()
 	var raw, target string
 	var at time.Time
-	err := q.QueryRow(ctx, "SELECT target, record::text, updated_at FROM clearance_tree_people WHERE key = $1", key).Scan(&target, &raw, &at)
+	var hs bool
+	err := q.QueryRow(ctx, "SELECT target, record::text, updated_at, has_source FROM clearance_tree_people WHERE key = $1", key).Scan(&target, &raw, &at, &hs)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.TreePeople{}, store.ErrNotFound
 	}
 	if err != nil {
 		return store.TreePeople{}, fmt.Errorf("pg: %w", err)
 	}
-	return store.TreePeople{Key: key, Target: target, UpdatedAt: at, Record: json.RawMessage(raw)}, nil
+	return store.TreePeople{Key: key, Target: target, UpdatedAt: at, HasSource: hs, Record: json.RawMessage(raw)}, nil
 }
 
 func treePeopleTarget(ctx context.Context, q querier, opt Options, target string, since time.Time, limit int) ([]store.TreePeople, error) {
 	ctx, cancel := deadline(ctx, opt)
 	defer cancel()
 	rows, err := q.Query(ctx, "SELECT key, target, record::text, updated_at FROM clearance_tree_people "+
-		`WHERE target = $1 AND updated_at >= $2 ORDER BY updated_at DESC, key COLLATE "C" LIMIT $3`, target, since, limit)
+		`WHERE target = $1 AND has_source AND updated_at >= $2 ORDER BY updated_at DESC, key COLLATE "C" LIMIT $3`, target, since, limit)
 	if err != nil {
 		return nil, fmt.Errorf("pg: %w", err)
 	}
@@ -1711,9 +1713,9 @@ func (t *tx) PutTreePeople(ctx context.Context, tp store.TreePeople) error {
 	if at.IsZero() {
 		at = time.Now()
 	}
-	_, err := t.tx.Exec(ctx, "INSERT INTO clearance_tree_people (key, target, record, updated_at) VALUES ($1, $2, $3, $4) "+
-		"ON CONFLICT (key) DO UPDATE SET target = EXCLUDED.target, record = EXCLUDED.record, updated_at = EXCLUDED.updated_at",
-		tp.Key, tp.Target, string(tp.Record), at)
+	_, err := t.tx.Exec(ctx, "INSERT INTO clearance_tree_people (key, target, record, updated_at, has_source) VALUES ($1, $2, $3, $4, $5) "+
+		"ON CONFLICT (key) DO UPDATE SET target = EXCLUDED.target, record = EXCLUDED.record, updated_at = EXCLUDED.updated_at, has_source = EXCLUDED.has_source",
+		tp.Key, tp.Target, string(tp.Record), at, tp.HasSource)
 	if err != nil {
 		return fmt.Errorf("pg: put tree people: %w", err)
 	}

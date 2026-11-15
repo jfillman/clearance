@@ -28,7 +28,7 @@ type Requirement struct {
 func (q Requirement) Satisfied(approvals []Approval) bool {
 	owner, outside := 0, 0
 	for _, a := range approvals {
-		if a.SetAside != "" {
+		if !a.Counts() {
 			continue
 		}
 		switch a.Role {

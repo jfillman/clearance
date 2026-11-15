@@ -1297,12 +1297,12 @@ func testTreePeople(t *testing.T, open Opener) {
 	// the target's recent records, newest first, cut at the limit, by (target, updated_at)
 	base := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
 	if err := s.Atomic(bg, func(tx store.Tx) error {
-		for i, k := range []string{"t|1", "t|2", "t|3", "u|1"} {
+		for i, k := range []string{"t|1", "t|2", "t|3", "u|1", "t|4"} {
 			tg := "t"
 			if k == "u|1" {
 				tg = "u"
 			}
-			if err := tx.PutTreePeople(bg, store.TreePeople{Key: k, Target: tg, UpdatedAt: base.Add(time.Duration(i) * time.Hour), Record: json.RawMessage(`{}`)}); err != nil {
+			if err := tx.PutTreePeople(bg, store.TreePeople{Key: k, Target: tg, UpdatedAt: base.Add(time.Duration(i) * time.Hour), HasSource: k != "t|4", Record: json.RawMessage(`{}`)}); err != nil {
 				return err
 			}
 		}

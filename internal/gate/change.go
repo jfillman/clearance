@@ -51,6 +51,21 @@ type Approval struct {
 	SetAside string `json:"set_aside,omitempty"`
 }
 
+// Counts is whether the approval counts: one set aside (its person is behind the change since they approved) does not.
+// Every count of a change's approvals (the requirement, the seats, the token, Slack, the GRC report) goes through it.
+func (a Approval) Counts() bool { return a.SetAside == "" }
+
+// CountedApprovals are the approvals that count.
+func CountedApprovals(as []Approval) []Approval {
+	out := make([]Approval, 0, len(as))
+	for _, a := range as {
+		if a.Counts() {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
 // Deployment is a GitHub Actions deployment waiting on a change (github_app.py's deployment protection rule).
 // Answer stays nil while the change holds; deliveries are retried until GitHub takes them.
 type Deployment struct {
@@ -315,7 +330,7 @@ func RoleFor(person string, groups map[string]bool, c *Change) (string, error) {
 	}
 	owner, outside := 0, 0
 	for _, a := range c.Approvals {
-		if a.SetAside != "" {
+		if !a.Counts() {
 			continue // no longer counts: its seat is open again
 		}
 		switch a.Role {

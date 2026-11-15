@@ -55,6 +55,8 @@ type TreePeople struct {
 	// or grown (the gate's clock): a target's recent records are read by (Target, UpdatedAt).
 	Target    string
 	UpdatedAt time.Time
+	// HasSource is whether the record holds an author, merger or promoter: only such rows are in a target's window.
+	HasSource bool
 	Record    json.RawMessage
 }
 
@@ -235,7 +237,7 @@ type Reader interface {
 	ChangesHolding(ctx context.Context) ([]Change, error)
 	// TreePeople is the people behind the tree key (ErrNotFound when none is recorded): one primary-key read.
 	TreePeople(ctx context.Context, key string) (TreePeople, error)
-	// TreePeopleForTarget are the target's records written or grown at or after since, newest first, at most limit
+	// TreePeopleForTarget are the target's records that hold an author, merger or promoter (HasSource), written or grown at or after since, newest first, at most limit
 	// (the caller asks for one more than it will use, to know it was cut): one indexed read.
 	TreePeopleForTarget(ctx context.Context, target string, since time.Time, limit int) ([]TreePeople, error)
 	// ChangesUndelivered are the changes with a deployment whose delivered is false (github_app.py retries them).

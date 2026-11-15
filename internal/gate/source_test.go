@@ -690,3 +690,28 @@ func TestAForeignClusterVerifierIsBoundToItsAppToo(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// The window applies whenever the tree's record holds no author, merger or promoter: any number of proposers on the tree
+// does not turn it off.
+func TestAnotherSourcelessRegistrantDoesNotTurnTheWindowOff(t *testing.T) {
+	f := newSrcGate(t)
+	other := strings.Repeat("ab", 32)
+	f.register(t, "ci", change(map[string]any{"objects": replicas, "treeDigest": other, "source": src([]string{"dev"}, nil, "")})) // the author's tree T'
+	plugin := f.register(t, "ci", change(map[string]any{"objects": replicas, "pr": json.Number("0"), "proposer": "system:argocd-cmp", "head": strings.Repeat("9", 40)}))
+	f.register(t, "ci", change(map[string]any{"objects": replicas, "pr": json.Number("5"), "proposer": "user:zed", "head": strings.Repeat("8", 40)})) // a second source-less registrant on T
+	if _, err := f.svc.Clear(f.ctx, person("dev"), plugin.ID, ""); rule(err) != "DG-PROPOSER" {
+		t.Fatal("dev cleared the tree with two proposers and no people of its own:", err)
+	}
+}
+
+// Rows with no author, merger or promoter are not in the window's read, so they cannot fill it.
+func TestProposerOnlyRowsDoNotFillTheWindow(t *testing.T) {
+	f := newSrcGate(t)
+	for i := 0; i < 100; i++ {
+		f.register(t, "ci", change(map[string]any{"objects": replicas, "head": fmt.Sprintf("%040x", i+1), "treeDigest": fmt.Sprintf("%064x", i+0x100)}))
+	}
+	p := f.register(t, "ci", change(map[string]any{"objects": replicas, "pr": json.Number("0"), "proposer": "system:argocd-cmp", "head": strings.Repeat("9", 40), "treeDigest": strings.Repeat("ab", 32)}))
+	if out, err := f.svc.Clear(f.ctx, person("erin"), p.ID, ""); err != nil || out.State != "cleared" {
+		t.Fatal(out.State, err)
+	}
+}
