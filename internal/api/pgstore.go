@@ -126,18 +126,26 @@ func (s *PG) records(ctx context.Context, sql string, args []any) ([]Record, err
 		if err := rows.Scan(&text, &assurance); err != nil {
 			return nil, fmt.Errorf("pg: %w", err)
 		}
-		v, err := canon.Parse([]byte(text))
+		m, err := parseStored(text, assurance)
 		if err != nil {
-			return nil, fmt.Errorf("pg: stored record: %w", err)
+			return nil, err
 		}
-		m, ok := v.(map[string]any)
-		if !ok {
-			return nil, errors.New("pg: stored record is not an object")
-		}
-		m["assurance"] = assurance
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+func parseStored(text, assurance string) (Record, error) {
+	v, err := canon.Parse([]byte(text))
+	if err != nil {
+		return nil, fmt.Errorf("pg: stored record: %w", err)
+	}
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil, errors.New("pg: stored record is not an object")
+	}
+	m["assurance"] = assurance
+	return m, nil
 }
 
 func (s *PG) Evidence(ctx context.Context, f EvidenceFilter, v *Viewer, limit int, after *int64) ([]Record, error) {

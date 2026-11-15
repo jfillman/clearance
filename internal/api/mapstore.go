@@ -10,7 +10,8 @@ import (
 	"github.com/jfillman/clearance/internal/store"
 )
 
-// The Map's reads (GET /v1/map): each is one aggregate statement, so the Map costs a fixed number of queries however
+// The Map's reads (GET /v1/map): each is one aggregate statement (the gate read also probes for its first seq, one index
+// lookup), so the Map costs a fixed number of queries (five) however
 // many gates, targets and records there are. None pages a history into Go.
 
 // MaxGateRows caps the groups GateActivity returns; past it the Map says truncated.
@@ -47,8 +48,10 @@ type HoldRow struct {
 const gateTools = "('deploy.request', 'deploy.clear', 'deploy.deny', 'deploy.expire', 'deploy.outcome', 'deploy.exception', 'deploy.degraded')"
 
 // GateActivity groups the gate records of [from, to) the viewer may see. A runtime decision is a record the core
-// wrote with a `policy` that is not an outcome. The statement is bounded below by the first record written at or after
-// from (clearance_evidence_written), since a record's ts is never before the time it was written.
+// wrote with a `policy` that is not an outcome. With clearance_evidence_gate built, the statement reads only the
+// records on that partial index (the gate predicate below, spelled as the index spells it), by ts range. Before it is
+// built, the statement reads the chain from the first record written at or after from, as it did before the index
+// existed: the cost is the window's records, not the whole chain.
 func (s *PG) GateActivity(ctx context.Context, v *Viewer, from, to string) ([]GateRow, bool, error) {
 	b := &q{}
 	with := b.evidenceScope(v)
@@ -57,16 +60,31 @@ func (s *PG) GateActivity(ctx context.Context, v *Viewer, from, to string) ([]Ga
 	if err != nil {
 		return nil, false, fmt.Errorf("api: gate activity from %q", from)
 	}
-	b.add("e.seq >= COALESCE((SELECT min(w.seq) FROM clearance_evidence w WHERE w.written_at >= " + b.arg(fromT) + "), 0)")
+	// Bounded below by the first record written at or after from (clearance_evidence_written, which exists from the
+	// first start of any version): a record's ts is stamped when it is written, so none with ts >= from was written
+	// long before from. This is what keeps the statement off the older chain until clearance_evidence_gate is built.
+	// The first seq is read on its own so that the statement carries it as a plain number: as a subselect the planner
+	// guesses a third of the chain and walks it with a table scan.
+	lo, found, err := s.firstSeqWrittenAt(ctx, fromT)
+	if err != nil {
+		return nil, false, err
+	}
+	if !found {
+		return nil, false, nil // nothing was written in the window, so nothing in it has gate activity
+	}
+	b.add("e.seq >= " + b.arg(lo))
 	b.add("e.record->>'ts' >= " + b.arg(from))
 	b.add("e.record->>'ts' < " + b.arg(to))
 	b.add("(e.record->>'tool' IN " + gateTools + " OR (e.record->>'boundary' = 'runtime' AND e.record ? 'policy' AND NOT (e.record ? 'outcome_of')))")
-	cols := "COALESCE(NULLIF(e.record->'provider'->>'name', " + core + "), ''), COALESCE(c.record->>'registered_by', ''), " +
-		"COALESCE(e.record->>'boundary', ''), COALESCE(e.record->>'tool', ''), COALESCE(e.record->>'decision', ''), " +
-		"COALESCE(e.record->>'coverage', ''), CASE WHEN e.record->>'boundary' = 'deployment' THEN COALESCE(e.record->>'app', '') ELSE '' END, " +
-		"COALESCE(e.record->'change'->>'env', ''), COALESCE(e.record->'outcome'->>'applied', ''), COALESCE(e.record->>'matched', '')"
-	rows, done, err := s.R.Query(ctx, with+"SELECT "+cols+", count(*), count(DISTINCT e.record->'change'->>'id') "+
-		"FROM clearance_evidence e LEFT JOIN clearance_changes c ON c.id = e.record->'change'->>'id' WHERE "+b.sql()+
+	// One jsonb_to_record per record: a record is TOASTed, and each e.record->>'f' would fetch and decompress it again.
+	cols := "COALESCE(NULLIF(x.provider->>'name', " + core + "), ''), COALESCE(c.record->>'registered_by', ''), " +
+		"COALESCE(x.boundary, ''), COALESCE(x.tool, ''), COALESCE(x.decision, ''), " +
+		"COALESCE(x.coverage, ''), CASE WHEN x.boundary = 'deployment' THEN COALESCE(x.app, '') ELSE '' END, " +
+		"COALESCE(x.change->>'env', ''), COALESCE(x.outcome->>'applied', ''), COALESCE(x.matched, '')"
+	rows, done, err := s.R.Query(ctx, with+"SELECT "+cols+", count(*), count(DISTINCT x.change->>'id') "+
+		"FROM clearance_evidence e CROSS JOIN LATERAL jsonb_to_record(e.record) AS x(provider jsonb, boundary text, tool text, "+
+		"decision text, coverage text, app text, change jsonb, outcome jsonb, matched text) "+
+		"LEFT JOIN clearance_changes c ON c.id = x.change->>'id' WHERE "+b.sql()+
 		" GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 LIMIT "+b.arg(MaxGateRows+1), b.args...)
 	if err != nil {
 		return nil, false, err
@@ -92,15 +110,33 @@ func (s *PG) GateActivity(ctx context.Context, v *Viewer, from, to string) ([]Ga
 	return out, cut, nil
 }
 
-// ScopeCoverage groups the observations and assessments of the scopes in [from, to), on the observed partial index
-// (clearance_evidence_observed: the predicate is repeated literally).
+// firstSeqWrittenAt is the seq of the first record written at or after t, and whether there is one. It orders by written_at, so it
+// is served by clearance_evidence_written; min(seq) with a filter walks the primary key from the first record instead.
+func (s *PG) firstSeqWrittenAt(ctx context.Context, t time.Time) (int64, bool, error) {
+	rows, done, err := s.R.Query(ctx, "SELECT seq FROM clearance_evidence WHERE written_at >= $1 ORDER BY written_at, seq LIMIT 1", t)
+	if err != nil {
+		return 0, false, err
+	}
+	defer done()
+	defer rows.Close()
+	var n int64
+	if !rows.Next() {
+		return 0, false, rows.Err()
+	}
+	if err := rows.Scan(&n); err != nil {
+		return 0, false, fmt.Errorf("pg: %w", err)
+	}
+	return n, true, rows.Err()
+}
+
+// ScopeCoverage groups the observations and assessments of the scopes in [from, to), on the clearance_evidence_obs_ts
+// partial index (scope, ts: the tool predicate is repeated literally), so it reads the records of the window and no others.
 func (s *PG) ScopeCoverage(ctx context.Context, v *Viewer, scopes []string, from, to string) ([]ScopeRow, error) {
 	if len(scopes) == 0 {
 		return nil, nil
 	}
 	b := &q{}
 	with := b.evidenceScope(v)
-	b.add(observedTools)
 	b.add("e.record->>'tool' IN ('observation', 'assessment')")
 	b.add("e.record->>'scope' = ANY(" + b.arg(scopes) + ")")
 	b.add("e.record->>'ts' >= " + b.arg(from))
@@ -124,29 +160,79 @@ func (s *PG) ScopeCoverage(ctx context.Context, v *Viewer, scopes []string, from
 	return out, rows.Err()
 }
 
+// healthTail is how many of a scope's newest health records HealthBeforeScopes reads (see there).
+const healthTail = 500
+
 // HealthBeforeScopes is HealthBefore for many scopes in one pass: per scope and source, the health records before
-// `before` from the last one the collector wrote as healthy through the newest.
+// `before` from the last one the collector wrote as healthy through the newest. One statement, two parts:
+//   - the newest healthTail health records of each scope (clearance_evidence_health, backwards from `before`), from the
+//     newest healthy collector record among them (or all of them, when there is none);
+//   - every health record the core wrote (a flip: monitoring forced blind or degraded) after the newest healthy collector
+//     record of its source, however old (clearance_evidence_health_core and clearance_evidence_health_ok). A flip holds
+//     until the collector reports healthy, so a flip older than the tail is still read, and the Map never shows a source
+//     better than the core's standing declaration.
+//
+// Its cost is the tail, the core's records since each source last reported healthy (few), and one index probe per
+// such record: bounded however long the chain is. What the bound still loses is the collector's own older records: a
+// source with no record among a scope's newest healthTail and no core flip since its last healthy report reads as
+// never seen, not stale (both blind). The viewer here is always an auditor (readerOf), so the anchor probe applies no
+// viewer condition.
 func (s *PG) HealthBeforeScopes(ctx context.Context, v *Viewer, scopes []string, before string) ([]Record, error) {
 	if len(scopes) == 0 {
 		return nil, nil
 	}
 	b := &q{}
 	with := b.evidenceScope(v)
-	b.add(observedTools)
+	bf := b.arg(before)
 	b.add("e.record->>'tool' = 'observation.health'")
-	b.add("e.record->>'scope' = ANY(" + b.arg(scopes) + ")")
-	b.add("e.record->>'ts' < " + b.arg(before))
+	b.add("e.record->>'scope' = s.scope")
+	b.add("e.record->>'ts' < " + bf)
 	core := b.arg(evidence.CoreProviderName)
-	pre := "h AS (SELECT e.seq, e.record, e.assurance, " +
-		"max(CASE WHEN COALESCE(e.record->'provider'->>'name', '') <> " + core + " AND e.record->'health'->>'state' = 'healthy' " +
-		"THEN e.seq END) OVER (PARTITION BY e.record->>'scope', COALESCE(e.record->'source'->>'name', '')) AS aseq " +
-		"FROM clearance_evidence e WHERE " + b.sql() + ") "
+	list := b.arg(scopes)
+	conds := b.sql()
+	cn := "'" + strings.ReplaceAll(evidence.CoreProviderName, "'", "''") + "'" // inline: a partial index is proved from a literal
+	pre := "h AS (SELECT t.seq, t.record, t.assurance, " +
+		"max(CASE WHEN COALESCE(t.record->'provider'->>'name', '') <> " + core + " AND t.record->'health'->>'state' = 'healthy' " +
+		"THEN t.seq END) OVER (PARTITION BY s.scope, COALESCE(t.record->'source'->>'name', '')) AS aseq " +
+		"FROM unnest(" + list + "::text[]) AS s(scope) CROSS JOIN LATERAL (SELECT e.seq, e.record, e.assurance FROM clearance_evidence e WHERE " +
+		conds + " AND e.record->>'tool' = 'observation.health' ORDER BY e.seq DESC LIMIT " + fmt.Sprint(healthTail) + ") t) "
+	flips := "SELECT c.record::text, c.assurance, c.seq FROM unnest(" + list + "::text[]) AS s(scope) CROSS JOIN LATERAL (" +
+		"SELECT e.seq, e.record, e.assurance FROM clearance_evidence e WHERE " + conds + " AND e.record->'provider'->>'name' = " + cn + ") c " +
+		"WHERE c.seq > COALESCE((SELECT a.seq FROM clearance_evidence a WHERE a.record->>'tool' = 'observation.health' " +
+		"AND COALESCE(a.record->'provider'->>'name', '') <> " + cn + " AND a.record->'health'->>'state' = 'healthy' " +
+		"AND a.record->>'scope' = s.scope AND COALESCE(a.record->'source'->>'name', '') = COALESCE(c.record->'source'->>'name', '') " +
+		"AND a.record->>'ts' < " + bf + " ORDER BY a.seq DESC LIMIT 1), -1)"
 	if with == "" {
 		with = "WITH "
 	} else {
 		with = strings.TrimRight(with, " ") + ", "
 	}
-	return s.records(ctx, with+pre+"SELECT h.record::text, h.assurance FROM h WHERE h.seq >= COALESCE(h.aseq, -1) ORDER BY h.seq", b.args)
+	rows, done, err := s.R.Query(ctx, with+pre+"SELECT h.record::text, h.assurance, h.seq FROM h WHERE h.seq >= COALESCE(h.aseq, -1) UNION ALL "+flips+
+		" ORDER BY 3", b.args...)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	defer rows.Close()
+	out := []Record{}
+	seen := map[int64]bool{} // a core flip inside the tail is in both parts
+	for rows.Next() {
+		var text, assurance string
+		var seq int64
+		if err := rows.Scan(&text, &assurance, &seq); err != nil {
+			return nil, fmt.Errorf("pg: %w", err)
+		}
+		if seen[seq] {
+			continue
+		}
+		seen[seq] = true
+		m, err := parseStored(text, assurance)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
 }
 
 // Holding groups the changes holding now that the viewer may see (clearance_changes_state).

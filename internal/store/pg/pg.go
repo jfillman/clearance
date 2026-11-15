@@ -292,6 +292,8 @@ type Store struct {
 
 	headMu    sync.RWMutex
 	committed evidence.Checkpoint
+
+	build indexBuild
 }
 
 var _ store.Store = (*Store)(nil)
@@ -325,6 +327,10 @@ func Open(ctx context.Context, dsn string, opt Options) (*Store, error) {
 	}
 	s.committed = cp
 	opt.Logger.Info("clearance store open", "records", cp.Count, "head", cp.Head)
+	// Only the process that holds the writer advisory lock (s.lock, above) starts this build, and only after it has
+	// started serving. A future warm standby builds the indexes only after it has taken the lock: two builders would find
+	// each other's in-progress (INVALID) index and fight over it.
+	s.startIndexBuild()
 	return s, nil
 }
 
@@ -357,6 +363,7 @@ func (s *Store) Close() {
 		return
 	}
 	s.closed = true
+	s.stopIndexBuild()
 	if s.conn != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		s.conn.Close(ctx)
