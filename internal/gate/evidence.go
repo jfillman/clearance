@@ -2,6 +2,7 @@ package gate
 
 import (
 	"context"
+	"errors"
 
 	"github.com/jfillman/clearance/internal/store"
 )
@@ -49,7 +50,11 @@ func (s *Service) SettleEvidence(ctx context.Context) ([]string, error) {
 				continue
 			}
 			if err := s.recheckPeople(ctx, tx, w, c); err != nil {
-				continue // the people cannot be settled now (DG-PEOPLE-WINDOW): it stays waiting
+				var ge *Error
+				if errors.As(err, &ge) && ge.Rule == "DG-PEOPLE-WINDOW" {
+					continue // the people cannot be settled now: it stays waiting
+				}
+				return err // a store read or decode failure is not a reason to skip a change silently
 			}
 			if req := c.RequirementObj(); req == nil || !req.Satisfied(c.Approvals) {
 				continue

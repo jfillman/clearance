@@ -14,6 +14,7 @@ import (
 
 	"github.com/jfillman/clearance/internal/authn"
 	"github.com/jfillman/clearance/internal/gate"
+	"github.com/jfillman/clearance/internal/store"
 	"github.com/jfillman/clearance/internal/vocab"
 	"github.com/jfillman/clearance/internal/vocab/vocabtest"
 )
@@ -713,5 +714,54 @@ func TestProposerOnlyRowsDoNotFillTheWindow(t *testing.T) {
 	p := f.register(t, "ci", change(map[string]any{"objects": replicas, "pr": json.Number("0"), "proposer": "system:argocd-cmp", "head": strings.Repeat("9", 40), "treeDigest": strings.Repeat("ab", 32)}))
 	if out, err := f.svc.Clear(f.ctx, person("erin"), p.ID, ""); err != nil || out.State != "cleared" {
 		t.Fatal(out.State, err)
+	}
+}
+
+// A settled change is not touched by a clear attempt: the people recheck is for a holding change only.
+func TestAClearAttemptOnASettledChangeChangesNothing(t *testing.T) {
+	f := newSrcGate(t)
+	cid := f.register(t, "ci", change(map[string]any{"objects": replicas})).ID
+	if out, err := f.svc.Clear(f.ctx, person("erin"), cid, ""); err != nil || out.State != "cleared" {
+		t.Fatal(out, err)
+	}
+	// the tree's record grows through another change on the tree, naming erin
+	f.register(t, "ci", change(map[string]any{"objects": replicas, "pr": json.Number("8"), "head": strings.Repeat("7", 40), "source": src([]string{"erin"}, nil, "")}))
+	before, _ := f.st.Change(f.ctx, cid)
+	nrec := len(f.records(t, ""))
+	if _, err := f.svc.Clear(f.ctx, person("lead"), cid, ""); rule(err) != "DG-STATE" {
+		t.Fatal(err)
+	}
+	after, _ := f.st.Change(f.ctx, cid)
+	if string(before.Record) != string(after.Record) {
+		t.Fatalf("a clear attempt on a cleared change rewrote it:\n%s\n%s", before.Record, after.Record)
+	}
+	if len(f.records(t, "")) != nrec {
+		t.Fatal("a clear attempt on a cleared change wrote a record")
+	}
+}
+
+type treeFailStore struct{ store.Store }
+
+func (s treeFailStore) Atomic(ctx context.Context, fn func(store.Tx) error) error {
+	return s.Store.Atomic(ctx, func(tx store.Tx) error { return fn(treeFailTx{tx}) })
+}
+
+type treeFailTx struct{ store.Tx }
+
+func (treeFailTx) TreePeople(context.Context, string) (store.TreePeople, error) {
+	return store.TreePeople{}, errors.New("the store is unreachable")
+}
+
+// SettleEvidence skips a change only when its people cannot be settled (DG-PEOPLE-WINDOW); a store failure is returned.
+func TestSettleEvidenceReturnsAStoreFailure(t *testing.T) {
+	f := newGate(t)
+	cid := waiting(t, f, "")
+	f.svc.Evidence = &holdKnob{} // the ledger is back
+	f.svc.Store = treeFailStore{f.st}
+	if ids, err := f.svc.SettleEvidence(f.ctx); err == nil || len(ids) != 0 {
+		t.Fatal("a store failure was swallowed:", ids, err)
+	}
+	if got := f.get(t, cid); got.State != "holding" {
+		t.Fatal(got.State)
 	}
 }

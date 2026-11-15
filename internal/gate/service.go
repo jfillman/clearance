@@ -610,8 +610,11 @@ func (s *Service) Clear(ctx context.Context, p authn.Principal, changeID, onBeha
 			return err
 		}
 		// The people as they are now, and the approvals that still count under them.
-		if err := s.recheckPeople(ctx, tx, w, c); err != nil {
-			return err
+		// (A holding change only: a cleared, denied or expired change is settled and a clear attempt on it touches nothing.)
+		if c.State == StateHolding {
+			if err := s.recheckPeople(ctx, tx, w, c); err != nil {
+				return err
+			}
 		}
 		role, err := RoleFor(person, groups, c)
 		if err != nil {
