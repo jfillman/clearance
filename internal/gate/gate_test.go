@@ -553,7 +553,7 @@ func TestWhoMayClearATier2Change(t *testing.T) {
 		t.Fatal(out, err)
 	}
 	via := tower
-	if !reflect.DeepEqual(out.Approvals, []gate.Approval{{"user:erin", &via, "owner", "2026-09-26T12:00:00Z", "user:erin", "delegate:" + tower, "person", ""}}) {
+	if !reflect.DeepEqual(out.Approvals, []gate.Approval{{"user:erin", &via, "owner", "2026-09-26T12:00:00Z", "user:erin", "delegate:" + tower, "person", "", ""}}) {
 		t.Fatal(out.Approvals)
 	}
 	recs := f.records(t, "deploy.clear")
@@ -725,6 +725,7 @@ func TestTheOwnerGroupComesFromTheCatalogWhenTheCheckDoesNotSay(t *testing.T) {
 func TestTheOwnerGroupCanBeOmittedOnlyWhenSomethingAnswers(t *testing.T) {
 	f := newGate(t)
 	f.svc.Owners = nil
+	f.svc.Config.VerifierAppBindingOff = true // registers an app other than its own
 	out := f.register(t, "ci", change(map[string]any{"objects": imageBump, "app": "orphan-app", "owner": nil}))
 	if out.Owner != "group:default/admins" {
 		t.Fatal(out.Owner)

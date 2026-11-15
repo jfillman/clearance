@@ -513,6 +513,12 @@
               "null"
             ]
           },
+          "also_behind": {
+            "items": {
+              "$ref": "#/components/schemas/GateBehind"
+            },
+            "type": "array"
+          },
           "app": {
             "type": "string"
           },
@@ -662,6 +668,9 @@
           "paths_count": {
             "type": "integer"
           },
+          "people_notes": {
+            "type": "integer"
+          },
           "policy_ref": {
             "type": "string"
           },
@@ -685,6 +694,9 @@
               "$ref": "#/components/schemas/GateReason"
             },
             "type": "array"
+          },
+          "refusal_notes": {
+            "type": "integer"
           },
           "registered_by": {
             "type": "string"
@@ -712,6 +724,16 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/GateRequirement"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateSourcePeople"
               },
               {
                 "type": "null"
@@ -1505,6 +1527,9 @@
           "session": {
             "type": "string"
           },
+          "set_aside": {
+            "type": "string"
+          },
           "sub": {
             "type": "string"
           },
@@ -1535,6 +1560,21 @@
         "required": [
           "outside",
           "owner"
+        ],
+        "type": "object"
+      },
+      "GateBehind": {
+        "properties": {
+          "person": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "person",
+          "role"
         ],
         "type": "object"
       },
@@ -2065,6 +2105,26 @@
         ],
         "type": "object"
       },
+      "GateSourcePeople": {
+        "properties": {
+          "authors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "mergers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "promoter": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "GateSubject": {
         "properties": {
           "digests": {
@@ -2500,6 +2560,12 @@
               "null"
             ]
           },
+          "also_behind": {
+            "items": {
+              "$ref": "#/components/schemas/GateBehind"
+            },
+            "type": "array"
+          },
           "app": {
             "type": "string"
           },
@@ -2655,6 +2721,9 @@
           "paths_count": {
             "type": "integer"
           },
+          "people_notes": {
+            "type": "integer"
+          },
           "policy_ref": {
             "type": "string"
           },
@@ -2679,6 +2748,9 @@
             },
             "type": "array"
           },
+          "refusal_notes": {
+            "type": "integer"
+          },
           "registered_by": {
             "type": "string"
           },
@@ -2695,6 +2767,16 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/GateRequirement"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateSourcePeople"
               },
               {
                 "type": "null"
@@ -4581,7 +4663,7 @@
             "bearer": []
           }
         ],
-        "summary": "The deployment gate's changes, newest first: tier and why, state (holding, cleared, denied, expired, superseded, degraded, exception), the requirement and the approvals so far, what the grant binds to. A person sees their apps' changes and the ones their groups may clear; the order is updated_at then id, and the cursor (next, pass it back as after) is \"<updated_at>,<id>\", so changes sharing a second are never dropped between pages; a bare updated_at from an older client still means strictly older. cluster=<c>&state=cleared is the grant feed: the cluster's cleared changes whose clearance token is live, each with its token; a feed reader (CLEARANCE_API_FEED_READERS) may read only that, for its own clusters. awaiting=me keeps the holding changes the caller may clear now (the gate's own rule: in the owner group or an unfilled outside group, not the proposer, not already an approver); a person's token or a delegate naming one",
+        "summary": "The deployment gate's changes, newest first: tier and why, state (holding, cleared, denied, expired, superseded, degraded, exception), the requirement and the approvals so far, what the grant binds to. A person sees their apps' changes and the ones their groups may clear; the order is updated_at then id, and the cursor (next, pass it back as after) is \"<updated_at>,<id>\", so changes sharing a second are never dropped between pages; a bare updated_at from an older client still means strictly older. cluster=<c>&state=cleared is the grant feed: the cluster's cleared changes whose clearance token is live, each with its token; a feed reader (CLEARANCE_API_FEED_READERS) may read only that, for its own clusters. awaiting=me keeps the holding changes the caller may clear now (the gate's own rule: in the owner group or an unfilled outside group, not the proposer, a source author or merger or the promoter, not already an approver); a person's token or a delegate naming one",
         "x-clearance-roles": [
           "person",
           "delegate",

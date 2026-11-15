@@ -90,12 +90,20 @@ func whyTier(c *gate.Change) string {
 }
 
 func approvers(c *gate.Change) string {
-	if len(c.Approvals) == 0 {
+	counted := gate.CountedApprovals(c.Approvals)
+	aside := len(c.Approvals) - len(counted)
+	if len(counted) == 0 {
+		if aside > 0 {
+			return fmt.Sprintf("none yet (%d set aside)", aside)
+		}
 		return "none yet"
 	}
 	var p []string
-	for _, a := range c.Approvals {
+	for _, a := range counted {
 		p = append(p, fmt.Sprintf("%s (%s)", mrkdwn(a.Person), mrkdwn(a.Role)))
+	}
+	if aside > 0 {
+		p = append(p, fmt.Sprintf("%d set aside", aside))
 	}
 	return strings.Join(p, ", ")
 }

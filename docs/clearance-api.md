@@ -427,7 +427,9 @@ principal and their groups; the gate's session and subject checks (`DG-APPROVER-
 and still apply when they act. An admin is listed only if they also qualify as a group member: admins may deny any held
 change, but clearing is the groups'. A person's token, or a delegate naming one, is needed (an auditor or a machine is
 400). `next` pages as the list does; the filter reads the holding changes the viewer sees a page at a time (at most 2000
-per request, and holding changes are few), so it is the same on the in-memory and Postgres stores.
+per request, and holding changes are few), so it is the same on the in-memory and Postgres stores. The gate's rule also leaves out a change the person is
+behind: the proposer, a source author or merger, or the promoter (a change's `source`, [gate.md](gate.md#the-people-behind-a-change-built)).
+A change's reads carry `source` (`{authors, mergers, promoter}`) when the verifier registered one and omit it otherwise.
 
 ```json
 {"items": [{"id": "c-7f3a", "app": "gate-api", "env": "prod", "tier": 3, "state": "holding", "proposer": "user:alice", "...": "..."}], "next": null}

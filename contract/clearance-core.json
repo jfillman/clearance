@@ -1174,6 +1174,9 @@
           "session": {
             "type": "string"
           },
+          "set_aside": {
+            "type": "string"
+          },
           "sub": {
             "type": "string"
           },
@@ -1189,6 +1192,21 @@
           "person",
           "role",
           "via"
+        ],
+        "type": "object"
+      },
+      "GateBehind": {
+        "properties": {
+          "person": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "person",
+          "role"
         ],
         "type": "object"
       },
@@ -1489,6 +1507,12 @@
               "null"
             ]
           },
+          "also_behind": {
+            "items": {
+              "$ref": "#/components/schemas/GateBehind"
+            },
+            "type": "array"
+          },
           "app": {
             "type": "string"
           },
@@ -1628,6 +1652,9 @@
           "paths_count": {
             "type": "integer"
           },
+          "people_notes": {
+            "type": "integer"
+          },
           "policy_ref": {
             "type": "string"
           },
@@ -1652,6 +1679,9 @@
             },
             "type": "array"
           },
+          "refusal_notes": {
+            "type": "integer"
+          },
           "registered_by": {
             "type": "string"
           },
@@ -1668,6 +1698,16 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/GateRequirement"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GateSourcePeople"
               },
               {
                 "type": "null"
@@ -2308,6 +2348,26 @@
           "address",
           "type"
         ],
+        "type": "object"
+      },
+      "GateSourcePeople": {
+        "properties": {
+          "authors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "mergers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "promoter": {
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "GateSubject": {
@@ -5162,7 +5222,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "description": "gate.ChangeRequest, schemas/change-request.schema.json (docs/gate.md): app, env, cluster, repo, pr, head, base, proposer, proposerKind, owner, protected, treeDigest, paths, linesChanged, objects, checks, policy, policyCommit, admission, agent, taskId, definition, subject (a saved Terraform plan: kind terraform-plan, planDigest, planJsonDigest, workspace, versions, summary, targeted, variableSetDigest, resources); unknown fields are refused. protected: false is refused (DG-PROTECTED): Clearance decides protection from CLEARANCE_PROTECTED_ENVIRONMENTS, and clears a change elsewhere at tier 0 (unprotected)",
+                "description": "gate.ChangeRequest, schemas/change-request.schema.json (docs/gate.md): app, env, cluster, repo, pr, head, base, proposer, proposerKind, source ({authors, mergers, promoter}: the people behind the change, none of whom may clear it; grow-only: a re-registration adds, never removes), owner, protected, treeDigest, paths, linesChanged, objects, checks, policy, policyCommit, admission, agent, taskId, definition, subject (a saved Terraform plan: kind terraform-plan, planDigest, planJsonDigest, workspace, versions, summary, targeted, variableSetDigest, resources); unknown fields are refused. protected: false is refused (DG-PROTECTED): Clearance decides protection from CLEARANCE_PROTECTED_ENVIRONMENTS, and clears a change elsewhere at tier 0 (unprotected)",
                 "type": "object"
               }
             }

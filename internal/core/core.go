@@ -11,6 +11,7 @@
 //	                              the policy bundles and environment naming (internal/bundles; default: the core
 //	                              rules only). A bundle whose sources cannot be read fails the start.
 //	CLEARANCE_VERIFIERS           principal globs that may register changes and ask for provenance
+//	CLEARANCE_VERIFIER_APP_BINDING  off: a verifier app-<app>-cicd/<sa> may register trees of any app (default: its own only)
 //	CLEARANCE_DELEGATES           principal globs that may act for a person they name (the on-behalf-of header)
 //	CLEARANCE_FRESH_AUTH_TIER2    longest sign-in age that may clear a tier 2 change (Go duration, 1m to 24h; unset = no limit)
 //	CLEARANCE_FRESH_AUTH_TIER3_BREAKGLASS
@@ -193,7 +194,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		return cfg, err
 	}
 	cfg.Vocabulary = &v
-	cfg.Gate = gate.Config{Verifiers: list(get("CLEARANCE_VERIFIERS", "")),
+	cfg.Gate = gate.Config{Verifiers: list(get("CLEARANCE_VERIFIERS", "")), VerifierAppBindingOff: get("CLEARANCE_VERIFIER_APP_BINDING", "") == "off",
 		Delegates: list(get("CLEARANCE_DELEGATES", "")), Admins: list(get("CLEARANCE_ADMINS", "")),
 		ImageAllow: list(get("RUNTIME_IMAGES_EXTRA", "")), TrustedRegistries: list(get("CLEARANCE_TRUSTED_REGISTRIES", ""))}
 	if cfg.Gate.Protected, err = gate.ParseProtected(list(get("CLEARANCE_PROTECTED_ENVIRONMENTS", ""))); err != nil {

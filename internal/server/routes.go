@@ -200,7 +200,7 @@ var routeTable = []Route{
 		Summary: "The clearance-gate check registers (or re-evaluates) a change to a protected environment; the caller " +
 			"is a verifier (CLEARANCE_VERIFIERS).",
 		RequestNote: "gate.ChangeRequest, schemas/change-request.schema.json (docs/gate.md): app, env, cluster, " +
-			"repo, pr, head, base, proposer, proposerKind, owner, protected, treeDigest, paths, linesChanged, objects, " +
+			"repo, pr, head, base, proposer, proposerKind, source ({authors, mergers, promoter}: the people behind the change, none of whom may clear it; grow-only: a re-registration adds, never removes), owner, protected, treeDigest, paths, linesChanged, objects, " +
 			"checks, policy, policyCommit, admission, agent, taskId, definition, subject (a saved Terraform plan: kind " +
 			"terraform-plan, planDigest, planJsonDigest, workspace, versions, summary, targeted, variableSetDigest, " +
 			"resources); unknown fields are refused. protected: false is refused (DG-PROTECTED): Clearance decides " +

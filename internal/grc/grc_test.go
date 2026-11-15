@@ -639,3 +639,20 @@ func TestTheSecretIsReadFromTheFileEachMint(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// An approval set aside (the person is behind the change since they approved) is not an approver: the report's count is
+// the token's.
+func TestASetAsideApprovalIsNotCounted(t *testing.T) {
+	var c grc.Change
+	raw := `{"id":"chg-1","app":"a","env":"prod","tier":3,"state":"cleared","cleared_by":"people","created_at":"2026-11-01T00:00:00+00:00",
+	  "updated_at":"2026-11-01T01:00:00+00:00","decided_at":"2026-11-01T01:00:00+00:00",
+	  "approvals":[{"at":"2026-11-01T00:30:00Z","kind":"person","set_aside":"user:erin is a source author of this change since they approved"},
+	               {"at":"2026-11-01T00:40:00Z","kind":"person"},{"at":"2026-11-01T00:50:00Z","kind":"person"}]}`
+	if err := json.Unmarshal([]byte(raw), &c); err != nil {
+		t.Fatal(err)
+	}
+	it, ok := grc.Builder{LinkBase: linkBase}.Evidence(c)
+	if !ok || it.Props["approver_count"] != int64(2) || it.Props["approver_kind"] != "person" {
+		t.Fatalf("%v %v", ok, it.Props)
+	}
+}

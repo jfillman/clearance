@@ -704,6 +704,9 @@ func (b *builder) aiIdentities(pk *Packet) {
 		if ag == "" || isObserved(str(r, "tool")) {
 			continue
 		}
+		if t := str(r, "tool"); t == "deploy.refuse" || t == "deploy.people" {
+			continue // about a person clearing, not the agent: no denied count, no principal, no record of its own
+		}
 		a := m[ag]
 		if a == nil {
 			a = &acc{AIIdentity{Agent: ag, FirstTS: b.ts(r), LastTS: b.ts(r)}}

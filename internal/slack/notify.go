@@ -278,7 +278,10 @@ func (n *Notifier) finish(ctx context.Context, id string, msgs []Message) error 
 	return fmt.Errorf("change %s is not among the latest of %s", id, ref)
 }
 
-func stateKey(c *gate.Change) string { return fmt.Sprintf("%s|%d", c.State, len(c.Approvals)) }
+// stateKey counts the approvals that count (gate.CountedApprovals): a set-aside one reopens a seat and changes the key.
+func stateKey(c *gate.Change) string {
+	return fmt.Sprintf("%s|%d", c.State, len(gate.CountedApprovals(c.Approvals)))
+}
 
 // outsideWaiting says whether the change now waits on the outside requirement: it has one and the owner requirement
 // is filled. Qualifying outsiders are then told by DM.
@@ -288,7 +291,7 @@ func outsideWaiting(c *gate.Change) bool {
 		return false
 	}
 	owner := 0
-	for _, a := range c.Approvals {
+	for _, a := range gate.CountedApprovals(c.Approvals) {
 		if a.Role == "owner" {
 			owner++
 		}
@@ -473,12 +476,19 @@ func threadNote(c *gate.Change, was string) string {
 		return s + "."
 	case c.State != gate.StateHolding && prevState != c.State:
 		return "Change is now " + c.State + "."
-	case c.State == gate.StateHolding && len(c.Approvals) > 0 && strconv.Itoa(len(c.Approvals)) != prevN:
-		a := c.Approvals[len(c.Approvals)-1]
+	case c.State == gate.StateHolding && strconv.Itoa(len(gate.CountedApprovals(c.Approvals))) != prevN:
+		counted := gate.CountedApprovals(c.Approvals)
 		need := ""
 		if c.Requirement != nil {
 			need = " Needs " + c.Requirement.Words() + "."
 		}
+		if was, err := strconv.Atoi(prevN); err == nil && len(counted) < was {
+			return "An approval was set aside (its person is behind the change since they approved); the seat is open again." + need
+		}
+		if len(counted) == 0 {
+			return ""
+		}
+		a := counted[len(counted)-1]
 		return a.Person + " approved (" + a.Role + ")." + need
 	}
 	return ""

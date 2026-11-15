@@ -580,15 +580,19 @@ type SourceView struct {
 // ChangeRequest is what a verifier registers (POST /v1/clearances; docs/gate.md). Its keys are the gate's
 // camelCase ones; the core refuses an unknown key.
 type ChangeRequest struct {
-	App          string            `json:"app"`
-	Env          string            `json:"env"`
-	Cluster      string            `json:"cluster"`
-	Repo         string            `json:"repo"`
-	PR           int64             `json:"pr"`
-	Head         string            `json:"head"`
-	Base         string            `json:"base,omitempty"`
-	Proposer     string            `json:"proposer"`
-	ProposerKind string            `json:"proposerKind,omitempty"`
+	App          string `json:"app"`
+	Env          string `json:"env"`
+	Cluster      string `json:"cluster"`
+	Repo         string `json:"repo"`
+	PR           int64  `json:"pr"`
+	Head         string `json:"head"`
+	Base         string `json:"base,omitempty"`
+	Proposer     string `json:"proposer"`
+	ProposerKind string `json:"proposerKind,omitempty"`
+	// Source is the people behind the change (docs/gate.md, The people behind a change): the source pull requests'
+	// authors and mergers and the promoter. The set only grows: a re-registration adds to it, and a shorter or absent set changes
+	// nothing (docs/gate.md).
+	Source       *SourcePeople     `json:"source,omitempty"`
 	Owner        string            `json:"owner,omitempty"`
 	Protected    bool              `json:"protected"`
 	TreeDigest   string            `json:"treeDigest"`
@@ -605,6 +609,21 @@ type ChangeRequest struct {
 	// Subject is a saved Terraform plan (G-TF-1); with it, Cluster and TreeDigest may be empty and Objects is an
 	// empty list (not nil: the core refuses "objects": null).
 	Subject *PlanSubject `json:"subject,omitempty"`
+}
+
+// BehindPerson is a person added to a change's excluded set after its first registration (Role: proposer or promoter).
+type BehindPerson struct {
+	Role   string `json:"role"`
+	Person string `json:"person"`
+}
+
+// SourcePeople is request.source: the openers of the source pull requests a release bundles, the people who merged
+// them and the promoter, each a principal (user:<name>, as proposer). At most 64 authors and 64 mergers, no
+// duplicates. None of them, nor the proposer, can clear the change.
+type SourcePeople struct {
+	Authors  []string `json:"authors,omitempty"`
+	Mergers  []string `json:"mergers,omitempty"`
+	Promoter string   `json:"promoter,omitempty"`
 }
 
 // PlanSubject is a terraform-plan change's subject as a verifier sends it (schemas/change-request.schema.json):
@@ -696,18 +715,25 @@ type ObjectChange struct {
 
 // Change is a change on record.
 type Change struct {
-	ID               string            `json:"id"`
-	App              string            `json:"app"`
-	Env              string            `json:"env"`
-	Cluster          string            `json:"cluster"`
-	Repo             string            `json:"repo"`
-	PR               int64             `json:"pr"`
-	Head             string            `json:"head"`
-	Base             string            `json:"base"`
-	Proposer         string            `json:"proposer"`
-	ProposerKind     string            `json:"proposer_kind"`
-	Agent            *string           `json:"agent"`
-	TaskID           *string           `json:"task_id"`
+	ID           string  `json:"id"`
+	App          string  `json:"app"`
+	Env          string  `json:"env"`
+	Cluster      string  `json:"cluster"`
+	Repo         string  `json:"repo"`
+	PR           int64   `json:"pr"`
+	Head         string  `json:"head"`
+	Base         string  `json:"base"`
+	Proposer     string  `json:"proposer"`
+	ProposerKind string  `json:"proposer_kind"`
+	Agent        *string `json:"agent"`
+	TaskID       *string `json:"task_id"`
+	// Source is the people behind the change as registered; nil for a change registered without them.
+	Source *SourcePeople `json:"source,omitempty"`
+	// AlsoBehind is who else is excluded from clearing it, added after the first registration. PeopleNotes counts the
+	// deploy.people records and RefusalNotes the deploy.refuse records written for the change, each bounded apart.
+	AlsoBehind       []BehindPerson    `json:"also_behind,omitempty"`
+	PeopleNotes      int               `json:"people_notes,omitempty"`
+	RefusalNotes     int               `json:"refusal_notes,omitempty"`
 	Owner            string            `json:"owner"`
 	Protected        bool              `json:"protected"`
 	TreeDigest       string            `json:"tree_digest"`
@@ -793,6 +819,8 @@ type Approval struct {
 	Kind string `json:"kind,omitempty"`
 	// Session is a digest of the approver's session at their identity provider, when the token carried one.
 	Session string `json:"session,omitempty"`
+	// SetAside is why the approval no longer counts (the person is behind the change since they approved); empty when it counts.
+	SetAside string `json:"set_aside,omitempty"`
 }
 
 // Deployment is a GitHub Actions deployment waiting on a change.

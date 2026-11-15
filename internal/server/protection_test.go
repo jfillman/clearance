@@ -37,6 +37,7 @@ func protectionFixture(t *testing.T, dsn string) *fixture {
 	cfg := core.Config{Memory: dsn == "", DSN: dsn, Version: "test", Providers: ps, Auth: core.DevAuthenticator(),
 		MaxClockSkew: -1, AgentLogins: []string{vocabtest.AgentLogin}}
 	cfg.Gate.Verifiers = []string{"app-*-cicd/pipeline-runner"}
+	cfg.Gate.VerifierAppBindingOff = true // registers several apps from one pipeline
 	cfg.Gate.Protected = []string{"hangar-prod/prod"}
 	return newFixture(t, cfg)
 }
@@ -250,6 +251,7 @@ func TestEmptyListProtectsEverything(t *testing.T) {
 	ps, _ := server.ParseProviders(protectionProviders)
 	cfg := core.Config{Memory: true, Version: "test", Providers: ps, Auth: core.DevAuthenticator(), MaxClockSkew: -1, AgentLogins: []string{vocabtest.AgentLogin}}
 	cfg.Gate.Verifiers = []string{"app-*-cicd/pipeline-runner"}
+	cfg.Gate.VerifierAppBindingOff = true // registers several apps from one pipeline
 	f := newFixture(t, cfg)
 	if s := f.do("POST", "/v1/clearances", ci, devRegistration("web")).want(t, 200, "").body["state"]; s != "holding" {
 		t.Fatalf("empty list: %v", s)

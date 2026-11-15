@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/jfillman/clearance/internal/vocab"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -25,6 +26,8 @@ type Config struct {
 	Off bool `json:"off"`
 	// Verifiers are principal globs that may register changes (CLEARANCE_VERIFIERS).
 	Verifiers []string `json:"verifiers"`
+	// VerifierAppBindingOff turns off the binding of a verifier named app-<app>-cicd/<sa> to <app> (CLEARANCE_VERIFIER_APP_BINDING=off).
+	VerifierAppBindingOff bool `json:"verifierAppBindingOff"`
 	// Delegates are principal globs that may act for a person they name (CLEARANCE_DELEGATES).
 	Delegates []string `json:"delegates"`
 	// Admins are principal globs (user:<login>) that may deny any held change (CLEARANCE_ADMINS).
@@ -55,6 +58,11 @@ type Config struct {
 	// Fresh is how recent a person's sign-in must be per action (CLEARANCE_FRESH_AUTH_*; zero values: no requirement).
 	Fresh Freshness `json:"fresh"`
 }
+
+// verifierApp matches the principals of a pipeline in an app's cicd namespace: <ns>/<sa> (in-cluster) and
+// <cluster>/<ns>/<sa> (a foreign cluster's workload, authn.KindForeignWorkload). Persons (user:), GitHub Actions
+// (github:) and any other name are not matched.
+var verifierApp = regexp.MustCompile(`^(?:[^/]+/)?app-([^/]+)-cicd/[^/]+$`)
 
 // Unbound-tree modes (Config.UnboundTree).
 const (
@@ -129,12 +137,17 @@ func (s *Service) now() time.Time { return s.Clock().UTC().Truncate(time.Microse
 func (s *Service) op(ctx context.Context, fn func(tx store.Tx, w *writer) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var result error
+	var result, failed error
 	var answered int
 	var touched map[string]string
 	err := s.Store.Atomic(ctx, func(tx store.Tx) error {
 		w := &writer{ctx: ctx, tx: tx, now: s.now(), wr: s.Writer.OrCore(), svc: s}
 		result = fn(tx, w)
+		if w.fail != nil {
+			// The operation says its refusal leaves nothing behind (Register): roll the whole transaction back.
+			failed = w.fail
+			return w.fail
+		}
 		w.signFeeds() // the touched clusters' grant feeds, in this transaction
 		if w.err != nil {
 			return w.err
@@ -142,6 +155,9 @@ func (s *Service) op(ctx context.Context, fn func(tx store.Tx, w *writer) error)
 		answered, touched = w.answered, w.touched
 		return nil
 	})
+	if failed != nil && errors.Is(err, failed) {
+		return failed
+	}
 	if err != nil {
 		return fmt.Errorf("gate: %w", err)
 	}
@@ -164,6 +180,9 @@ type writer struct {
 	wr       evidence.Writer
 	svc      *Service
 	touched  map[string]string // change id -> cluster, of every change or token written
+	// fail, when set by the operation, rolls the whole transaction back and is returned as it is (op otherwise commits what
+	// fn wrote when fn returns an error: an expiry found while clearing, a refused clear's record).
+	fail error
 }
 
 func (w *writer) put(c *Change) {
@@ -290,6 +309,12 @@ func (s *Service) Register(ctx context.Context, p authn.Principal, body any) (*C
 		return nil, gerr("DG-UNBOUND", "treeDigest is a placeholder, not the digest of the rendered tree",
 			"Send the manifest-tree digest of what will be applied (`clearance register` computes it; docs/gate.md, The manifest-tree digest).", 400)
 	}
+	if m := verifierApp.FindStringSubmatch(p.ID); m != nil && !s.Config.VerifierAppBindingOff && m[1] != req.App && treeKeyOfReq(req) != "" {
+		// A verifier running in app-<app>-cicd registers manifest-tree changes for <app> only (terraform plans and
+		// definition releases have no tree record; a placeholder tree has one per head), so a verifier cannot add names to another app's trees.
+		return nil, gerr("DG-VERIFIER-APP", fmt.Sprintf("%s may register changes for %s only, not %s", p.ID, m[1], req.App),
+			"Register from the app's own pipeline (CLEARANCE_VERIFIER_APP_BINDING=off turns this check off).", 403)
+	}
 	if bound, ok := p.Claims["repository"].(string); ok {
 		// A workflow's OIDC token registers changes for its own repository only (`clearance register`).
 		if req.Repo != lower(bound) {
@@ -307,15 +332,40 @@ func (s *Service) Register(ctx context.Context, p authn.Principal, body any) (*C
 		}
 	}
 	var out *Change
-	err = s.op(ctx, func(tx store.Tx, w *writer) error {
+	err = s.op(ctx, func(tx store.Tx, w *writer) (rerr error) {
+		// A registration is all or nothing: any error it returns rolls everything back (nothing superseded, no record).
+		defer func() {
+			if rerr != nil {
+				w.fail = rerr
+			}
+		}()
 		if c, err := s.clearedByTree(ctx, tx, req); err != nil {
 			return err
 		} else if c != nil {
 			out = c
 			return nil
 		}
+		// The people behind the change, before any state moves: the tree's record (grow-only, outlives every change on
+		// the tree) takes this registration's proposer and set, or the registration is refused whole (DG-SOURCE-LIMIT).
+		tree, err := s.unionTree(ctx, tx, req)
+		if err != nil {
+			return err
+		}
 		existing, err := load(ctx, tx, req.ID())
 		if err != nil {
+			return err
+		}
+		if existing != nil {
+			// A re-registration adds its proposer and set to the change's, never removes (the change's snapshot of the tree's).
+			changed, err := s.applyPeople(w, existing, req, tree, p.ID, false)
+			if err != nil {
+				return err
+			}
+			if changed && existing.State != StateHolding {
+				w.put(existing)
+			}
+		}
+		if err := tree.save(ctx, tx, w.now); err != nil {
 			return err
 		}
 		if existing != nil && existing.State != StateHolding {
@@ -381,9 +431,12 @@ func (s *Service) Register(ctx context.Context, p authn.Principal, body any) (*C
 				w.record("policy", nil, "deploy.expire", old, "allow", nil, "superseded by "+pycompat.Truncate(req.Head, 7), map[string]any{"by": req.Head})
 			}
 			ch = Open(req, c, w.now, p.ID)
+			if _, err := s.applyPeople(w, ch, req, tree, p.ID, true); err != nil {
+				return err
+			}
 			ch.State = ""
 			w.opened(ch, to)
-			w.record(p.ID, nil, "deploy.request", ch, "allow", nil, c.Why, body)
+			w.record(p.ID, nil, "deploy.request", ch, "allow", nil, c.Why, body, map[string]any{"change": ch.recordChange()})
 		} else {
 			ch = existing
 			ch.Checks, ch.Tier, ch.Reasons, ch.UpdatedAt = copyChecks(req.Checks), c.Tier, append([]Reason(nil), c.Reasons...), now
@@ -556,15 +609,27 @@ func (s *Service) Clear(ctx context.Context, p authn.Principal, changeID, onBeha
 		if err := checkApproverKind(onBehalfOf, person, who); err != nil {
 			return err
 		}
+		// The people as they are now, and the approvals that still count under them.
+		// (A holding change only: a cleared, denied or expired change is settled and a clear attempt on it touches nothing.)
+		if c.State == StateHolding {
+			if err := s.recheckPeople(ctx, tx, w, c); err != nil {
+				return err
+			}
+		}
 		role, err := RoleFor(person, groups, c)
 		if err != nil {
+			var ge *Error
+			if errors.As(err, &ge) && ge.Rule == "DG-PROPOSER" {
+				// A refused clear is a record (who tried, which role excluded them), bounded per change.
+				w.refused(c, person, via, ge)
+			}
 			return err
 		}
 		if err := checkApproverDistinct(c, person, who, sessionDigest(who.iss, who.sid), onBehalfOf != ""); err != nil {
 			return err
 		}
 		now := PyTime{w.now}
-		c.Approvals = append(c.Approvals, Approval{person, via, role, pycompat.ISO(w.now), who.sub, who.iss, KindPerson, sessionDigest(who.iss, who.sid)})
+		c.Approvals = append(c.Approvals, Approval{person, via, role, pycompat.ISO(w.now), who.sub, who.iss, KindPerson, sessionDigest(who.iss, who.sid), ""})
 		c.UpdatedAt = now
 		req := c.RequirementObj()
 		done := req != nil && req.Satisfied(c.Approvals)
@@ -605,6 +670,7 @@ func (s *Service) Clear(ctx context.Context, p authn.Principal, changeID, onBeha
 		if waiting != "" {
 			extra["evidence"] = map[string]any{"assurance": AssuranceWaiting, "detail": waiting}
 		}
+		extra["change"] = c.recordChange() // the set this clear was checked against (change.people.digest)
 		rec := w.record(person, via, "deploy.clear", c, "allow", nil, result, map[string]any{"role": role}, extra)
 		out = Decided{c.View(), recordSeq(rec)}
 		return nil
@@ -723,3 +789,204 @@ func lower(s string) string { return strings.ToLower(s) }
 
 // PolicyView is Gateway.gate_policy_view.
 func (s *Service) PolicyView() PolicyView { return s.Policy.View() }
+
+// treeKey is what "the same tree" means for the people rule, as clearedByTree keys it: a manifest tree of the same app,
+// environment, cluster and repository with the same bound tree digest, whatever its pull request or head. A change
+// whose tree is a placeholder has a record of its own per head ("unbound@<head>"), so its people still count in its
+// target's window (targetOf). "" for a terraform plan or a definition release, whose people stay with the change.
+func treeKey(app, env, cluster, repo, digest, head string, manifest bool) string {
+	if !manifest {
+		return ""
+	}
+	if Unbound(digest) {
+		return targetKey(app, env, cluster, repo) + "|unbound@" + head
+	}
+	return targetKey(app, env, cluster, repo) + "|" + bareHex(digest)
+}
+
+// targetKey is the target a tree belongs to: the app's environment on a cluster, from a repository.
+func targetKey(app, env, cluster, repo string) string {
+	return app + "|" + env + "|" + cluster + "|" + repo
+}
+
+func treeKeyOfReq(r ChangeRequest) string {
+	return treeKey(r.App, r.Env, r.Cluster, r.Repo, r.TreeDigest, r.Head, r.Kind() == KindManifestTree)
+}
+
+func treeKeyOf(c *Change) string {
+	return treeKey(c.App, c.Env, c.Cluster, c.Repo, c.TreeDigest, c.Head, c.Subject == nil || c.Subject.Kind == KindManifestTree)
+}
+
+// treeState is the tree's record as read and as it will be written.
+type treeState struct {
+	key    string
+	target string
+	rec    TreeRecord
+	grew   bool
+}
+
+func (t *treeState) save(ctx context.Context, tx store.Tx, now time.Time) error {
+	if t.key == "" || !t.grew {
+		return nil
+	}
+	raw, err := json.Marshal(t.rec)
+	if err != nil {
+		return err
+	}
+	return tx.PutTreePeople(ctx, store.TreePeople{Key: t.key, Target: t.target, UpdatedAt: now, HasSource: !t.rec.noPeopleOfItsOwn(), Record: raw})
+}
+
+func readTree(ctx context.Context, r store.Reader, key string) (TreeRecord, error) {
+	row, err := r.TreePeople(ctx, key)
+	if errors.Is(err, store.ErrNotFound) {
+		return TreeRecord{}, nil
+	}
+	if err != nil {
+		return TreeRecord{}, err
+	}
+	var rec TreeRecord
+	if err := json.Unmarshal(row.Record, &rec); err != nil {
+		return TreeRecord{}, fmt.Errorf("gate: tree people %s: %w", key, err)
+	}
+	return rec, nil
+}
+
+// unionTree reads the request's tree record (one primary-key read) and adds the request's people to it, refusing the
+// registration before anything is written when a role would pass MaxTreePeople. A request with no tree key has none.
+func (s *Service) unionTree(ctx context.Context, r store.Reader, req ChangeRequest) (*treeState, error) {
+	t := &treeState{key: treeKeyOfReq(req), target: targetKey(req.App, req.Env, req.Cluster, req.Repo)}
+	if t.key == "" {
+		return t, nil
+	}
+	rec, err := readTree(ctx, r, t.key)
+	if err != nil {
+		return nil, err
+	}
+	t.rec, t.grew, err = rec.union(requestPeople(req))
+	return t, err
+}
+
+// recheckPeople is what a clear stands on: the people behind the change as they are now, and the approvals that still
+// count under them. It gives the change the tree's record as it is (a registration since the change's last one may have
+// added people); when the change has no people of its own (its tree's record holds no author, merger or promoter; proposers do not
+// count), every other people record of its target written or grown within its hold window is behind it
+// too (the plugin's pr 0 change for a tree that is not the pull request's), a read bounded at MaxTargetRecords: past it
+// the clear is refused (DG-PEOPLE-WINDOW). Then each approval from a person now behind the change is set aside (kept in
+// the history, not counted, with a record saying why). It persists what it changed.
+func (s *Service) recheckPeople(ctx context.Context, tx store.Tx, w *writer, c *Change) error {
+	key := treeKeyOf(c)
+	if key == "" {
+		return s.setAside(w, c, false)
+	}
+	rec, err := readTree(ctx, tx, key)
+	if err != nil {
+		return err
+	}
+	added, err := c.absorb(rec.people())
+	if err != nil {
+		return err
+	}
+	changed := len(added) > 0
+	if rec.noPeopleOfItsOwn() {
+		since := w.now.Add(-holdWindow(c))
+		rows, err := tx.TreePeopleForTarget(ctx, targetKey(c.App, c.Env, c.Cluster, c.Repo), since, MaxTargetRecords+1)
+		if err != nil {
+			return err
+		}
+		if len(rows) > MaxTargetRecords {
+			return gerr("DG-PEOPLE-WINDOW", fmt.Sprintf("this target has more than %d recent people records, so who may clear cannot be settled; use break-glass", MaxTargetRecords),
+				"Nobody can clear it through the gate until older changes lapse; break-glass (not source-aware, at most 4 hours) is the path.", 409)
+		}
+		for _, row := range rows {
+			if row.Key == key {
+				continue
+			}
+			var other TreeRecord
+			if err := json.Unmarshal(row.Record, &other); err != nil {
+				return fmt.Errorf("gate: tree people %s: %w", row.Key, err)
+			}
+			a, err := c.absorb(other.people())
+			if err != nil {
+				return err
+			}
+			changed = changed || len(a) > 0
+		}
+	}
+	return s.setAside(w, c, changed)
+}
+
+// holdWindow is how long a change holds: its own TTL (the hold window the target's recent records are read over).
+func holdWindow(c *Change) time.Duration {
+	if d := c.ExpiresAt.Sub(c.CreatedAt.Time); d > 0 {
+		return d
+	}
+	return 7 * 24 * time.Hour
+}
+
+// setAside marks each approval from a person now behind c, and persists c when it (or the people) changed.
+func (s *Service) setAside(w *writer, c *Change, changed bool) error {
+	for i := range c.Approvals {
+		a := &c.Approvals[i]
+		if a.SetAside != "" {
+			continue
+		}
+		if roles := rolesBehind(a.Person, c); len(roles) > 0 {
+			a.SetAside = a.Person + " is " + strings.Join(roles, " and ") + " of this change since they approved"
+			changed = true
+			w.note(c, "policy", "people: approval of "+a.Person+" set aside: "+a.SetAside)
+		}
+	}
+	if changed {
+		w.put(c)
+	}
+	return nil
+}
+
+// applyPeople gives ch the tree's people (or, with no tree key, this request's) and records a re-registration that
+// omitted names the change has (only when it sent a set: a verifier that sends none gets today's behaviour). It only
+// adds. It reports whether ch changed.
+func (s *Service) applyPeople(w *writer, ch *Change, req ChangeRequest, tree *treeState, principal string, fresh bool) (bool, error) {
+	changed := false
+	if !fresh && req.Source != nil {
+		if n := ch.omitted(req); n > 0 && ch.PeopleNotes < MaxPeopleNotes {
+			changed = true
+			w.note(ch, principal, fmt.Sprintf("people: the registration omitted %d source name(s) the change has; kept (the set only grows)", n))
+		}
+	}
+	add := requestPeople(req)
+	if tree.key != "" {
+		add = tree.rec.people()
+	}
+	added, err := ch.absorb(add)
+	if err != nil {
+		return false, err
+	}
+	if len(added) > 0 {
+		changed = true
+		if !fresh {
+			w.note(ch, principal, "people: added "+strings.Join(added, ", "))
+		}
+	}
+	return changed, nil
+}
+
+// note records a growth of (or an omission from) a change's people, as deploy.people, bounded per change.
+func (w *writer) note(c *Change, principal, result string) {
+	if c.PeopleNotes >= MaxPeopleNotes {
+		return
+	}
+	c.PeopleNotes++
+	w.record(principal, nil, "deploy.people", c, "allow", nil, result, map[string]any{"change": c.recordChange()})
+}
+
+// refused records a clear the people rule refused, as deploy.refuse (decision deny, rule DG-PROPOSER), bounded per
+// change and apart from the people notes, so refusals cannot use up the budget that records a shrink attempt; the
+// packet reads deploy.request, deploy.clear and deploy.deny, so this is not mistaken for a state.
+func (w *writer) refused(c *Change, person string, via *string, ge *Error) {
+	if c.RefusalNotes >= MaxPeopleNotes {
+		return
+	}
+	c.RefusalNotes++
+	w.record(person, via, "deploy.refuse", c, "deny", strp(ge.Rule), ge.Message, map[string]any{"rule": ge.Rule}, map[string]any{"change": c.recordChange()})
+	w.put(c)
+}

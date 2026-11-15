@@ -783,3 +783,22 @@ func TestPacketPrintsWhatTheNoiseRulesFiltered(t *testing.T) {
 		t.Fatalf("no counts supplied, none printed: %v %+v", err, res.Packet.Exceptions.Filtered)
 	}
 }
+
+// A refused clear (deploy.refuse) and a people note (deploy.people) on an agent-proposed change carry the change's agent
+// but are about a person, not the agent: they are not the agent's denied or allowed record and add no principal.
+func TestPeopleRecordsAreNotTheAgents(t *testing.T) {
+	st := miniChain(t, health("2026-10-09T00:00:00Z", "aws-111", "healthy", 5184000))
+	l := &labber{t: t, st: st}
+	l.add(coreW, gate("2026-10-20T00:00:00Z", "deploy.request", "gate-api", "prod", map[string]any{"change": change(chA, "gate-api", "prod", "hangar-prod", 2, "holding"), "agent": "triage-agent", "principal": "ci"}))
+	l.add(coreW, gate("2026-10-20T00:01:00Z", "deploy.refuse", "gate-api", "prod", map[string]any{"change": change(chA, "gate-api", "prod", "hangar-prod", 2, "holding"), "agent": "triage-agent",
+		"principal": "user:dev", "decision": "deny", "rule": "DG-PROPOSER"}))
+	l.add(coreW, gate("2026-10-20T00:02:00Z", "deploy.people", "gate-api", "prod", map[string]any{"change": change(chA, "gate-api", "prod", "hangar-prod", 2, "holding"), "agent": "triage-agent", "principal": "ci"}))
+	res, err := packet.Build(bg, st, packet.Params{From: mustTime(t, winFrom), To: mustTime(t, winTo), Now: mustTime(t, nowAt), Version: "test", Scopes: []string{"aws-111"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := res.Packet.AIIdentities
+	if len(ids) != 1 || ids[0].Records != 1 || ids[0].Denied != 0 || ids[0].Allowed != 1 || strings.Join(ids[0].Principals, ",") != "ci" {
+		t.Fatalf("%+v", ids)
+	}
+}

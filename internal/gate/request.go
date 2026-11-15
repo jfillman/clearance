@@ -42,17 +42,19 @@ type ChangeRequest struct {
 	PR                      int64
 	Head, Base              string
 	Proposer, ProposerKind  string
-	Owner                   string // the app's owner group; "" = the core looks it up
-	Protected               bool
-	TreeDigest              string
-	Paths                   []string
-	LinesChanged            int64
-	Objects                 []ObjectChange
-	Checks                  Checks
-	Policy                  map[string]any // the repo's clearance.yaml at head, if any (nil = none)
-	PolicyCommit            string         // the commit that last changed that clearance.yaml ("" = not said)
-	Admission               *Admission     // the verifier's offline admission result (nil = none sent)
-	Agent                   *string
+	// Source is the people behind the change (source pull request authors and mergers, the promoter); nil = none sent.
+	Source       *SourcePeople
+	Owner        string // the app's owner group; "" = the core looks it up
+	Protected    bool
+	TreeDigest   string
+	Paths        []string
+	LinesChanged int64
+	Objects      []ObjectChange
+	Checks       Checks
+	Policy       map[string]any // the repo's clearance.yaml at head, if any (nil = none)
+	PolicyCommit string         // the commit that last changed that clearance.yaml ("" = not said)
+	Admission    *Admission     // the verifier's offline admission result (nil = none sent)
+	Agent        *string
 	// TaskID is the run's task, when an agent's run proposed the change (Autopilot's task_id), for correlation.
 	TaskID *string
 	// Definition is an agent definition's release: {name, path, old, new}; old nil = a new agent, new nil = removed.
@@ -86,7 +88,7 @@ func (r ChangeRequest) ID() string {
 	return "ch-" + hex.EncodeToString(h[:])[:16]
 }
 
-var requestKeys = setOf("app", "env", "cluster", "repo", "pr", "head", "base", "proposer", "proposerKind", "owner",
+var requestKeys = setOf("app", "env", "cluster", "repo", "pr", "head", "base", "proposer", "proposerKind", "source", "owner",
 	"protected", "treeDigest", "paths", "linesChanged", "objects", "checks", "policy", "policyCommit", "admission", "agent", "taskId", "definition", "subject")
 var objectKeys = setOf("apiVersion", "kind", "namespace", "name", "op", "fields", "images", "digest")
 var definitionKeys = setOf("name", "path", "old", "new")
@@ -171,6 +173,13 @@ func ParseRequest(v any) (ChangeRequest, error) {
 	}
 	if !slices.Contains(ProposerKinds, r.ProposerKind) {
 		return r, bad("proposerKind is person, agent or unknown")
+	}
+	if v := d["source"]; v != nil {
+		src, serr := parseSource(v)
+		if serr != nil {
+			return r, serr
+		}
+		r.Source = src
 	}
 	r.Owner = s("owner", groupRx, false, "")
 	if err != nil {

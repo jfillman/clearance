@@ -224,6 +224,10 @@ app.kubernetes.io/component: {{ .component }}
 - name: CLEARANCE_GATE_UNBOUND_TREE
   value: {{ . | quote }}
 {{- end }}
+{{- with .Values.gate.verifierAppBinding }}
+- name: CLEARANCE_VERIFIER_APP_BINDING
+  value: {{ . | quote }}
+{{- end }}
 {{- if .Values.agents.configMap }}
 - name: CLEARANCE_AGENTS_DIR
   value: /etc/clearance/agents

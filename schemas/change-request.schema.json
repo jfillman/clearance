@@ -87,6 +87,42 @@
         }
       ]
     },
+    "source": {
+      "description": "The people behind the change, resolved by the verifier from authenticated facts: the openers of the source pull requests a release bundles, the people who merged them, and the promoter. With the proposer, none of them can clear the change. Fixed at registration; only a verifier supplies it.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "authors": {
+              "type": "array",
+              "maxItems": 64,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9:/_.@\\[\\]-]{1,200}$"
+              }
+            },
+            "mergers": {
+              "type": "array",
+              "maxItems": 64,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9:/_.@\\[\\]-]{1,200}$"
+              }
+            },
+            "promoter": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9:/_.@\\[\\]-]{1,200}$"
+            }
+          }
+        }
+      ]
+    },
     "owner": {
       "description": "The app's owner group; absent: the core looks it up.",
       "oneOf": [

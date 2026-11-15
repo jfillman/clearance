@@ -119,6 +119,9 @@ func (t *Tokens) Claims(c *Change, nonce string, now, exp time.Time) token.Claim
 	sort.Strings(images)
 	approvals := make([]token.Approval, 0, len(c.Approvals))
 	for _, a := range c.Approvals {
+		if !a.Counts() {
+			continue // an approval set aside is history, not a clearance
+		}
 		approvals = append(approvals, a.claim())
 	}
 	clearedBy := "policy"
@@ -189,6 +192,7 @@ func (w *writer) issue(c *Change, nonce string) (string, error) {
 	if nonce == "" {
 		n, err := NewNonce()
 		if err != nil {
+			w.err = err // rolls the clear back like the other failures below (the only cause is a crypto/rand failure)
 			return "", err
 		}
 		nonce = n
@@ -246,6 +250,9 @@ func (w *writer) revoke(c *Change, why string, extra map[string]any) {
 func clearedFields(c *Change, nonce string) map[string]any {
 	approvals := make([]any, 0, len(c.Approvals))
 	for _, a := range c.Approvals {
+		if a.SetAside != "" {
+			continue
+		}
 		cl := a.claim()
 		m := map[string]any{"sub": cl.Sub, "iss": cl.Iss, "person": cl.Person, "role": cl.Role, "at": cl.At}
 		if cl.Via != "" {

@@ -2,6 +2,7 @@ package gate
 
 import (
 	"context"
+	"errors"
 
 	"github.com/jfillman/clearance/internal/store"
 )
@@ -48,6 +49,13 @@ func (s *Service) SettleEvidence(ctx context.Context) ([]string, error) {
 			if c.State != StateHolding || c.EvidenceWait == nil || !w.now.Before(c.ExpiresAt.Time) {
 				continue
 			}
+			if err := s.recheckPeople(ctx, tx, w, c); err != nil {
+				var ge *Error
+				if errors.As(err, &ge) && ge.Rule == "DG-PEOPLE-WINDOW" {
+					continue // the people cannot be settled now: it stays waiting
+				}
+				return err // a store read or decode failure is not a reason to skip a change silently
+			}
 			if req := c.RequirementObj(); req == nil || !req.Satisfied(c.Approvals) {
 				continue
 			}
@@ -56,6 +64,9 @@ func (s *Service) SettleEvidence(ctx context.Context) ([]string, error) {
 			w.move(c, StateCleared, "", nil)
 			c.ClearedBy, c.DecidedAt, c.UpdatedAt = strp("people"), &now, now
 			w.settle(c)
+			// move changed c in memory only (holding to cleared writes no record), and no record is written before this
+			// point, so a failure here has written nothing; issue sets w.err (its only failure that did not was the
+			// nonce's crypto/rand read), which rolls the whole transaction back.
 			nonce, err := w.issue(c, "")
 			if err != nil {
 				return err

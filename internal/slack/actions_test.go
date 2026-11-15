@@ -426,3 +426,33 @@ func TestADeactivatedSlackAccountLosesItsLink(t *testing.T) {
 		t.Error("the sweep removed an active account")
 	}
 }
+
+// The people behind a change (source authors, mergers, the promoter) are refused from Slack as the gate refuses them:
+// the form is not offered and nothing is written.
+func TestSourcePeopleAreNotOfferedAClearForm(t *testing.T) {
+	for name, tc := range map[string]struct {
+		src  map[string]any
+		want string
+	}{
+		"author":   {map[string]any{"authors": []string{"User:Ann"}}, "source author"},
+		"merger":   {map[string]any{"mergers": []string{"ann"}}, "source merger"},
+		"promoter": {map[string]any{"promoter": "user:ann"}, "the promoter"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := actionRig(t)
+			c := change("c-1", "web", "prod", 2, "group:default/payments", nil)
+			c["source"] = tc.src
+			r.clr.setChanges(c)
+			r.click(ActClear, "c-1", "U1", "C_PAY")
+			waitFor(t, "an answer", func() bool { return len(r.slack.called("chat.postEphemeral")) >= 1 })
+			e := r.lastEphemeral()
+			if !strings.Contains(e, tc.want) {
+				t.Errorf("not refused as a person behind the change: %s", e)
+			}
+			r.quiet()
+			if len(r.slack.called("views.open")) != 0 || r.clr.writeCount() != 0 {
+				t.Fatal("a person behind the change got a form")
+			}
+		})
+	}
+}
