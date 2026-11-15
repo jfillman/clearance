@@ -18,7 +18,7 @@ CONTRACT_VERSION = "1.0.0"
 
 RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "run.finish", "human.answer", "session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome", "deploy.exception", "deploy.degraded", "federated.decision", "observation", "assessment", "resolution", "observation.health", "observation.verification", "grc.push", "grc.report")
 
-__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BackdateRefusal", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Delivery", "DeliveryRequest", "DeliveryRevoked", "DeliveryWindow", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateBulkResolutionFailed", "GateBulkResolutionRecorded", "GateBulkResolutionRequest", "GateBulkResolutionResult", "GateBulkResolutionSkipped", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateProtectedPair", "GateReason", "GateRequirement", "GateResolutionRecorded", "GateResolutionRequest", "GateResource", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "IndexStatus", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PacketBundle", "PacketCheckpointRef", "PacketError", "PacketLinks", "PacketMeta", "PacketPublished", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProtectionCluster", "ProtectionRequest", "ProtectionResult", "ProtectionState", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProvidedDefinition", "ProviderEvent", "Ready", "ReceiptRecorded", "RecipientKeyRevokeRequest", "RecipientKeyRevoked", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "RevokeRequest", "SamplingCheckpoint", "SamplingDocument", "SamplingItem", "SamplingPacketRef", "SamplingParams", "SamplingPopulationDoc", "SamplingProof", "SamplingRecorded", "SamplingRow", "SamplingStratum", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "StatementIssued", "StatementLinks", "StatementList", "StatementListItem", "StatementRequest", "StatementRevokeRequest", "StatementRevoked", "Subject", "SubjectProperties", "TargetsGate", "TargetsObserver", "TargetsRequest", "TargetsResult", "TargetsTarget", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenKeyRevoked", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
+__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BackdateRefusal", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Delivery", "DeliveryRequest", "DeliveryRevoked", "DeliveryWindow", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBreakglass", "GateBreakglassRequest", "GateBulkResolutionFailed", "GateBulkResolutionRecorded", "GateBulkResolutionRequest", "GateBulkResolutionResult", "GateBulkResolutionSkipped", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateProtectedPair", "GateReason", "GateRequirement", "GateResolutionRecorded", "GateResolutionRequest", "GateResource", "GateSourcePeople", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "IndexStatus", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PacketBundle", "PacketCheckpointRef", "PacketError", "PacketLinks", "PacketMeta", "PacketPublished", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProtectionCluster", "ProtectionRequest", "ProtectionResult", "ProtectionState", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProvidedDefinition", "ProviderEvent", "Ready", "ReceiptRecorded", "RecipientKeyRevokeRequest", "RecipientKeyRevoked", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "RevokeRequest", "SamplingCheckpoint", "SamplingDocument", "SamplingItem", "SamplingPacketRef", "SamplingParams", "SamplingPopulationDoc", "SamplingProof", "SamplingRecorded", "SamplingRow", "SamplingStratum", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "StatementIssued", "StatementLinks", "StatementList", "StatementListItem", "StatementRequest", "StatementRevokeRequest", "StatementRevoked", "Subject", "SubjectProperties", "TargetsGate", "TargetsObserver", "TargetsRequest", "TargetsResult", "TargetsTarget", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenKeyRevoked", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -765,6 +765,7 @@ class GateChange(Model):
         Field("repo", "repo", ("str",), True),
         Field("repo_policy_digest", "repo_policy_digest", ("nullable", ("str",)), True),
         Field("requirement", "requirement", ("nullable", ("ref", "GateRequirement")), True),
+        Field("source", "source", ("nullable", ("ref", "GateSourcePeople")), False),
         Field("state", "state", ("str",), True),
         Field("subject", "subject", ("nullable", ("ref", "GateSubject")), True),
         Field("superseded_by", "superseded_by", ("nullable", ("str",)), True),
@@ -815,6 +816,7 @@ class GateChange(Model):
     repo: str
     repo_policy_digest: str | None
     requirement: GateRequirement | None
+    source: GateSourcePeople | None = None
     state: str
     subject: GateSubject | None
     superseded_by: str | None
@@ -872,6 +874,7 @@ class GateChangeWithAuditSeq(Model):
         Field("repo", "repo", ("str",), True),
         Field("repo_policy_digest", "repo_policy_digest", ("nullable", ("str",)), True),
         Field("requirement", "requirement", ("nullable", ("ref", "GateRequirement")), True),
+        Field("source", "source", ("nullable", ("ref", "GateSourcePeople")), False),
         Field("state", "state", ("str",), True),
         Field("subject", "subject", ("nullable", ("ref", "GateSubject")), True),
         Field("superseded_by", "superseded_by", ("nullable", ("str",)), True),
@@ -923,6 +926,7 @@ class GateChangeWithAuditSeq(Model):
     repo: str
     repo_policy_digest: str | None
     requirement: GateRequirement | None
+    source: GateSourcePeople | None = None
     state: str
     subject: GateSubject | None
     superseded_by: str | None
@@ -1279,6 +1283,22 @@ class GateResource(Model):
     address: str
     fields: list[str] | None = None
     type: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class GateSourcePeople(Model):
+    """Contract schema GateSourcePeople."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("authors", "authors", ("list", ("str",)), False),
+        Field("mergers", "mergers", ("list", ("str",)), False),
+        Field("promoter", "promoter", ("str",), False),
+    )
+
+    authors: list[str] | None = None
+    mergers: list[str] | None = None
+    promoter: str | None = None
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -3121,6 +3141,7 @@ MODELS: dict[str, type[Model]] = {
     "GateResolutionRecorded": GateResolutionRecorded,
     "GateResolutionRequest": GateResolutionRequest,
     "GateResource": GateResource,
+    "GateSourcePeople": GateSourcePeople,
     "GateSubject": GateSubject,
     "GateTokenView": GateTokenView,
     "GateVersions": GateVersions,

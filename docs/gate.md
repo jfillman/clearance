@@ -54,7 +54,7 @@ people), never loosen, the way `cicd.yaml`'s `governance` fields work.
 |---|---|---|
 | **0** | Docs, tests, comments, labels and annotations without effect, anything outside a runtime path | policy, at once |
 | **1** | An image bump on a Flight-registry image (`release.yaml`, the Rollout's image) with CI green, provenance confirmed, under 400 changed lines; ConfigMap data a Rollout does not mount as config of a tier-2 object | policy, at once, when every check holds; else it becomes tier 2 |
-| **2** | Runtime shape: replicas, resources, Rollout strategy, `values-<env>.yaml`, NetworkPolicy, HTTPRoute, environment variables, probes | **one** person from the app's owner group, not the proposer |
+| **2** | Runtime shape: replicas, resources, Rollout strategy, `values-<env>.yaml`, NetworkPolicy, HTTPRoute, environment variables, probes | **one** person from the app's owner group, not the proposer or anyone else behind the change ([source people](#the-people-behind-a-change-built)) |
 | **3** | Secrets and their references (Secret, ExternalSecret, SecretStore), RBAC (Role, RoleBinding, ServiceAccount), AppProject, migrations/jobs that write data, anything in `clearance.yaml` itself | **two** people: one from the owner group, one from outside it (a group `clearance.yaml` names: platform-leads, security), neither the proposer |
 
 Which registries count as Flight is deployment configuration, `CLEARANCE_TRUSTED_REGISTRIES` (prefixes ending in `/`). Unset, the product default, any registry counts and the `image:not-trusted-registry` rule never fires. Hangar sets `ghcr.io/riley-roooo/` from the R-4 cutover (decided 2026-11-03): a bump to any other image, the third-party images Kyverno allows included, is tier 2 and waits for one owner.
@@ -699,6 +699,54 @@ Not yet: admission on the grant (G-ARGO-2), the CMP that registers the whole ren
 marked (G-ARGO-4), the PreSync wait
 (G-ARGO-5), and the Terraform plan subject (G-TF-1, which adds `subjects.plan_digest`).
 
+## The people behind a change (Built)
+
+A production release usually bundles several source pull requests, each with an opener and a merger, and is promoted by
+someone. With one `proposer` field a developer could arrange for someone else, or a bot, to be the proposer and then
+clear their own change. So the registration can carry the rest of the people:
+
+```json
+{"proposer": "user:dana", "proposerKind": "person",
+ "source": {"authors": ["user:dev", "dependabot[bot]"], "mergers": ["user:lead"], "promoter": "user:dana"}}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `source.authors` | the openers of the source pull requests the release bundles |
+| `source.mergers` | the people who merged them |
+| `source.promoter` | the person who promoted the release |
+
+All three are optional; `source` itself is optional. Each entry is a principal in the form and pattern of `proposer`
+(`^[A-Za-z0-9:/_.@\[\]-]{1,200}$`). Each list holds at most 64 entries; a duplicate (compared as below), an
+oversize list, an unknown key or a malformed entry is a 400, like any other malformed field. An empty
+`source` is no set.
+
+- **Clearing.** A person who is the proposer, in `authors`, in `mergers` or the promoter cannot clear the change at any
+  tier where a person clears: at tier 2 they cannot be the owner, at tier 3 they cannot be either of the two. The
+  refusal is `DG-PROPOSER` (403) and says which roles excluded them ("user:dev is a source author and a source merger
+  of this change and cannot clear it"). The same rule decides the Slack form, `awaiting=me` and the UI, because they
+  all ask the gate's `RoleFor`. **Deny is unchanged**: anyone who may deny today still may.
+- **Names are compared as the approver rules compare them**: lower case, a `user:` prefix ignored, so `User:Dev`, `dev`
+  and `user:dev` are one person. The proposer check now compares the same way; before this it was an exact string
+  comparison, so a proposer registered as `Dana` did not stop `user:dana`. Nothing treats a bot specially: a
+  `dependabot[bot]` login is a name like any other (a `person`-kind proposer that is a bot is a separate decision).
+- **Fixed at registration.** Registering the same change again (same repository, pull request and head) must send the
+  same proposer and the same set (order, case and the `user:` prefix do not matter): anything else, including leaving
+  `source` out, is `DG-IMMUTABLE` (409), whether the change is still holding or already decided. Before this the
+  proposer sent on a re-registration was silently ignored; both are strict now. A new head is a new change and carries
+  its own set. A change registered before this field existed is not given one afterwards; a new head carries it.
+- **Who may supply it.** Only a verifier, because only a verifier may register a change (`CLEARANCE_VERIFIERS`): a
+  person at the CLI or in the UI cannot register, so cannot name `source` for their own benefit. The set can only
+  narrow who may clear; a verifier that leaves it out gets today's behaviour, so the verifier is trusted to send what
+  it resolved from authenticated facts (Glidepath: the GitHub pull request openers and merge actors, not commit text).
+- **Stored, returned, recorded.** The set is in the change's record, so it is returned as `source` on every read
+  (`GET /v1/clearances`, `/{id}`, both APIs; absent when none) and the Go and Python clients model it. It is covered by
+  the `deploy.request` record's `args_sha256` (the digest of the registration body) and is not copied into the record's
+  fields, so the record's shape is unchanged. **It is not in the clearance token**: a consumer of the token verifies
+  *what* was cleared and *who cleared it* (`approvals`, `provenance.proposer`), and up to 129 more names would grow a
+  credential every Argo CD agent and admission policy carries, for no decision they make. There is no database column:
+  the change row's `record` is jsonb.
+
 ## Tier 3 approvers are people (C-14, Built)
 
 **Rule `GATE-APPROVER-001`: the approvers of a change are distinct people, never automation.** The clear route
@@ -926,6 +974,8 @@ partial index `clearance_evidence_exceptions`. Filters: `tool`, `kind` (an excep
 | `DG-PROTECTED` | `POST /v1/clearances`, 400 | `protected: false` is refused: Clearance decides protection |
 | `unprotected` | a change's reason (tier 0) | the environment is not on `CLEARANCE_PROTECTED_ENVIRONMENTS` |
 | `DG-POLICY` (outage) | `clearance.yaml` | an `outage:` entry that loosens the baseline, or not a tier 0 to 3 |
+| `DG-PROPOSER` | clear, 403 | the person is the proposer, a source author or merger, or the promoter ([the people behind a change](#the-people-behind-a-change-built)) |
+| `DG-IMMUTABLE` | `POST /v1/clearances`, 409 | a re-registration sends another proposer or another `source` set |
 | `DG-BREAKGLASS` | `POST /v1/breakglass`, `/close`, 403 | not an admin |
 | `DG-RESOLUTION` | `POST /v1/observations/{seq}/resolution`, 403 | not an admin |
 | `DG-BREAKGLASS-TTL` | `POST /v1/breakglass`, 400 | the TTL is not a Go duration from 1m to the deployment's maximum (at most 4h) |

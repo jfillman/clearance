@@ -580,15 +580,18 @@ type SourceView struct {
 // ChangeRequest is what a verifier registers (POST /v1/clearances; docs/gate.md). Its keys are the gate's
 // camelCase ones; the core refuses an unknown key.
 type ChangeRequest struct {
-	App          string            `json:"app"`
-	Env          string            `json:"env"`
-	Cluster      string            `json:"cluster"`
-	Repo         string            `json:"repo"`
-	PR           int64             `json:"pr"`
-	Head         string            `json:"head"`
-	Base         string            `json:"base,omitempty"`
-	Proposer     string            `json:"proposer"`
-	ProposerKind string            `json:"proposerKind,omitempty"`
+	App          string `json:"app"`
+	Env          string `json:"env"`
+	Cluster      string `json:"cluster"`
+	Repo         string `json:"repo"`
+	PR           int64  `json:"pr"`
+	Head         string `json:"head"`
+	Base         string `json:"base,omitempty"`
+	Proposer     string `json:"proposer"`
+	ProposerKind string `json:"proposerKind,omitempty"`
+	// Source is the people behind the change (docs/gate.md, The people behind a change): the source pull requests'
+	// authors and mergers and the promoter. Fixed at registration; a re-registration must send the same set.
+	Source       *SourcePeople     `json:"source,omitempty"`
 	Owner        string            `json:"owner,omitempty"`
 	Protected    bool              `json:"protected"`
 	TreeDigest   string            `json:"treeDigest"`
@@ -605,6 +608,15 @@ type ChangeRequest struct {
 	// Subject is a saved Terraform plan (G-TF-1); with it, Cluster and TreeDigest may be empty and Objects is an
 	// empty list (not nil: the core refuses "objects": null).
 	Subject *PlanSubject `json:"subject,omitempty"`
+}
+
+// SourcePeople is request.source: the openers of the source pull requests a release bundles, the people who merged
+// them and the promoter, each a principal (user:<name>, as proposer). At most 64 authors and 64 mergers, no
+// duplicates. None of them, nor the proposer, can clear the change.
+type SourcePeople struct {
+	Authors  []string `json:"authors,omitempty"`
+	Mergers  []string `json:"mergers,omitempty"`
+	Promoter string   `json:"promoter,omitempty"`
 }
 
 // PlanSubject is a terraform-plan change's subject as a verifier sends it (schemas/change-request.schema.json):
@@ -696,18 +708,20 @@ type ObjectChange struct {
 
 // Change is a change on record.
 type Change struct {
-	ID               string            `json:"id"`
-	App              string            `json:"app"`
-	Env              string            `json:"env"`
-	Cluster          string            `json:"cluster"`
-	Repo             string            `json:"repo"`
-	PR               int64             `json:"pr"`
-	Head             string            `json:"head"`
-	Base             string            `json:"base"`
-	Proposer         string            `json:"proposer"`
-	ProposerKind     string            `json:"proposer_kind"`
-	Agent            *string           `json:"agent"`
-	TaskID           *string           `json:"task_id"`
+	ID           string  `json:"id"`
+	App          string  `json:"app"`
+	Env          string  `json:"env"`
+	Cluster      string  `json:"cluster"`
+	Repo         string  `json:"repo"`
+	PR           int64   `json:"pr"`
+	Head         string  `json:"head"`
+	Base         string  `json:"base"`
+	Proposer     string  `json:"proposer"`
+	ProposerKind string  `json:"proposer_kind"`
+	Agent        *string `json:"agent"`
+	TaskID       *string `json:"task_id"`
+	// Source is the people behind the change as registered; nil for a change registered without them.
+	Source           *SourcePeople     `json:"source,omitempty"`
 	Owner            string            `json:"owner"`
 	Protected        bool              `json:"protected"`
 	TreeDigest       string            `json:"tree_digest"`

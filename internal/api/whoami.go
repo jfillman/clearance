@@ -114,7 +114,7 @@ func claimUnix(v any) (int64, bool) {
 }
 
 // listAwaiting is GET /v1/clearances?awaiting=me: the holding changes the caller may clear now. The qualification is
-// the gate's own (gate.RoleFor: not the proposer, not already an approver, in the owner group or an outside group
+// the gate's own (gate.RoleFor: not the proposer, a source author or merger or the promoter, not already an approver, in the owner group or an outside group
 // whose requirement is not yet filled), applied to the changes the viewer can already see; the api re-implements no
 // policy. Admins are not listed unless they also qualify: an admin may deny any held change but clearing is the
 // groups'.

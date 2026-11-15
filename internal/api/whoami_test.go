@@ -140,3 +140,29 @@ func TestWhoAmI(t *testing.T) {
 		}
 	})
 }
+
+// A person who merged one of the source pull requests (or opened one, or promoted the release) is not offered the
+// change: awaiting=me is the gate's own rule.
+func TestAwaitingMeLeavesOutThePeopleBehindTheChange(t *testing.T) {
+	withSource := func(id string, src *gate.SourcePeople) store.Change {
+		row := held(id, "gate-api", "holding", "user:alice", nil, "2026-11-01T10:00:00Z")
+		var c gate.Change
+		if err := json.Unmarshal(row.Record, &c); err != nil {
+			t.Fatal(err)
+		}
+		c.Source = src
+		row.Record, _ = json.Marshal(c.View())
+		return row
+	}
+	w := world{changes: []store.Change{
+		withSource("s-1", &gate.SourcePeople{Mergers: []string{"User:ERIN"}}),
+		withSource("s-2", &gate.SourcePeople{Authors: []string{"erin"}}),
+		withSource("s-3", &gate.SourcePeople{Promoter: "user:erin"}),
+		withSource("s-4", &gate.SourcePeople{Authors: []string{"someone-else"}}),
+	}}
+	each(t, w, func(t *testing.T, h *harness) {
+		if got := ids(h.ok("/v1/clearances?awaiting=me", "erin")); strings.Join(got, ",") != "s-4" {
+			t.Errorf("erin: %v", got)
+		}
+	})
+}

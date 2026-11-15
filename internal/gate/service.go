@@ -318,6 +318,11 @@ func (s *Service) Register(ctx context.Context, p authn.Principal, body any) (*C
 		if err != nil {
 			return err
 		}
+		if existing != nil {
+			if err := sameSource(existing, req); err != nil {
+				return err
+			}
+		}
 		if existing != nil && existing.State != StateHolding {
 			out = existing
 			return nil

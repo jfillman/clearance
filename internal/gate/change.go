@@ -66,18 +66,21 @@ type Deployment struct {
 // what the change binds to, after tree_digest), then target, objects_count and paths_count; it is the row's jsonb
 // record. A change stored before subjects were (v0.30.0 and earlier) is read with a manifest-tree subject.
 type Change struct {
-	ID               string            `json:"id"`
-	App              string            `json:"app"`
-	Env              string            `json:"env"`
-	Cluster          string            `json:"cluster"`
-	Repo             string            `json:"repo"`
-	PR               int64             `json:"pr"`
-	Head             string            `json:"head"`
-	Base             string            `json:"base"`
-	Proposer         string            `json:"proposer"`
-	ProposerKind     string            `json:"proposer_kind"`
-	Agent            *string           `json:"agent"`
-	TaskID           *string           `json:"task_id"`
+	ID           string  `json:"id"`
+	App          string  `json:"app"`
+	Env          string  `json:"env"`
+	Cluster      string  `json:"cluster"`
+	Repo         string  `json:"repo"`
+	PR           int64   `json:"pr"`
+	Head         string  `json:"head"`
+	Base         string  `json:"base"`
+	Proposer     string  `json:"proposer"`
+	ProposerKind string  `json:"proposer_kind"`
+	Agent        *string `json:"agent"`
+	TaskID       *string `json:"task_id"`
+	// Source is the people behind the change as the verifier sent them (request source); fixed at registration and
+	// absent on changes registered without it.
+	Source           *SourcePeople     `json:"source,omitempty"`
 	Owner            string            `json:"owner"`
 	Protected        bool              `json:"protected"`
 	TreeDigest       string            `json:"tree_digest"`
@@ -198,7 +201,7 @@ func (c *Change) RequirementObj() *Requirement { return c.Requirement }
 func Open(req ChangeRequest, cl Classification, now time.Time, registeredBy string) *Change {
 	reasons := append([]Reason(nil), cl.Reasons...)
 	c := &Change{ID: req.ID(), App: req.App, Env: req.Env, Cluster: req.Cluster, Repo: req.Repo, PR: req.PR,
-		Head: req.Head, Base: req.Base, Proposer: req.Proposer, ProposerKind: req.ProposerKind, Agent: req.Agent, TaskID: req.TaskID,
+		Head: req.Head, Base: req.Base, Proposer: req.Proposer, ProposerKind: req.ProposerKind, Agent: req.Agent, TaskID: req.TaskID, Source: req.Source.clone(),
 		Owner: req.Owner, Protected: req.Protected, TreeDigest: req.TreeDigest, Subject: subjectFor(req), Paths: append([]string(nil), req.Paths...),
 		LinesChanged: req.LinesChanged, Objects: append([]ObjectChange(nil), req.Objects...), Checks: copyChecks(req.Checks),
 		PolicyVersion: cl.Policy.Version, RepoPolicyDigest: cl.Policy.RepoPolicyDigest, PolicyRef: policyRefOf(req),
@@ -283,8 +286,14 @@ func RoleFor(person string, groups map[string]bool, c *Change) (string, error) {
 	if c.State != StateHolding {
 		return "", gerr("DG-STATE", "this change is "+c.State, "", 409)
 	}
-	if person == c.Proposer {
-		return "", gerr("DG-PROPOSER", "the proposer of a change cannot clear it", "Someone else from the owner group must.", 403)
+	if roles := rolesBehind(person, c); len(roles) > 0 {
+		// The proposer, a source pull request's author or merger, and the promoter cannot clear the change (rule
+		// GATE-APPROVER-001's neighbour): who is compared as the approver rules compare names.
+		m := "the proposer of a change cannot clear it"
+		if len(roles) > 1 || roles[0] != "the proposer" {
+			m = person + " is " + strings.Join(roles, " and ") + " of this change and cannot clear it"
+		}
+		return "", gerr("DG-PROPOSER", m, "Someone else from the owner group must: the people behind a change (proposer, source authors and mergers, promoter) never clear it.", 403)
 	}
 	for _, a := range c.Approvals {
 		if a.Person == person {
