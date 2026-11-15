@@ -75,7 +75,8 @@ type Server struct {
 	log     *slog.Logger
 	handler http.Handler
 	hub     *hub
-	verify  *verifier // nil: no attestation trust configured
+	verify  *verifier     // nil: no attestation trust configured
+	mapSem  chan struct{} // MaxConcurrentMapReads: a Map read holds one reader connection per statement
 }
 
 // New builds the server.
@@ -89,7 +90,7 @@ func New(opt Options) (*Server, error) {
 	if opt.Log == nil {
 		opt.Log = slog.Default()
 	}
-	s := &Server{opt: opt, log: opt.Log, hub: newHub(opt.Store, opt.StreamPoll, opt.Log), verify: newVerifier(opt.Attest)}
+	s := &Server{opt: opt, log: opt.Log, hub: newHub(opt.Store, opt.StreamPoll, opt.Log), verify: newVerifier(opt.Attest), mapSem: make(chan struct{}, MaxConcurrentMapReads)}
 	mux := http.NewServeMux()
 	for _, rt := range Routes() {
 		if rt.serve == nil {
@@ -137,6 +138,17 @@ func (e *apiError) write(w http.ResponseWriter) { writeError(w, e.status, e.msg)
 
 // readFailed is a store failure: 503, the cause logged and never sent (api.py: "read failed: <class>").
 func (s *Server) readFailed(w http.ResponseWriter, r *http.Request, err error) {
+	// A request that ran out of time (queued for its turn, as a Map does) or whose client went away is not a store failure.
+	switch {
+	case errors.Is(err, context.Canceled):
+		s.log.InfoContext(r.Context(), "read abandoned: the client went away", "path", r.URL.Path)
+		writeError(w, http.StatusServiceUnavailable, "read failed")
+		return
+	case errors.Is(err, context.DeadlineExceeded):
+		s.log.WarnContext(r.Context(), "read timed out (waiting for its turn or for the store)", "path", r.URL.Path)
+		writeError(w, http.StatusServiceUnavailable, "read failed")
+		return
+	}
 	s.log.ErrorContext(r.Context(), "read failed", "path", r.URL.Path, "error", err.Error())
 	writeError(w, http.StatusServiceUnavailable, "read failed")
 }

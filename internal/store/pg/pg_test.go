@@ -60,6 +60,7 @@ func open(t *testing.T, dsn string) *Store {
 		t.Fatal(err)
 	}
 	t.Cleanup(s.Close)
+	<-s.build.done // the Map's indexes build in the background: plans in these tests are of a settled table
 	return s
 }
 
