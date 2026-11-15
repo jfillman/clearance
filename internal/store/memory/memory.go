@@ -40,6 +40,7 @@ type Store struct {
 	atts    map[string]store.Attestation
 	packets map[string]store.Packet
 	glass   map[string]store.Breakglass
+	trees   map[string]store.TreePeople
 	ledger  *store.LedgerCheckpoint // the latest witnessed checkpoint (C-3), nil when none
 	closed  bool
 }
@@ -55,7 +56,7 @@ var ErrTxDone = errors.New("memory: transaction is finished")
 // New returns an empty store.
 func New() *Store {
 	return &Store{head: evidence.Start, changes: map[string]store.Change{}, targets: map[string]store.TargetSet{}, protect: map[string]store.ProtectionSet{}, tokens: map[string]store.Token{},
-		keys: map[string]store.SigningKey{}, feeds: map[string]store.Feed{}, atts: map[string]store.Attestation{}, packets: map[string]store.Packet{}, glass: map[string]store.Breakglass{}}
+		keys: map[string]store.SigningKey{}, feeds: map[string]store.Feed{}, atts: map[string]store.Attestation{}, packets: map[string]store.Packet{}, glass: map[string]store.Breakglass{}, trees: map[string]store.TreePeople{}}
 }
 
 // Load returns a store holding an existing chain, verified from genesis like store/pg's Open.
@@ -97,7 +98,7 @@ func (s *Store) Atomic(ctx context.Context, fn func(tx store.Tx) error) (err err
 		return ErrClosed
 	}
 	t := &tx{s: s, head: head, changes: map[string]store.Change{}, tokens: map[string]store.Token{},
-		feeds: map[string]store.Feed{}, atts: map[string]store.Attestation{}, packets: map[string]store.Packet{}, glass: map[string]store.Breakglass{}}
+		feeds: map[string]store.Feed{}, atts: map[string]store.Attestation{}, packets: map[string]store.Packet{}, glass: map[string]store.Breakglass{}, trees: map[string]store.TreePeople{}}
 	defer func() {
 		t.mu.Lock()
 		t.done = true
@@ -140,6 +141,9 @@ func (s *Store) Atomic(ctx context.Context, fn func(tx store.Tx) error) (err err
 	for id, b := range t.glass {
 		s.glass[id] = b
 	}
+	for k, tp := range t.trees {
+		s.trees[k] = tp
+	}
 	if t.keys != nil {
 		s.keys = t.keys
 	}
@@ -163,6 +167,7 @@ type tx struct {
 	packets map[string]store.Packet
 	keys    map[string]store.SigningKey // nil: unchanged
 	glass   map[string]store.Breakglass
+	trees   map[string]store.TreePeople
 }
 
 func (t *tx) lock() error {
@@ -423,6 +428,7 @@ type view struct {
 	atts    map[string]store.Attestation
 	packets map[string]store.Packet
 	glass   map[string]store.Breakglass
+	trees   map[string]store.TreePeople
 	ledger  *store.LedgerCheckpoint
 }
 
@@ -439,6 +445,10 @@ func (s *Store) view() (view, error) {
 	glass := make(map[string]store.Breakglass, len(s.glass))
 	for k, v := range s.glass {
 		glass[k] = v
+	}
+	trees := make(map[string]store.TreePeople, len(s.trees))
+	for k, v := range s.trees {
+		trees[k] = v
 	}
 	feeds := make(map[string]store.Feed, len(s.feeds))
 	for k, v := range s.feeds {
@@ -461,7 +471,7 @@ func (s *Store) view() (view, error) {
 		packets[k] = v
 	}
 	return view{packets: packets, ledger: s.ledger, targets: targets, protect: protect, head: s.head, records: s.records[:len(s.records):len(s.records)], changes: maps(s.changes), defs: s.defs,
-		tokens: tokens, keys: s.keys, feeds: feeds, atts: atts, glass: glass}, nil
+		tokens: tokens, keys: s.keys, feeds: feeds, atts: atts, glass: glass, trees: trees}, nil
 }
 
 func maps(m map[string]store.Change) map[string]store.Change {
@@ -511,6 +521,9 @@ func (t *tx) view() (view, error) {
 	}
 	for id, b := range t.glass {
 		v.glass[id] = b
+	}
+	for k, tp := range t.trees {
+		v.trees[k] = tp
 	}
 	if t.keys != nil {
 		v.keys = t.keys
@@ -1265,4 +1278,42 @@ func (v view) packet(id string) (store.Packet, error) {
 		return store.Packet{}, store.ErrNotFound
 	}
 	return p, nil
+}
+
+func (s *Store) TreePeople(ctx context.Context, key string) (store.TreePeople, error) {
+	v, err := s.view()
+	if err != nil {
+		return store.TreePeople{}, err
+	}
+	return v.treePeople(key)
+}
+
+func (t *tx) TreePeople(ctx context.Context, key string) (store.TreePeople, error) {
+	v, err := t.view()
+	if err != nil {
+		return store.TreePeople{}, err
+	}
+	return v.treePeople(key)
+}
+
+func (v view) treePeople(key string) (store.TreePeople, error) {
+	tp, ok := v.trees[key]
+	if !ok {
+		return store.TreePeople{}, store.ErrNotFound
+	}
+	tp.Record = bytes.Clone(tp.Record)
+	return tp, nil
+}
+
+func (t *tx) PutTreePeople(ctx context.Context, tp store.TreePeople) error {
+	if err := t.lock(); err != nil {
+		return err
+	}
+	defer t.mu.Unlock()
+	if tp.Key == "" || !json.Valid(tp.Record) {
+		return errors.New("memory: a tree's people need a key and a JSON record")
+	}
+	tp.Record = bytes.Clone(tp.Record)
+	t.trees[tp.Key] = tp
+	return nil
 }

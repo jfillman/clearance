@@ -46,6 +46,14 @@ type Change struct {
 	Record                          json.RawMessage
 }
 
+// TreePeople is one row of clearance_tree_people: the people behind a tree (the gate's TreeRecord as JSON), keyed by
+// the tree key (app, environment, cluster, repository and bound tree digest). It only grows and outlives every
+// change on the tree.
+type TreePeople struct {
+	Key    string
+	Record json.RawMessage
+}
+
 // Definition is one row of clearance_definitions: a cluster-pinned agent definition and its state.
 type Definition struct {
 	Name, State string
@@ -169,6 +177,8 @@ type Tx interface {
 	// intent capture and verified set), and returns the stored record (seq, envelope and hash added).
 	Append(ctx context.Context, event Event, w evidence.Writer) (Record, error)
 	PutChange(ctx context.Context, c Change) error
+	// PutTreePeople writes the tree's people (an upsert by key; the gate only ever writes a superset).
+	PutTreePeople(ctx context.Context, t TreePeople) error
 	ReplaceDefinitions(ctx context.Context, defs []Definition) error
 	// PutTargets replaces the source's declared targets (an upsert by source).
 	PutTargets(ctx context.Context, t TargetSet) error
@@ -219,6 +229,8 @@ type Reader interface {
 	// change by app, environment and tree digest, since Argo syncs the merge commit, not the PR head).
 	ChangesCleared(ctx context.Context, app, env string) ([]Change, error)
 	ChangesHolding(ctx context.Context) ([]Change, error)
+	// TreePeople is the people behind the tree key (ErrNotFound when none is recorded): one primary-key read.
+	TreePeople(ctx context.Context, key string) (TreePeople, error)
 	// ChangesUndelivered are the changes with a deployment whose delivered is false (github_app.py retries them).
 	ChangesUndelivered(ctx context.Context) ([]Change, error)
 	Definitions(ctx context.Context) ([]Definition, error)

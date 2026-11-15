@@ -180,6 +180,7 @@ All configuration comes from the environment. An empty variable counts as unset.
 | `CLEARANCE_BUNDLE_SOURCE_WAIT` | How long the start keeps retrying a source that does not answer before it goes on with that bundle degraded (Go duration, default `10s`). |
 | `CLEARANCE_ENV_LOWER_NAMES`, `CLEARANCE_ENV_LOWER_PREFIXES`, `CLEARANCE_ENV_LOWER_PROJECT_SUFFIXES`, `CLEARANCE_ENV_UPPER_REPO_PREFIXES` | How arguments name an environment tier, for R012 (below). Defaults: lower names `dev,development,sandbox,scratch`, no prefixes or suffixes. |
 | `CLEARANCE_VERIFIERS` | Principal globs that may register changes and ask for provenance. |
+| `CLEARANCE_VERIFIER_APP_BINDING` | `off` lets a verifier named `app-<app>-cicd/<sa>` register manifest-tree changes for any app. Default (enforcing): it registers for `<app>` only (`DG-VERIFIER-APP`, 403), so it cannot add names to another app's tree. Verifiers that are not named that way (OIDC workflows are bound to their repository instead) are not narrowed by it. |
 | `CLEARANCE_DELEGATES` | Principal globs that may act for a person they name (in `CLEARANCE_ON_BEHALF_OF_HEADER`). |
 | `CLEARANCE_ADMINS` | Principal globs (`user:<login>`) that may deny any held change and break glass. |
 | `CLEARANCE_PROTECTED_ENVIRONMENTS` | Comma-separated `<cluster glob>/<env glob>` entries: the environments the gate protects. **Unset: every environment is protected** (fail closed). A change to any other is cleared at tier 0, reason `unprotected` ([gate.md](gate.md#protected-environments)). |

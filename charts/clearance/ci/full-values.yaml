@@ -57,6 +57,7 @@ gate:
   delegatePersonAllowed: ["user:*@example.com"]
   viasExtra: ["portal"]
   unboundTree: refuse
+  verifierAppBinding: "off"
 agents:
   configMap: clearance-agents
 signing:

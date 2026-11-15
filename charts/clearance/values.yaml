@@ -140,6 +140,9 @@ gate:
   # copies of one digit, or sha256 of nothing) is flagged tree:unbound and binds to its commit only, or refused
   # (DG-UNBOUND). Empty: flag (the core's default for one release; refuse is planned to become it).
   unboundTree: ""
+  # CLEARANCE_VERIFIER_APP_BINDING: "off" lets a verifier app-<app>-cicd/<sa> register manifest trees for any app. Empty: it
+  # registers for <app> only (DG-VERIFIER-APP).
+  verifierAppBinding: ""
 
 # -- The clearance token (C-1; docs/core.md, The clearance token) ------------------------------------------------
 # The core signs a short-lived token for every cleared change with an ECDSA P-256 key. The key is never in this

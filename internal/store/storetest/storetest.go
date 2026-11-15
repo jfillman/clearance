@@ -56,6 +56,7 @@ func Run(t *testing.T, open Opener) {
 		{"Attestations", testAttestations},
 		{"Packets", testPackets},
 		{"Breakglass", testBreakglass},
+		{"TreePeople", testTreePeople},
 		{"Concurrent", testConcurrent},
 		{"CancelledContext", testCancelled},
 		{"CancelDuringWrite", testCancelDuringWrite},
@@ -1254,5 +1255,43 @@ func testPackets(t *testing.T, open Opener) {
 	}
 	if got, _ := s.Packet(bg, pk.ID); string(got.Bundle) != string(pk.Bundle) {
 		t.Fatalf("a packet is immutable: %s", got.Bundle)
+	}
+}
+
+func testTreePeople(t *testing.T, open Opener) {
+	s := open(t, nil)
+	if _, err := s.TreePeople(bg, "a|b"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal(err)
+	}
+	put := func(raw string) error {
+		return s.Atomic(bg, func(tx store.Tx) error {
+			return tx.PutTreePeople(bg, store.TreePeople{Key: "a|b", Record: json.RawMessage(raw)})
+		})
+	}
+	if err := put(`{"proposers":["user:a"]}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := put(`{"proposers":["user:a","user:b"]}`); err != nil { // an upsert
+		t.Fatal(err)
+	}
+	got, err := s.TreePeople(bg, "a|b")
+	if err != nil || got.Key != "a|b" || !strings.Contains(string(got.Record), "user:b") {
+		t.Fatal(got, err)
+	}
+	// a rolled-back write leaves the row as it was, and a bad record is refused
+	err = s.Atomic(bg, func(tx store.Tx) error {
+		if err := tx.PutTreePeople(bg, store.TreePeople{Key: "a|b", Record: json.RawMessage(`{"proposers":[]}`)}); err != nil {
+			return err
+		}
+		return errors.New("roll back")
+	})
+	if err == nil {
+		t.Fatal("no error")
+	}
+	if got, _ := s.TreePeople(bg, "a|b"); !strings.Contains(string(got.Record), "user:b") {
+		t.Fatal("rollback did not hold:", string(got.Record))
+	}
+	if err := put(`not json`); err == nil {
+		t.Fatal("a record that is not JSON was kept")
 	}
 }

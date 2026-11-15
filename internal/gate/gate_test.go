@@ -725,6 +725,7 @@ func TestTheOwnerGroupComesFromTheCatalogWhenTheCheckDoesNotSay(t *testing.T) {
 func TestTheOwnerGroupCanBeOmittedOnlyWhenSomethingAnswers(t *testing.T) {
 	f := newGate(t)
 	f.svc.Owners = nil
+	f.svc.Config.VerifierAppBindingOff = true // registers an app other than its own
 	out := f.register(t, "ci", change(map[string]any{"objects": imageBump, "app": "orphan-app", "owner": nil}))
 	if out.Owner != "group:default/admins" {
 		t.Fatal(out.Owner)

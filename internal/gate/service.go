@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/jfillman/clearance/internal/vocab"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -25,6 +26,8 @@ type Config struct {
 	Off bool `json:"off"`
 	// Verifiers are principal globs that may register changes (CLEARANCE_VERIFIERS).
 	Verifiers []string `json:"verifiers"`
+	// VerifierAppBindingOff turns off the binding of a verifier named app-<app>-cicd/<sa> to <app> (CLEARANCE_VERIFIER_APP_BINDING=off).
+	VerifierAppBindingOff bool `json:"verifierAppBindingOff"`
 	// Delegates are principal globs that may act for a person they name (CLEARANCE_DELEGATES).
 	Delegates []string `json:"delegates"`
 	// Admins are principal globs (user:<login>) that may deny any held change (CLEARANCE_ADMINS).
@@ -55,6 +58,8 @@ type Config struct {
 	// Fresh is how recent a person's sign-in must be per action (CLEARANCE_FRESH_AUTH_*; zero values: no requirement).
 	Fresh Freshness `json:"fresh"`
 }
+
+var verifierApp = regexp.MustCompile(`^app-(.+)-cicd/`)
 
 // Unbound-tree modes (Config.UnboundTree).
 const (
@@ -129,12 +134,17 @@ func (s *Service) now() time.Time { return s.Clock().UTC().Truncate(time.Microse
 func (s *Service) op(ctx context.Context, fn func(tx store.Tx, w *writer) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var result error
+	var result, failed error
 	var answered int
 	var touched map[string]string
 	err := s.Store.Atomic(ctx, func(tx store.Tx) error {
 		w := &writer{ctx: ctx, tx: tx, now: s.now(), wr: s.Writer.OrCore(), svc: s}
 		result = fn(tx, w)
+		if w.fail != nil {
+			// The operation says its refusal leaves nothing behind (Register): roll the whole transaction back.
+			failed = w.fail
+			return w.fail
+		}
 		w.signFeeds() // the touched clusters' grant feeds, in this transaction
 		if w.err != nil {
 			return w.err
@@ -142,6 +152,9 @@ func (s *Service) op(ctx context.Context, fn func(tx store.Tx, w *writer) error)
 		answered, touched = w.answered, w.touched
 		return nil
 	})
+	if failed != nil && errors.Is(err, failed) {
+		return failed
+	}
 	if err != nil {
 		return fmt.Errorf("gate: %w", err)
 	}
@@ -164,6 +177,9 @@ type writer struct {
 	wr       evidence.Writer
 	svc      *Service
 	touched  map[string]string // change id -> cluster, of every change or token written
+	// fail, when set by the operation, rolls the whole transaction back and is returned as it is (op otherwise commits what
+	// fn wrote when fn returns an error: an expiry found while clearing, a refused clear's record).
+	fail error
 }
 
 func (w *writer) put(c *Change) {
@@ -290,6 +306,12 @@ func (s *Service) Register(ctx context.Context, p authn.Principal, body any) (*C
 		return nil, gerr("DG-UNBOUND", "treeDigest is a placeholder, not the digest of the rendered tree",
 			"Send the manifest-tree digest of what will be applied (`clearance register` computes it; docs/gate.md, The manifest-tree digest).", 400)
 	}
+	if m := verifierApp.FindStringSubmatch(p.ID); m != nil && !s.Config.VerifierAppBindingOff && m[1] != req.App && treeKeyOfReq(req) != "" {
+		// A verifier running in app-<app>-cicd registers manifest-tree changes for <app> only (terraform plans and
+		// placeholder trees have no tree record), so a verifier cannot add names to another app's trees.
+		return nil, gerr("DG-VERIFIER-APP", fmt.Sprintf("%s may register changes for %s only, not %s", p.ID, m[1], req.App),
+			"Register from the app's own pipeline (CLEARANCE_VERIFIER_APP_BINDING=off turns this check off).", 403)
+	}
 	if bound, ok := p.Claims["repository"].(string); ok {
 		// A workflow's OIDC token registers changes for its own repository only (`clearance register`).
 		if req.Repo != lower(bound) {
@@ -307,26 +329,41 @@ func (s *Service) Register(ctx context.Context, p authn.Principal, body any) (*C
 		}
 	}
 	var out *Change
-	err = s.op(ctx, func(tx store.Tx, w *writer) error {
+	err = s.op(ctx, func(tx store.Tx, w *writer) (rerr error) {
+		// A registration is all or nothing: any error it returns rolls everything back (nothing superseded, no record).
+		defer func() {
+			if rerr != nil {
+				w.fail = rerr
+			}
+		}()
 		if c, err := s.clearedByTree(ctx, tx, req); err != nil {
 			return err
 		} else if c != nil {
 			out = c
 			return nil
 		}
+		// The people behind the change, before any state moves: the tree's record (grow-only, outlives every change on
+		// the tree) takes this registration's proposer and set, or the registration is refused whole (DG-SOURCE-LIMIT).
+		tree, err := s.unionTree(ctx, tx, req)
+		if err != nil {
+			return err
+		}
 		existing, err := load(ctx, tx, req.ID())
 		if err != nil {
 			return err
 		}
 		if existing != nil {
-			// The people behind a change only grow: a re-registration adds its proposer and set, never removes.
-			changed, err := s.mergePeople(ctx, tx, w, existing, req, p.ID, false)
+			// A re-registration adds its proposer and set to the change's, never removes (the change's snapshot of the tree's).
+			changed, err := s.applyPeople(w, existing, req, tree, p.ID, false)
 			if err != nil {
 				return err
 			}
 			if changed && existing.State != StateHolding {
 				w.put(existing)
 			}
+		}
+		if err := tree.save(ctx, tx); err != nil {
+			return err
 		}
 		if existing != nil && existing.State != StateHolding {
 			out = existing
@@ -391,7 +428,7 @@ func (s *Service) Register(ctx context.Context, p authn.Principal, body any) (*C
 				w.record("policy", nil, "deploy.expire", old, "allow", nil, "superseded by "+pycompat.Truncate(req.Head, 7), map[string]any{"by": req.Head})
 			}
 			ch = Open(req, c, w.now, p.ID)
-			if _, err := s.mergePeople(ctx, tx, w, ch, req, p.ID, true); err != nil {
+			if _, err := s.applyPeople(w, ch, req, tree, p.ID, true); err != nil {
 				return err
 			}
 			ch.State = ""
@@ -569,6 +606,10 @@ func (s *Service) Clear(ctx context.Context, p authn.Principal, changeID, onBeha
 		if err := checkApproverKind(onBehalfOf, person, who); err != nil {
 			return err
 		}
+		// The tree's people as they are now (a later registration may have added to them since this change's snapshot).
+		if err := s.refreshPeople(ctx, tx, c); err != nil {
+			return err
+		}
 		role, err := RoleFor(person, groups, c)
 		if err != nil {
 			var ge *Error
@@ -743,45 +784,103 @@ func lower(s string) string { return strings.ToLower(s) }
 // PolicyView is Gateway.gate_policy_view.
 func (s *Service) PolicyView() PolicyView { return s.Policy.View() }
 
-// treeKey is what "the same tree" means for the people rule, as clearedByTree keys it: a manifest-tree change (or a
-// definition release) of the same app, environment, cluster and repository with the same bound tree digest, whatever
-// its pull request or head. "" for a terraform plan or a placeholder tree.
-func treeKey(c *Change) string {
-	if (c.Subject != nil && c.Subject.Kind != KindManifestTree) || Unbound(c.TreeDigest) {
+// treeKey is what "the same tree" means for the people rule, as clearedByTree keys it: a manifest tree of the same app,
+// environment, cluster and repository with the same bound tree digest, whatever its pull request or head. "" for a
+// terraform plan, a definition release and a placeholder tree, whose people stay with the change.
+func treeKey(app, env, cluster, repo, digest string, manifest bool) string {
+	if !manifest || Unbound(digest) {
 		return ""
 	}
-	return c.App + "|" + c.Env + "|" + c.Cluster + "|" + c.Repo + "|" + bareHex(c.TreeDigest)
+	return app + "|" + env + "|" + cluster + "|" + repo + "|" + bareHex(digest)
 }
 
-// mergePeople makes the people behind ch the union of what it has, what req brings, and every other holding or
-// cleared (not superseded) change on the same tree has; holding changes on that tree gain the union too, so the
-// Argo CD plugin's pr 0 registration of a tree a pull request's change already holds cannot be cleared by that
-// pull request's author. It only adds. It records what was added, and a re-registration that left stored names out.
-func (s *Service) mergePeople(ctx context.Context, tx store.Tx, w *writer, ch *Change, req ChangeRequest, principal string, fresh bool) (bool, error) {
+func treeKeyOfReq(r ChangeRequest) string {
+	return treeKey(r.App, r.Env, r.Cluster, r.Repo, r.TreeDigest, r.Kind() == KindManifestTree)
+}
+
+func treeKeyOf(c *Change) string {
+	return treeKey(c.App, c.Env, c.Cluster, c.Repo, c.TreeDigest, c.Subject == nil || c.Subject.Kind == KindManifestTree)
+}
+
+// treeState is the tree's record as read and as it will be written.
+type treeState struct {
+	key  string
+	rec  TreeRecord
+	grew bool
+}
+
+func (t *treeState) save(ctx context.Context, tx store.Tx) error {
+	if t.key == "" || !t.grew {
+		return nil
+	}
+	raw, err := json.Marshal(t.rec)
+	if err != nil {
+		return err
+	}
+	return tx.PutTreePeople(ctx, store.TreePeople{Key: t.key, Record: raw})
+}
+
+func readTree(ctx context.Context, r store.Reader, key string) (TreeRecord, error) {
+	row, err := r.TreePeople(ctx, key)
+	if errors.Is(err, store.ErrNotFound) {
+		return TreeRecord{}, nil
+	}
+	if err != nil {
+		return TreeRecord{}, err
+	}
+	var rec TreeRecord
+	if err := json.Unmarshal(row.Record, &rec); err != nil {
+		return TreeRecord{}, fmt.Errorf("gate: tree people %s: %w", key, err)
+	}
+	return rec, nil
+}
+
+// unionTree reads the request's tree record (one primary-key read) and adds the request's people to it, refusing the
+// registration before anything is written when a role would pass MaxTreePeople. A request with no tree key has none.
+func (s *Service) unionTree(ctx context.Context, r store.Reader, req ChangeRequest) (*treeState, error) {
+	t := &treeState{key: treeKeyOfReq(req)}
+	if t.key == "" {
+		return t, nil
+	}
+	rec, err := readTree(ctx, r, t.key)
+	if err != nil {
+		return nil, err
+	}
+	t.rec, t.grew, err = rec.union(requestPeople(req))
+	return t, err
+}
+
+// refreshPeople gives a change the tree's people as they are now (clear time): the snapshot a change carries is as of
+// its last registration, and a registration of the same tree since may have added people.
+func (s *Service) refreshPeople(ctx context.Context, r store.Reader, c *Change) error {
+	key := treeKeyOf(c)
+	if key == "" {
+		return nil
+	}
+	rec, err := readTree(ctx, r, key)
+	if err != nil {
+		return err
+	}
+	_, err = c.absorb(rec.people())
+	return err
+}
+
+// applyPeople gives ch the tree's people (or, with no tree key, this request's) and records a re-registration that
+// omitted names the change has (only when it sent a set: a verifier that sends none gets today's behaviour). It only
+// adds. It reports whether ch changed.
+func (s *Service) applyPeople(w *writer, ch *Change, req ChangeRequest, tree *treeState, principal string, fresh bool) (bool, error) {
 	changed := false
-	if n := ch.omitted(req); n > 0 && ch.PeopleNotes < MaxPeopleNotes {
-		changed = true
-		w.note(ch, principal, fmt.Sprintf("people: the registration omitted %d name(s) the change has; kept (the set only grows)", n))
-	}
-	union := ch.peopleOf().union(requestPeople(req))
-	var peers []*Change
-	if key := treeKey(ch); key != "" {
-		holding, err := loadAll(tx.ChangesHolding(ctx))
-		if err != nil {
-			return false, err
-		}
-		cleared, err := loadAll(tx.ChangesCleared(ctx, ch.App, ch.Env))
-		if err != nil {
-			return false, err
-		}
-		for _, o := range append(holding, cleared...) {
-			if o.ID != ch.ID && treeKey(o) == key && (o.State == StateHolding || o.State == StateCleared) {
-				peers = append(peers, o)
-				union = union.union(o.peopleOf())
-			}
+	if !fresh && req.Source != nil {
+		if n := ch.omitted(req); n > 0 && ch.PeopleNotes < MaxPeopleNotes {
+			changed = true
+			w.note(ch, principal, fmt.Sprintf("people: the registration omitted %d source name(s) the change has; kept (the set only grows)", n))
 		}
 	}
-	added, err := ch.absorb(union)
+	add := requestPeople(req)
+	if tree.key != "" {
+		add = tree.rec.people()
+	}
+	added, err := ch.absorb(add)
 	if err != nil {
 		return false, err
 	}
@@ -789,17 +888,6 @@ func (s *Service) mergePeople(ctx context.Context, tx store.Tx, w *writer, ch *C
 		changed = true
 		if !fresh {
 			w.note(ch, principal, "people: added "+strings.Join(added, ", "))
-		}
-	}
-	for _, o := range peers {
-		if o.State != StateHolding {
-			continue
-		}
-		if added, err := o.absorb(union); err != nil {
-			return false, err
-		} else if len(added) > 0 {
-			w.note(o, "policy", "people: gained "+strings.Join(added, ", ")+" from the same tree ("+ch.ID+")")
-			w.put(o)
 		}
 	}
 	return changed, nil
@@ -815,12 +903,13 @@ func (w *writer) note(c *Change, principal, result string) {
 }
 
 // refused records a clear the people rule refused, as deploy.refuse (decision deny, rule DG-PROPOSER), bounded per
-// change; the packet reads deploy.request, deploy.clear and deploy.deny, so this is not mistaken for a state.
+// change and apart from the people notes, so refusals cannot use up the budget that records a shrink attempt; the
+// packet reads deploy.request, deploy.clear and deploy.deny, so this is not mistaken for a state.
 func (w *writer) refused(c *Change, person string, via *string, ge *Error) {
-	if c.PeopleNotes >= MaxPeopleNotes {
+	if c.RefusalNotes >= MaxPeopleNotes {
 		return
 	}
-	c.PeopleNotes++
+	c.RefusalNotes++
 	w.record(person, via, "deploy.refuse", c, "deny", strp(ge.Rule), ge.Message, map[string]any{"rule": ge.Rule}, map[string]any{"change": c.recordChange()})
 	w.put(c)
 }

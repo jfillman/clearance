@@ -104,10 +104,10 @@ type Behind struct {
 }
 
 const (
-	// MaxSourceStored bounds each list of a change's stored set, which grows by union across re-registrations and
-	// same-tree changes; a registration that would pass it is refused (DG-SOURCE-LIMIT).
-	MaxSourceStored = 512
-	// MaxPeopleNotes bounds the people notes and refused-clear records written per change.
+	// MaxTreePeople bounds each role of the people behind a tree (and of a change's own set), which grow by union;
+	// a registration that would pass it is refused whole, before anything is written (DG-SOURCE-LIMIT).
+	MaxTreePeople = 256
+	// MaxPeopleNotes bounds the deploy.people records, and (separately) the deploy.refuse records, written per change.
 	MaxPeopleNotes = 32
 	// maxPeopleListed is how many names a record lists (past it: the digest and the count only).
 	maxPeopleListed = 64
@@ -234,8 +234,8 @@ func (c *Change) absorb(p people) ([]string, error) {
 			if hasBare(*f.have, n) {
 				continue
 			}
-			if len(*f.have) >= MaxSourceStored {
-				return added, gerr("DG-SOURCE-LIMIT", fmt.Sprintf("the people behind this change would pass %d %ss", MaxSourceStored, f.role),
+			if len(*f.have) >= MaxTreePeople {
+				return added, gerr("DG-SOURCE-LIMIT", fmt.Sprintf("the people behind this change would pass %d %ss", MaxTreePeople, f.role),
 					"A change's set only grows; register a new head.", 409)
 			}
 			*f.have = append(*f.have, n)
@@ -250,11 +250,12 @@ func (c *Change) absorb(p people) ([]string, error) {
 	return added, nil
 }
 
-// omitted is how many of c's people a registration's own do not name (a re-registration cannot remove them).
+// omitted is how many of c's source names (authors, mergers, promoters; proposers legitimately differ between
+// registrars) a registration that sent a set does not name: a re-registration cannot remove them.
 func (c *Change) omitted(r ChangeRequest) int {
 	have, n := requestPeople(r), 0
 	cur := c.peopleOf()
-	for _, x := range []struct{ cur, req []string }{{cur.proposers, have.proposers}, {cur.authors, have.authors}, {cur.mergers, have.mergers}, {cur.promoters, have.promoters}} {
+	for _, x := range []struct{ cur, req []string }{{cur.authors, have.authors}, {cur.mergers, have.mergers}, {cur.promoters, have.promoters}} {
 		for _, name := range x.cur {
 			if !hasBare(x.req, name) {
 				n++
@@ -324,4 +325,43 @@ func (c *Change) recordChange() map[string]any {
 		m["people"] = c.peopleSummary()
 	}
 	return m
+}
+
+// TreeRecord is the people behind a tree: every proposer and source entry ever registered for it. It is its own durable
+// record keyed by the tree key, grows only, and does not depend on the state or life of any change on the tree.
+type TreeRecord struct {
+	Proposers []string `json:"proposers"`
+	Authors   []string `json:"authors"`
+	Mergers   []string `json:"mergers"`
+	Promoters []string `json:"promoters"`
+}
+
+func (t TreeRecord) people() people {
+	return people{t.Proposers, t.Authors, t.Mergers, t.Promoters}
+}
+
+// union adds p's names (by bare name) to t, reporting whether it grew; a role over MaxTreePeople is refused and t is
+// untouched.
+func (t TreeRecord) union(p people) (TreeRecord, bool, error) {
+	out := TreeRecord{append([]string(nil), t.Proposers...), append([]string(nil), t.Authors...),
+		append([]string(nil), t.Mergers...), append([]string(nil), t.Promoters...)}
+	grew := false
+	for _, f := range []struct {
+		role string
+		have *[]string
+		add  []string
+	}{{"proposer", &out.Proposers, p.proposers}, {"author", &out.Authors, p.authors}, {"merger", &out.Mergers, p.mergers}, {"promoter", &out.Promoters, p.promoters}} {
+		for _, n := range f.add {
+			if hasBare(*f.have, n) {
+				continue
+			}
+			if len(*f.have) >= MaxTreePeople {
+				return t, false, gerr("DG-SOURCE-LIMIT", fmt.Sprintf("this tree already has %d %ss behind it; the registration would add more", MaxTreePeople, f.role),
+					"Nothing was registered. A tree's people only grow; the verifier is sending names that are not people on this tree.", 409)
+			}
+			*f.have = append(*f.have, n)
+			grew = true
+		}
+	}
+	return out, grew, nil
 }

@@ -732,6 +732,7 @@ type Change struct {
 	// people and refused-clear records written for the change.
 	AlsoBehind       []BehindPerson    `json:"also_behind,omitempty"`
 	PeopleNotes      int               `json:"people_notes,omitempty"`
+	RefusalNotes     int               `json:"refusal_notes,omitempty"`
 	Owner            string            `json:"owner"`
 	Protected        bool              `json:"protected"`
 	TreeDigest       string            `json:"tree_digest"`

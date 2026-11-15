@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jfillman/clearance/internal/authn"
 	"github.com/jfillman/clearance/internal/gate"
@@ -212,7 +213,9 @@ func TestAttackADeveloperCannotClearTheirOwnReleaseByMakingABotTheProposer(t *te
 		t.Fatal(got)
 	}
 	// without the set, the same registration lets dev clear it: that is the hole
-	cid2 := f.register(t, "ci", change(map[string]any{"objects": replicas, "proposer": "dependabot[bot]", "head": strings.Repeat("d", 40)})).ID
+	// (another tree: the people behind a tree are the tree's, whatever the head)
+	cid2 := f.register(t, "ci", change(map[string]any{"objects": replicas, "proposer": "dependabot[bot]", "head": strings.Repeat("d", 40),
+		"treeDigest": strings.Repeat("ab", 32)})).ID
 	if out, err := f.svc.Clear(f.ctx, person("dev"), cid2, ""); err != nil || out.State != "cleared" {
 		t.Fatal("the unfixed behaviour changed", out, err)
 	}
@@ -429,15 +432,21 @@ func TestTheRecordsSayWhoWasExcluded(t *testing.T) {
 	}
 }
 
+// A new head carries its own set; on the same tree the tree's people stay behind it too, on another tree they do not.
 func TestANewHeadCarriesItsOwnSet(t *testing.T) {
 	f := newSrcGate(t)
 	a := f.register(t, "ci", change(map[string]any{"objects": replicas, "source": src([]string{"dev"}, nil, "")}))
 	b := f.register(t, "ci", change(map[string]any{"objects": replicas, "head": strings.Repeat("e", 40), "source": src([]string{"bob"}, nil, "")}))
-	if b.ID == a.ID || b.Source.Authors[0] != "bob" || f.get(t, a.ID).State != "superseded" {
+	if b.ID == a.ID || names(b.Source.Authors) != "bob,dev" || f.get(t, a.ID).State != "superseded" {
 		t.Fatal(a, b)
 	}
-	if _, err := f.svc.Clear(f.ctx, person("dev"), b.ID, ""); err != nil {
-		t.Fatal("dev is not behind the new head's set:", err)
+	if _, err := f.svc.Clear(f.ctx, person("dev"), b.ID, ""); rule(err) != "DG-PROPOSER" {
+		t.Fatal("the same tree's author cleared its next head:", err)
+	}
+	c := f.register(t, "ci", change(map[string]any{"objects": replicas, "head": strings.Repeat("f", 40), "treeDigest": strings.Repeat("cd", 32),
+		"source": src([]string{"bob"}, nil, "")}))
+	if _, err := f.svc.Clear(f.ctx, person("dev"), c.ID, ""); err != nil {
+		t.Fatal("another tree took the set:", err)
 	}
 }
 
@@ -454,5 +463,102 @@ func TestOnlyAVerifierSuppliesASet(t *testing.T) {
 		if !errors.As(err, &nv) {
 			t.Errorf("%s: %v", who, err)
 		}
+	}
+}
+
+// The tree's people are a record of their own: no change's state or lifetime can lose them.
+func TestThePeopleOfATreeOutliveTheChangeThatBroughtThem(t *testing.T) {
+	plugin := func() map[string]any {
+		return change(map[string]any{"objects": replicas, "pr": json.Number("0"), "proposer": "system:argocd-cmp", "head": strings.Repeat("9", 40)})
+	}
+	for _, how := range []string{"expires", "denied", "superseded", "revoked", "cleared then superseded"} {
+		t.Run(how, func(t *testing.T) {
+			f := newSrcGate(t)
+			c := f.register(t, "ci", change(map[string]any{"objects": replicas, "source": src([]string{"dev"}, nil, "")}))
+			switch how {
+			case "expires":
+				f.clock.advance(30 * 24 * time.Hour)
+				if _, err := f.svc.Expire(f.ctx); err != nil {
+					t.Fatal(err)
+				}
+			case "denied":
+				if _, err := f.svc.Deny(f.ctx, person("erin"), c.ID, "no", ""); err != nil {
+					t.Fatal(err)
+				}
+			case "superseded":
+				f.register(t, "ci", change(map[string]any{"objects": replicas, "head": strings.Repeat("e", 40), "source": src([]string{"bob"}, nil, "")}))
+			case "revoked", "cleared then superseded":
+				if _, err := f.svc.Clear(f.ctx, person("erin"), c.ID, ""); err != nil {
+					t.Fatal(err)
+				}
+				f.register(t, "ci", change(map[string]any{"objects": replicas, "head": strings.Repeat("e", 40)}))
+			}
+			if st := f.get(t, c.ID).State; st == "holding" {
+				t.Fatal("the first change still holds:", st)
+			}
+			p := f.register(t, "ci", plugin())
+			if _, err := f.svc.Clear(f.ctx, person("dev"), p.ID, ""); rule(err) != "DG-PROPOSER" {
+				t.Fatalf("dev cleared the plugin's change after the first one %s: %v", how, err)
+			}
+		})
+	}
+}
+
+// A refused registration leaves nothing behind: the old head is not superseded and nothing is recorded.
+func TestARefusedRegistrationIsAllOrNothing(t *testing.T) {
+	f := newSrcGate(t)
+	old := f.register(t, "ci", change(map[string]any{"objects": replicas}))
+	before := len(f.records(t, ""))
+	var many []string
+	for i := 0; i < gate.MaxTreePeople+1; i++ {
+		many = append(many, fmt.Sprintf("u%d", i))
+	}
+	// 64 per request, so fill the tree to the cap over several registrations of the one head, then pass it
+	for i := 0; i < gate.MaxTreePeople; i += 64 {
+		f.register(t, "ci", change(map[string]any{"objects": replicas, "source": src(many[i:min(i+64, gate.MaxTreePeople)], nil, "")}))
+	}
+	before = len(f.records(t, ""))
+	_, err := f.svc.Register(f.ctx, principals["ci"], change(map[string]any{"objects": replicas, "head": strings.Repeat("e", 40),
+		"source": src(many[gate.MaxTreePeople:], nil, "")}))
+	if rule(err) != "DG-SOURCE-LIMIT" {
+		t.Fatal(err)
+	}
+	if f.get(t, old.ID).State != "holding" || len(f.records(t, "")) != before {
+		t.Fatal("a refused registration left something behind")
+	}
+	if _, err := f.st.Change(f.ctx, gate.ChangeRequest{Repo: "jfillman/gitops-gate-api", PR: 7, Head: strings.Repeat("e", 40)}.ID()); err == nil {
+		t.Fatal("the refused change was opened")
+	}
+	// the names already there are still there, and a registration that adds none still works
+	if _, err := f.svc.Register(f.ctx, principals["ci"], change(map[string]any{"objects": replicas, "source": src(many[:3], nil, "")})); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A verifier running in app-<app>-cicd registers manifest trees for its own app only.
+func TestAVerifierIsBoundToItsOwnApp(t *testing.T) {
+	f := newGate(t)
+	_, err := f.svc.Register(f.ctx, principals["ci"], change(map[string]any{"objects": replicas, "app": "other-app"}))
+	if rule(err) != "DG-VERIFIER-APP" {
+		t.Fatal(err)
+	}
+	f.svc.Config.VerifierAppBindingOff = true
+	if _, err := f.svc.Register(f.ctx, principals["ci"], change(map[string]any{"objects": replicas, "app": "other-app"})); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Behaviour with no source anywhere: one proposer on a tree records exactly what it did; a second proposer on the tree
+// is excluded on it (the point of the per-tree record) and shows in the record.
+func TestTheProposerOfEveryChangeOnATreeIsExcludedOnIt(t *testing.T) {
+	f := newSrcGate(t)
+	f.register(t, "ci", change(map[string]any{"objects": replicas}))
+	if _, has := f.records(t, "deploy.request")[0]["change"].(map[string]any)["people"]; has {
+		t.Fatal("a tree with one proposer and no source changed the record's shape")
+	}
+	p := f.register(t, "ci", change(map[string]any{"objects": replicas, "pr": json.Number("0"), "proposer": "system:argocd-cmp", "head": strings.Repeat("9", 40)}))
+	// dana proposed the PR change on this tree; she cannot clear the pr 0 change either
+	if _, err := f.svc.Clear(f.ctx, person("dana"), p.ID, ""); rule(err) != "DG-PROPOSER" {
+		t.Fatal(err)
 	}
 }

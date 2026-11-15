@@ -17,6 +17,7 @@ package pg
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -135,6 +136,11 @@ CREATE TABLE IF NOT EXISTS clearance_feeds (
 );
 CREATE INDEX IF NOT EXISTS clearance_evidence_app ON clearance_evidence ((record->>'principal'), seq)
   WHERE record->>'principal' LIKE 'app:%';
+CREATE TABLE IF NOT EXISTS clearance_tree_people (
+  key        text        PRIMARY KEY,
+  record     jsonb       NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS clearance_breakglass (
   id         text        PRIMARY KEY,
   cluster    text        NOT NULL,
@@ -1624,4 +1630,48 @@ func (t *tx) BreakglassOpen(ctx context.Context) ([]store.Breakglass, error) {
 	}
 	defer done()
 	return breakglassRows(ctx, q, t.s.opt, "state = 'open'")
+}
+
+func treePeopleOne(ctx context.Context, q querier, opt Options, key string) (store.TreePeople, error) {
+	ctx, cancel := deadline(ctx, opt)
+	defer cancel()
+	var raw string
+	err := q.QueryRow(ctx, "SELECT record::text FROM clearance_tree_people WHERE key = $1", key).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.TreePeople{}, store.ErrNotFound
+	}
+	if err != nil {
+		return store.TreePeople{}, fmt.Errorf("pg: %w", err)
+	}
+	return store.TreePeople{Key: key, Record: json.RawMessage(raw)}, nil
+}
+
+func (r *Reader) TreePeople(ctx context.Context, key string) (store.TreePeople, error) {
+	return treePeopleOne(ctx, r.pool, r.opt, key)
+}
+
+func (t *tx) TreePeople(ctx context.Context, key string) (store.TreePeople, error) {
+	ctx = t.ctx // detached and bounded: see Store.Atomic
+	q, done, err := t.q()
+	if err != nil {
+		return store.TreePeople{}, err
+	}
+	defer done()
+	return treePeopleOne(ctx, q, t.s.opt, key)
+}
+
+func (t *tx) PutTreePeople(ctx context.Context, tp store.TreePeople) error {
+	ctx = t.ctx // detached and bounded: see Store.Atomic
+	if err := t.lock(); err != nil {
+		return err
+	}
+	defer t.mu.Unlock()
+	ctx, cancel := deadline(ctx, t.s.opt)
+	defer cancel()
+	_, err := t.tx.Exec(ctx, "INSERT INTO clearance_tree_people (key, record) VALUES ($1, $2) "+
+		"ON CONFLICT (key) DO UPDATE SET record = EXCLUDED.record, updated_at = now()", tp.Key, string(tp.Record))
+	if err != nil {
+		return fmt.Errorf("pg: put tree people: %w", err)
+	}
+	return nil
 }

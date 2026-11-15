@@ -82,9 +82,11 @@ type Change struct {
 	// absent on changes registered without it.
 	Source *SourcePeople `json:"source,omitempty"`
 	// AlsoBehind is who else is excluded from clearing it, added after the first registration (another proposer, another
-	// promoter): the set only grows. PeopleNotes counts the people and refused-clear records written (bounded).
-	AlsoBehind       []Behind          `json:"also_behind,omitempty"`
-	PeopleNotes      int               `json:"people_notes,omitempty"`
+	// promoter): the set only grows. PeopleNotes counts the deploy.people records written (bounded).
+	AlsoBehind  []Behind `json:"also_behind,omitempty"`
+	PeopleNotes int      `json:"people_notes,omitempty"`
+	// RefusalNotes counts the refused-clear records written for the change (a budget apart from PeopleNotes).
+	RefusalNotes     int               `json:"refusal_notes,omitempty"`
 	Owner            string            `json:"owner"`
 	Protected        bool              `json:"protected"`
 	TreeDigest       string            `json:"tree_digest"`

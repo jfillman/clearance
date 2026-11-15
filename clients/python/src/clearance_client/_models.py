@@ -777,6 +777,7 @@ class GateChange(Model):
         Field("proposer_kind", "proposer_kind", ("str",), True),
         Field("protected", "protected", ("bool",), True),
         Field("reasons", "reasons", ("list", ("ref", "GateReason")), True),
+        Field("refusal_notes", "refusal_notes", ("int",), False),
         Field("registered_by", "registered_by", ("str",), True),
         Field("repo", "repo", ("str",), True),
         Field("repo_policy_digest", "repo_policy_digest", ("nullable", ("str",)), True),
@@ -830,6 +831,7 @@ class GateChange(Model):
     proposer_kind: str
     protected: bool
     reasons: list[GateReason]
+    refusal_notes: int | None = None
     registered_by: str
     repo: str
     repo_policy_digest: str | None
@@ -890,6 +892,7 @@ class GateChangeWithAuditSeq(Model):
         Field("proposer_kind", "proposer_kind", ("str",), True),
         Field("protected", "protected", ("bool",), True),
         Field("reasons", "reasons", ("list", ("ref", "GateReason")), True),
+        Field("refusal_notes", "refusal_notes", ("int",), False),
         Field("registered_by", "registered_by", ("str",), True),
         Field("repo", "repo", ("str",), True),
         Field("repo_policy_digest", "repo_policy_digest", ("nullable", ("str",)), True),
@@ -944,6 +947,7 @@ class GateChangeWithAuditSeq(Model):
     proposer_kind: str
     protected: bool
     reasons: list[GateReason]
+    refusal_notes: int | None = None
     registered_by: str
     repo: str
     repo_policy_digest: str | None

@@ -292,6 +292,7 @@ func TestFinalStatesIgnoreReportsAndPeople(t *testing.T) {
 
 func TestAPushSupersedesOnlyItsOwnAppEnvAndCluster(t *testing.T) {
 	f, _ := withTokens(t)
+	f.svc.Config.VerifierAppBindingOff = true
 	a := f.register(t, "ci", change(map[string]any{"objects": replicas, "pr": json.Number("0"), "head": headN(1)}))
 	b := f.register(t, "ci", change(map[string]any{"objects": replicas, "pr": json.Number("0"), "head": headN(2), "app": "other-app"}))
 	if f.get(t, a.ID).State != gate.StateHolding || f.get(t, b.ID).State != gate.StateHolding {

@@ -695,6 +695,9 @@
             },
             "type": "array"
           },
+          "refusal_notes": {
+            "type": "integer"
+          },
           "registered_by": {
             "type": "string"
           },
@@ -2741,6 +2744,9 @@
               "$ref": "#/components/schemas/GateReason"
             },
             "type": "array"
+          },
+          "refusal_notes": {
+            "type": "integer"
           },
           "registered_by": {
             "type": "string"

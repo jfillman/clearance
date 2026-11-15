@@ -192,6 +192,7 @@ func TestPeopleClearingIssuesATokenNamingThePersonAtTheirIdP(t *testing.T) {
 
 func TestANewHeadRevokesTheTokenAndTheOldOneIsAReplay(t *testing.T) {
 	f, ks := withTokens(t)
+	f.svc.Config.VerifierAppBindingOff = true
 	c := f.register(t, "ci", change(map[string]any{"objects": imageBump}))
 	old := f.token(t, c.ID)
 	if _, err := f.verify(t, ks, old, f.svc); err != nil {

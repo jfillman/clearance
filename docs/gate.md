@@ -730,22 +730,30 @@ oversize list, an unknown key or a malformed entry is a 400, like any other malf
   and `user:dev` are one person. The proposer check now compares the same way; before this it was an exact string
   comparison, so a proposer registered as `Dana` did not stop `user:dana`. Nothing treats a bot specially: a
   `dependabot[bot]` login is a name like any other (a `person`-kind proposer that is a bot is a separate decision).
-- **The set only grows.** The excluded people of a change are the union of every proposer and every `source` entry
-  ever registered for it. A re-registration (a re-run, a `/retest` by another person, a second registrar) may add
-  people and never removes any: a shorter set, or none, is accepted and has no effect, and is recorded
-  (`deploy.people`, "omitted N name(s)"). A different `proposer` on a re-registration is added to the set ("a further
-  proposer") and the first proposer stays the displayed one; a different promoter is added the same way. This applies
-  to a change that was already holding before this field existed. A decided change keeps its state but its set still
-  grows. A new head is a new change and starts from its own set (and the same tree's, below). The stored lists are
-  bounded (512 each; past it `DG-SOURCE-LIMIT`, 409).
-- **Across changes on one tree.** The exclusion is per change, but a tree can be registered twice: the Argo CD plugin
-  registers the merged tree as `pr 0` (proposer `system:argocd-cmp`, no set) while the pull request's change may still
-  hold. So the people behind every **holding or cleared (not superseded) change on the same tree** are one set: a
-  registration takes the union of them, and when a later registration brings people, the holding changes on that tree
-  gain them too. "The same tree" is what the by-tree lookup keys on: the same app, environment, cluster and
-  repository, a manifest tree (or definition release) with the same bound tree digest, whatever the pull request or
-  head. A terraform plan and a placeholder tree have no such key. Either order works (the pull request's change first,
-  or the plugin's), and a gained name is a `deploy.people` record on the change that gained it.
+- **The set only grows, and belongs to the tree.** The people behind a manifest tree (app, environment, cluster,
+  repository and bound tree digest: the key the by-tree lookup uses, whatever the pull request or head) are a record of
+  their own, `clearance_tree_people`, one row per tree, read by that key in one primary-key read. Every registration of
+  the tree first adds its proposer and `source` to that record, and the change's excluded set is that record: the
+  change carries a snapshot (`source`, `also_behind`) and the core reads the record again when someone clears, so a
+  registration made after the change still counts. The record does not depend on any change: it outlives a change that
+  expired, was denied, revoked or superseded, so the Argo CD plugin's `pr 0` registration of a tree whose pull request's
+  change has long expired is still behind the same people. A re-registration (a re-run, a `/retest` by another person, a
+  second registrar) may add and never removes; a shorter set, or none, has no effect, and a re-registration that sent a
+  set missing names the change has is recorded (`deploy.people`, "omitted N"). A different `proposer` is added ("a
+  further proposer"; the first stays displayed). **Behaviour change for deployments that send no `source`:** the proposer
+  of every change on a tree is now excluded from clearing every other change on that tree (the plugin's `pr 0`
+  registration, a new head of the same tree, a second pull request with the same result), not only the one they proposed.
+  When a tree has exactly one proposer and no source, nothing in a record or the packet changes.
+- **Bounds and refusal.** Each role of a tree's record holds at most 256 names. A registration that would pass it is
+  refused whole before anything is written (`DG-SOURCE-LIMIT`, 409): no change is opened, nothing is superseded, no record
+  is written. A registration is all or nothing: any error it returns rolls its transaction back (`op` otherwise commits
+  what an operation wrote when it returns an error, which a clear relies on to keep an expiry found while clearing and the
+  refused-clear record; Register opts out). A change with no tree key (a terraform plan, a definition release, a
+  placeholder tree) keeps its own set with the same bounds.
+- **A verifier is bound to its app.** A verifier named `app-<app>-cicd/<sa>` registers manifest-tree changes for `<app>`
+  only (`DG-VERIFIER-APP`, 403), so the names it sends can only reach its own app's trees; junk from one app cannot fill
+  or poison another's. `CLEARANCE_VERIFIER_APP_BINDING=off` turns this off. The open case: a verifier not named that way
+  (a global CI principal, an HCP run task) is not narrowed, and an OIDC workflow is bound to its repository instead.
 - **Aliases.** The comparison goes through `CLEARANCE_APPROVER_ALIASES` as the tier 3 distinct-approver rule does, so a
   person with two aliased identities is excluded under both.
 - **Precondition.** The rule matches the clearing person (`user:<name>`, the name from `CLEARANCE_OIDC_USER_CLAIM`)
@@ -759,20 +767,24 @@ oversize list, an unknown key or a malformed entry is a 400, like any other malf
   person at the CLI or in the UI cannot register, so cannot name `source` for their own benefit. The set can only
   narrow who may clear; a verifier that leaves it out gets today's behaviour, so the verifier is trusted to send what
   it resolved from authenticated facts (Glidepath: the GitHub pull request openers and merge actors, not commit text).
-- **Stored, returned, recorded.** The set is in the change's record, so it is returned as `source` (plus
-  `also_behind`, the people added later) on every read (`GET /v1/clearances`, `/{id}`, both APIs; absent when none)
-  and the Go and Python clients model it. A change that has a set carries it in its records: the `change` object of
-  `deploy.request`, `deploy.clear` and `deploy.people` has `people: {digest, count, excluded}` (the sorted names by
-  role, listed when there are at most 64, else the digest and count only), so an auditor with only the packet sees who
-  was excluded and which version of the set a clear was checked against (`deploy.clear`'s `change.people.digest`). A
-  change without a set records exactly what it did before; old records stay valid (`change` is a free object). A
-  refused clear is a `deploy.refuse` record (decision `deny`, rule `DG-PROPOSER`, the person and the role that
-  excluded them), at most 32 people records and refusals per change. The packet reads `deploy.request`,
-  `deploy.clear` and `deploy.deny` for a change's state and ignores `deploy.people` and `deploy.refuse`, so neither
-  is mistaken for a state. **It is not in the clearance token**: a consumer of the token verifies
-  *what* was cleared and *who cleared it* (`approvals`, `provenance.proposer`), and up to 129 more names would grow a
-  credential every Argo CD agent and admission policy carries, for no decision they make. There is no database column:
-  the change row's `record` is jsonb.
+- **Stored, returned, recorded.** The tree's people are in `clearance_tree_people` (a small table created with
+  `CREATE TABLE IF NOT EXISTS`, a primary-key index only, nothing added to the evidence table). The change's snapshot is
+  in its record, so it is returned as `source` (plus `also_behind`, the people added later) on every read
+  (`GET /v1/clearances`, `/{id}`, both APIs; absent when none) and the Go and Python clients model it. Slack and
+  `awaiting=me` read the snapshot, so they can lag a registration made since; the core decides on the clear. A change
+  that has a set (or more than one proposer on its tree) carries it in its records: the `change` object of
+  `deploy.request`, `deploy.clear`, `deploy.people` has `people: {digest, count, excluded}` (the sorted names by role,
+  listed when there are at most 64, else the digest and count only), so an auditor with only the packet sees who was
+  excluded and which version of the set a clear was checked against (`deploy.clear`'s `change.people.digest`). **Packets
+  carry the set in the request and clear records but not the refusals or the notes.** A refused clear is a
+  `deploy.refuse` record (decision `deny`, rule `DG-PROPOSER`, the person and the role that excluded them); at most 32
+  `deploy.people` and, on a separate budget, 32 `deploy.refuse` records per change. The packet reads `deploy.request`,
+  `deploy.clear` and `deploy.deny` for a change's state and ignores the two new tools. clearance-ui's flight log shows an
+  unknown `deploy.*` record by its tool name and `result`, and the change history by tool name with no label until a UI
+  change adds `deploy.refuse` and `deploy.people` to its tool table (fields: `decision`, `rule`, `result`,
+  `change.people`). **It is not in the clearance token**: a consumer of the token verifies *what* was cleared and *who
+  cleared it* (`approvals`, `provenance.proposer`), and up to 1,024 more names would grow a credential every Argo CD
+  agent and admission policy carries, for no decision they make.
 
 ## Tier 3 approvers are people (C-14, Built)
 
@@ -1002,7 +1014,8 @@ partial index `clearance_evidence_exceptions`. Filters: `tool`, `kind` (an excep
 | `unprotected` | a change's reason (tier 0) | the environment is not on `CLEARANCE_PROTECTED_ENVIRONMENTS` |
 | `DG-POLICY` (outage) | `clearance.yaml` | an `outage:` entry that loosens the baseline, or not a tier 0 to 3 |
 | `DG-PROPOSER` | clear, 403 | the person is the proposer, a source author or merger, or the promoter ([the people behind a change](#the-people-behind-a-change-built)) |
-| `DG-SOURCE-LIMIT` | `POST /v1/clearances`, 409 | the change's stored people would pass 512 authors or mergers |
+| `DG-SOURCE-LIMIT` | `POST /v1/clearances`, 409 | the tree's (or change's) people would pass 256 in a role; nothing was registered |
+| `DG-VERIFIER-APP` | `POST /v1/clearances`, 403 | a verifier `app-<app>-cicd/<sa>` registering a manifest tree for another app |
 | `DG-BREAKGLASS` | `POST /v1/breakglass`, `/close`, 403 | not an admin |
 | `DG-RESOLUTION` | `POST /v1/observations/{seq}/resolution`, 403 | not an admin |
 | `DG-BREAKGLASS-TTL` | `POST /v1/breakglass`, 400 | the TTL is not a Go duration from 1m to the deployment's maximum (at most 4h) |
