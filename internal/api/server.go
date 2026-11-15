@@ -75,7 +75,8 @@ type Server struct {
 	log     *slog.Logger
 	handler http.Handler
 	hub     *hub
-	verify  *verifier // nil: no attestation trust configured
+	verify  *verifier     // nil: no attestation trust configured
+	mapSem  chan struct{} // MaxConcurrentMapReads: a Map read holds one reader connection per statement
 }
 
 // New builds the server.
@@ -89,7 +90,7 @@ func New(opt Options) (*Server, error) {
 	if opt.Log == nil {
 		opt.Log = slog.Default()
 	}
-	s := &Server{opt: opt, log: opt.Log, hub: newHub(opt.Store, opt.StreamPoll, opt.Log), verify: newVerifier(opt.Attest)}
+	s := &Server{opt: opt, log: opt.Log, hub: newHub(opt.Store, opt.StreamPoll, opt.Log), verify: newVerifier(opt.Attest), mapSem: make(chan struct{}, MaxConcurrentMapReads)}
 	mux := http.NewServeMux()
 	for _, rt := range Routes() {
 		if rt.serve == nil {

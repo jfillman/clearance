@@ -1,11 +1,14 @@
 package pg
 
 import (
+	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/jfillman/clearance/internal/evidence"
 	"github.com/jfillman/clearance/internal/store"
 	"github.com/jfillman/clearance/internal/store/storetest"
 )
@@ -139,5 +142,141 @@ func TestCoreWritesWhileAnIndexIsBuilding(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
+	waitIndexes(t, conn)
+}
+
+func dropMapIndexes(t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+	for _, ix := range MapIndexes {
+		if _, err := conn.Exec(bg, "DROP INDEX IF EXISTS "+ix.Name); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func activeBuilds(t *testing.T, conn *pgx.Conn) (n int) {
+	t.Helper()
+	if err := conn.QueryRow(bg, "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND query LIKE 'CREATE INDEX CONCURRENTLY%' AND state = 'active'").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func waitFor(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	for i := 0; i < 100; i++ {
+		if ok() {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+// The partial indexes' predicates are proved from literals: the core's provider name is spelled in two of them.
+func TestMapIndexesSpellTheCoreProviderName(t *testing.T) {
+	n := 0
+	for _, ix := range MapIndexes {
+		if strings.Contains(ix.DDL, "'"+evidence.CoreProviderName+"'") {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Fatalf("%d indexes spell the core provider name %q, want 2 (health_core, health_ok)", n, evidence.CoreProviderName)
+	}
+}
+
+// An INVALID index that a live backend is still building (a killed core's ghost) is not dropped, which would throw the
+// work away: the next build waits for it and finds it valid.
+func TestLiveBuildOfAnInvalidIndexIsNotDropped(t *testing.T) {
+	indexPoll = 100 * time.Millisecond
+	t.Cleanup(func() { indexPoll = 5 * time.Second })
+	dsn := newDB(t)
+	s := open(t, dsn)
+	conn, err := pgx.Connect(bg, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(bg)
+	waitIndexes(t, conn)
+	dropMapIndexes(t, conn)
+	blocker, err := pgx.Connect(bg, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Close(bg)
+	if _, err := blocker.Exec(bg, "BEGIN; LOCK TABLE clearance_evidence IN ROW EXCLUSIVE MODE"); err != nil {
+		t.Fatal(err)
+	}
+	ghost, err := pgx.Connect(bg, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ghost.Close(bg)
+	ghostDone := make(chan error, 1)
+	go func() { _, err := ghost.Exec(bg, MapIndexes[0].DDL); ghostDone <- err }()
+	waitFor(t, "the ghost build", func() bool {
+		_, _, found := indexState(t, conn, "clearance_evidence_gate")
+		return found && activeBuilds(t, conn) > 0
+	})
+	oid, _, _ := indexState(t, conn, "clearance_evidence_gate")
+	wait, cancel := context.WithTimeout(bg, time.Second)
+	defer cancel()
+	if err := s.buildIndex(wait, MapIndexes[0].Name, MapIndexes[0].DDL); err == nil {
+		t.Fatal("the build did not wait for the live one")
+	}
+	if now, _, found := indexState(t, conn, "clearance_evidence_gate"); !found || now != oid {
+		t.Fatalf("the index a live backend was building was dropped (oid %d, now %d, found %v)", oid, now, found)
+	}
+	if _, err := blocker.Exec(bg, "COMMIT"); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-ghostDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.buildIndex(bg, MapIndexes[0].Name, MapIndexes[0].DDL); err != nil {
+		t.Fatal(err)
+	}
+	if now, v, _ := indexState(t, conn, "clearance_evidence_gate"); now != oid || !v {
+		t.Fatalf("the finished ghost's index is not the one kept: oid %d (was %d) valid %v", now, oid, v)
+	}
+}
+
+// Close during a build returns at once (bounded), and the build stops on the server too: pgx's context cancel is a
+// CancelRequest here, not only a closed socket (a backend waiting on a lock does not notice a closed socket). The
+// next start finds the INVALID index and rebuilds it.
+func TestCloseDuringABuildIsBounded(t *testing.T) {
+	dsn := newDB(t)
+	s := open(t, dsn)
+	conn, err := pgx.Connect(bg, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(bg)
+	waitIndexes(t, conn)
+	dropMapIndexes(t, conn)
+	blocker, err := pgx.Connect(bg, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Close(bg)
+	if _, err := blocker.Exec(bg, "BEGIN; LOCK TABLE clearance_evidence IN ROW EXCLUSIVE MODE"); err != nil {
+		t.Fatal(err)
+	}
+	s.startIndexBuild()
+	waitFor(t, "the build", func() bool { return activeBuilds(t, conn) > 0 })
+	start := time.Now()
+	s.Close()
+	if d := time.Since(start); d > 4*time.Second {
+		t.Fatalf("Close took %s during a build", d)
+	}
+	waitFor(t, "the cancelled build to leave the server", func() bool { return activeBuilds(t, conn) == 0 })
+	if _, err := blocker.Exec(bg, "COMMIT"); err != nil {
+		t.Fatal(err)
+	}
+	if _, v, found := indexState(t, conn, "clearance_evidence_gate"); found && v {
+		t.Fatal("a cancelled build left a valid index")
+	}
+	open(t, dsn) // the next start drops the invalid one and builds again
 	waitIndexes(t, conn)
 }

@@ -30,12 +30,16 @@ const (
 
 // MapLimits.
 const (
-	MaxMapScopes       = 1000
-	MaxMapAttention    = 200
-	MaxAttentionTarget = 20
-	MaxMapChanges      = 20
-	MaxMapEvidence     = 10
-	healthWindow       = time.Minute
+	MaxMapScopes = 1000
+	// MaxConcurrentMapReads bounds the Maps reading at once. A Map runs its four statements at once, so it holds four
+	// reader connections (the pool defaults to 5, CLEARANCE_API_POOL): two at a time would starve every other endpoint.
+	// A Map past the bound waits for its turn within its own request's deadline; the pool is not raised.
+	MaxConcurrentMapReads = 1
+	MaxMapAttention       = 200
+	MaxAttentionTarget    = 20
+	MaxMapChanges         = 20
+	MaxMapEvidence        = 10
+	healthWindow          = time.Minute
 )
 
 const (
@@ -427,6 +431,12 @@ func (s *Server) getMap(w http.ResponseWriter, r *http.Request, v *Viewer) {
 // feeds' health at the window's end and the changes holding. The scopes are those of the targets asked about; the gate
 // records are the whole window's (an undeclared gate is found in them), so they are read once.
 func (s *Server) mapRead(ctx context.Context, v *Viewer, all, asked []DeclaredTarget, from, to, now time.Time) (*mapBuild, bool, error) {
+	select {
+	case s.mapSem <- struct{}{}:
+		defer func() { <-s.mapSem }()
+	case <-ctx.Done():
+		return nil, false, ctx.Err()
+	}
 	st := s.opt.Store
 	b := &mapBuild{byInst: map[string][]int{}, scopes: map[string]scopeTally{}, health: map[string]map[string]observe.SourceHealth{}}
 	var cut bool

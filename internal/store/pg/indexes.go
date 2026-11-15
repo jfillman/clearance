@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgconn/ctxwatch"
 )
 
 // MapIndexes are the partial indexes behind clearance-api's GET /v1/map (api/mapstore.go spells each predicate as its
@@ -24,6 +26,10 @@ var MapIndexes = []struct{ Name, DDL string }{
      OR (record->>'boundary' = 'runtime' AND record ? 'policy' AND NOT (record ? 'outcome_of'))`},
 	{"clearance_evidence_health", `CREATE INDEX CONCURRENTLY IF NOT EXISTS clearance_evidence_health ON clearance_evidence ((record->>'scope'), seq)
   WHERE record->>'tool' = 'observation.health'`},
+	{"clearance_evidence_health_core", `CREATE INDEX CONCURRENTLY IF NOT EXISTS clearance_evidence_health_core ON clearance_evidence ((record->>'scope'), seq)
+  WHERE record->>'tool' = 'observation.health' AND record->'provider'->>'name' = 'clearance'`},
+	{"clearance_evidence_health_ok", `CREATE INDEX CONCURRENTLY IF NOT EXISTS clearance_evidence_health_ok ON clearance_evidence ((record->>'scope'), (COALESCE(record->'source'->>'name', '')), seq)
+  WHERE record->>'tool' = 'observation.health' AND COALESCE(record->'provider'->>'name', '') <> 'clearance' AND record->'health'->>'state' = 'healthy'`},
 	{"clearance_evidence_obs_ts", `CREATE INDEX CONCURRENTLY IF NOT EXISTS clearance_evidence_obs_ts ON clearance_evidence ((record->>'scope'), (record->>'ts'))
   WHERE record->>'tool' IN ('observation', 'assessment')`},
 }
@@ -82,10 +88,21 @@ func (s *Store) BuildIndexes(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// indexPoll is how often a build waits for another backend's build of the same index to finish.
+var indexPoll = 5 * time.Second
+
 func (s *Store) buildIndex(ctx context.Context, name, ddl string) error {
 	cctx, cancel := context.WithTimeout(ctx, indexBuildTimeout)
 	defer cancel()
-	conn, err := pgx.ConnectConfig(cctx, s.cfg.Copy())
+	cc := s.cfg.Copy()
+	// A cancelled context must stop the build on the server, not only on our side. pgx's default handler only sets a past
+	// deadline on the socket and closes it, which leaves the backend building as a ghost until it next looks at the
+	// socket (for CREATE INDEX CONCURRENTLY, possibly minutes); this one also sends a CancelRequest, which aborts the
+	// build at once and leaves an INVALID index for the next start.
+	cc.Config.BuildContextWatcherHandler = func(c *pgconn.PgConn) ctxwatch.Handler {
+		return &pgconn.CancelRequestContextWatcherHandler{Conn: c, DeadlineDelay: 3 * time.Second}
+	}
+	conn, err := pgx.ConnectConfig(cctx, cc)
 	if err != nil {
 		return err
 	}
@@ -93,17 +110,40 @@ func (s *Store) buildIndex(ctx context.Context, name, ddl string) error {
 	if _, err := conn.Exec(cctx, "SET statement_timeout = 0; SET lock_timeout = 0; SET idle_in_transaction_session_timeout = 0"); err != nil {
 		return err
 	}
-	var valid *bool
-	if err := conn.QueryRow(cctx, "SELECT i.indisvalid FROM pg_index i WHERE i.indexrelid = to_regclass($1)", name).Scan(&valid); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return err
-	}
-	if valid != nil && *valid {
-		return nil
-	}
-	if valid != nil {
-		s.opt.Logger.Warn("clearance index is invalid (an earlier build was interrupted): dropping it to rebuild", "index", name)
-		if _, err := conn.Exec(cctx, "DROP INDEX CONCURRENTLY IF EXISTS "+name); err != nil {
+	warned := false
+	for {
+		var valid *bool
+		if err := conn.QueryRow(cctx, "SELECT i.indisvalid FROM pg_index i WHERE i.indexrelid = to_regclass($1)", name).Scan(&valid); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return err
+		}
+		if valid != nil && *valid {
+			return nil
+		}
+		if valid == nil {
+			break
+		}
+		// INVALID: an interrupted build, or one still running in a backend that outlived its core (a killed pod's
+		// connection is noticed late). Dropping an index a live backend is building throws its work away, so wait for it.
+		var live int
+		if err := conn.QueryRow(cctx, `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()
+			AND state = 'active' AND query LIKE '%CREATE INDEX CONCURRENTLY%' AND query LIKE '%EXISTS ' || $1::text || ' ON %'`, name).Scan(&live); err != nil {
+			return err
+		}
+		if live == 0 {
+			s.opt.Logger.Warn("clearance index rebuilt from zero; previous build did not finish (a start loop shorter than a build never completes it)", "index", name)
+			if _, err := conn.Exec(cctx, "DROP INDEX CONCURRENTLY IF EXISTS "+name); err != nil {
+				return err
+			}
+			break
+		}
+		if !warned {
+			s.opt.Logger.Warn("clearance index is being built by another backend (an earlier core's build still running); waiting for it", "index", name)
+			warned = true
+		}
+		select {
+		case <-cctx.Done():
+			return cctx.Err()
+		case <-time.After(indexPoll):
 		}
 	}
 	start := time.Now()

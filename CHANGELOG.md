@@ -87,13 +87,11 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 - **`GET /v1/map` no longer times out (503 `read failed`, SQLSTATE 57014) on a real chain.** Records are TOASTed, and the Map's gate and
   health statements walked every record of the chain (the health one read a scope's whole history), so each took 5 to 8 s on the lab
   against the 5 s `statement_timeout`. Each statement now reads only its records from a new partial index (`clearance_evidence_gate`,
-  `clearance_evidence_obs_ts`, `clearance_evidence_health`), health reads the newest 500 records per scope, the four statements run at once,
+  `clearance_evidence_obs_ts`, `clearance_evidence_health` and two for the core's health flips), health reads the newest 500 records per scope plus every core flip since its source last reported healthy (the Map never shows a source better than the core declared), the four aggregates run at once (one Map at a time),
   and a record's fields are extracted with one `jsonb_to_record`. The response is unchanged. **The indexes are built by the core after it starts**, in the
   background, one at a time, with `CREATE INDEX CONCURRENTLY IF NOT EXISTS` on their own connection (no statement timeout), so the core serves
-  at once and its writes are never blocked, however long the chain. **Until they exist the Map is as slow as before** (on the lab, a few seconds
-  at 40 000 records; about 100 microseconds a record to build). An interrupted build's `INVALID` index is dropped and rebuilt at the next start; a
-  failed build is logged and retried at the next start, never fatal. The health bound's one edge (a core monitoring flip older than 500 health records
-  of its scope reads as the collector's own state) is in
+  at once and its writes are never blocked, however long the chain. **Until they exist the Map is slower** (the gate read is bounded to the window as before; the observation and health reads take seconds on the lab at 40 000 records; about 100 microseconds a record to build). An interrupted build's `INVALID` index is dropped and rebuilt at the next start (waiting first for a still-running build of it, and warning `rebuilt from zero` so a restart loop shows); a
+  failed build is logged and retried at the next start, never fatal. Details in
   [docs/clearance-api.md](docs/clearance-api.md#the-coverage-map-and-the-target-registry).
 
 ## [0.48.0] - 2026-11-14

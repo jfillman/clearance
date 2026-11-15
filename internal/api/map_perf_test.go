@@ -193,7 +193,7 @@ func TestMapReadsOnlyTheIndexedRecords(t *testing.T) {
 		t.Fatalf("the synthetic registry produced an empty map: %v", m)
 	}
 	rdr.Close()
-	want := []string{"clearance_evidence_gate", "clearance_evidence_obs_ts", "clearance_evidence_health"}
+	want := []string{"clearance_evidence_gate", "clearance_evidence_obs_ts", "clearance_evidence_health", "clearance_evidence_health_core"}
 	var seq1 int64
 	var idx1 map[string]int64
 	for i := 0; i < 50; i++ { // the statistics reach the collector a moment after the statements finish
@@ -214,5 +214,56 @@ func TestMapReadsOnlyTheIndexedRecords(t *testing.T) {
 	}
 	if seq1 != seq0 {
 		t.Errorf("the Map walked clearance_evidence %d times: every statement must come from a partial index", seq1-seq0)
+	}
+}
+
+// Until clearance_evidence_gate is built (the core builds it in the background after a start that adds it), the gate
+// read must not be worse than before the index existed: it reads the chain from the first record written at or
+// after `from`, not the whole of it. Postgres's own tuple counts say how many records it read.
+func TestGateActivityBeforeItsIndexExists(t *testing.T) {
+	dsn := newDB(t)
+	st, err := pg.Open(bg, dsn, pg.Options{Logger: quiet})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Close() // and with it the background build: the indexes are dropped below, whichever of them it got to
+	synthChain(t, dsn, 60000, 30*24*time.Hour)
+	conn, err := pgx.Connect(bg, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(bg)
+	for _, ix := range pg.MapIndexes {
+		if _, err := conn.Exec(bg, "DROP INDEX IF EXISTS "+ix.Name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read := func() (n int64) {
+		if err := conn.QueryRow(bg, "SELECT seq_tup_read + idx_tup_fetch FROM pg_stat_user_tables WHERE relname = 'clearance_evidence'").Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	rdr, err := pg.OpenReader(bg, dsn, pg.Options{MaxConns: 2, Logger: quiet})
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Second)
+	before := read()
+	rows, _, err := (&PG{R: rdr}).GateActivity(bg, &Viewer{Role: RoleAuditor}, "2026-11-09T12:00:00Z", "2026-11-10T12:00:00Z")
+	if err != nil || len(rows) == 0 {
+		t.Fatalf("gate activity: %d rows, %v", len(rows), err)
+	}
+	rdr.Close() // a backend reports its tuple counts when its session ends
+	var after int64
+	for i := 0; i < 50; i++ {
+		if after = read(); after > before {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	// The window is 1/30 of the chain (2 000 records): reading the chain from its start would read 60 000.
+	if n := after - before; n > 10000 {
+		t.Errorf("GateActivity read %d records of 60000 with no gate index: it must start at the window", n)
 	}
 }

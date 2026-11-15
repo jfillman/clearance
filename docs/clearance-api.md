@@ -244,34 +244,41 @@ record) and `boundary`, takes `scope=<scope>` (one observed scope's records, rea
 `bucket=1m|5m|15m|1h|6h|1d` (needs `since`; `until` defaults to now; at most 1500 buckets): each item is then a bucket
 (`bucket`, its epoch-aligned start) and a key, in time order, at most 10000 items.
 
-**Budget.** The Map is four independent statements, run at once (it waits for the slowest, not their sum, each under the store's
-`statement_timeout`): `GateActivity` over the window's gate records, `ScopeCoverage` over the declared scopes' observations and
-assessments in the window, `HealthBeforeScopes` for their health, and `Holding` for the changes holding. A record is TOASTed (about
-2 KB compressed), so what a statement costs is how many records it has to fetch and decompress. Each therefore reads only its own records
-from a partial index (`clearance_evidence_gate`
-(the gate records by `ts`), `clearance_evidence_obs_ts` (observations and assessments by scope and `ts`) and `clearance_evidence_health` (health records by scope and
-`seq`), each predicate repeated word for word in `mapstore.go`). The window's reads cost the records in the window (gate records and
-observations), never the chain's length.
+**Budget.** The Map is five fixed statements: `GateActivity` over the window's gate records (preceded by one index probe for the first seq written
+in the window), `ScopeCoverage` over the declared scopes' observations and assessments in the window, `HealthBeforeScopes` for their health, and
+`Holding` for the changes holding. The four aggregates run at once (it waits for the slowest, not their sum, each under the store's
+`statement_timeout`). They hold four reader connections, and the pool defaults to five, so **at most one Map reads at a time**
+(`MaxConcurrentMapReads`): another waits for its turn within its own request's deadline, and the other endpoints keep a connection.
+A record is TOASTed (about 2 KB compressed), so what a statement costs is how many records it has to fetch and decompress. Each therefore reads
+only its own records from a partial index: `clearance_evidence_gate` (the gate records by `ts`), `clearance_evidence_obs_ts` (observations and
+assessments by scope and `ts`), `clearance_evidence_health` (health records by scope and `seq`) and, for the core's flips, `clearance_evidence_health_core`
+and `clearance_evidence_health_ok`, each predicate repeated word for word in `mapstore.go`. The window's reads cost the records in the window
+(gate records and observations), never the chain's length.
 
 **The indexes are built by the core after it starts, not by the migration.** On a chain of millions of records an index takes minutes, and the
 core, the deploy gate's only writer, must neither be down for that nor have its writes blocked. So the core starts and serves at once, then builds
-the three in the background, one at a time, with `CREATE INDEX CONCURRENTLY IF NOT EXISTS` on its own connection with no statement timeout
-(`pg.Store.BuildIndexes`; it logs each index's start, finish and duration). **Until an index exists the Map is as slow as it was without it**
-(seconds on a chain of tens of thousands of records, and a 503 `read failed` once a statement passes the 5 s `statement_timeout`). An interrupted
-build leaves an `INVALID` index that `IF NOT EXISTS` would skip for ever: at start the core finds an index of these names with
-`pg_index.indisvalid = false`, drops it (`DROP INDEX CONCURRENTLY`) and builds it again. A failed build is logged and tried again at the next start;
-it never stops the core. clearance-api (the reader) owns no DDL.
+the five in the background (only in the process that holds the writer lock), one at a time, with `CREATE INDEX CONCURRENTLY IF NOT EXISTS` on its own
+connection with no statement timeout (`pg.Store.BuildIndexes`; it logs each index's start, finish and duration). **Until an index exists the Map is
+slower:** the gate read is bounded to the records written since the window began (as it was before these indexes), but the observation and health
+reads walk the scope's records (seconds on a chain of tens of thousands, and a 503 `read failed` once a statement passes the 5 s `statement_timeout`).
+An interrupted build leaves an `INVALID` index that `IF NOT EXISTS` would skip for ever. At start the core finds an index of these names with
+`pg_index.indisvalid = false`; if another backend is still building it (a killed core's connection is noticed late) it waits for that build, so the work
+is kept; otherwise it drops it (`DROP INDEX CONCURRENTLY`), logs a warning `rebuilt from zero; previous build did not finish` (repeated warnings mean the
+core restarts more often than a build takes) and builds it again. A stopping core cancels its build with a CancelRequest, which leaves an
+`INVALID` index for the next start. A failed build is logged and tried again at the next start; it never stops the core. clearance-api (the reader)
+owns no DDL.
 
-**What the health bound loses.** Health reads the newest 500 health records of each scope and starts at the newest healthy collector record among
-them. A source's state is the collector's own newest record, except that a flip the core wrote (monitoring forced blind or degraded) holds the
-state at the worse of the two until the collector reports healthy. If such a flip began more than 500 health records before the window's end
-(roughly eight hours at one record a minute and two sources per scope) and the collector has not reported healthy since, the flip's record is not
-read: the Map shows the collector's own newest state (degraded, or blind when its record is stale) where it would have shown the flip's `blind`. It never shows a
-source healthier than it is, because a healthy collector record ends the flip and is in the tail. A source with no record among a scope's newest 500
-(a source silent for longer than that) reads as never seen, not as stale; both are `blind`. `TestHealthTailBoundAndWhatItLoses` pins both.
+**Health.** A source's state is the collector's own newest record, except that a flip the core wrote (monitoring forced blind or degraded) holds the
+state at the worse of the two until the collector reports healthy. The Map reads the newest 500 health records of each scope, from the newest healthy
+collector record among them, **and** every health record the core wrote since the newest healthy collector report of its source, however old: so a
+flip is read however many records have passed, and the Map never shows a source better than the core's standing declaration, until the collector
+reports healthy (which ends the flip). What the bound still loses is only the collector's own older records: a source with no record among the
+scope's newest 500 and no core flip since it last reported healthy reads as never seen rather than stale (both `blind`).
+`TestHealthNeverBetterThanTheCoreDeclared` pins this (a flip older than the tail, a flip crowded out by another source of the scope, a flip ended by a
+healthy report).
 `GateActivity` extracts a record's fields with one
 `jsonb_to_record`, so a record is decompressed once.
-`TestMapReadsOnlyTheIndexedRecords` (indexes built first) fails if a Map read walks the table or misses one of the three indexes (it reads Postgres's own scan
+`TestMapReadsOnlyTheIndexedRecords` (indexes built first) fails if a Map read walks the table or misses one of its indexes (it reads Postgres's own scan
 counts, so it holds on any machine); `TestMapStaysUnderABudgetOnALargeChain` holds `GET /v1/map` under a second on 25 000 records
 (about 0.2 s) and, with `CLEARANCE_MAP_PERF=1`, under three seconds on 250 000 (about 1.5 s: half of them gate records inside the window).
 
