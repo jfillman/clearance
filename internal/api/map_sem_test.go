@@ -1,7 +1,13 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -78,5 +84,26 @@ func TestConcurrentMapReadsAreBounded(t *testing.T) {
 	}
 	if p := sg.peak.Load(); p != 1 {
 		t.Errorf("peak %d Map reads at once, want %d", p, MaxConcurrentMapReads)
+	}
+}
+
+// A Map that waited for its turn past its deadline, or whose client left, is a 503 but not a store failure: it is
+// logged below ERROR, so a queue under load does not read as the store failing.
+func TestReadFailedLevels(t *testing.T) {
+	var buf bytes.Buffer
+	h := newHarness(t, backends[0], world{}, func(o *Options) { o.Log = slog.New(slog.NewJSONHandler(&buf, nil)) })
+	for _, c := range []struct {
+		err   error
+		level string
+	}{{context.DeadlineExceeded, "WARN"}, {context.Canceled, "INFO"}, {errors.New("ERROR: canceling statement due to statement timeout (SQLSTATE 57014)"), "ERROR"}} {
+		buf.Reset()
+		rec := httptest.NewRecorder()
+		h.srv.readFailed(rec, httptest.NewRequest("GET", "/v1/map", nil), fmt.Errorf("pg: %w", c.err))
+		if rec.Code != 503 {
+			t.Errorf("%v: status %d", c.err, rec.Code)
+		}
+		if !strings.Contains(buf.String(), `"level":"`+c.level+`"`) {
+			t.Errorf("%v logged as %s, want %s", c.err, buf.String(), c.level)
+		}
 	}
 }

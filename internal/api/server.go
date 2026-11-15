@@ -138,6 +138,17 @@ func (e *apiError) write(w http.ResponseWriter) { writeError(w, e.status, e.msg)
 
 // readFailed is a store failure: 503, the cause logged and never sent (api.py: "read failed: <class>").
 func (s *Server) readFailed(w http.ResponseWriter, r *http.Request, err error) {
+	// A request that ran out of time (queued for its turn, as a Map does) or whose client went away is not a store failure.
+	switch {
+	case errors.Is(err, context.Canceled):
+		s.log.InfoContext(r.Context(), "read abandoned: the client went away", "path", r.URL.Path)
+		writeError(w, http.StatusServiceUnavailable, "read failed")
+		return
+	case errors.Is(err, context.DeadlineExceeded):
+		s.log.WarnContext(r.Context(), "read timed out (waiting for its turn or for the store)", "path", r.URL.Path)
+		writeError(w, http.StatusServiceUnavailable, "read failed")
+		return
+	}
 	s.log.ErrorContext(r.Context(), "read failed", "path", r.URL.Path, "error", err.Error())
 	writeError(w, http.StatusServiceUnavailable, "read failed")
 }

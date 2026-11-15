@@ -65,9 +65,12 @@ func (s *PG) GateActivity(ctx context.Context, v *Viewer, from, to string) ([]Ga
 	// long before from. This is what keeps the statement off the older chain until clearance_evidence_gate is built.
 	// The first seq is read on its own so that the statement carries it as a plain number: as a subselect the planner
 	// guesses a third of the chain and walks it with a table scan.
-	lo, err := s.firstSeqWrittenAt(ctx, fromT)
+	lo, found, err := s.firstSeqWrittenAt(ctx, fromT)
 	if err != nil {
 		return nil, false, err
+	}
+	if !found {
+		return nil, false, nil // nothing was written in the window, so nothing in it has gate activity
 	}
 	b.add("e.seq >= " + b.arg(lo))
 	b.add("e.record->>'ts' >= " + b.arg(from))
@@ -107,22 +110,23 @@ func (s *PG) GateActivity(ctx context.Context, v *Viewer, from, to string) ([]Ga
 	return out, cut, nil
 }
 
-// firstSeqWrittenAt is the seq of the first record written at or after t, 0 when none was. It orders by written_at, so it
+// firstSeqWrittenAt is the seq of the first record written at or after t, and whether there is one. It orders by written_at, so it
 // is served by clearance_evidence_written; min(seq) with a filter walks the primary key from the first record instead.
-func (s *PG) firstSeqWrittenAt(ctx context.Context, t time.Time) (int64, error) {
-	rows, done, err := s.R.Query(ctx, "SELECT COALESCE((SELECT seq FROM clearance_evidence WHERE written_at >= $1 ORDER BY written_at, seq LIMIT 1), 0)", t)
+func (s *PG) firstSeqWrittenAt(ctx context.Context, t time.Time) (int64, bool, error) {
+	rows, done, err := s.R.Query(ctx, "SELECT seq FROM clearance_evidence WHERE written_at >= $1 ORDER BY written_at, seq LIMIT 1", t)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	defer done()
 	defer rows.Close()
 	var n int64
-	if rows.Next() {
-		if err := rows.Scan(&n); err != nil {
-			return 0, fmt.Errorf("pg: %w", err)
-		}
+	if !rows.Next() {
+		return 0, false, rows.Err()
 	}
-	return n, rows.Err()
+	if err := rows.Scan(&n); err != nil {
+		return 0, false, fmt.Errorf("pg: %w", err)
+	}
+	return n, true, rows.Err()
 }
 
 // ScopeCoverage groups the observations and assessments of the scopes in [from, to), on the clearance_evidence_obs_ts

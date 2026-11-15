@@ -133,7 +133,7 @@ func TestMapStaysUnderABudgetOnALargeChain(t *testing.T) {
 }
 
 // A long chain with a small window: 60 000 records over 30 days, so the Map's 24 hours hold about 3% of them. A Map
-// read must come from the partial indexes (the three the schema adds for it) and never walk the table: a record is
+// read must come from the partial indexes (the indexes the core builds for it after it starts: store/pg/indexes.go) and never walk the table: a record is
 // TOASTed, so a statement that filters a chain row by row pays a fetch and a decompress for every record of every
 // day, which on the lab took each statement past the 5 s statement_timeout. The scan counts come from Postgres's own
 // statistics, so this holds on any machine, however fast.
@@ -265,5 +265,28 @@ func TestGateActivityBeforeItsIndexExists(t *testing.T) {
 	// The window is 1/30 of the chain (2 000 records): reading the chain from its start would read 60 000.
 	if n := after - before; n > 10000 {
 		t.Errorf("GateActivity read %d records of 60000 with no gate index: it must start at the window", n)
+	}
+	// A window after the last record written has no gate activity, and the statement does not look: no record written at
+	// or after from means none has a ts at or after it (a record's ts is stamped when it is written; a backdated one
+	// is the caveat in docs/clearance-api.md, and the gate index, once built, would find it).
+	rdr, err = pg.OpenReader(bg, dsn, pg.Options{MaxConns: 2, Logger: quiet})
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Second)
+	before = read()
+	rows, cut, err := (&PG{R: rdr}).GateActivity(bg, &Viewer{Role: RoleAuditor}, "2026-11-10T13:00:00Z", "2026-11-10T14:00:00Z")
+	if err != nil || len(rows) != 0 || cut {
+		t.Fatalf("a window after the last write: %d rows, cut %v, %v", len(rows), cut, err)
+	}
+	rdr.Close()
+	for i := 0; i < 50; i++ {
+		if after = read(); after > before {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if n := after - before; n > 100 {
+		t.Errorf("a window after the last write read %d records of 60000: it must not scan the chain", n)
 	}
 }

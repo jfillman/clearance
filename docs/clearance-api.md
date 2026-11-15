@@ -259,7 +259,7 @@ and `clearance_evidence_health_ok`, each predicate repeated word for word in `ma
 core, the deploy gate's only writer, must neither be down for that nor have its writes blocked. So the core starts and serves at once, then builds
 the five in the background (only in the process that holds the writer lock), one at a time, with `CREATE INDEX CONCURRENTLY IF NOT EXISTS` on its own
 connection with no statement timeout (`pg.Store.BuildIndexes`; it logs each index's start, finish and duration). **Until an index exists the Map is
-slower:** the gate read is bounded to the records written since the window began (as it was before these indexes), but the observation and health
+slower:** the gate read is bounded to the records written since the window began (as it was before these indexes; a window with no record written in it is answered empty without a scan, which would miss only a gate record whose `ts` is later than its write, as a provider-reported one could be), but the observation and health
 reads walk the scope's records (seconds on a chain of tens of thousands, and a 503 `read failed` once a statement passes the 5 s `statement_timeout`).
 An interrupted build leaves an `INVALID` index that `IF NOT EXISTS` would skip for ever. At start the core finds an index of these names with
 `pg_index.indisvalid = false`; if another backend is still building it (a killed core's connection is noticed late) it waits for that build, so the work

@@ -42,17 +42,26 @@ func waitIndexes(t *testing.T, conn *pgx.Conn) {
 	t.Fatal("the Map's indexes were not built")
 }
 
-// The core builds the Map's indexes after it has started, so Open does not wait for them; they are valid soon after.
-func TestMapIndexesAreBuiltInTheBackground(t *testing.T) {
+// Open builds the Map's indexes itself, after it has started and not in the migration (Schema): Open returns without
+// waiting for them (this does not use the open helper, which does), and they are valid soon after.
+func TestOpenBuildsTheMapIndexesAfterStart(t *testing.T) {
+	for _, ix := range MapIndexes {
+		if strings.Contains(Schema, ix.Name) {
+			t.Errorf("the migration creates %s", ix.Name)
+		}
+	}
 	dsn := newDB(t)
-	s := open(t, dsn)
+	s, err := Open(bg, dsn, Options{VerifyBatch: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.Close)
 	conn, err := pgx.Connect(bg, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close(bg)
 	waitIndexes(t, conn)
-	_ = s
 }
 
 // An interrupted CREATE INDEX CONCURRENTLY leaves an INVALID index, which IF NOT EXISTS would skip for ever: the next
