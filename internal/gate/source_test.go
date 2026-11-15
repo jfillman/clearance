@@ -212,11 +212,10 @@ func TestAttackADeveloperCannotClearTheirOwnReleaseByMakingABotTheProposer(t *te
 	if got := f.get(t, cid); got.State != "holding" || len(got.Approvals) != 0 {
 		t.Fatal(got)
 	}
-	// without the set, the same registration lets dev clear it: that is the hole
-	// (another tree: the people behind a tree are the tree's, whatever the head)
-	cid2 := f.register(t, "ci", change(map[string]any{"objects": replicas, "proposer": "dependabot[bot]", "head": strings.Repeat("d", 40),
-		"treeDigest": strings.Repeat("ab", 32)})).ID
-	if out, err := f.svc.Clear(f.ctx, person("dev"), cid2, ""); err != nil || out.State != "cleared" {
+	// without the set (and nothing else recent on the target), the same registration lets dev clear it: that is the hole
+	g := newSrcGate(t)
+	cid2 := g.register(t, "ci", change(map[string]any{"objects": replicas, "proposer": "dependabot[bot]"})).ID
+	if out, err := g.svc.Clear(g.ctx, person("dev"), cid2, ""); err != nil || out.State != "cleared" {
 		t.Fatal("the unfixed behaviour changed", out, err)
 	}
 }
@@ -365,6 +364,7 @@ func TestTheSetFollowsATreeAcrossChanges(t *testing.T) {
 	// another tree is untouched
 	f := newSrcGate(t)
 	f.register(t, "ci", change(map[string]any{"objects": replicas, "source": src([]string{"dev"}, nil, "")}))
+	f.clock.advance(8 * 24 * time.Hour) // (inside the hold window another tree's people are behind it too: see the target's window)
 	other := f.register(t, "ci", change(map[string]any{"objects": replicas, "pr": json.Number("0"), "head": strings.Repeat("8", 40),
 		"treeDigest": strings.Repeat("ab", 32), "proposer": "system:argocd-cmp"}))
 	if _, err := f.svc.Clear(f.ctx, person("dev"), other.ID, ""); err != nil {
@@ -471,7 +471,7 @@ func TestThePeopleOfATreeOutliveTheChangeThatBroughtThem(t *testing.T) {
 	plugin := func() map[string]any {
 		return change(map[string]any{"objects": replicas, "pr": json.Number("0"), "proposer": "system:argocd-cmp", "head": strings.Repeat("9", 40)})
 	}
-	for _, how := range []string{"expires", "denied", "superseded", "revoked", "cleared then superseded"} {
+	for _, how := range []string{"expires", "denied", "superseded", "revoked"} {
 		t.Run(how, func(t *testing.T) {
 			f := newSrcGate(t)
 			c := f.register(t, "ci", change(map[string]any{"objects": replicas, "source": src([]string{"dev"}, nil, "")}))
@@ -487,7 +487,7 @@ func TestThePeopleOfATreeOutliveTheChangeThatBroughtThem(t *testing.T) {
 				}
 			case "superseded":
 				f.register(t, "ci", change(map[string]any{"objects": replicas, "head": strings.Repeat("e", 40), "source": src([]string{"bob"}, nil, "")}))
-			case "revoked", "cleared then superseded":
+			case "revoked": // cleared, then a new head revokes its token
 				if _, err := f.svc.Clear(f.ctx, person("erin"), c.ID, ""); err != nil {
 					t.Fatal(err)
 				}
@@ -559,6 +559,134 @@ func TestTheProposerOfEveryChangeOnATreeIsExcludedOnIt(t *testing.T) {
 	p := f.register(t, "ci", change(map[string]any{"objects": replicas, "pr": json.Number("0"), "proposer": "system:argocd-cmp", "head": strings.Repeat("9", 40)}))
 	// dana proposed the PR change on this tree; she cannot clear the pr 0 change either
 	if _, err := f.svc.Clear(f.ctx, person("dana"), p.ID, ""); rule(err) != "DG-PROPOSER" {
+		t.Fatal(err)
+	}
+}
+
+// Tier 3: an approval counted must be from a person the record, as it stands when the clear completes, does not exclude.
+func TestAnEarlierApprovalFromAPersonNowExcludedIsNotCounted(t *testing.T) {
+	f := newSrcGate(t)
+	cid := f.register(t, "ci", change(map[string]any{"objects": secret})).ID
+	if out, err := f.svc.Clear(f.ctx, person("erin"), cid, ""); err != nil || out.State != "holding" {
+		t.Fatal(out, err)
+	}
+	// a later registration of the tree names erin as an author
+	f.register(t, "ci", change(map[string]any{"objects": secret, "source": src([]string{"erin"}, nil, "")}))
+	// the outside seat is filled; the owner seat is erin's, which no longer counts
+	out, err := f.svc.Clear(f.ctx, person("sec"), cid, "")
+	if err != nil || out.State != "holding" {
+		t.Fatal("cleared on an approval from a person now excluded:", out.State, err)
+	}
+	out, err = f.svc.Clear(f.ctx, person("lead"), cid, "")
+	if err != nil || out.State != "cleared" {
+		t.Fatal(out.State, err)
+	}
+	var aside, counted int
+	for _, a := range out.Approvals {
+		if a.SetAside != "" {
+			aside++
+			if a.Person != "user:erin" || !strings.Contains(a.SetAside, "source author") {
+				t.Error(a)
+			}
+		} else {
+			counted++
+		}
+	}
+	if aside != 1 || counted != 2 {
+		t.Fatal(out.Approvals)
+	}
+	notes := f.records(t, "deploy.people")
+	if len(notes) == 0 || !strings.Contains(notes[len(notes)-1]["result"].(string), "set aside") {
+		t.Fatal("no record says why:", notes)
+	}
+	// the token claims only the approvals that counted
+	clears := f.records(t, "deploy.clear")
+	aps, _ := clears[len(clears)-1]["approvals"].([]any)
+	if len(aps) != 2 {
+		t.Fatal("the final clear record lists", len(aps), "approvals, want the 2 that counted")
+	}
+	for _, a := range aps {
+		if a.(map[string]any)["person"] == "user:erin" {
+			t.Fatal("the clear record names a set-aside approver as a clearer")
+		}
+	}
+}
+
+// The practical gap: the plugin's change is on another tree than the pull request's. Every other people record of the
+// target written within the change's hold window is behind it, unless it has people of its own.
+func TestTheTargetsRecentPeopleAreBehindASourcelessChange(t *testing.T) {
+	plugin := func(tree string) map[string]any {
+		return change(map[string]any{"objects": replicas, "pr": json.Number("0"), "proposer": "system:argocd-cmp", "head": strings.Repeat("9", 40), "treeDigest": tree})
+	}
+	other := strings.Repeat("ab", 32)
+	t.Run("another tree", func(t *testing.T) {
+		f := newSrcGate(t)
+		f.register(t, "ci", change(map[string]any{"objects": replicas, "source": src([]string{"dev"}, nil, "")}))
+		p := f.register(t, "ci", plugin(other))
+		if _, err := f.svc.Clear(f.ctx, person("dev"), p.ID, ""); rule(err) != "DG-PROPOSER" {
+			t.Fatal("dev cleared the plugin's change for another tree:", err)
+		}
+		if out, err := f.svc.Clear(f.ctx, person("erin"), p.ID, ""); err != nil || out.State != "cleared" {
+			t.Fatal(out, err)
+		}
+	})
+	t.Run("a placeholder tree", func(t *testing.T) {
+		f := newSrcGate(t)
+		f.register(t, "ci", change(map[string]any{"objects": replicas, "treeDigest": strings.Repeat("0", 64), "source": src([]string{"dev"}, nil, "")}))
+		p := f.register(t, "ci", plugin(other))
+		if _, err := f.svc.Clear(f.ctx, person("dev"), p.ID, ""); rule(err) != "DG-PROPOSER" {
+			t.Fatal("dev cleared after a placeholder-tree registration:", err)
+		}
+	})
+	t.Run("outside the window", func(t *testing.T) {
+		f := newSrcGate(t)
+		f.register(t, "ci", change(map[string]any{"objects": replicas, "source": src([]string{"dev"}, nil, "")}))
+		f.clock.advance(8 * 24 * time.Hour)
+		p := f.register(t, "ci", plugin(other))
+		if out, err := f.svc.Clear(f.ctx, person("dev"), p.ID, ""); err != nil || out.State != "cleared" {
+			t.Fatal("the window is the hold TTL:", out.State, err)
+		}
+	})
+	t.Run("another target", func(t *testing.T) {
+		f := newSrcGate(t)
+		f.svc.Config.VerifierAppBindingOff = true
+		f.register(t, "ci", change(map[string]any{"objects": replicas, "app": "other-app", "source": src([]string{"dev"}, nil, "")}))
+		p := f.register(t, "ci", plugin(other))
+		if _, err := f.svc.Clear(f.ctx, person("dev"), p.ID, ""); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("a change with people of its own is not widened", func(t *testing.T) {
+		f := newSrcGate(t)
+		f.register(t, "ci", change(map[string]any{"objects": replicas, "source": src([]string{"dev"}, nil, "")}))
+		own := change(map[string]any{"objects": replicas, "head": strings.Repeat("7", 40), "treeDigest": other, "source": src([]string{"bob"}, nil, "")})
+		c := f.register(t, "ci", own)
+		if _, err := f.svc.Clear(f.ctx, person("dev"), c.ID, ""); err != nil {
+			t.Fatal("a change that brought its own set took the target's:", err)
+		}
+	})
+	t.Run("too many recent records fails closed", func(t *testing.T) {
+		f := newSrcGate(t)
+		for i := 0; i < gate.MaxTargetRecords+1; i++ {
+			f.register(t, "ci", change(map[string]any{"objects": replicas, "head": fmt.Sprintf("%040x", i+1), "treeDigest": fmt.Sprintf("%064x", i+0x100),
+				"source": src([]string{fmt.Sprintf("u%d", i)}, nil, "")}))
+		}
+		p := f.register(t, "ci", plugin(other))
+		_, err := f.svc.Clear(f.ctx, person("erin"), p.ID, "")
+		if rule(err) != "DG-PEOPLE-WINDOW" || !strings.Contains(msg(err), "break-glass") {
+			t.Fatal(err)
+		}
+	})
+}
+
+func TestAForeignClusterVerifierIsBoundToItsAppToo(t *testing.T) {
+	f := newGate(t)
+	f.svc.Config.Verifiers = append(f.svc.Config.Verifiers, "*/app-*-cicd/pipeline-runner")
+	p := authn.Principal{ID: "other-cluster/app-gate-api-cicd/pipeline-runner", Kind: authn.KindForeignWorkload}
+	if _, err := f.svc.Register(f.ctx, p, change(map[string]any{"objects": replicas, "app": "other-app"})); rule(err) != "DG-VERIFIER-APP" {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.Register(f.ctx, p, change(map[string]any{"objects": replicas})); err != nil {
 		t.Fatal(err)
 	}
 }

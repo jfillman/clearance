@@ -46,6 +46,9 @@ type Approval struct {
 	// Session is a digest of the approver's session at their identity provider, when the ID token carried one (kept to
 	// refuse a second approval from the same session; the session id itself is not kept, and is not in the token).
 	Session string `json:"session,omitempty"`
+	// SetAside is why this approval no longer counts: the person is, as the tree's people stand now, behind the change
+	// (a registration after they approved named them). It stays in the history; it is not counted and not in the token.
+	SetAside string `json:"set_aside,omitempty"`
 }
 
 // Deployment is a GitHub Actions deployment waiting on a change (github_app.py's deployment protection rule).
@@ -312,6 +315,9 @@ func RoleFor(person string, groups map[string]bool, c *Change) (string, error) {
 	}
 	owner, outside := 0, 0
 	for _, a := range c.Approvals {
+		if a.SetAside != "" {
+			continue // no longer counts: its seat is open again
+		}
 		switch a.Role {
 		case "owner":
 			owner++

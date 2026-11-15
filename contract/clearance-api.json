@@ -1527,6 +1527,9 @@
           "session": {
             "type": "string"
           },
+          "set_aside": {
+            "type": "string"
+          },
           "sub": {
             "type": "string"
           },

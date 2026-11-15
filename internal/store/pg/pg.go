@@ -138,9 +138,11 @@ CREATE INDEX IF NOT EXISTS clearance_evidence_app ON clearance_evidence ((record
   WHERE record->>'principal' LIKE 'app:%';
 CREATE TABLE IF NOT EXISTS clearance_tree_people (
   key        text        PRIMARY KEY,
+  target     text        NOT NULL DEFAULT '',
   record     jsonb       NOT NULL,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS clearance_tree_people_target ON clearance_tree_people (target, updated_at);
 CREATE TABLE IF NOT EXISTS clearance_breakglass (
   id         text        PRIMARY KEY,
   cluster    text        NOT NULL,
@@ -1635,15 +1637,52 @@ func (t *tx) BreakglassOpen(ctx context.Context) ([]store.Breakglass, error) {
 func treePeopleOne(ctx context.Context, q querier, opt Options, key string) (store.TreePeople, error) {
 	ctx, cancel := deadline(ctx, opt)
 	defer cancel()
-	var raw string
-	err := q.QueryRow(ctx, "SELECT record::text FROM clearance_tree_people WHERE key = $1", key).Scan(&raw)
+	var raw, target string
+	var at time.Time
+	err := q.QueryRow(ctx, "SELECT target, record::text, updated_at FROM clearance_tree_people WHERE key = $1", key).Scan(&target, &raw, &at)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.TreePeople{}, store.ErrNotFound
 	}
 	if err != nil {
 		return store.TreePeople{}, fmt.Errorf("pg: %w", err)
 	}
-	return store.TreePeople{Key: key, Record: json.RawMessage(raw)}, nil
+	return store.TreePeople{Key: key, Target: target, UpdatedAt: at, Record: json.RawMessage(raw)}, nil
+}
+
+func treePeopleTarget(ctx context.Context, q querier, opt Options, target string, since time.Time, limit int) ([]store.TreePeople, error) {
+	ctx, cancel := deadline(ctx, opt)
+	defer cancel()
+	rows, err := q.Query(ctx, "SELECT key, target, record::text, updated_at FROM clearance_tree_people "+
+		`WHERE target = $1 AND updated_at >= $2 ORDER BY updated_at DESC, key COLLATE "C" LIMIT $3`, target, since, limit)
+	if err != nil {
+		return nil, fmt.Errorf("pg: %w", err)
+	}
+	defer rows.Close()
+	var out []store.TreePeople
+	for rows.Next() {
+		var tp store.TreePeople
+		var raw string
+		if err := rows.Scan(&tp.Key, &tp.Target, &raw, &tp.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("pg: %w", err)
+		}
+		tp.Record = json.RawMessage(raw)
+		out = append(out, tp)
+	}
+	return out, rows.Err()
+}
+
+func (r *Reader) TreePeopleForTarget(ctx context.Context, target string, since time.Time, limit int) ([]store.TreePeople, error) {
+	return treePeopleTarget(ctx, r.pool, r.opt, target, since, limit)
+}
+
+func (t *tx) TreePeopleForTarget(ctx context.Context, target string, since time.Time, limit int) ([]store.TreePeople, error) {
+	ctx = t.ctx // detached and bounded: see Store.Atomic
+	q, done, err := t.q()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	return treePeopleTarget(ctx, q, t.s.opt, target, since, limit)
 }
 
 func (r *Reader) TreePeople(ctx context.Context, key string) (store.TreePeople, error) {
@@ -1668,8 +1707,13 @@ func (t *tx) PutTreePeople(ctx context.Context, tp store.TreePeople) error {
 	defer t.mu.Unlock()
 	ctx, cancel := deadline(ctx, t.s.opt)
 	defer cancel()
-	_, err := t.tx.Exec(ctx, "INSERT INTO clearance_tree_people (key, record) VALUES ($1, $2) "+
-		"ON CONFLICT (key) DO UPDATE SET record = EXCLUDED.record, updated_at = now()", tp.Key, string(tp.Record))
+	at := tp.UpdatedAt
+	if at.IsZero() {
+		at = time.Now()
+	}
+	_, err := t.tx.Exec(ctx, "INSERT INTO clearance_tree_people (key, target, record, updated_at) VALUES ($1, $2, $3, $4) "+
+		"ON CONFLICT (key) DO UPDATE SET target = EXCLUDED.target, record = EXCLUDED.record, updated_at = EXCLUDED.updated_at",
+		tp.Key, tp.Target, string(tp.Record), at)
 	if err != nil {
 		return fmt.Errorf("pg: put tree people: %w", err)
 	}

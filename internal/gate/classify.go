@@ -28,6 +28,9 @@ type Requirement struct {
 func (q Requirement) Satisfied(approvals []Approval) bool {
 	owner, outside := 0, 0
 	for _, a := range approvals {
+		if a.SetAside != "" {
+			continue
+		}
 		switch a.Role {
 		case "owner":
 			owner++

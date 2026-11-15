@@ -1294,4 +1294,40 @@ func testTreePeople(t *testing.T, open Opener) {
 	if err := put(`not json`); err == nil {
 		t.Fatal("a record that is not JSON was kept")
 	}
+	// the target's recent records, newest first, cut at the limit, by (target, updated_at)
+	base := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	if err := s.Atomic(bg, func(tx store.Tx) error {
+		for i, k := range []string{"t|1", "t|2", "t|3", "u|1"} {
+			tg := "t"
+			if k == "u|1" {
+				tg = "u"
+			}
+			if err := tx.PutTreePeople(bg, store.TreePeople{Key: k, Target: tg, UpdatedAt: base.Add(time.Duration(i) * time.Hour), Record: json.RawMessage(`{}`)}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	keys := func(since time.Time, limit int) string {
+		rs, err := s.TreePeopleForTarget(bg, "t", since, limit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ks []string
+		for _, r := range rs {
+			ks = append(ks, r.Key)
+		}
+		return strings.Join(ks, ",")
+	}
+	if got := keys(base, 10); got != "t|3,t|2,t|1" {
+		t.Fatal(got)
+	}
+	if got := keys(base.Add(time.Hour), 10); got != "t|3,t|2" {
+		t.Fatal("since:", got)
+	}
+	if got := keys(base, 2); got != "t|3,t|2" {
+		t.Fatal("limit:", got)
+	}
 }

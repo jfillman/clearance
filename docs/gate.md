@@ -750,17 +750,47 @@ oversize list, an unknown key or a malformed entry is a 400, like any other malf
   what an operation wrote when it returns an error, which a clear relies on to keep an expiry found while clearing and the
   refused-clear record; Register opts out). A change with no tree key (a terraform plan, a definition release, a
   placeholder tree) keeps its own set with the same bounds.
-- **A verifier is bound to its app.** A verifier named `app-<app>-cicd/<sa>` registers manifest-tree changes for `<app>`
-  only (`DG-VERIFIER-APP`, 403), so the names it sends can only reach its own app's trees; junk from one app cannot fill
-  or poison another's. `CLEARANCE_VERIFIER_APP_BINDING=off` turns this off. The open case: a verifier not named that way
-  (a global CI principal, an HCP run task) is not narrowed, and an OIDC workflow is bound to its repository instead.
+- **A verifier is bound to its app.** A verifier whose principal matches `^(<cluster>/)?app-(.+)-cicd/<sa>$` (an
+  in-cluster `<ns>/<sa>` or a foreign cluster's `<cluster>/<ns>/<sa>`, the two service-account forms `internal/authn`
+  produces) registers manifest-tree changes for `<app>` only (`DG-VERIFIER-APP`, 403), so the names it sends can only
+  reach its own app's trees. **Not narrowed:** a principal that is not named that way (the Argo CD plugin's, `infra-*`
+  namespaces, a global CI account, the HCP run task), a person (`user:`), GitHub Actions workflows (`github:`; an OIDC
+  workflow is bound to its repository by the `repository` claim instead), and terraform-plan and definition
+  registrations (they have no tree record). `CLEARANCE_VERIFIER_APP_BINDING=off` turns the whole check off.
 - **Aliases.** The comparison goes through `CLEARANCE_APPROVER_ALIASES` as the tier 3 distinct-approver rule does, so a
   person with two aliased identities is excluded under both.
-- **Precondition.** The rule matches the clearing person (`user:<name>`, the name from `CLEARANCE_OIDC_USER_CLAIM`)
-  with the names the verifier sent. It works only when the two are the same name: the source system's login (a GitHub
-  login) equals the sign-in name, or an alias maps them. A sign-in whose name is an email address never matches a
-  login (`user:erin@example.com` is not `erin`); with such a deployment configure the user claim to a login-shaped
-  claim, or aliases, or the rule excludes no one.
+- **The matching rule and its limit.** The exclusion matches the clearing person (`user:<name>`, the name from
+  `CLEARANCE_OIDC_USER_CLAIM`) against the names the verifier sent, by bare name (lower case, no `user:`) and through the
+  aliases. It works only when the two are the same name: the source system's login (a GitHub login) equals the sign-in
+  name, or an alias maps them. A sign-in whose name is an email address never matches a login
+  (`user:erin@example.com` is not `erin`); with such a deployment set the user claim to a login-shaped claim, or aliases,
+  or the rule excludes no one. And the rule follows *trees*: the people behind a tree are behind every change for that
+  tree. The Argo CD plugin registers the tree Argo CD syncs, which is the pull request's tree only when the merge commit
+  renders to the same manifests. When it does not (another change for the app and environment merged first, or the
+  registration carried a placeholder tree), a change with no people of its own (its tree's record holds nobody but its
+  own proposer, or its tree is a placeholder's) is also behind **every person in the people records of the same target
+  (app, environment, cluster, repository) written or grown within its hold window** (its TTL, 7 days by default),
+  read at clear time with one indexed read of at most 64 records; past 64 the clear is refused (`DG-PEOPLE-WINDOW`) and
+  the message names break-glass. The window is a conservative stand-in, not an identity: outside it, or for another
+  target, nothing is excluded. A placeholder tree has a people record of its own per head, and a held change never
+  rebinds its digest (its id is the repository, pull request and head, and a registration of a change that already holds
+  changes only its checks and tier), so a change that registered with a placeholder tree stays under that rule.
+- **Earlier approvals are re-checked.** At the moment a clear is decided, every approval counted must be from a person the
+  people record, as it stands then, does not exclude. An approval from a person a later registration added (an author,
+  say) is set aside: it stays in the change's history (`set_aside` says why), is not counted, is not in the token or the
+  clear record, and its seat is open again; a `deploy.people` record says why. Changes already cleared stay cleared: the
+  check runs while a change holds.
+- **What sends the set.** Glidepath's gate sends only `proposer` today; `source.authors`, `source.mergers` and
+  `source.promoter` need the Glidepath change that resolves them from GitHub (jfillman/glidepath#247, not merged at the
+  time of writing). Until it ships, what is excluded is the proposer of every change on a tree and the window above, not
+  the authors and mergers.
+- **Rollback and small teams.** The people record is permanent per tree: there is no admin removal, and only that exact
+  tree is affected. After a rollback to an older tree whose change has expired, everyone who ever proposed, authored,
+  merged or promoted that tree is excluded; while the old tree's cleared change is still live nobody needs to clear
+  anything. A small team (a single owner who proposed the tree, or whose whole owner group is behind it) can end with
+  nobody eligible: break-glass, which is not source-aware and lasts at most 4 hours, is the path, and a person outside
+  the set (the outside group, or a second owner) clears everything else. A single owner cannot clear the plugin's change
+  for a tree they proposed; they have the outside group clear it where one exists, or break-glass.
 - **Break-glass is not source-aware.** An excluded admin can still open break-glass; that is recorded as break-glass
   (`breakglass.open`), not as a clear. Unchanged by this rule.
 - **Who may supply it.** Only a verifier, because only a verifier may register a change (`CLEARANCE_VERIFIERS`): a
@@ -777,7 +807,7 @@ oversize list, an unknown key or a malformed entry is a 400, like any other malf
   listed when there are at most 64, else the digest and count only), so an auditor with only the packet sees who was
   excluded and which version of the set a clear was checked against (`deploy.clear`'s `change.people.digest`). **Packets
   carry the set in the request and clear records but not the refusals or the notes.** A refused clear is a
-  `deploy.refuse` record (decision `deny`, rule `DG-PROPOSER`, the person and the role that excluded them); at most 32
+  `deploy.refuse` record (it carries the change's agent, so the packet's AI identities skip it and `deploy.people`) (decision `deny`, rule `DG-PROPOSER`, the person and the role that excluded them); at most 32
   `deploy.people` and, on a separate budget, 32 `deploy.refuse` records per change. The packet reads `deploy.request`,
   `deploy.clear` and `deploy.deny` for a change's state and ignores the two new tools. clearance-ui's flight log shows an
   unknown `deploy.*` record by its tool name and `result`, and the change history by tool name with no label until a UI
@@ -1015,6 +1045,7 @@ partial index `clearance_evidence_exceptions`. Filters: `tool`, `kind` (an excep
 | `DG-POLICY` (outage) | `clearance.yaml` | an `outage:` entry that loosens the baseline, or not a tier 0 to 3 |
 | `DG-PROPOSER` | clear, 403 | the person is the proposer, a source author or merger, or the promoter ([the people behind a change](#the-people-behind-a-change-built)) |
 | `DG-SOURCE-LIMIT` | `POST /v1/clearances`, 409 | the tree's (or change's) people would pass 256 in a role; nothing was registered |
+| `DG-PEOPLE-WINDOW` | clear, 409 | the target has more than 64 recent people records; break-glass is the path |
 | `DG-VERIFIER-APP` | `POST /v1/clearances`, 403 | a verifier `app-<app>-cicd/<sa>` registering a manifest tree for another app |
 | `DG-BREAKGLASS` | `POST /v1/breakglass`, `/close`, 403 | not an admin |
 | `DG-RESOLUTION` | `POST /v1/observations/{seq}/resolution`, 403 | not an admin |

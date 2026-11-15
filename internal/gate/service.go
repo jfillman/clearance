@@ -59,7 +59,10 @@ type Config struct {
 	Fresh Freshness `json:"fresh"`
 }
 
-var verifierApp = regexp.MustCompile(`^app-(.+)-cicd/`)
+// verifierApp matches the principals of a pipeline in an app's cicd namespace: <ns>/<sa> (in-cluster) and
+// <cluster>/<ns>/<sa> (a foreign cluster's workload, authn.KindForeignWorkload). Persons (user:), GitHub Actions
+// (github:) and any other name are not matched.
+var verifierApp = regexp.MustCompile(`^(?:[^/]+/)?app-([^/]+)-cicd/[^/]+$`)
 
 // Unbound-tree modes (Config.UnboundTree).
 const (
@@ -362,7 +365,7 @@ func (s *Service) Register(ctx context.Context, p authn.Principal, body any) (*C
 				w.put(existing)
 			}
 		}
-		if err := tree.save(ctx, tx); err != nil {
+		if err := tree.save(ctx, tx, w.now); err != nil {
 			return err
 		}
 		if existing != nil && existing.State != StateHolding {
@@ -606,8 +609,8 @@ func (s *Service) Clear(ctx context.Context, p authn.Principal, changeID, onBeha
 		if err := checkApproverKind(onBehalfOf, person, who); err != nil {
 			return err
 		}
-		// The tree's people as they are now (a later registration may have added to them since this change's snapshot).
-		if err := s.refreshPeople(ctx, tx, c); err != nil {
+		// The people as they are now, and the approvals that still count under them.
+		if err := s.recheckPeople(ctx, tx, w, c); err != nil {
 			return err
 		}
 		role, err := RoleFor(person, groups, c)
@@ -623,7 +626,7 @@ func (s *Service) Clear(ctx context.Context, p authn.Principal, changeID, onBeha
 			return err
 		}
 		now := PyTime{w.now}
-		c.Approvals = append(c.Approvals, Approval{person, via, role, pycompat.ISO(w.now), who.sub, who.iss, KindPerson, sessionDigest(who.iss, who.sid)})
+		c.Approvals = append(c.Approvals, Approval{person, via, role, pycompat.ISO(w.now), who.sub, who.iss, KindPerson, sessionDigest(who.iss, who.sid), ""})
 		c.UpdatedAt = now
 		req := c.RequirementObj()
 		done := req != nil && req.Satisfied(c.Approvals)
@@ -785,31 +788,41 @@ func lower(s string) string { return strings.ToLower(s) }
 func (s *Service) PolicyView() PolicyView { return s.Policy.View() }
 
 // treeKey is what "the same tree" means for the people rule, as clearedByTree keys it: a manifest tree of the same app,
-// environment, cluster and repository with the same bound tree digest, whatever its pull request or head. "" for a
-// terraform plan, a definition release and a placeholder tree, whose people stay with the change.
-func treeKey(app, env, cluster, repo, digest string, manifest bool) string {
-	if !manifest || Unbound(digest) {
+// environment, cluster and repository with the same bound tree digest, whatever its pull request or head. A change
+// whose tree is a placeholder has a record of its own per head ("unbound@<head>"), so its people still count in its
+// target's window (targetOf). "" for a terraform plan or a definition release, whose people stay with the change.
+func treeKey(app, env, cluster, repo, digest, head string, manifest bool) string {
+	if !manifest {
 		return ""
 	}
-	return app + "|" + env + "|" + cluster + "|" + repo + "|" + bareHex(digest)
+	if Unbound(digest) {
+		return targetKey(app, env, cluster, repo) + "|unbound@" + head
+	}
+	return targetKey(app, env, cluster, repo) + "|" + bareHex(digest)
+}
+
+// targetKey is the target a tree belongs to: the app's environment on a cluster, from a repository.
+func targetKey(app, env, cluster, repo string) string {
+	return app + "|" + env + "|" + cluster + "|" + repo
 }
 
 func treeKeyOfReq(r ChangeRequest) string {
-	return treeKey(r.App, r.Env, r.Cluster, r.Repo, r.TreeDigest, r.Kind() == KindManifestTree)
+	return treeKey(r.App, r.Env, r.Cluster, r.Repo, r.TreeDigest, r.Head, r.Kind() == KindManifestTree)
 }
 
 func treeKeyOf(c *Change) string {
-	return treeKey(c.App, c.Env, c.Cluster, c.Repo, c.TreeDigest, c.Subject == nil || c.Subject.Kind == KindManifestTree)
+	return treeKey(c.App, c.Env, c.Cluster, c.Repo, c.TreeDigest, c.Head, c.Subject == nil || c.Subject.Kind == KindManifestTree)
 }
 
 // treeState is the tree's record as read and as it will be written.
 type treeState struct {
-	key  string
-	rec  TreeRecord
-	grew bool
+	key    string
+	target string
+	rec    TreeRecord
+	grew   bool
 }
 
-func (t *treeState) save(ctx context.Context, tx store.Tx) error {
+func (t *treeState) save(ctx context.Context, tx store.Tx, now time.Time) error {
 	if t.key == "" || !t.grew {
 		return nil
 	}
@@ -817,7 +830,7 @@ func (t *treeState) save(ctx context.Context, tx store.Tx) error {
 	if err != nil {
 		return err
 	}
-	return tx.PutTreePeople(ctx, store.TreePeople{Key: t.key, Record: raw})
+	return tx.PutTreePeople(ctx, store.TreePeople{Key: t.key, Target: t.target, UpdatedAt: now, Record: raw})
 }
 
 func readTree(ctx context.Context, r store.Reader, key string) (TreeRecord, error) {
@@ -838,7 +851,7 @@ func readTree(ctx context.Context, r store.Reader, key string) (TreeRecord, erro
 // unionTree reads the request's tree record (one primary-key read) and adds the request's people to it, refusing the
 // registration before anything is written when a role would pass MaxTreePeople. A request with no tree key has none.
 func (s *Service) unionTree(ctx context.Context, r store.Reader, req ChangeRequest) (*treeState, error) {
-	t := &treeState{key: treeKeyOfReq(req)}
+	t := &treeState{key: treeKeyOfReq(req), target: targetKey(req.App, req.Env, req.Cluster, req.Repo)}
 	if t.key == "" {
 		return t, nil
 	}
@@ -850,19 +863,80 @@ func (s *Service) unionTree(ctx context.Context, r store.Reader, req ChangeReque
 	return t, err
 }
 
-// refreshPeople gives a change the tree's people as they are now (clear time): the snapshot a change carries is as of
-// its last registration, and a registration of the same tree since may have added people.
-func (s *Service) refreshPeople(ctx context.Context, r store.Reader, c *Change) error {
+// recheckPeople is what a clear stands on: the people behind the change as they are now, and the approvals that still
+// count under them. It gives the change the tree's record as it is (a registration since the change's last one may have
+// added people); when the change has no people of its own beyond its proposer (its tree's record holds nobody else, or it
+// is a placeholder tree's), every other people record of its target written or grown within its hold window is behind it
+// too (the plugin's pr 0 change for a tree that is not the pull request's), a read bounded at MaxTargetRecords: past it
+// the clear is refused (DG-PEOPLE-WINDOW). Then each approval from a person now behind the change is set aside (kept in
+// the history, not counted, with a record saying why). It persists what it changed.
+func (s *Service) recheckPeople(ctx context.Context, tx store.Tx, w *writer, c *Change) error {
 	key := treeKeyOf(c)
 	if key == "" {
-		return nil
+		return s.setAside(w, c, false)
 	}
-	rec, err := readTree(ctx, r, key)
+	rec, err := readTree(ctx, tx, key)
 	if err != nil {
 		return err
 	}
-	_, err = c.absorb(rec.people())
-	return err
+	added, err := c.absorb(rec.people())
+	if err != nil {
+		return err
+	}
+	changed := len(added) > 0
+	if rec.nobodyBut(c.Proposer) {
+		since := w.now.Add(-holdWindow(c))
+		rows, err := tx.TreePeopleForTarget(ctx, targetKey(c.App, c.Env, c.Cluster, c.Repo), since, MaxTargetRecords+1)
+		if err != nil {
+			return err
+		}
+		if len(rows) > MaxTargetRecords {
+			return gerr("DG-PEOPLE-WINDOW", fmt.Sprintf("this target has more than %d recent people records, so who may clear cannot be settled; use break-glass", MaxTargetRecords),
+				"Nobody can clear it through the gate until older changes lapse; break-glass (not source-aware, at most 4 hours) is the path.", 409)
+		}
+		for _, row := range rows {
+			if row.Key == key {
+				continue
+			}
+			var other TreeRecord
+			if err := json.Unmarshal(row.Record, &other); err != nil {
+				return fmt.Errorf("gate: tree people %s: %w", row.Key, err)
+			}
+			a, err := c.absorb(other.people())
+			if err != nil {
+				return err
+			}
+			changed = changed || len(a) > 0
+		}
+	}
+	return s.setAside(w, c, changed)
+}
+
+// holdWindow is how long a change holds: its own TTL (the hold window the target's recent records are read over).
+func holdWindow(c *Change) time.Duration {
+	if d := c.ExpiresAt.Sub(c.CreatedAt.Time); d > 0 {
+		return d
+	}
+	return 7 * 24 * time.Hour
+}
+
+// setAside marks each approval from a person now behind c, and persists c when it (or the people) changed.
+func (s *Service) setAside(w *writer, c *Change, changed bool) error {
+	for i := range c.Approvals {
+		a := &c.Approvals[i]
+		if a.SetAside != "" {
+			continue
+		}
+		if roles := rolesBehind(a.Person, c); len(roles) > 0 {
+			a.SetAside = a.Person + " is " + strings.Join(roles, " and ") + " of this change since they approved"
+			changed = true
+			w.note(c, "policy", "people: approval of "+a.Person+" set aside: "+a.SetAside)
+		}
+	}
+	if changed {
+		w.put(c)
+	}
+	return nil
 }
 
 // applyPeople gives ch the tree's people (or, with no tree key, this request's) and records a re-registration that

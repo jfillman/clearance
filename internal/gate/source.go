@@ -104,6 +104,8 @@ type Behind struct {
 }
 
 const (
+	// MaxTargetRecords bounds the recent people records read for a target's window; past it a clear is refused.
+	MaxTargetRecords = 64
 	// MaxTreePeople bounds each role of the people behind a tree (and of a change's own set), which grow by union;
 	// a registration that would pass it is refused whole, before anything is written (DG-SOURCE-LIMIT).
 	MaxTreePeople = 256
@@ -364,4 +366,18 @@ func (t TreeRecord) union(p people) (TreeRecord, bool, error) {
 		}
 	}
 	return out, grew, nil
+}
+
+// nobodyBut is whether the record holds no author, merger or promoter and no proposer but who (a change with no people
+// of its own).
+func (t TreeRecord) nobodyBut(proposer string) bool {
+	if len(t.Authors)+len(t.Mergers)+len(t.Promoters) > 0 {
+		return false
+	}
+	for _, p := range t.Proposers {
+		if !sameName(p, proposer) {
+			return false
+		}
+	}
+	return true
 }

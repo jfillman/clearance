@@ -547,6 +547,7 @@ class GateApproval(Model):
         Field("person", "person", ("str",), True),
         Field("role", "role", ("str",), True),
         Field("session", "session", ("str",), False),
+        Field("set_aside", "set_aside", ("str",), False),
         Field("sub", "sub", ("str",), False),
         Field("via", "via", ("nullable", ("str",)), True),
     )
@@ -557,6 +558,7 @@ class GateApproval(Model):
     person: str
     role: str
     session: str | None = None
+    set_aside: str | None = None
     sub: str | None = None
     via: str | None
 

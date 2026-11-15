@@ -22,7 +22,7 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   proposer and no source records exactly what it did). Re-registrations add, never remove (an omission is a `deploy.people` record). Each role holds at most 256 names; past it the registration is refused whole before any write
   (`DG-SOURCE-LIMIT`), and a registration is all or nothing (its transaction rolls back on any error). A verifier `app-<app>-cicd/<sa>` registers manifest trees for `<app>` only (`DG-VERIFIER-APP`;
   `CLEARANCE_VERIFIER_APP_BINDING=off`). Aliases (`CLEARANCE_APPROVER_ALIASES`) are honoured. Records of a change with a set carry `change.people` (digest, count, names); a refused clear is a `deploy.refuse` record (own
-  budget). Break-glass is not source-aware. Returned as `source` and `also_behind` on reads. Requests without it behave as before. Go and Python clients updated.
+  budget). Break-glass is not source-aware. A change with no people of its own is also behind the target's people records written within its hold window (bounded; past it a clear is refused `DG-PEOPLE-WINDOW`), and at clear time approvals from people now behind the change are set aside (`set_aside`). Returned as `source` and `also_behind` on reads. Requests without it behave as before. Go and Python clients updated.
 
 - **Revocation of the W6 assurance surface** ([docs/assurance.md](docs/assurance.md#revocation)); the Cloud spec's access-grant revoke now has its core half.
   `POST /v1/packets/{id}/deliveries/{delivery}/revoke` (admin; `packet.revoke` record before the answer, idempotent): every read and sample under the delivery's credential is

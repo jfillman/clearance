@@ -50,8 +50,12 @@ type Change struct {
 // the tree key (app, environment, cluster, repository and bound tree digest). It only grows and outlives every
 // change on the tree.
 type TreePeople struct {
-	Key    string
-	Record json.RawMessage
+	Key string
+	// Target is the tree's target (app, environment, cluster, repository), and UpdatedAt when the record was written
+	// or grown (the gate's clock): a target's recent records are read by (Target, UpdatedAt).
+	Target    string
+	UpdatedAt time.Time
+	Record    json.RawMessage
 }
 
 // Definition is one row of clearance_definitions: a cluster-pinned agent definition and its state.
@@ -231,6 +235,9 @@ type Reader interface {
 	ChangesHolding(ctx context.Context) ([]Change, error)
 	// TreePeople is the people behind the tree key (ErrNotFound when none is recorded): one primary-key read.
 	TreePeople(ctx context.Context, key string) (TreePeople, error)
+	// TreePeopleForTarget are the target's records written or grown at or after since, newest first, at most limit
+	// (the caller asks for one more than it will use, to know it was cut): one indexed read.
+	TreePeopleForTarget(ctx context.Context, target string, since time.Time, limit int) ([]TreePeople, error)
 	// ChangesUndelivered are the changes with a deployment whose delivered is false (github_app.py retries them).
 	ChangesUndelivered(ctx context.Context) ([]Change, error)
 	Definitions(ctx context.Context) ([]Definition, error)

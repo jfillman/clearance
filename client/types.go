@@ -818,6 +818,8 @@ type Approval struct {
 	Kind string `json:"kind,omitempty"`
 	// Session is a digest of the approver's session at their identity provider, when the token carried one.
 	Session string `json:"session,omitempty"`
+	// SetAside is why the approval no longer counts (the person is behind the change since they approved); empty when it counts.
+	SetAside string `json:"set_aside,omitempty"`
 }
 
 // Deployment is a GitHub Actions deployment waiting on a change.

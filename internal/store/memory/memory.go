@@ -1296,6 +1296,42 @@ func (t *tx) TreePeople(ctx context.Context, key string) (store.TreePeople, erro
 	return v.treePeople(key)
 }
 
+func (s *Store) TreePeopleForTarget(ctx context.Context, target string, since time.Time, limit int) ([]store.TreePeople, error) {
+	v, err := s.view()
+	if err != nil {
+		return nil, err
+	}
+	return v.treePeopleForTarget(target, since, limit), nil
+}
+
+func (t *tx) TreePeopleForTarget(ctx context.Context, target string, since time.Time, limit int) ([]store.TreePeople, error) {
+	v, err := t.view()
+	if err != nil {
+		return nil, err
+	}
+	return v.treePeopleForTarget(target, since, limit), nil
+}
+
+func (v view) treePeopleForTarget(target string, since time.Time, limit int) []store.TreePeople {
+	var out []store.TreePeople
+	for _, tp := range v.trees {
+		if tp.Target == target && !tp.UpdatedAt.Before(since) {
+			tp.Record = bytes.Clone(tp.Record)
+			out = append(out, tp)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].UpdatedAt.Equal(out[j].UpdatedAt) {
+			return out[i].UpdatedAt.After(out[j].UpdatedAt)
+		}
+		return out[i].Key < out[j].Key
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
 func (v view) treePeople(key string) (store.TreePeople, error) {
 	tp, ok := v.trees[key]
 	if !ok {
