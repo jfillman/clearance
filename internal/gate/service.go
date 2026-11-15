@@ -311,7 +311,7 @@ func (s *Service) Register(ctx context.Context, p authn.Principal, body any) (*C
 	}
 	if m := verifierApp.FindStringSubmatch(p.ID); m != nil && !s.Config.VerifierAppBindingOff && m[1] != req.App && treeKeyOfReq(req) != "" {
 		// A verifier running in app-<app>-cicd registers manifest-tree changes for <app> only (terraform plans and
-		// placeholder trees have no tree record), so a verifier cannot add names to another app's trees.
+		// definition releases have no tree record; a placeholder tree has one per head), so a verifier cannot add names to another app's trees.
 		return nil, gerr("DG-VERIFIER-APP", fmt.Sprintf("%s may register changes for %s only, not %s", p.ID, m[1], req.App),
 			"Register from the app's own pipeline (CLEARANCE_VERIFIER_APP_BINDING=off turns this check off).", 403)
 	}

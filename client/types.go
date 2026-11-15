@@ -590,7 +590,8 @@ type ChangeRequest struct {
 	Proposer     string `json:"proposer"`
 	ProposerKind string `json:"proposerKind,omitempty"`
 	// Source is the people behind the change (docs/gate.md, The people behind a change): the source pull requests'
-	// authors and mergers and the promoter. Fixed at registration; a re-registration must send the same set.
+	// authors and mergers and the promoter. The set only grows: a re-registration adds to it, and a shorter or absent set changes
+	// nothing (docs/gate.md).
 	Source       *SourcePeople     `json:"source,omitempty"`
 	Owner        string            `json:"owner,omitempty"`
 	Protected    bool              `json:"protected"`
@@ -728,8 +729,8 @@ type Change struct {
 	TaskID       *string `json:"task_id"`
 	// Source is the people behind the change as registered; nil for a change registered without them.
 	Source *SourcePeople `json:"source,omitempty"`
-	// AlsoBehind is who else is excluded from clearing it, added after the first registration; PeopleNotes counts the
-	// people and refused-clear records written for the change.
+	// AlsoBehind is who else is excluded from clearing it, added after the first registration. PeopleNotes counts the
+	// deploy.people records and RefusalNotes the deploy.refuse records written for the change, each bounded apart.
 	AlsoBehind       []BehindPerson    `json:"also_behind,omitempty"`
 	PeopleNotes      int               `json:"people_notes,omitempty"`
 	RefusalNotes     int               `json:"refusal_notes,omitempty"`

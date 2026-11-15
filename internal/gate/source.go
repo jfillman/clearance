@@ -3,7 +3,6 @@ package gate
 import (
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/jfillman/clearance/internal/pycompat"
 	"github.com/jfillman/clearance/internal/vocab"
@@ -69,23 +68,6 @@ func parseSource(v any) (*SourcePeople, error) {
 
 func (s *SourcePeople) empty() bool {
 	return s == nil || (len(s.Authors) == 0 && len(s.Mergers) == 0 && s.Promoter == "")
-}
-
-// key is the set as a comparable string: each list sorted and normalised as the clearing rule compares names, so a
-// re-run that spells the same people differently is the same set.
-func (s *SourcePeople) key() string {
-	if s.empty() {
-		return ""
-	}
-	norm := func(xs []string) string {
-		out := make([]string, 0, len(xs))
-		for _, x := range xs {
-			out = append(out, bareName(x))
-		}
-		sort.Strings(out)
-		return strings.Join(out, "\x00")
-	}
-	return norm(s.Authors) + "\x01" + norm(s.Mergers) + "\x01" + bareName(s.Promoter)
 }
 
 func (s *SourcePeople) clone() *SourcePeople {
@@ -201,10 +183,34 @@ func hasBare(xs []string, n string) bool {
 // absorb adds the names of p that c does not have (grow-only: nothing is ever removed) and returns what it added,
 // as "role name". A name over the stored bound is refused.
 func (c *Change) absorb(p people) ([]string, error) {
+	// All or nothing: on a refusal the change is as it was.
+	src, also := c.Source, c.AlsoBehind
+	if src != nil {
+		cp := *src
+		cp.Authors, cp.Mergers = append([]string(nil), src.Authors...), append([]string(nil), src.Mergers...)
+		c.Source = &cp
+	}
+	c.AlsoBehind = append([]Behind(nil), also...)
+	added, err := c.absorbInto(p)
+	if err != nil {
+		c.Source, c.AlsoBehind = src, also
+		return nil, err
+	}
+	return added, nil
+}
+
+func (c *Change) absorbInto(p people) ([]string, error) {
 	var added []string
 	cur := c.peopleOf()
+	over := func(role string) error {
+		return gerr("DG-SOURCE-LIMIT", fmt.Sprintf("the people behind this change would pass %d %ss", MaxTreePeople, role),
+			"A change's set only grows; register a new head.", 409)
+	}
 	for _, n := range p.proposers {
 		if !hasBare(cur.proposers, n) {
+			if len(cur.proposers) >= MaxTreePeople {
+				return added, over("proposer")
+			}
 			c.AlsoBehind = append(c.AlsoBehind, Behind{"proposer", n})
 			cur.proposers = append(cur.proposers, n)
 			added = append(added, "proposer "+n)
@@ -213,6 +219,9 @@ func (c *Change) absorb(p people) ([]string, error) {
 	for _, n := range p.promoters {
 		if hasBare(cur.promoters, n) {
 			continue
+		}
+		if len(cur.promoters) >= MaxTreePeople {
+			return added, over("promoter")
 		}
 		cur.promoters = append(cur.promoters, n)
 		added = append(added, "promoter "+n)
