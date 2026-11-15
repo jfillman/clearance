@@ -9,6 +9,8 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.49.0] - 2026-11-14
+
 ### Added
 
 - **Revocation of the W6 assurance surface** ([docs/assurance.md](docs/assurance.md#revocation)); the Cloud spec's access-grant revoke now has its core half.
@@ -86,7 +88,7 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 - **`GET /v1/map` no longer times out (503 `read failed`, SQLSTATE 57014) on a real chain.** Records are TOASTed, and the Map's gate and
   health statements walked every record of the chain (the health one read a scope's whole history), so each took 5 to 8 s on the lab
-  against the 5 s `statement_timeout`. Each statement now reads only its records from a new partial index (`clearance_evidence_gate`,
+  against the 5 s `statement_timeout`. Each statement now reads only its records from five new partial indexes, built by the core in the background after it starts (`clearance_evidence_gate`,
   `clearance_evidence_obs_ts`, `clearance_evidence_health` and two for the core's health flips), health reads the newest 500 records per scope plus every core flip since its source last reported healthy (the Map never shows a source better than the core declared), the four aggregates run at once (one Map at a time),
   and a record's fields are extracted with one `jsonb_to_record`. The response is unchanged. **The indexes are built by the core after it starts**, in the
   background, one at a time, with `CREATE INDEX CONCURRENTLY IF NOT EXISTS` on their own connection (no statement timeout), so the core serves
@@ -1622,7 +1624,8 @@ What the Autopilot gateway needs of the core before the hangar-dev cutover (R-3e
   scope, narrow-only limits, CEL policy, sessions, the hash-chained audit log and the gateway; the Hangar pack's
   `glidepath.*` and `airframe.*` tools over glidepath-api and a GET-only Kubernetes adapter.
 
-[Unreleased]: https://github.com/jfillman/clearance/compare/v0.48.0...HEAD
+[Unreleased]: https://github.com/jfillman/clearance/compare/v0.49.0...HEAD
+[0.49.0]: https://github.com/jfillman/clearance/compare/v0.48.0...v0.49.0
 [0.48.0]: https://github.com/jfillman/clearance/compare/v0.47.1...v0.48.0
 [0.47.1]: https://github.com/jfillman/clearance/compare/v0.47.0...v0.47.1
 [0.47.0]: https://github.com/jfillman/clearance/compare/v0.46.0...v0.47.0
