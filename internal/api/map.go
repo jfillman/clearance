@@ -119,6 +119,9 @@ type ObserverRef struct {
 	LastTS   *string  `json:"last_ts"`
 	Stale    bool     `json:"stale"`
 	Failed   []string `json:"failed_checks"`
+	// Reporting is set only on a blind observer whose scope does have health records, under other source names: the
+	// declared source matches none of them, so the declaration (not the feed) is the likely fault.
+	Reporting []string `json:"reporting_sources,omitempty"`
 }
 
 // TargetNode is a declared target with its metrics.
@@ -723,6 +726,11 @@ func assembleMap(b *mapBuild, reg TargetList, declared []DeclaredTarget, from, t
 					if sh.Failed != nil {
 						ref.Failed = sh.Failed
 					}
+				} else {
+					for src := range b.health[t.Scope] {
+						ref.Reporting = append(ref.Reporting, src)
+					}
+					sort.Strings(ref.Reporting)
 				}
 			}
 			blind = blind || ref.State == observe.Blind
@@ -956,6 +964,10 @@ func buildAttention(b *mapBuild, out *MapResponse, declared []DeclaredTarget, in
 				d := "no signed health record in time"
 				if o.LastTS != nil {
 					d = "last health record " + *o.LastTS
+				}
+				if len(o.Reporting) > 0 {
+					d = "the declared source " + o.Source + " matches no health record, but this scope's records name " +
+						strings.Join(o.Reporting, ", ") + " (fix the declaration: source is the record's source.name)"
 				}
 				if len(o.Failed) > 0 {
 					d += "; failed checks: " + strings.Join(o.Failed, ", ")

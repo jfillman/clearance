@@ -518,3 +518,45 @@ func TestCountsByProviderScopeAndBucket(t *testing.T) {
 		}
 	})
 }
+
+// A Kubernetes observer's health records are named by the collector's own source (source.name "k8s-audit-webhook", the
+// real shape; the provider is observe-k8s). A target declaring that source sees its feed; one declaring a source no
+// record carries stays blind, and says which sources the scope does report, so a wrong declaration cannot pass for an outage.
+func TestMapObserverSourceMatchesTheRecordsSourceName(t *testing.T) {
+	w := mapWorld()
+	w.events = append(w.events, ev(map[string]any{"ts": "2026-11-10T11:59:40Z", "tool": "observation.health", "scope": "hangar-dev", "boundary": "deployment",
+		"_provider": "observe-k8s", "source": map[string]any{"name": "k8s-audit-webhook"},
+		"health": map[string]any{"state": "healthy", "interval_seconds": 60, "checks": []any{}}}))
+	w.targets[1] = targetSet("hangar-dev", tgt("dev-ns", func(t *targets.Target) {
+		t.Group, t.App, t.Scope = "hangar-dev", "dev-app", "hangar-dev"
+		t.Observers = []targets.Observer{{Provider: "observe-k8s", Source: "k8s-audit-webhook"}, {Provider: "observe-k8s", Source: "observe-k8s"}}
+	}))
+	mapEach(t, w, func(t *testing.T, h *harness) {
+		m := h.ok("/v1/map", "audit")
+		dev := pick(t, sub(m, "nodes")["targets"], "id", "dev-ns")
+		good := pick(t, dev["observers"], "source", "k8s-audit-webhook")
+		if good["state"] != "healthy" || good["last_ts"] != "2026-11-10T11:59:40Z" {
+			t.Fatalf("a declared source the records carry is seen: %v", good)
+		}
+		bad := pick(t, dev["observers"], "source", "observe-k8s")
+		if bad["state"] != "blind" || bad["last_ts"] != nil {
+			t.Fatalf("a declared source no record carries stays blind: %v", bad)
+		}
+		rs := bad["reporting_sources"].([]any)
+		if len(rs) != 1 || rs[0] != "k8s-audit-webhook" {
+			t.Fatalf("the blind observer names what the scope reports: %v", bad)
+		}
+		if good["reporting_sources"] != nil {
+			t.Fatalf("a seen observer lists none: %v", good)
+		}
+		var found bool
+		for _, a := range kinds(m)["blind-observer"] {
+			if strings.Contains(a["title"].(string), "observe-k8s/observe-k8s is blind on dev-ns") {
+				found = strings.Contains(a["detail"].(string), "k8s-audit-webhook") && strings.Contains(a["detail"].(string), "declared source")
+			}
+		}
+		if !found {
+			t.Fatalf("the attention item names the mismatch: %v", kinds(m)["blind-observer"])
+		}
+	})
+}

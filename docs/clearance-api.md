@@ -161,10 +161,15 @@ filter; a target id two sources declare is a `conflicts` entry and the first sou
             "registry": "flight", "scope": "hangar-prod",
             "gates": [{"type": "glidepath", "instance": "gate-api-cicd", "mode": "enforce"},
                       {"type": "g-argo", "instance": "argo-gate", "mode": "flag"}],
-            "observers": [{"provider": "observe-k8s", "source": "observe-k8s"}]}],
+            "observers": [{"provider": "observe-k8s", "source": "k8s-audit-webhook"}]}],
  "sources": [{"source": "hangar-prod", "digest": "9f2c...", "targets": 25, "updated_at": "2026-11-13T09:00:00Z"}],
  "conflicts": [], "invalid": []}
 ```
+
+An observer's `source` is the `source.name` its health records carry, not the provider's name: the Kubernetes audit
+collector (`observe-k8s`) declares `k8s-audit-webhook`, the AWS collector (`observe-aws`) declares `observe-aws`. The Map
+finds an observer's feed by that name, so a source no record carries stays blind; its `reporting_sources` (and the blind
+item's detail) then name the sources the scope does report.
 
 A gate's `instance` is the name its records carry: the registered provider's name (`provider.name`), or, for a gate that
 registers changes (the clearance-gate check, Glidepath), the verifier principal that registered them. A target's `scope`
@@ -193,13 +198,13 @@ account, `expand=<g>[,<g>]` adds an edge to each target of those groups, `target
                "lanes": {"...": 0}, "holding": 1,
                "gates": [{"type": "g-argo", "instance": "argo-gate", "mode": "flag", "attributed": true, "silent": false,
                           "decisions": 31, "refused": 2, "exceptions": 1, "holding": 0, "coverage": {"...": 0}, "lanes": {"...": 0}}],
-               "observers": [{"provider": "observe-k8s", "source": "observe-k8s", "state": "healthy",
+               "observers": [{"provider": "observe-k8s", "source": "k8s-audit-webhook", "state": "healthy",
                               "last_ts": "2026-11-13T11:59:30Z", "stale": false, "failed_checks": []}]}],
-  "observers": [{"id": "observer:observe-k8s/observe-k8s", "provider": "observe-k8s", "source": "observe-k8s",
+  "observers": [{"id": "observer:observe-k8s/k8s-audit-webhook", "provider": "observe-k8s", "source": "k8s-audit-webhook",
                  "targets": 12, "states": {"healthy": 12}, "status": "ok"}]},
  "edges": [{"from": "gate:g-argo", "to": "group:hangar-prod", "kind": "guards", "targets": 12, "volume": 412,
             "refused": 9, "holding": 3, "status": "attention"},
-           {"from": "observer:observe-k8s/observe-k8s", "to": "group:hangar-prod", "kind": "watches", "targets": 12,
+           {"from": "observer:observe-k8s/k8s-audit-webhook", "to": "group:hangar-prod", "kind": "watches", "targets": 12,
             "volume": 0, "refused": 0, "holding": 0, "status": "ok"}],
  "attention": [{"kind": "blind-observer", "severity": "down", "title": "...", "detail": "...", "count": 1,
                 "targets": ["acct-prod"]}],
