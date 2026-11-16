@@ -49,6 +49,9 @@ spec:
           args: ["api"]
           ports:
             - {name: http, containerPort: 8080, protocol: TCP}
+            {{- with .Values.api.metricsListen }}
+            - {name: metrics, containerPort: {{ regexFind "[0-9]+$" . | int }}, protocol: TCP}
+            {{- end }}
           env:
             - name: CLEARANCE_API_DSN
               valueFrom:
@@ -107,6 +110,10 @@ spec:
               value: {{ .Values.api.pool | quote }}
             - name: CLEARANCE_API_COVERAGE_CONCURRENCY
               value: {{ .Values.api.coverageConcurrency | quote }}
+            - name: CLEARANCE_API_METRICS_LISTEN
+              value: {{ .Values.api.metricsListen | quote }}
+            - name: CLEARANCE_API_PPROF_LISTEN
+              value: {{ .Values.api.pprofListen | quote }}
             - name: CLEARANCE_API_COVERAGE_WAIT_SECONDS
               value: {{ .Values.api.coverageWaitSeconds | quote }}
             - name: CLEARANCE_API_COVERAGE_CACHE_SECONDS

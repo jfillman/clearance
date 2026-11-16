@@ -386,6 +386,15 @@ api:
   # CLEARANCE_API_COVERAGE_CONCURRENCY: coverage computations in flight at once per replica (1 to 20); a read past it
   # is answered 503 with Retry-After.
   coverageConcurrency: 2
+  # CLEARANCE_API_METRICS_LISTEN: host:port for /metrics (Go runtime memory, goroutines, coverage gauges); "" is off.
+  # Unauthenticated numbers: set it to ":PORT" (all interfaces) only together with networkPolicy.api.metricsFrom naming who
+  # may scrape. Set, the container declares that port; with networkPolicy.enabled and no metricsFrom the default-deny
+  # blocks it, so nothing can reach it.
+  metricsListen: ""
+  # CLEARANCE_API_PPROF_LISTEN: a loopback IP literal host:port (127.0.0.1:6060 or [::1]:6060, not localhost) for the
+  # pprof profiles; "" is off. Read it with `kubectl port-forward` (needs create on pods/portforward); anything else
+  # stops the api at start. Needs a restart to turn on or off.
+  pprofListen: ""
   # CLEARANCE_API_COVERAGE_WAIT_SECONDS: how long a coverage read past that limit waits for a slot before the 503 (0 to 10;
   # 0 refuses at once). At most 4 reads per slot wait; the rest are refused at once.
   coverageWaitSeconds: 3
@@ -676,6 +685,9 @@ networkPolicy:
   api:
     # NetworkPolicyPeers allowed to call clearance-api (a portal, auditors, the Gateway's namespace).
     from: []
+    # NetworkPolicyPeers allowed to scrape /metrics on the port of api.metricsListen (your Prometheus's pods or namespace).
+    # Empty: no rule is added, so with api.metricsListen set nothing may reach that port.
+    metricsFrom: []
   web:
     # NetworkPolicyPeers allowed to call the web UI on 8080: your Gateway's pods or namespace. Empty: unreachable.
     from: []

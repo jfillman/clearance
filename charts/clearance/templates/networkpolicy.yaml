@@ -77,6 +77,13 @@ spec:
       ports:
         - {protocol: TCP, port: 8080}
     {{- end }}
+    {{- if and (eq $component "api") $.Values.api.metricsListen $np.api.metricsFrom }}
+    # Prometheus scrapes /metrics: the named peers, that port only (api.metricsListen, networkPolicy.api.metricsFrom).
+    - from:
+        {{- toYaml $np.api.metricsFrom | nindent 8 }}
+      ports:
+        - {protocol: TCP, port: {{ regexFind "[0-9]+$" $.Values.api.metricsListen | int }}}
+    {{- end }}
     {{- if $.Values.web.enabled }}
     # The web UI forwards the page's calls here (reads to the api, writes to the core).
     - from:
