@@ -386,6 +386,9 @@ api:
   # CLEARANCE_API_COVERAGE_CONCURRENCY: coverage computations in flight at once per replica (1 to 20); a read past it
   # is answered 503 with Retry-After.
   coverageConcurrency: 2
+  # CLEARANCE_API_COVERAGE_WAIT_SECONDS: how long a coverage read past that limit waits for a slot before the 503 (0 to 10;
+  # 0 refuses at once). At most 4 reads per slot wait; the rest are refused at once.
+  coverageWaitSeconds: 3
   # CLEARANCE_API_COVERAGE_CACHE_SECONDS: reuse a coverage answer this long (0 to 300; 0 is no cache). A reused answer
   # carries Age and its `to` is when it was computed.
   coverageCacheSeconds: 0

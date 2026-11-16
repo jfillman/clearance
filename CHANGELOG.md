@@ -9,6 +9,20 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Changed
+
+- **A coverage read waits briefly for a slot before it is refused.** A page that asks for several scopes at once
+  was refused for all but the first few. A read past `CLEARANCE_API_COVERAGE_CONCURRENCY` now waits up to
+  `CLEARANCE_API_COVERAGE_WAIT_SECONDS` (default 3, 0 to 10; 0 refuses at once; chart `api.coverageWaitSeconds`) and only
+  then gets the 503 with `Retry-After`. The wait ends when the client goes away, and at most 4 reads per slot wait.
+  A cache hit sends the same `Content-Type` as a computed answer (tested). The docs say that a caller varying the raw
+  `from`/`to` strings can evict cache entries.
+- **`clearance coverage`: exit 3 now means blind only.** A busy api (503 or 429) is retried using `Retry-After` (at most 4
+  tries, each wait capped at 5 s, under 20 s in all). A statement that still cannot be read (api busy, down, unreachable,
+  or an older api without the route) exits **8**, no longer 3. Nothing in this repo keys on exit 3 for coverage: the Slack
+  alerter reads the API itself and treats a failed read as an error, not as blind. Scripts that treated 3 as
+  "blind or unavailable" must handle 8 too. Tests now also compare the slim and whole-record coverage statements on Postgres where CI has a DSN.
+
 ### Fixed
 
 - **`GET /v1/coverage` no longer exhausts the API's memory.** A statement read up to 10000 whole records of each kind per

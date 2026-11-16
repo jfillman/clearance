@@ -86,7 +86,7 @@ func (s *covSpy) Evidence(ctx context.Context, f EvidenceFilter, v *Viewer, limi
 	return rs, err
 }
 
-func spied(t *testing.T, w world, mod func(*covSpy), opts ...option) (*harness, *covSpy) {
+func covSpied(t *testing.T, w world, mod func(*covSpy), opts ...option) (*harness, *covSpy) {
 	t.Helper()
 	var sp *covSpy
 	b := backend{"spy", func(t *testing.T, w world) (Store, string) {
@@ -103,7 +103,7 @@ func spied(t *testing.T, w world, mod func(*covSpy), opts ...option) (*harness, 
 // Proved: the statement reads records without state_change and correlation, builds the identical statement, and
 // reads a small fraction of the bytes. Before the change every record came whole (the Slim flag off).
 func TestCoverageStatementReadsRecordsWithoutTheObjectsItNeverUses(t *testing.T) {
-	h, sp := spied(t, covWorld(1, 300, 8<<10), nil)
+	h, sp := covSpied(t, covWorld(1, 300, 8<<10), nil)
 	from, to := covNow.Add(-24*time.Hour), covNow
 	aud := &Viewer{Role: RoleAuditor}
 	got, err := h.srv.statement(bg, aud, "aws:000", from, to, covNow)
@@ -145,7 +145,7 @@ func TestCoverageStatementReadsRecordsWithoutTheObjectsItNeverUses(t *testing.T)
 // Proved: a cancelled request stops reading: the next page, the next record kind and the next scope are not read.
 func TestCancelledCoverageReadStopsReading(t *testing.T) {
 	ctx, cancel := context.WithCancel(bg)
-	h, sp := spied(t, covWorld(5, 3, 10), func(sp *covSpy) {
+	h, sp := covSpied(t, covWorld(5, 3, 10), func(sp *covSpy) {
 		sp.afterCall = func(n int64) {
 			if n == 1 {
 				cancel() // the client goes away during the first read
@@ -163,7 +163,7 @@ func TestCancelledCoverageReadStopsReading(t *testing.T) {
 		t.Errorf("%d evidence reads after the client left, want 1 (the one in flight)", n)
 	}
 	// uncancelled, the same request reads 6 kinds x 5 scopes
-	h2, sp2 := spied(t, covWorld(5, 3, 10), nil)
+	h2, sp2 := covSpied(t, covWorld(5, 3, 10), nil)
 	if r := h2.get("/v1/coverage", "audit"); r.status != 200 {
 		t.Fatal(r.status, string(r.body))
 	}
@@ -175,7 +175,7 @@ func TestCancelledCoverageReadStopsReading(t *testing.T) {
 // Proved: with one slot, a second coverage read is refused at once (503, Retry-After), not queued; other endpoints
 // answer; the slot is free again afterwards.
 func TestCoverageComputationsAreBoundedAndTheRestAreRefused(t *testing.T) {
-	h, sp := spied(t, covWorld(1, 2, 10), func(sp *covSpy) { sp.release = make(chan struct{}); sp.started = make(chan struct{}, 8) },
+	h, sp := covSpied(t, covWorld(1, 2, 10), func(sp *covSpy) { sp.release = make(chan struct{}); sp.started = make(chan struct{}, 8) },
 		func(o *Options) { o.CoverageConcurrency = 1 })
 	var wg sync.WaitGroup
 	first := make(chan resp, 1)
@@ -215,7 +215,7 @@ func TestCoverageComputationsAreBoundedAndTheRestAreRefused(t *testing.T) {
 
 // Proved: the default allows more than one at a time, and a refused read never took a slot it does not release.
 func TestCoverageDefaultConcurrencyIsTwo(t *testing.T) {
-	h, sp := spied(t, covWorld(1, 2, 10), func(sp *covSpy) { sp.release = make(chan struct{}); sp.started = make(chan struct{}, 8) })
+	h, sp := covSpied(t, covWorld(1, 2, 10), func(sp *covSpy) { sp.release = make(chan struct{}); sp.started = make(chan struct{}, 8) })
 	var wg sync.WaitGroup
 	codes := make([]int, 3)
 	for i := 0; i < 2; i++ {
@@ -246,7 +246,7 @@ func TestCoverageCacheIsOptInAndSaysHowOldItIs(t *testing.T) {
 		_ = json.Unmarshal(rec.Body.Bytes(), &m)
 		return rec, m
 	}
-	h, sp := spied(t, covWorld(2, 2, 10), nil, func(o *Options) { o.CoverageCacheTTL = 30 * time.Second; o.Clock = func() time.Time { return clock } })
+	h, sp := covSpied(t, covWorld(2, 2, 10), nil, func(o *Options) { o.CoverageCacheTTL = 30 * time.Second; o.Clock = func() time.Time { return clock } })
 	r1, m1 := get(h, "/v1/coverage")
 	n := sp.calls.Load()
 	if r1.Code != 200 || n == 0 || r1.Header().Get("Age") != "0" {
@@ -273,7 +273,7 @@ func TestCoverageCacheIsOptInAndSaysHowOldItIs(t *testing.T) {
 		t.Errorf("bad from: %d", r.Code)
 	}
 
-	h0, sp0 := spied(t, covWorld(1, 2, 10), nil)
+	h0, sp0 := covSpied(t, covWorld(1, 2, 10), nil)
 	get(h0, "/v1/coverage?scope=aws:000")
 	k := sp0.calls.Load()
 	r, _ := get(h0, "/v1/coverage?scope=aws:000")
@@ -291,17 +291,206 @@ func TestCoverageSettingsFromEnv(t *testing.T) {
 		return func(k string) string { return base[k] }
 	}
 	c, err := FromEnv(env(nil))
-	if err != nil || c.CoverageConcurrency != DefaultCoverageConcurrency || c.CoverageCacheTTL != 0 {
+	if err != nil || c.CoverageConcurrency != DefaultCoverageConcurrency || c.CoverageCacheTTL != 0 || c.CoverageWait != 3*time.Second {
 		t.Fatalf("defaults: %+v %v", c, err)
 	}
-	c, err = FromEnv(env(map[string]string{"CLEARANCE_API_COVERAGE_CONCURRENCY": "4", "CLEARANCE_API_COVERAGE_CACHE_SECONDS": "30"}))
-	if err != nil || c.CoverageConcurrency != 4 || c.CoverageCacheTTL != 30*time.Second {
+	c, err = FromEnv(env(map[string]string{"CLEARANCE_API_COVERAGE_CONCURRENCY": "4", "CLEARANCE_API_COVERAGE_CACHE_SECONDS": "30", "CLEARANCE_API_COVERAGE_WAIT_SECONDS": "0"}))
+	if err != nil || c.CoverageWait != 0 || c.CoverageConcurrency != 4 || c.CoverageCacheTTL != 30*time.Second {
 		t.Fatalf("set: %+v %v", c, err)
 	}
 	for _, kv := range [][2]string{{"CLEARANCE_API_COVERAGE_CONCURRENCY", "0"}, {"CLEARANCE_API_COVERAGE_CONCURRENCY", "x"},
-		{"CLEARANCE_API_COVERAGE_CACHE_SECONDS", "-1"}, {"CLEARANCE_API_COVERAGE_CACHE_SECONDS", "301"}} {
+		{"CLEARANCE_API_COVERAGE_WAIT_SECONDS", "11"}, {"CLEARANCE_API_COVERAGE_CACHE_SECONDS", "-1"}, {"CLEARANCE_API_COVERAGE_CACHE_SECONDS", "301"}} {
 		if _, err := FromEnv(env(map[string]string{kv[0]: kv[1]})); err == nil {
 			t.Errorf("%s=%s accepted", kv[0], kv[1])
 		}
 	}
+}
+
+func covGet(h *harness, ctx context.Context, path string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest("GET", path, nil).WithContext(ctx)
+	req.Header.Set("Authorization", "Bearer audit")
+	rec := httptest.NewRecorder()
+	h.srv.Handler().ServeHTTP(rec, req)
+	return rec
+}
+
+func waitWaiters(t *testing.T, h *harness, n int64) {
+	t.Helper()
+	for i := 0; i < 500 && h.srv.covWaiters.Load() != n; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := h.srv.covWaiters.Load(); got != n {
+		t.Fatalf("%d waiters, want %d", got, n)
+	}
+}
+
+func holdOne(t *testing.T, wait time.Duration) (*harness, *covSpy, func() *httptest.ResponseRecorder) {
+	h, sp := covSpied(t, covWorld(1, 2, 10), func(sp *covSpy) { sp.release = make(chan struct{}); sp.started = make(chan struct{}, 8) },
+		func(o *Options) { o.CoverageConcurrency = 1; o.CoverageWait = wait })
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- covGet(h, bg, "/v1/coverage?scope=aws:000") }()
+	<-sp.started
+	return h, sp, func() *httptest.ResponseRecorder { return <-done }
+}
+
+// A read past the limit waits and is served when the slot frees.
+func TestCoverageWaiterIsServedWhenASlotFrees(t *testing.T) {
+	h, sp, first := holdOne(t, 5*time.Second)
+	second := make(chan *httptest.ResponseRecorder, 1)
+	go func() { second <- covGet(h, bg, "/v1/coverage?scope=aws:000") }()
+	waitWaiters(t, h, 1)
+	close(sp.release)
+	if r := first(); r.Code != 200 {
+		t.Errorf("first %d", r.Code)
+	}
+	if r := <-second; r.Code != 200 {
+		t.Errorf("waiter %d %s", r.Code, r.Body)
+	}
+	if n := h.srv.covWaiters.Load(); n != 0 {
+		t.Errorf("%d waiters left", n)
+	}
+}
+
+// A waiter that gets no slot in time is refused with 503 and Retry-After, and leaves no waiter behind.
+func TestCoverageWaiterTimesOutWith503(t *testing.T) {
+	h, sp, first := holdOne(t, 150*time.Millisecond)
+	t0 := time.Now()
+	r := covGet(h, bg, "/v1/coverage?scope=aws:000")
+	if d := time.Since(t0); r.Code != 503 || r.Header().Get("Retry-After") == "" || d < 140*time.Millisecond || d > 3*time.Second {
+		t.Errorf("waiter: %d, Retry-After %q after %s", r.Code, r.Header().Get("Retry-After"), d)
+	}
+	if n := h.srv.covWaiters.Load(); n != 0 {
+		t.Errorf("%d waiters left", n)
+	}
+	close(sp.release)
+	first()
+}
+
+// A waiter whose client leaves stops waiting at once and leaves neither a waiter nor a slot behind.
+func TestCoverageCancelledWaiterLeavesNothingBehind(t *testing.T) {
+	h, sp, first := holdOne(t, 10*time.Second)
+	ctx, cancel := context.WithCancel(bg)
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- covGet(h, ctx, "/v1/coverage?scope=aws:000") }()
+	waitWaiters(t, h, 1)
+	cancel()
+	select {
+	case r := <-done:
+		if r.Code != 503 {
+			t.Errorf("cancelled waiter %d", r.Code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a cancelled waiter kept waiting")
+	}
+	waitWaiters(t, h, 0)
+	close(sp.release)
+	first()
+	if n := len(h.srv.covSem); n != 0 {
+		t.Errorf("%d slots held", n)
+	}
+	if r := covGet(h, bg, "/v1/coverage?scope=aws:000"); r.Code != 200 {
+		t.Errorf("after: %d", r.Code)
+	}
+}
+
+// At most CoverageWaitersPerSlot reads wait per slot; the next is refused at once.
+func TestCoverageWaitersAreCapped(t *testing.T) {
+	h, sp, first := holdOne(t, 10*time.Second)
+	codes := make(chan int, CoverageWaitersPerSlot)
+	for i := 0; i < CoverageWaitersPerSlot; i++ {
+		go func() { codes <- covGet(h, bg, "/v1/coverage?scope=aws:000").Code }()
+	}
+	waitWaiters(t, h, CoverageWaitersPerSlot)
+	t0 := time.Now()
+	r := covGet(h, bg, "/v1/coverage?scope=aws:000")
+	if r.Code != 503 || r.Header().Get("Retry-After") == "" || time.Since(t0) > time.Second {
+		t.Errorf("past the cap: %d after %s", r.Code, time.Since(t0))
+	}
+	waitWaiters(t, h, CoverageWaitersPerSlot)
+	close(sp.release)
+	first()
+	for i := 0; i < CoverageWaitersPerSlot; i++ {
+		if c := <-codes; c != 200 {
+			t.Errorf("waiter %d", c)
+		}
+	}
+	waitWaiters(t, h, 0)
+}
+
+// A cache hit answers with the headers a computed answer has.
+func TestCoverageCacheHitSendsTheHeadersOfAComputedAnswer(t *testing.T) {
+	h, _ := covSpied(t, covWorld(1, 2, 10), nil, func(o *Options) { o.CoverageCacheTTL = time.Minute })
+	a, b := covGet(h, bg, "/v1/coverage"), covGet(h, bg, "/v1/coverage")
+	if a.Header().Get("Content-Type") != "application/json" || b.Header().Get("Content-Type") != a.Header().Get("Content-Type") {
+		t.Errorf("Content-Type %q then %q", a.Header().Get("Content-Type"), b.Header().Get("Content-Type"))
+	}
+}
+
+// wholeStatement builds the statement the way it was built before slim reads: every record read whole.
+func wholeStatement(t *testing.T, s *Server, scope string, from, to, now time.Time) observe.Statement {
+	t.Helper()
+	aud := &Viewer{Role: RoleAuditor}
+	in := observe.Input{Scope: scope, Window: observe.Window{From: from, To: to}}
+	f, tt := evidence.ISO(from), evidence.ISO(to)
+	rd := func(kind, since, until string) []Record {
+		rs, _, err := s.collect(bg, EvidenceFilter{Scope: scope, Outcomes: OutcomesInclude, Tools: []string{kind}, Since: since, Until: until}, aud, MaxCoverageRecords)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rs
+	}
+	in.Observations, in.Assessments = rd(evidence.KindObservation, f, tt), rd(evidence.KindAssessment, f, "")
+	in.Resolutions, in.Verifications = rd(evidence.KindResolution, f, ""), rd(evidence.KindVerification, f, "")
+	in.Health, in.Gaps = rd(evidence.KindHealth, f, tt), rd(evidence.KindAuditGap, f, tt)
+	before, err := s.opt.Store.HealthBefore(bg, aud, scope, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.Health = append(before, in.Health...)
+	return observe.Build(in, now)
+}
+
+// On the memory store and, where CLEARANCE_TEST_DSN names a Postgres, on it: the slim read (the SQL `record - key`
+// path included) builds the statement the whole-record read builds, from records that carry state_change.
+func TestSlimCoverageStatementEqualsTheWholeRecordOne(t *testing.T) {
+	onBoth(t, func(t *testing.T, f *fakeObserved) {
+		start := time.Now().UTC().Truncate(time.Second)
+		f.post("observation.health", obsHealth("healthy"))
+		var last map[string]any
+		for i := 0; i < 5; i++ {
+			ev := obsEvent(fmt.Sprint("e-", i), "RunInstances", i != 3)
+			ev["state_change"] = map[string]any{"before": nil, "after": map[string]any{"InstanceType": "m5.large", "n": i}}
+			last = f.post("observation", ev)
+		}
+		f.post("assessment", map[string]any{"scope": obsScope, "about": map[string]any{"seq": last["seq"]},
+			"coverage": "out-of-band-detected", "tier": 3, "rule_set": map[string]any{"version": "1"},
+			"attribution": map[string]any{"signal": "no-grant"}})
+		f.post("observation.health", obsHealth("degraded", "digests-validating"))
+		now := start.Add(time.Minute)
+		h := f.harness(t, now)
+		from := f.firstTS()
+		// the slim read really drops the objects
+		rs, err := h.srv.opt.Store.Evidence(bg, EvidenceFilter{Scope: obsScope, Tools: []string{evidence.KindObservation}, Slim: true}, &Viewer{Role: RoleAuditor}, 10, nil)
+		if err != nil || len(rs) != 5 {
+			t.Fatalf("%d records, %v", len(rs), err)
+		}
+		for _, r := range rs {
+			if _, has := r["state_change"]; has {
+				t.Fatalf("a slim record kept state_change: %v", r)
+			}
+		}
+		whole, _ := h.srv.opt.Store.Evidence(bg, EvidenceFilter{Scope: obsScope, Tools: []string{evidence.KindObservation}}, &Viewer{Role: RoleAuditor}, 10, nil)
+		if _, has := whole[0]["state_change"]; !has {
+			t.Fatal("the whole record lost state_change")
+		}
+		got, err := h.srv.statement(bg, &Viewer{Role: RoleAuditor}, obsScope, from, now, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gj, _ := json.Marshal(got)
+		wj, _ := json.Marshal(wholeStatement(t, h.srv, obsScope, from, now, now))
+		if string(gj) != string(wj) {
+			t.Fatalf("slim %s\nwhole %s", gj, wj)
+		}
+	})
 }

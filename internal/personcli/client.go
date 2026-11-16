@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// Exit codes. coverage has its own meaning for 2 and 3 (degraded, blind or unavailable).
+// Exit codes. coverage has its own meaning for 2, 3 and 8 (degraded, blind, could not be read).
 const (
 	ExitOK           = 0
 	ExitError        = 1
@@ -22,6 +22,9 @@ const (
 	ExitForbidden    = 5 // 403
 	ExitNotFound     = 6 // 404
 	ExitUnavailable  = 7 // the api could not be reached, or answered 5xx
+	// ExitCoverageUnread is `coverage` only: the statement could not be read (the api busy or down, after retries), which is
+	// not the same as blind (3).
+	ExitCoverageUnread = 8
 )
 
 // Client calls clearance-api with the person's own bearer token.
@@ -41,6 +44,8 @@ type APIError struct {
 	// Rule, Hint and MaxAge are the core's refusal fields (a gate rule such as DG-AUTH-NOT-FRESH, what to do, and for
 	// that rule the longest sign-in age the action allows).
 	Rule, Hint, MaxAge string
+	// RetryAfter is the Retry-After header of the answer ("" when absent), as sent.
+	RetryAfter string
 	// From names the server that answered, for messages ("" is clearance-api).
 	From string
 }
@@ -138,7 +143,7 @@ func (c *Client) do(ctx context.Context, method, path string, q url.Values, body
 		if len(msg) > 300 {
 			msg = msg[:300]
 		}
-		return nil, &APIError{Status: resp.StatusCode, Message: msg, Rule: body.Rule, Hint: body.Hint, MaxAge: body.MaxAge, From: c.Name}
+		return nil, &APIError{Status: resp.StatusCode, Message: msg, Rule: body.Rule, Hint: body.Hint, MaxAge: body.MaxAge, From: c.Name, RetryAfter: resp.Header.Get("Retry-After")}
 	}
 	return resp, nil
 }

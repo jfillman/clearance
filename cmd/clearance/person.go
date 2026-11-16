@@ -76,7 +76,7 @@ func init() {
 	reg("attest get", "a change's attestation summary", (*personcli.Env).AttestGet)
 	reg("attest download", "save a change's attestation bundle (-o file)", (*personcli.Env).AttestDownload)
 	reg("exceptions list", "the exceptions (--scope --kind --since)", (*personcli.Env).ExceptionsList)
-	reg("coverage", "the coverage statement for a scope; exit 0 covered, 2 degraded, 3 blind or unavailable", (*personcli.Env).Coverage)
+	reg("coverage", "the coverage statement for a scope; exit 0 covered, 2 degraded, 3 blind, 8 could not be read", (*personcli.Env).Coverage)
 	reg("evidence", "query evidence records (--tool --app --coverage --since --limit)", (*personcli.Env).EvidenceList)
 	reg("watch", "follow the live event stream, filtered", (*personcli.Env).Watch)
 }

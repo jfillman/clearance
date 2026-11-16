@@ -42,6 +42,7 @@ import (
 //	CLEARANCE_API_POOL                  Postgres connections per replica (default 5)
 //	CLEARANCE_API_COVERAGE_CONCURRENCY  coverage computations in flight at once per replica, 1 to 20 (default 2); a read past
 //	                                    it is answered 503 with Retry-After
+//	CLEARANCE_API_COVERAGE_WAIT_SECONDS how long a coverage read waits for a slot before the 503, 0 to 10 (default 3; 0 refuses at once)
 //	CLEARANCE_API_COVERAGE_CACHE_SECONDS  reuse a coverage answer this many seconds, 0 to 300 (default 0: no cache); a
 //	                                    reused answer carries Age and its `to` is when it was computed
 //	CLEARANCE_API_ATTEST_KEY            the attestation signing key's public half (PEM) or the core's JWKS: verifies
@@ -72,6 +73,7 @@ type Config struct {
 	Pool                           int32
 	CoverageConcurrency            int
 	CoverageCacheTTL               time.Duration
+	CoverageWait                   time.Duration
 	Policy                         bundles.Config
 	Vocabulary                     *vocab.Vocabulary // nil: the vocabulary already in force (vocab.Get; tests)
 	GatewayURL, CoreURL            string
@@ -133,6 +135,11 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		cfg.CoverageConcurrency < 1 || cfg.CoverageConcurrency > 20 {
 		return cfg, errors.New("CLEARANCE_API_COVERAGE_CONCURRENCY is a number of computations, 1 to 20")
 	}
+	wait, err := strconv.Atoi(get("CLEARANCE_API_COVERAGE_WAIT_SECONDS", "3"))
+	if err != nil || wait < 0 || wait > 10 {
+		return cfg, errors.New("CLEARANCE_API_COVERAGE_WAIT_SECONDS is seconds, 0 to 10")
+	}
+	cfg.CoverageWait = time.Duration(wait) * time.Second
 	ttl, err := strconv.Atoi(get("CLEARANCE_API_COVERAGE_CACHE_SECONDS", "0"))
 	if err != nil || ttl < 0 || ttl > 300 {
 		return cfg, errors.New("CLEARANCE_API_COVERAGE_CACHE_SECONDS is seconds, 0 to 300")
@@ -298,7 +305,7 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 	gp := gate.DefaultPolicy().View()
 	srv, err := New(Options{Store: st, Auth: cfg.Auth, Access: access, Engine: eng, GatePolicy: &gp,
 		Definitions: defs, GatewayURL: cfg.GatewayURL, CoreURL: cfg.CoreURL, Log: log, Attest: cfg.Attest,
-		CoverageConcurrency: cfg.CoverageConcurrency, CoverageCacheTTL: cfg.CoverageCacheTTL})
+		CoverageConcurrency: cfg.CoverageConcurrency, CoverageCacheTTL: cfg.CoverageCacheTTL, CoverageWait: cfg.CoverageWait})
 	if err != nil {
 		return err
 	}
