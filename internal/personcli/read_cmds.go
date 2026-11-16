@@ -3,6 +3,7 @@ package personcli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -531,8 +532,9 @@ func (e *Env) EvidenceList(ctx context.Context, args []string) int {
 	}())
 }
 
-// Coverage is `clearance coverage [scope]`. Exit codes: 0 covered (every feed healthy), 2 degraded, 3 blind or
-// unavailable (the statement could not be read, or no scope has any coverage). 1, 4 and 5 are as everywhere.
+// Coverage is `clearance coverage [scope]`. Exit codes: 0 covered (every feed healthy), 2 degraded, 3 blind (or no scope
+// has any coverage), 8 the statement could not be read (the api busy, down or unreachable, after the retries below).
+// 4 and 5 are as everywhere.
 func (e *Env) Coverage(ctx context.Context, args []string) int {
 	var from, to string
 	s, pos, ee := e.begin("coverage", "[scope] [--from T] [--to T]", args, func(fs *flag.FlagSet) {
@@ -558,7 +560,7 @@ func (e *Env) Coverage(ctx context.Context, args []string) int {
 		setIf(q, "from", from)
 		setIf(q, "to", to)
 		var raw json.RawMessage
-		if err := c.Get(ctx, "/v1/coverage", q, &raw); err != nil {
+		if err := getRetrying(ctx, c, "/v1/coverage", q, &raw); err != nil {
 			return err
 		}
 		var m map[string]any
@@ -597,7 +599,7 @@ func (e *Env) Coverage(ctx context.Context, args []string) int {
 	if err != nil {
 		ee := mapError(err)
 		if ee.code == ExitUnavailable || ee.code == ExitNotFound || ee.code == ExitError {
-			code = 3
+			code = ExitCoverageUnread // could not be read: not blind (3), which only a statement that was read can say
 		} else {
 			code = ee.code
 		}
@@ -622,4 +624,50 @@ func coverageCode(sts []map[string]any) int {
 		}
 	}
 	return code
+}
+
+// The coverage read retries an api that is busy (503, or 429): at most coverageTries requests, each wait the answer's
+// Retry-After (seconds; coverageDefaultWait when absent or unreadable) capped at coverageMaxWait, and none that would
+// end after coverageBudget in all. coverageSleep is replaced by tests.
+const (
+	coverageTries       = 4
+	coverageDefaultWait = 2 * time.Second
+	coverageMaxWait     = 5 * time.Second
+	coverageBudget      = 20 * time.Second
+)
+
+var coverageSleep = func(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func getRetrying(ctx context.Context, c *Client, path string, q url.Values, out any) error {
+	start := time.Now()
+	var err error
+	for try := 1; ; try++ {
+		if err = c.Get(ctx, path, q, out); err == nil {
+			return nil
+		}
+		var ae *APIError
+		if !errors.As(err, &ae) || (ae.Status != 503 && ae.Status != 429) || try >= coverageTries {
+			return err
+		}
+		wait := coverageDefaultWait
+		if n, perr := strconv.Atoi(strings.TrimSpace(ae.RetryAfter)); perr == nil && n >= 0 {
+			wait = time.Duration(n) * time.Second
+		}
+		wait = min(wait, coverageMaxWait)
+		if time.Since(start)+wait > coverageBudget {
+			return err
+		}
+		if serr := coverageSleep(ctx, wait); serr != nil {
+			return err
+		}
+	}
 }

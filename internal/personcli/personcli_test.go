@@ -810,15 +810,18 @@ func TestCoverageExitCodes(t *testing.T) {
 			t.Errorf("%s: no output", c.name)
 		}
 	}
-	// unavailable: 503, unreachable and a missing route are 3; a refused sign-in is still 4
-	for status_, want := range map[int]int{503: 3, 404: 3, 401: ExitUnauthorized, 403: ExitForbidden} {
+	// could not be read: 503, unreachable and a missing route are 8, never 3 (blind); a refused sign-in is still 4
+	sleeps := 0
+	defer func(f func(context.Context, time.Duration) error) { coverageSleep = f }(coverageSleep)
+	coverageSleep = func(context.Context, time.Duration) error { sleeps++; return nil }
+	for status_, want := range map[int]int{503: ExitCoverageUnread, 404: ExitCoverageUnread, 401: ExitUnauthorized, 403: ExitForbidden} {
 		_, api := serve(t, map[string]func(http.ResponseWriter, *http.Request){"/v1/coverage": status(status_, "x")})
 		h := newHarness(t, api)
 		if code, _, _ := h.run((*Env).Coverage, "scope"); code != want {
 			t.Errorf("HTTP %d: exit %d, want %d", status_, code, want)
 		}
 	}
-	if code, _, _ := newHarness(t, "http://127.0.0.1:1").run((*Env).Coverage); code != 3 {
+	if code, _, _ := newHarness(t, "http://127.0.0.1:1").run((*Env).Coverage); code != ExitCoverageUnread {
 		t.Errorf("unreachable: %d", code)
 	}
 	f, api := serve(t, map[string]func(http.ResponseWriter, *http.Request){"/v1/coverage": ok(st("s", "healthy", true))})
@@ -943,5 +946,65 @@ func TestUsageAndHelp(t *testing.T) {
 	h.env.Prog = "clr"
 	if _, _, errw := h.run((*Env).ChangesShow); !strings.Contains(errw, "usage: clr changes show") {
 		t.Errorf("clr names itself: %q", errw)
+	}
+}
+
+func TestCoverageRetriesABusyAPI(t *testing.T) {
+	var waits []time.Duration
+	defer func(f func(context.Context, time.Duration) error) { coverageSleep = f }(coverageSleep)
+	coverageSleep = func(_ context.Context, d time.Duration) error { waits = append(waits, d); return nil }
+	healthy := map[string]any{"scope": "s", "state": "healthy", "clean": true, "text": "ok"}
+	busy := func(n int, code int, after string) func(http.ResponseWriter, *http.Request) {
+		calls := 0
+		return func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			if calls <= n {
+				if after != "" {
+					w.Header().Set("Retry-After", after)
+				}
+				w.WriteHeader(code)
+				_, _ = w.Write([]byte(`{"error":"coverage reads are at their limit; retry shortly"}`))
+				return
+			}
+			ok(healthy)(w, r)
+		}
+	}
+	for _, c := range []struct {
+		name  string
+		h     func(http.ResponseWriter, *http.Request)
+		code  int
+		waits []time.Duration
+	}{
+		{"503 then served", busy(2, 503, "1"), 0, []time.Duration{time.Second, time.Second}},
+		{"429 then served, no header", busy(1, 429, ""), 0, []time.Duration{coverageDefaultWait}},
+		{"a long Retry-After is capped", busy(1, 503, "60"), 0, []time.Duration{coverageMaxWait}},
+		{"always busy: tries run out, 8 not 3", busy(100, 503, "5"), ExitCoverageUnread, []time.Duration{5 * time.Second, 5 * time.Second, 5 * time.Second}},
+	} {
+		waits = nil
+		_, api := serve(t, map[string]func(http.ResponseWriter, *http.Request){"/v1/coverage": c.h})
+		h := newHarness(t, api)
+		if code, _, errw := h.run((*Env).Coverage, "s", "-o", "table"); code != c.code {
+			t.Errorf("%s: exit %d, want %d (%s)", c.name, code, c.code, errw)
+		}
+		if len(waits) != len(c.waits) {
+			t.Errorf("%s: waits %v, want %v", c.name, waits, c.waits)
+			continue
+		}
+		for i := range waits {
+			if waits[i] != c.waits[i] {
+				t.Errorf("%s: waits %v, want %v", c.name, waits, c.waits)
+			}
+		}
+	}
+	// a 400 or a 403 is not retried
+	waits = nil
+	_, api := serve(t, map[string]func(http.ResponseWriter, *http.Request){"/v1/coverage": status(403, "x")})
+	if code, _, _ := newHarness(t, api).run((*Env).Coverage, "s"); code != ExitForbidden || len(waits) != 0 {
+		t.Errorf("403: exit %d, waits %v", code, waits)
+	}
+	// blind stays 3
+	_, api = serve(t, map[string]func(http.ResponseWriter, *http.Request){"/v1/coverage": ok(map[string]any{"scope": "s", "state": "blind", "clean": false, "text": "x"})})
+	if code, _, _ := newHarness(t, api).run((*Env).Coverage, "s"); code != 3 {
+		t.Errorf("blind: %d", code)
 	}
 }

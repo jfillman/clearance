@@ -139,8 +139,11 @@ release that carries `awaiting=me` and `/v1/whoami`.
 | 7 | clearance-api (or the core, for a write) unreachable, rate limited, or 5xx |
 
 **`coverage`** is for scripts and on-call, and uses its own codes for the statement: **0** covered (every feed
-healthy), **2** degraded, **3** blind, or unavailable (the api could not be read, or no scope has any coverage at all).
-With no scope it takes the worst of all scopes. A sign-in or permission failure is still 4 or 5. `clean` (nothing seen
+healthy), **2** degraded, **3** blind (or no scope has any coverage at all), **8** the statement could not be read (the api
+busy, down or unreachable, or an older api without the route): 8 says nothing about coverage, so automation should retry or
+page on it, not treat it as blind. A busy api (503 or 429) is retried first, using its `Retry-After` (at most 4 tries, each
+wait capped at 5 s, under 20 s in all). With no scope it takes the worst of all scopes. A sign-in or permission failure is
+still 4 or 5. (Before this change an unreadable statement also exited 3.) `clean` (nothing seen
 uncleared) is shown but does not change the code: coverage is about whether Clearance could see.
 
 ## Examples

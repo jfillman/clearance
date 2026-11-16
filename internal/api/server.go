@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/jfillman/clearance/internal/authn"
@@ -67,6 +68,8 @@ type Options struct {
 	// CoverageConcurrency bounds the coverage computations in flight at once; a read past it is answered 503 with
 	// Retry-After (0: DefaultCoverageConcurrency).
 	CoverageConcurrency int
+	// CoverageWait is how long a coverage read waits for a slot before it is refused (0: refused at once).
+	CoverageWait time.Duration
 	// CoverageCacheTTL reuses a coverage answer for that long (0: no cache). A reused answer's `to` is the time it
 	// was computed for, and the response carries Age.
 	CoverageCacheTTL time.Duration
@@ -77,14 +80,15 @@ type Options struct {
 
 // Server is the read API. Build it with New.
 type Server struct {
-	opt     Options
-	log     *slog.Logger
-	handler http.Handler
-	hub     *hub
-	verify  *verifier     // nil: no attestation trust configured
-	mapSem  chan struct{} // MaxConcurrentMapReads: a Map read holds one reader connection per statement
-	covSem  chan struct{} // Options.CoverageConcurrency: coverage computations in flight
-	covC    *covCache
+	opt        Options
+	log        *slog.Logger
+	handler    http.Handler
+	hub        *hub
+	verify     *verifier     // nil: no attestation trust configured
+	mapSem     chan struct{} // MaxConcurrentMapReads: a Map read holds one reader connection per statement
+	covSem     chan struct{} // Options.CoverageConcurrency: coverage computations in flight
+	covC       *covCache
+	covWaiters atomic.Int64 // coverage reads waiting for a slot
 }
 
 // New builds the server.
