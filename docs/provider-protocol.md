@@ -153,7 +153,7 @@ PUT /v1/targets/hangar-prod
               "scope": "hangar-prod",
               "gates": [{"type": "glidepath", "instance": "gate-api-cicd", "mode": "enforce"},
                         {"type": "g-argo", "instance": "argo-gate", "mode": "flag"}],
-              "observers": [{"provider": "observe-k8s", "source": "observe-k8s"}]}]}
+              "observers": [{"provider": "observe-k8s", "source": "k8s-audit-webhook"}]}]}
 ```
 
 `kind` is `k8s-namespace`, `k8s-cluster`, `aws-account`, `github-environment` or `other`; `group` is the cluster or account;

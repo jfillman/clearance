@@ -9,6 +9,12 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Fixed
+
+- The Map: a blind observer whose scope does have health records under other source names now says so
+  (`reporting_sources`, and the blind-observer item's detail). A Kubernetes observer declared with source `observe-k8s`
+  instead of the records' `k8s-audit-webhook` read as blind forever; the documented examples now use the real name.
+
 ## [0.50.0] - 2026-11-15
 
 ### Added
