@@ -175,6 +175,16 @@ func (m *memStore) Evidence(_ context.Context, f EvidenceFilter, v *Viewer, limi
 		r := m.recs[i]
 		seq, _ := seqOf(r)
 		if (after == nil || seq < *after) && m.sees(r, v, owners) && m.matches(r, f) {
+			if f.Slim {
+				c := make(Record, len(r))
+				for k, x := range r {
+					c[k] = x
+				}
+				for _, k := range SlimFields {
+					delete(c, k)
+				}
+				r = c
+			}
 			out = append(out, r)
 		}
 	}

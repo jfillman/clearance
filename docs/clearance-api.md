@@ -109,6 +109,13 @@ key in a non-Secret object is not recognised.
 
 **Names only:** `GET /v1/coverage?names=only` (no `scope`; `names` with a `scope`, or any value but `only`, is 400) answers `{from, to, scopes: [{scope: "<name>"}, ...], truncated, names_only: true}` straight from the one `Store.Scopes` read: no statement is built (no evidence or health read per scope), so it stays cheap however many scopes there are. It lists up to 1000 names (then `truncated`), not the 100 a full answer's statements are capped at. Use it to populate a scope picker. A Clearance older than this change answers `names=only` with 400 (an unknown parameter), the signal to fall back to the full scope-less call.
 
+**What bounds a coverage read.** Coverage is the heaviest read (a statement is six record reads and a health read per scope; the scope-less form is one statement per scope), so it is bounded on every side:
+
+- A statement reads each record without its `state_change` and `correlation` (the objects a provider reports, up to 128 KiB an observation, which `observe.Build` never reads): the database drops them (`EvidenceFilter.Slim`), so they are never sent or parsed. The statement is identical to one built from whole records (a test builds both). A statement still holds at most 10000 records of each kind, then says `truncated`.
+- The request's context reaches every query and is checked between pages, between kinds and between scopes: a client that goes away, or the 25 s handler deadline, ends the work instead of finishing it for nobody.
+- At most `CLEARANCE_API_COVERAGE_CONCURRENCY` (default 2) coverage computations run at once per replica. A read past the bound is not queued: it is answered at once with `503`, `Retry-After: 5` and `{"error": "coverage reads are at their limit; retry shortly"}`. A caller that polls should back off on it.
+- Optional cache, off by default: with `CLEARANCE_API_COVERAGE_CACHE_SECONDS` above 0 (at most 300), an answer is reused for that long. The key is the route's `scope`, `names`, `from` and `to` as sent, so every read with no `from` and no `to` shares one entry; it does not include the caller, because coverage is read as an auditor whoever asks and carries no per-person redaction. Staleness: a reused answer is up to that many seconds old, and says so in the `Age` header (seconds since it was computed) and `Cache-Control: private, max-age=<seconds left>`; its `to` is the moment it was computed for, so the body shows the window end it speaks for. A computed answer sends `Age: 0`. Only successful answers are cached, and a refusal (400, 503) never is. With the cache off no `Age` or `Cache-Control` is sent. A `from` or `to` that changes on every call (a browser sending `now`-minus-a-window) never hits the cache.
+
 `GET /v1/coverage?scope=&from=&to=` (RFC 3339; `to` defaults to now and is never in the future, `from` to 24 hours
 before it; at most 92 days) answers:
 
@@ -478,6 +485,8 @@ A change's reads carry `source` (`{authors, mergers, promoter}`) when the verifi
 | `CLEARANCE_AGENTS_DIR` | none | the bundled definitions; cluster pins come from `clearance_definitions` |
 | `CLEARANCE_API_DEFINITIONS_INTERVAL` | 30 | seconds between re-reads of the stored definitions |
 | `CLEARANCE_API_POOL` | 5 | Postgres connections per replica (1 to 50) |
+| `CLEARANCE_API_COVERAGE_CONCURRENCY` | 2 | coverage computations in flight at once per replica (1 to 20); a read past it is answered 503 with `Retry-After` ([coverage bounds](#observations-and-the-coverage-statement-o-1)) |
+| `CLEARANCE_API_COVERAGE_CACHE_SECONDS` | 0 (off) | reuse a coverage answer this long (0 to 300); a reused answer carries `Age` |
 | `CLEARANCE_BUNDLES`, `CLEARANCE_BUNDLE_SOURCES`, `CLEARANCE_BUNDLE_SOURCE_WAIT`, `CLEARANCE_ENV_*` | none | the policy bundles the core runs ([core.md](core.md#policy-bundles)), for `/v1/policy` and the explainer; loaded as the core loads them: a source that does not answer leaves the bundle degraded (named in `/readyz` `degraded`, still 200) until it answers |
 | `CLEARANCE_ON_BEHALF_OF_HEADER`, `CLEARANCE_V0_PROVIDER` and the rest of the vocabulary | core.md | the header a delegate names a person in, the provider v0-draft rows are projected with ([core.md](core.md#configuration)) |
 | `CLEARANCE_API_ATTEST_KEY` | none | the attestation signing key's **public** half (PEM) or the core's JWKS: verifies static-key attestations |

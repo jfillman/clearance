@@ -11,6 +11,14 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ### Fixed
 
+- **`GET /v1/coverage` no longer exhausts the API's memory.** A statement read up to 10000 whole records of each kind per
+  scope, each with its provider's `state_change` (up to 128 KiB) and `correlation`, which the statement never reads, and
+  nothing bounded how many such reads ran at once, so a page polling every scope (and a 256Mi limit) was OOM-killed
+  every few minutes. Now the records are read without those objects (a statement reads about 30x fewer bytes in the
+  test; the statement is identical), the request's context ends the work between pages, kinds and scopes, at most
+  `CLEARANCE_API_COVERAGE_CONCURRENCY` (default 2) computations run at once and a read past that is answered 503 with
+  `Retry-After` instead of queuing. New, off by default: `CLEARANCE_API_COVERAGE_CACHE_SECONDS` reuses an answer for up
+  to 300 s and says its age in `Age`; its `to` is when it was computed ([docs/clearance-api.md](docs/clearance-api.md#observations-and-the-coverage-statement-o-1)).
 - The Map: a blind observer whose scope does have health records under other source names now says so
   (`reporting_sources`, and the blind-observer item's detail). A Kubernetes observer declared with source `observe-k8s`
   instead of the records' `k8s-audit-webhook` read as blind forever; the documented examples now use the real name.

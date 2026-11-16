@@ -1,10 +1,13 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -114,6 +117,9 @@ func (s *Server) observationPage(w http.ResponseWriter, r *http.Request, v *View
 func (s *Server) collect(ctx context.Context, f EvidenceFilter, v *Viewer, max int) (out []Record, truncated bool, err error) {
 	var after *int64
 	for len(out) < max {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
 		page, err := s.opt.Store.Evidence(ctx, f, readerOf(v), MaxLimit, after)
 		if err != nil {
 			return nil, false, err
@@ -213,19 +219,47 @@ func (s *Server) getCoverage(w http.ResponseWriter, r *http.Request, v *Viewer) 
 		}
 	}
 	ctx := r.Context()
-	if scope != "" {
-		st, err := s.statement(ctx, v, scope, from, to, now)
-		if err != nil {
-			s.readFailed(w, r, err)
-			return
-		}
-		writeJSON(w, 200, st)
+	key := covKey{scope: scope, names: q["names"], from: q["from"], to: q["to"]}
+	if e, ok := s.covC.get(key, now); ok {
+		age := now.Sub(e.at)
+		w.Header().Set("Age", strconv.Itoa(int(age/time.Second)))
+		w.Header().Set("Cache-Control", "private, max-age="+strconv.Itoa(int((s.covC.ttl-age)/time.Second)))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write(e.body)
 		return
 	}
-	scopes, cut, err := s.scopesIn(ctx, v, from, to)
+	if !s.acquireCoverage(w, r) {
+		return
+	}
+	defer s.releaseCoverage()
+	out, err := s.coverageAnswer(ctx, v, q, scope, from, to, now)
 	if err != nil {
 		s.readFailed(w, r, err)
 		return
+	}
+	if s.covC.ttl > 0 {
+		var buf bytes.Buffer
+		enc := json.NewEncoder(&buf) // as httpjson.Write encodes
+		enc.SetEscapeHTML(false)
+		if enc.Encode(out) == nil {
+			s.covC.put(key, buf.Bytes(), now)
+			w.Header().Set("Age", "0")
+			w.Header().Set("Cache-Control", "private, max-age="+strconv.Itoa(int(s.covC.ttl/time.Second)))
+		}
+	}
+	writeJSON(w, 200, out)
+}
+
+// coverageAnswer computes the body of GET /v1/coverage: one scope's statement, the scope names, or every scope's
+// statement.
+func (s *Server) coverageAnswer(ctx context.Context, v *Viewer, q map[string]string, scope string, from, to, now time.Time) (any, error) {
+	if scope != "" {
+		return s.statement(ctx, v, scope, from, to, now)
+	}
+	scopes, cut, err := s.scopesIn(ctx, v, from, to)
+	if err != nil {
+		return nil, err
 	}
 	if q["names"] == "only" { // the scope list straight from the one distinct-names read: no statement is built
 		if len(scopes) > MaxScopeNames { // scopesIn read one past the cap only to learn it was cut
@@ -235,22 +269,23 @@ func (s *Server) getCoverage(w http.ResponseWriter, r *http.Request, v *Viewer) 
 		for _, sc := range scopes {
 			names.Scopes = append(names.Scopes, ScopeName{Scope: sc})
 		}
-		writeJSON(w, 200, names)
-		return
+		return names, nil
 	}
 	out := ScopeStatements{From: evidence.ISO(from), To: evidence.ISO(to), Scopes: []observe.Statement{}, Truncated: cut}
 	if len(scopes) > MaxCoverageScopes {
 		scopes, out.Truncated = scopes[:MaxCoverageScopes], true
 	}
 	for _, sc := range scopes {
+		if err := ctx.Err(); err != nil { // the client left or the deadline passed: no more scopes
+			return nil, err
+		}
 		st, err := s.statement(ctx, v, sc, from, to, now)
 		if err != nil {
-			s.readFailed(w, r, err)
-			return
+			return nil, err
 		}
 		out.Scopes = append(out.Scopes, st)
 	}
-	writeJSON(w, 200, out)
+	return out, nil
 }
 
 // MaxScopeNames caps the scope names one unscoped coverage answer reads; past it the answer says truncated.
@@ -286,6 +321,7 @@ func (s *Server) statement(ctx context.Context, v *Viewer, scope string, from, t
 			return nil
 		}
 		f := base
+		f.Slim = true
 		f.Tools, f.Since, f.Until = tools, since, until
 		var rs []Record
 		var cut bool

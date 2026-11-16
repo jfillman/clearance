@@ -38,7 +38,14 @@ type EvidenceFilter struct {
 	// source.name is it, and Tools those whose tool is one of them.
 	Scope, Source string
 	Tools         []string
+	// Slim leaves out of each record the objects a coverage statement never reads (SlimFields: a provider's
+	// state_change, up to 128 KiB an observation, and correlation), in the database, so they are neither sent nor
+	// parsed. Only coverage reads set it: every other read answers the record whole.
+	Slim bool
 }
+
+// SlimFields are the top-level keys of an observation record that observe.Build does not read.
+var SlimFields = []string{"state_change", "correlation"}
 
 // ChangeFilter is the deployment gate's list and counts filters; "" and nil are unset.
 type ChangeFilter struct {
