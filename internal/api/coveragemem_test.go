@@ -50,6 +50,8 @@ func TestCoverageMemoryHarness(t *testing.T) {
 	fmt.Sscan(os.Getenv("CLEARANCE_MEM_CANCEL_PCT"), &cancelPct)
 	total := 3000
 	fmt.Sscan(os.Getenv("CLEARANCE_MEM_REQUESTS"), &total)
+	total = max(total, 1)
+	every := max(total/4, 1)
 	debug.SetMemoryLimit(400 << 20)
 	h, _ := covSpied(t, covMemWorld(3, 450, 3000, 1500, 3000), nil, func(o *Options) { o.CoverageConcurrency = 2; o.CoverageWait = 3 * time.Second })
 	paths := []string{"/v1/coverage?scope=aws:000", "/v1/coverage?scope=aws:001", "/v1/coverage?scope=aws:002", "/v1/coverage", "/v1/coverage?names=only"}
@@ -89,7 +91,7 @@ func TestCoverageMemoryHarness(t *testing.T) {
 				codes[rec.Code]++
 				d := done
 				mu.Unlock()
-				if d%(total/4) == 0 {
+				if d%every == 0 {
 					mu.Lock()
 					report("mid")
 					mu.Unlock()
