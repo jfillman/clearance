@@ -9,8 +9,17 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.51.0] - 2026-11-16
+
 ### Changed
 
+- **Upgrading from 0.50.0: read this before rolling out.**
+  - **`clearance coverage` exit codes.** Exit **3 now means blind only**. A statement that cannot be read (api busy after the retries, down, unreachable, or an older api without the route) exits **8**. A script that treated 3 as
+    "blind or unavailable" must handle 8 too.
+  - **Three new api settings, with defaults that apply with no change to your values** (chart `api.coverageConcurrency`, `api.coverageWaitSeconds`, `api.coverageCacheSeconds`): `CLEARANCE_API_COVERAGE_CONCURRENCY` = 2 (coverage computations at once), `CLEARANCE_API_COVERAGE_WAIT_SECONDS` = 3
+    (0 to 10; how long a read past the bound waits for a slot before the 503 + `Retry-After`; chart `api.coverageWaitSeconds`), `CLEARANCE_API_COVERAGE_CACHE_SECONDS` = 0 (off; up to 300).
+  - **A busy coverage read is now a 503 with `Retry-After`** (it was unbounded work). Callers of `GET /v1/coverage` that poll many scopes at once must tolerate it; the CLI does.
+  - No schema change, no new table. Rolling back to 0.50.0 is safe: the settings are ignored.
 - **A coverage read waits briefly for a slot before it is refused.** A page that asks for several scopes at once
   was refused for all but the first few. A read past `CLEARANCE_API_COVERAGE_CONCURRENCY` now waits up to
   `CLEARANCE_API_COVERAGE_WAIT_SECONDS` (default 3, 0 to 10; 0 refuses at once; chart `api.coverageWaitSeconds`) and only
@@ -1679,7 +1688,8 @@ What the Autopilot gateway needs of the core before the hangar-dev cutover (R-3e
   scope, narrow-only limits, CEL policy, sessions, the hash-chained audit log and the gateway; the Hangar pack's
   `glidepath.*` and `airframe.*` tools over glidepath-api and a GET-only Kubernetes adapter.
 
-[Unreleased]: https://github.com/jfillman/clearance/compare/v0.50.0...HEAD
+[Unreleased]: https://github.com/jfillman/clearance/compare/v0.51.0...HEAD
+[0.51.0]: https://github.com/jfillman/clearance/compare/v0.50.0...v0.51.0
 [0.50.0]: https://github.com/jfillman/clearance/compare/v0.49.0...v0.50.0
 [0.49.0]: https://github.com/jfillman/clearance/compare/v0.48.0...v0.49.0
 [0.48.0]: https://github.com/jfillman/clearance/compare/v0.47.1...v0.48.0
