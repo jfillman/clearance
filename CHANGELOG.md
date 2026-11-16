@@ -9,6 +9,14 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Added
+
+- **See the API's memory.** Two opt-in listeners, off by default and never on the service port:
+  `CLEARANCE_API_METRICS_LISTEN` serves `/metrics` (Go runtime memory, goroutines, GC, the coverage gauges; numbers
+  only), and `CLEARANCE_API_PPROF_LISTEN` serves `net/http/pprof` on a loopback address only (any other address stops
+  the api at start). Chart `api.metricsListen`, `api.pprofListen`. How to read a heap profile with `kubectl
+  port-forward` is in docs/clearance-api.md. The api had no metrics endpoint before, so there was nothing to scrape.
+
 ## [0.51.0] - 2026-11-16
 
 ### Changed

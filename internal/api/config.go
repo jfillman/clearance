@@ -42,6 +42,8 @@ import (
 //	CLEARANCE_API_POOL                  Postgres connections per replica (default 5)
 //	CLEARANCE_API_COVERAGE_CONCURRENCY  coverage computations in flight at once per replica, 1 to 20 (default 2); a read past
 //	                                    it is answered 503 with Retry-After
+//	CLEARANCE_API_METRICS_LISTEN        host:port for /metrics (Go runtime memory and the coverage gauges); unset: none (debug.go)
+//	CLEARANCE_API_PPROF_LISTEN          a loopback host:port for net/http/pprof; unset: none; a non-loopback address is refused
 //	CLEARANCE_API_COVERAGE_WAIT_SECONDS how long a coverage read waits for a slot before the 503, 0 to 10 (default 3; 0 refuses at once)
 //	CLEARANCE_API_COVERAGE_CACHE_SECONDS  reuse a coverage answer this many seconds, 0 to 300 (default 0: no cache); a
 //	                                    reused answer carries Age and its `to` is when it was computed
@@ -74,6 +76,7 @@ type Config struct {
 	CoverageConcurrency            int
 	CoverageCacheTTL               time.Duration
 	CoverageWait                   time.Duration
+	MetricsListen, PprofListen     string
 	Policy                         bundles.Config
 	Vocabulary                     *vocab.Vocabulary // nil: the vocabulary already in force (vocab.Get; tests)
 	GatewayURL, CoreURL            string
@@ -134,6 +137,12 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	if cfg.CoverageConcurrency, err = strconv.Atoi(get("CLEARANCE_API_COVERAGE_CONCURRENCY", strconv.Itoa(DefaultCoverageConcurrency))); err != nil ||
 		cfg.CoverageConcurrency < 1 || cfg.CoverageConcurrency > 20 {
 		return cfg, errors.New("CLEARANCE_API_COVERAGE_CONCURRENCY is a number of computations, 1 to 20")
+	}
+	cfg.MetricsListen, cfg.PprofListen = get("CLEARANCE_API_METRICS_LISTEN", ""), get("CLEARANCE_API_PPROF_LISTEN", "")
+	if cfg.PprofListen != "" {
+		if err := LoopbackOnly(cfg.PprofListen); err != nil {
+			return cfg, fmt.Errorf("CLEARANCE_API_PPROF_LISTEN: %w", err)
+		}
 	}
 	wait, err := strconv.Atoi(get("CLEARANCE_API_COVERAGE_WAIT_SECONDS", "3"))
 	if err != nil || wait < 0 || wait > 10 {
@@ -312,6 +321,29 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		return fmt.Errorf("api: listen %s: %w", cfg.Listen, err)
+	}
+	for _, side := range []struct {
+		name string
+		srv  func() (*http.Server, error)
+		addr string
+	}{{"metrics", func() (*http.Server, error) { return srv.MetricsServer(cfg.MetricsListen), nil }, cfg.MetricsListen},
+		{"pprof", func() (*http.Server, error) { return PprofServer(cfg.PprofListen) }, cfg.PprofListen}} {
+		if side.addr == "" {
+			continue
+		}
+		ss, err := side.srv()
+		if err != nil {
+			ln.Close()
+			return fmt.Errorf("api: %s listener: %w", side.name, err)
+		}
+		sl, err := net.Listen("tcp", side.addr)
+		if err != nil {
+			ln.Close()
+			return fmt.Errorf("api: %s listener %s: %w", side.name, side.addr, err)
+		}
+		log.Info("clearance api: opt-in listener", "kind", side.name, "addr", sl.Addr().String())
+		go func() { _ = ss.Serve(sl) }()
+		defer ss.Close()
 	}
 	hs := srv.HTTPServer(cfg.Listen)
 	bg, stop := context.WithCancel(context.Background())

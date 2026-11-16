@@ -107,6 +107,10 @@ spec:
               value: {{ .Values.api.pool | quote }}
             - name: CLEARANCE_API_COVERAGE_CONCURRENCY
               value: {{ .Values.api.coverageConcurrency | quote }}
+            - name: CLEARANCE_API_METRICS_LISTEN
+              value: {{ .Values.api.metricsListen | quote }}
+            - name: CLEARANCE_API_PPROF_LISTEN
+              value: {{ .Values.api.pprofListen | quote }}
             - name: CLEARANCE_API_COVERAGE_WAIT_SECONDS
               value: {{ .Values.api.coverageWaitSeconds | quote }}
             - name: CLEARANCE_API_COVERAGE_CACHE_SECONDS

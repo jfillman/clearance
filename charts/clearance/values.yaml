@@ -386,6 +386,12 @@ api:
   # CLEARANCE_API_COVERAGE_CONCURRENCY: coverage computations in flight at once per replica (1 to 20); a read past it
   # is answered 503 with Retry-After.
   coverageConcurrency: 2
+  # CLEARANCE_API_METRICS_LISTEN: host:port for /metrics (Go runtime memory, goroutines, coverage gauges); "" is off.
+  # Unauthenticated numbers only: expose it to the scrape and nothing else.
+  metricsListen: ""
+  # CLEARANCE_API_PPROF_LISTEN: a loopback host:port (127.0.0.1:6060) for net/http/pprof; "" is off. Read it with
+  # `kubectl port-forward`; a non-loopback address stops the api at start.
+  pprofListen: ""
   # CLEARANCE_API_COVERAGE_WAIT_SECONDS: how long a coverage read past that limit waits for a slot before the 503 (0 to 10;
   # 0 refuses at once). At most 4 reads per slot wait; the rest are refused at once.
   coverageWaitSeconds: 3
