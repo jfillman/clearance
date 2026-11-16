@@ -49,6 +49,9 @@ spec:
           args: ["api"]
           ports:
             - {name: http, containerPort: 8080, protocol: TCP}
+            {{- with .Values.api.metricsListen }}
+            - {name: metrics, containerPort: {{ regexFind "[0-9]+$" . | int }}, protocol: TCP}
+            {{- end }}
           env:
             - name: CLEARANCE_API_DSN
               valueFrom:

@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/http/pprof"
+	"os"
 	"runtime"
+	"runtime/pprof"
+	"runtime/trace"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -15,23 +18,30 @@ import (
 //	CLEARANCE_API_METRICS_LISTEN  /metrics in the Prometheus text format: the Go runtime's memory and goroutine
 //	                              numbers and the coverage gauges. Numbers only; no memory contents, no request data.
 //	                              It is unauthenticated: bind it to the pod network only where the scrape needs it.
-//	CLEARANCE_API_PPROF_LISTEN    net/http/pprof (heap, goroutine, allocs, CPU profiles). A profile shows what the
-//	                              process holds, so it must be a loopback address (127.0.0.1:PORT, [::1]:PORT or
-//	                              localhost:PORT), reached with `kubectl port-forward`; anything else is refused at start.
+//	CLEARANCE_API_PPROF_LISTEN    the pprof profiles (heap, goroutine, allocs, CPU, trace). A profile shows what the
+//	                              process holds, so the address must be a loopback IP literal (127.0.0.1:PORT or
+//	                              [::1]:PORT), reached with `kubectl port-forward`; anything else is refused at start.
+//
+// The pprof handlers are built here from runtime/pprof, not by importing net/http/pprof, whose init registers them on
+// http.DefaultServeMux for every binary that links this package (a later ListenAndServe(addr, nil) would serve them).
 
-// LoopbackOnly says whether addr (host:port) names a loopback host: an IP that is loopback, or the name localhost.
+// LoopbackOnly says whether addr (host:port) is a loopback IP literal: 127.0.0.0/8 or ::1. The name localhost is
+// refused (it depends on the pod's /etc/hosts), and so is an IPv4-mapped IPv6 literal ([::ffff:127.0.0.1]): say 127.0.0.1.
 func LoopbackOnly(addr string) error {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil || port == "" {
 		return fmt.Errorf("%q is not host:port", addr)
 	}
-	if host == "localhost" {
-		return nil
+	ip := net.ParseIP(host)
+	switch {
+	case host == "localhost":
+		return fmt.Errorf("%q: use 127.0.0.1 (the name localhost depends on the pod's /etc/hosts)", addr)
+	case ip == nil || !ip.IsLoopback():
+		return fmt.Errorf("%q is not a loopback IP literal (127.0.0.1:PORT or [::1]:PORT)", addr)
+	case strings.Contains(host, ":") && ip.To4() != nil:
+		return fmt.Errorf("%q is an IPv4-mapped address: use 127.0.0.1", addr)
 	}
-	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
-		return nil
-	}
-	return fmt.Errorf("%q is not a loopback address (127.0.0.1:PORT, [::1]:PORT or localhost:PORT)", addr)
+	return nil
 }
 
 // MetricsHandler writes the runtime and coverage numbers as Prometheus text. The names are the ones the Go client's
@@ -77,18 +87,83 @@ func (s *Server) MetricsServer(addr string) *http.Server {
 		WriteTimeout: WriteTimeout, IdleTimeout: IdleTimeout, MaxHeaderBytes: MaxHeaderBytes}
 }
 
-// PprofServer serves net/http/pprof on its own mux at /debug/pprof/, on a loopback addr only (LoopbackOnly). A profile
-// of up to a minute is allowed (CPU: ?seconds=).
+// PprofServer serves the pprof profiles on its own mux at /debug/pprof/, on a loopback addr only (LoopbackOnly). A
+// profile of up to a minute is allowed (CPU and trace: ?seconds=).
 func PprofServer(addr string) (*http.Server, error) {
 	if err := LoopbackOnly(addr); err != nil {
 		return nil, err
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/debug/pprof/", pprof.Index)
-	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	mux.HandleFunc("/debug/pprof/cmdline", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte(strings.Join(osArgs(), "\x00")))
+	})
+	mux.HandleFunc("/debug/pprof/profile", func(w http.ResponseWriter, r *http.Request) {
+		secs := pprofSeconds(r)
+		w.Header().Set("Content-Type", "application/octet-stream")
+		if err := pprof.StartCPUProfile(w); err != nil {
+			http.Error(w, "cpu profile: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		sleepOrDone(r, secs)
+		pprof.StopCPUProfile()
+	})
+	mux.HandleFunc("/debug/pprof/trace", func(w http.ResponseWriter, r *http.Request) {
+		secs := pprofSeconds(r)
+		w.Header().Set("Content-Type", "application/octet-stream")
+		if err := trace.Start(w); err != nil {
+			http.Error(w, "trace: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		sleepOrDone(r, secs)
+		trace.Stop()
+	})
+	// /debug/pprof/ lists the profiles; /debug/pprof/<name> writes one (heap, allocs, goroutine, ...): ?debug=1 as text,
+	// ?debug=2 for goroutine as full stacks, none for the protobuf `go tool pprof` reads.
+	mux.HandleFunc("/debug/pprof/", func(w http.ResponseWriter, r *http.Request) {
+		name := strings.TrimPrefix(r.URL.Path, "/debug/pprof/")
+		if name == "" {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			for _, p := range pprof.Profiles() {
+				fmt.Fprintf(w, "%s\t%d\n", p.Name(), p.Count())
+			}
+			return
+		}
+		p := pprof.Lookup(name)
+		if p == nil {
+			http.NotFound(w, r)
+			return
+		}
+		debug, _ := strconv.Atoi(r.URL.Query().Get("debug"))
+		if name == "heap" && r.URL.Query().Get("gc") == "1" {
+			runtime.GC()
+		}
+		if debug != 0 {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		} else {
+			w.Header().Set("Content-Type", "application/octet-stream")
+		}
+		_ = p.WriteTo(w, debug)
+	})
 	return &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: ReadHeaderLimit, ReadTimeout: ReadTimeout,
 		WriteTimeout: 2 * time.Minute, IdleTimeout: IdleTimeout, MaxHeaderBytes: MaxHeaderBytes}, nil
 }
+
+func pprofSeconds(r *http.Request) time.Duration {
+	n, err := strconv.Atoi(r.URL.Query().Get("seconds"))
+	if err != nil || n < 1 {
+		n = 30
+	}
+	return time.Duration(min(n, 60)) * time.Second
+}
+
+func sleepOrDone(r *http.Request, d time.Duration) {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-r.Context().Done():
+	}
+}
+
+func osArgs() []string { return os.Args }

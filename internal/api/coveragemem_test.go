@@ -43,7 +43,7 @@ func covMemWorld(scopes, obs, health, assess, stateBytes int) world {
 }
 
 func TestCoverageMemoryHarness(t *testing.T) {
-	if os.Getenv("CLEARANCE_MEM_HARNESS") == "" {
+	if os.Getenv("CLEARANCE_MEM_HARNESS") != "1" {
 		t.Skip("set CLEARANCE_MEM_HARNESS=1")
 	}
 	cancelPct := 0
@@ -106,7 +106,7 @@ func TestCoverageMemoryHarness(t *testing.T) {
 // What a slim stored record costs once parsed (records()/parseStored: canon.Parse into map[string]any): the live bytes
 // per record of about 535 bytes of JSON, which a statement holds up to MaxCoverageRecords (10000) of per kind.
 func TestCoverageParsedRecordCost(t *testing.T) {
-	if os.Getenv("CLEARANCE_MEM_HARNESS") == "" {
+	if os.Getenv("CLEARANCE_MEM_HARNESS") != "1" {
 		t.Skip("set CLEARANCE_MEM_HARNESS=1")
 	}
 	text := `{"seq":123456,"hash":"` + strings.Repeat("a", 64) + `","prev_hash":"` + strings.Repeat("b", 64) + `","ts":"2026-11-16T08:00:00.123456Z","tool":"observation","scope":"aws:000",` +

@@ -486,8 +486,8 @@ A change's reads carry `source` (`{authors, mergers, promoter}`) when the verifi
 | `CLEARANCE_API_DEFINITIONS_INTERVAL` | 30 | seconds between re-reads of the stored definitions |
 | `CLEARANCE_API_POOL` | 5 | Postgres connections per replica (1 to 50) |
 | `CLEARANCE_API_COVERAGE_CONCURRENCY` | 2 | coverage computations in flight at once per replica (1 to 20); a read past it is answered 503 with `Retry-After` ([coverage bounds](#observations-and-the-coverage-statement-o-1)) |
-| `CLEARANCE_API_METRICS_LISTEN` | unset (off) | `host:port` of a separate listener that serves `/metrics` (Prometheus text): Go runtime memory (`go_memstats_heap_alloc_bytes`, `_heap_inuse_bytes`, `_heap_idle_bytes`, `_heap_released_bytes`, `_sys_bytes`, `_next_gc_bytes`), `go_goroutines`, GC cycles and pause, and `clearance_api_coverage_inflight` / `_waiting`. Numbers only, unauthenticated: bind it where the scrape reaches and nowhere else. Never on the service port |
-| `CLEARANCE_API_PPROF_LISTEN` | unset (off) | a loopback `host:port` (`127.0.0.1:6060`) serving `net/http/pprof`; any other address stops the api at start. Never on the service port ([heap profile](#reading-a-heap-profile)) |
+| `CLEARANCE_API_METRICS_LISTEN` | unset (off) | `host:port` of a separate listener that serves `/metrics` (Prometheus text): Go runtime memory (`go_memstats_heap_alloc_bytes`, `_heap_inuse_bytes`, `_heap_idle_bytes`, `_heap_released_bytes`, `_sys_bytes`, `_next_gc_bytes`), `go_goroutines`, GC cycles and pause, and `clearance_api_coverage_inflight` / `_waiting`. **Unauthenticated numbers** (no memory contents, no request data), so the network is the control: bind to the pod IP or `:PORT` only together with a NetworkPolicy that names who may scrape. The chart declares the port (`metrics`) and, with `networkPolicy.api.metricsFrom` set, adds one ingress rule for that port from those peers only; with the default-deny policy on and no peers named, nothing can reach it. Never on the service port |
+| `CLEARANCE_API_PPROF_LISTEN` | unset (off) | a loopback IP literal `host:port` (`127.0.0.1:6060` or `[::1]:6060`; not `localhost`, which depends on the pod's `/etc/hosts`, and not an IPv4-mapped address) serving the pprof profiles; any other address stops the api at start. Never on the service port ([heap profile](#reading-a-heap-profile)) |
 | `CLEARANCE_API_COVERAGE_WAIT_SECONDS` | 3 | how long a coverage read past the concurrency limit waits for a slot before the 503 (0 to 10; 0 refuses at once) |
 | `CLEARANCE_API_COVERAGE_CACHE_SECONDS` | 0 (off) | reuse a coverage answer this long (0 to 300); a reused answer carries `Age` |
 | `CLEARANCE_BUNDLES`, `CLEARANCE_BUNDLE_SOURCES`, `CLEARANCE_BUNDLE_SOURCE_WAIT`, `CLEARANCE_ENV_*` | none | the policy bundles the core runs ([core.md](core.md#policy-bundles)), for `/v1/policy` and the explainer; loaded as the core loads them: a source that does not answer leaves the bundle degraded (named in `/readyz` `degraded`, still 200) until it answers |
@@ -814,7 +814,7 @@ moves to `paths` (the Backstage backend reads both). `/v1` changes are additive 
 
 ### Reading a heap profile
 
-Set `CLEARANCE_API_PPROF_LISTEN=127.0.0.1:6060` (chart `api.pprofListen`) and restart the pod; it listens on the pod's own loopback, so nothing off the pod can reach it except through the API server's port-forward, which needs the right to forward to the pod:
+Turning pprof on needs a restart: set `CLEARANCE_API_PPROF_LISTEN=127.0.0.1:6060` (chart `api.pprofListen`) and let the pod roll. It listens on the pod's own loopback, so nothing off the pod can reach it except through the API server's port-forward, which needs **`create` on `pods/portforward` in the namespace** (`clearance-system` in the lab). The handlers are built from `runtime/pprof` on their own mux; the api does not import `net/http/pprof`, so nothing is registered on `http.DefaultServeMux`, and a test fails if that changes.
 
 ```
 kubectl -n clearance-system port-forward deploy/clearance-api 6060:6060
@@ -823,4 +823,11 @@ go tool pprof -sample_index=alloc_space http://127.0.0.1:6060/debug/pprof/allocs
 curl -s 'http://127.0.0.1:6060/debug/pprof/goroutine?debug=1' | head -50           # goroutines that outlive requests
 ```
 
-A heap profile lists the functions that hold memory, not its contents, but a goroutine or heap dump can still name request paths: keep the output with the operators. Turn the setting off again afterwards. Memory over time needs no port-forward: scrape `CLEARANCE_API_METRICS_LISTEN` (the Prometheus `ServiceMonitor` or `PodMonitor` belongs to the deployment's gitops, not this repo).
+What it exposes, so you can decide who gets the permission:
+
+- `heap` and `allocs`: function names, stack traces and byte counts. Not the memory contents.
+- `goroutine?debug=2`: every goroutine's full stack **with the argument words of each frame**, which can include pointers and small values (request paths, token-sized strings are possible), and names the code paths in flight.
+- `cmdline`: the process's arguments.
+- `profile` (CPU) and `trace` run for up to 60 s and slow the process while they do.
+
+Keep the output with the operators, and **turn the setting off and restart again afterwards**. Memory over time needs no port-forward: scrape `CLEARANCE_API_METRICS_LISTEN` (the Prometheus `ServiceMonitor` or `PodMonitor` belongs to the deployment's gitops, not this repo).

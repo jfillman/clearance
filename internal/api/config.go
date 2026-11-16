@@ -43,7 +43,7 @@ import (
 //	CLEARANCE_API_COVERAGE_CONCURRENCY  coverage computations in flight at once per replica, 1 to 20 (default 2); a read past
 //	                                    it is answered 503 with Retry-After
 //	CLEARANCE_API_METRICS_LISTEN        host:port for /metrics (Go runtime memory and the coverage gauges); unset: none (debug.go)
-//	CLEARANCE_API_PPROF_LISTEN          a loopback host:port for net/http/pprof; unset: none; a non-loopback address is refused
+//	CLEARANCE_API_PPROF_LISTEN          a loopback IP literal host:port (127.0.0.1:6060) for the pprof profiles; unset: none; anything else is refused
 //	CLEARANCE_API_COVERAGE_WAIT_SECONDS how long a coverage read waits for a slot before the 503, 0 to 10 (default 3; 0 refuses at once)
 //	CLEARANCE_API_COVERAGE_CACHE_SECONDS  reuse a coverage answer this many seconds, 0 to 300 (default 0: no cache); a
 //	                                    reused answer carries Age and its `to` is when it was computed
@@ -342,7 +342,11 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 			return fmt.Errorf("api: %s listener %s: %w", side.name, side.addr, err)
 		}
 		log.Info("clearance api: opt-in listener", "kind", side.name, "addr", sl.Addr().String())
-		go func() { _ = ss.Serve(sl) }()
+		go func(name string) {
+			if err := ss.Serve(sl); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("clearance api: opt-in listener stopped", "kind", name, "error", err.Error())
+			}
+		}(side.name)
 		defer ss.Close()
 	}
 	hs := srv.HTTPServer(cfg.Listen)
