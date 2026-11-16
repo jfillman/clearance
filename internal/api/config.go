@@ -40,6 +40,10 @@ import (
 //	                                    core's store (clearance_definitions), refreshed every
 //	CLEARANCE_API_DEFINITIONS_INTERVAL  seconds (default 30)
 //	CLEARANCE_API_POOL                  Postgres connections per replica (default 5)
+//	CLEARANCE_API_COVERAGE_CONCURRENCY  coverage computations in flight at once per replica, 1 to 20 (default 2); a read past
+//	                                    it is answered 503 with Retry-After
+//	CLEARANCE_API_COVERAGE_CACHE_SECONDS  reuse a coverage answer this many seconds, 0 to 300 (default 0: no cache); a
+//	                                    reused answer carries Age and its `to` is when it was computed
 //	CLEARANCE_API_ATTEST_KEY            the attestation signing key's public half (PEM) or the core's JWKS: verifies
 //	                                    static-key attestations (GET /v1/clearances/{id}/attestation/verify)
 //	CLEARANCE_API_ATTEST_TRUST_ROOT     keyless: a Sigstore trusted-root.json, or Fulcio's root and intermediate PEM
@@ -66,6 +70,8 @@ type Config struct {
 	AgentsDir                      string
 	DefinitionsEvery               time.Duration
 	Pool                           int32
+	CoverageConcurrency            int
+	CoverageCacheTTL               time.Duration
 	Policy                         bundles.Config
 	Vocabulary                     *vocab.Vocabulary // nil: the vocabulary already in force (vocab.Get; tests)
 	GatewayURL, CoreURL            string
@@ -123,6 +129,15 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		return cfg, errors.New("CLEARANCE_API_POOL is a number of connections, 1 to 50")
 	}
 	cfg.Pool = int32(pool)
+	if cfg.CoverageConcurrency, err = strconv.Atoi(get("CLEARANCE_API_COVERAGE_CONCURRENCY", strconv.Itoa(DefaultCoverageConcurrency))); err != nil ||
+		cfg.CoverageConcurrency < 1 || cfg.CoverageConcurrency > 20 {
+		return cfg, errors.New("CLEARANCE_API_COVERAGE_CONCURRENCY is a number of computations, 1 to 20")
+	}
+	ttl, err := strconv.Atoi(get("CLEARANCE_API_COVERAGE_CACHE_SECONDS", "0"))
+	if err != nil || ttl < 0 || ttl > 300 {
+		return cfg, errors.New("CLEARANCE_API_COVERAGE_CACHE_SECONDS is seconds, 0 to 300")
+	}
+	cfg.CoverageCacheTTL = time.Duration(ttl) * time.Second
 	if getenv("CLEARANCE_PACKS") != "" {
 		return cfg, errors.New("CLEARANCE_PACKS is gone: name policy bundle files in CLEARANCE_BUNDLES (docs/core.md, Policy bundles)")
 	}
@@ -282,7 +297,8 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 	}
 	gp := gate.DefaultPolicy().View()
 	srv, err := New(Options{Store: st, Auth: cfg.Auth, Access: access, Engine: eng, GatePolicy: &gp,
-		Definitions: defs, GatewayURL: cfg.GatewayURL, CoreURL: cfg.CoreURL, Log: log, Attest: cfg.Attest})
+		Definitions: defs, GatewayURL: cfg.GatewayURL, CoreURL: cfg.CoreURL, Log: log, Attest: cfg.Attest,
+		CoverageConcurrency: cfg.CoverageConcurrency, CoverageCacheTTL: cfg.CoverageCacheTTL})
 	if err != nil {
 		return err
 	}

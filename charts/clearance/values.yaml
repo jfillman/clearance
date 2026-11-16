@@ -383,6 +383,12 @@ api:
   gatewayURL: ""
   # CLEARANCE_API_POOL: the read pool's size.
   pool: 5
+  # CLEARANCE_API_COVERAGE_CONCURRENCY: coverage computations in flight at once per replica (1 to 20); a read past it
+  # is answered 503 with Retry-After.
+  coverageConcurrency: 2
+  # CLEARANCE_API_COVERAGE_CACHE_SECONDS: reuse a coverage answer this long (0 to 300; 0 is no cache). A reused answer
+  # carries Age and its `to` is when it was computed.
+  coverageCacheSeconds: 0
   # What GET /v1/clearances/{id}/attestation/verify trusts, and what GET /v1/attestation-config shows. Public material
   # only: an existing ConfigMap you manage, mounted read-only at /etc/clearance/attest-trust, holding the files named
   # below. Empty: the api verifies nothing and no portal may call an attestation verified.

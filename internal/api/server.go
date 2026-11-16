@@ -64,6 +64,12 @@ type Options struct {
 	Log                 *slog.Logger
 	// StreamPoll is how often the stream hub reads the chain's head (0: StreamPoll).
 	StreamPoll time.Duration
+	// CoverageConcurrency bounds the coverage computations in flight at once; a read past it is answered 503 with
+	// Retry-After (0: DefaultCoverageConcurrency).
+	CoverageConcurrency int
+	// CoverageCacheTTL reuses a coverage answer for that long (0: no cache). A reused answer's `to` is the time it
+	// was computed for, and the response carries Age.
+	CoverageCacheTTL time.Duration
 	// Attest is the trust attestations are verified against (nil: GET /v1/clearances/{id}/attestation/verify answers
 	// 404 and nothing is called verified) and the Rekor URL the portal links to.
 	Attest *AttestTrust
@@ -77,6 +83,8 @@ type Server struct {
 	hub     *hub
 	verify  *verifier     // nil: no attestation trust configured
 	mapSem  chan struct{} // MaxConcurrentMapReads: a Map read holds one reader connection per statement
+	covSem  chan struct{} // Options.CoverageConcurrency: coverage computations in flight
+	covC    *covCache
 }
 
 // New builds the server.
@@ -90,7 +98,10 @@ func New(opt Options) (*Server, error) {
 	if opt.Log == nil {
 		opt.Log = slog.Default()
 	}
-	s := &Server{opt: opt, log: opt.Log, hub: newHub(opt.Store, opt.StreamPoll, opt.Log), verify: newVerifier(opt.Attest), mapSem: make(chan struct{}, MaxConcurrentMapReads)}
+	if opt.CoverageConcurrency <= 0 {
+		opt.CoverageConcurrency = DefaultCoverageConcurrency
+	}
+	s := &Server{opt: opt, covSem: make(chan struct{}, opt.CoverageConcurrency), covC: &covCache{ttl: opt.CoverageCacheTTL}, log: opt.Log, hub: newHub(opt.Store, opt.StreamPoll, opt.Log), verify: newVerifier(opt.Attest), mapSem: make(chan struct{}, MaxConcurrentMapReads)}
 	mux := http.NewServeMux()
 	for _, rt := range Routes() {
 		if rt.serve == nil {

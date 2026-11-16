@@ -170,6 +170,7 @@ unset, so the core's default applies. Lists are joined with commas.
 | `api.observationReaders` | | `CLEARANCE_API_OBSERVATION_READERS`: principal globs of machine pollers that read coverage, observations, observation health and exceptions, nothing else (O-5). |
 | `api.feedReaders` | | `CLEARANCE_API_FEED_READERS`: `[{principal, cluster}]`, who reads a cluster's grant feed (a grant-sync agent). |
 | `api.pool`, `api.definitionsInterval` | 5, 30 | `CLEARANCE_API_POOL`, `CLEARANCE_API_DEFINITIONS_INTERVAL`. |
+| `api.coverageConcurrency`, `api.coverageCacheSeconds` | 2, 0 (off) | `CLEARANCE_API_COVERAGE_CONCURRENCY`, `CLEARANCE_API_COVERAGE_CACHE_SECONDS`: how many coverage reads compute at once (the rest get 503 with `Retry-After`), and how long an answer is reused (it carries `Age`). |
 | `api.resources`, `api.serviceAccount.*`, `api.topologySpreadConstraints` and the same pod settings as the core | | |
 | `slack.enabled` | false | clearance-slack ([slack.md](slack.md)): a separate Deployment and image; adds its service account to `delegates`, `api.notifiers` and `api.observationReaders` and opens the core's and api's ingress to it. |
 | `slack.existingSecret`, `slack.publicUrl`, `slack.slackClientId`, `slack.idpClientId` | | Required with it on: the Secret (keys `bot-token`, `app-token`, `signing-secret`, `client-secret`, `idp-client-secret`, `dsn`), the https URL of the link pages, Sign in with Slack's client id, the IdP client id. The issuer, claim and allowlist are `oidc.*`. |

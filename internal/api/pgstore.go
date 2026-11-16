@@ -155,7 +155,15 @@ func (s *PG) Evidence(ctx context.Context, f EvidenceFilter, v *Viewer, limit in
 	if after != nil {
 		b.add("e.seq < " + b.arg(*after))
 	}
-	return s.records(ctx, with+"SELECT e.record::text, e.assurance FROM clearance_evidence e WHERE "+b.sql()+
+	col := "e.record::text"
+	if f.Slim { // the jsonb minus its heavy keys: they are dropped in the database, never sent or parsed
+		col = "(e.record"
+		for _, k := range SlimFields { // constants, never request text
+			col += " - '" + k + "'"
+		}
+		col += ")::text"
+	}
+	return s.records(ctx, with+"SELECT "+col+", e.assurance FROM clearance_evidence e WHERE "+b.sql()+
 		" ORDER BY e.seq DESC LIMIT "+b.arg(limit), b.args)
 }
 

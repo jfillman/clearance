@@ -105,6 +105,10 @@ spec:
             {{- end }}
             - name: CLEARANCE_API_POOL
               value: {{ .Values.api.pool | quote }}
+            - name: CLEARANCE_API_COVERAGE_CONCURRENCY
+              value: {{ .Values.api.coverageConcurrency | quote }}
+            - name: CLEARANCE_API_COVERAGE_CACHE_SECONDS
+              value: {{ .Values.api.coverageCacheSeconds | quote }}
             - name: CLEARANCE_API_DEFINITIONS_INTERVAL
               value: {{ .Values.api.definitionsInterval | quote }}
             {{- include "clearance.sharedEnv" . | nindent 12 }}
