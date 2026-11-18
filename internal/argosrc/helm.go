@@ -118,7 +118,11 @@ func (st *state) helm(ctx context.Context, pos int, req Request, s Source, env E
 	}()
 	out, err := st.o.Run(ctx, appPath, st.o.helmEnv(), "helm", args...)
 	if err != nil && isMissingDependency(err) {
-		// runHelmBuild: Argo CD builds the chart's dependencies once, then retries.
+		// runHelmBuild: Argo CD builds the chart's dependencies once, then retries. Only local ones here: a Chart.yaml
+		// inside an allowed source must not pick a repository the platform did not list (localrefs.go).
+		if cerr := checkChartDependencies(root, appPath, pos); cerr != nil {
+			return nil, cerr
+		}
 		if _, berr := st.o.Run(ctx, appPath, st.o.helmEnv(), "helm", "dependency", "build"); berr != nil {
 			return nil, unsupported(pos, "a chart dependency that cannot be built here",
 				"helm dependency build failed (the plugin holds no repository definitions or credentials): "+firstLine(berr.Error()))

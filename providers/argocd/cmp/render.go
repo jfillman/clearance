@@ -109,6 +109,10 @@ func Render(ctx context.Context, run Exec, cfg Config, srcDir string) (*Rendered
 	out.Manifests = helm
 	if cfg.KustomizeDir != "" {
 		if st, err := os.Stat(filepath.Join(srcDir, filepath.FromSlash(cfg.KustomizeDir))); err == nil && st.IsDir() {
+			// kustomize clones a remote base and pulls helmCharts by itself: only a local kustomization is built.
+			if err := argosrc.CheckLocalKustomization(srcDir, filepath.Join(srcDir, filepath.FromSlash(cfg.KustomizeDir))); err != nil {
+				return nil, fmt.Errorf("refused: kustomize %s: %w", cfg.KustomizeDir, err)
+			}
 			k, err := run(ctx, srcDir, "kustomize", "build", filepath.Join(srcDir, filepath.FromSlash(cfg.KustomizeDir)))
 			if err != nil {
 				return nil, fmt.Errorf("kustomize build: %w", err)

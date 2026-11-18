@@ -1783,6 +1783,15 @@ their brackets in the comparison; `.git` is dropped for git URLs only (it is par
 host root (`https://charts.example.test`) is allowed when listed. An OCI registry is listed as `oci://host/path` and
 only the generic mode fetches one. What git or Helm is given is the list's own string for the matched repository, never
 the app's spelling of it, so a difference between this comparison and git's reading of a URL cannot reach an unlisted host.
+
+The list covers the plugin's own fetches. Two renderers fetch by themselves, from files inside an allowed source, so the
+plugin refuses them instead: `helm dependency build` (generic mode; a chart whose Chart.yaml, requirements.yaml or
+Chart.lock names a dependency repository other than an empty one or a `file://` path inside the source: vendor the
+chart under `charts/`), and `kustomize build` (the tenant's `kustomizeDir` and generic-mode kustomize sources: any
+resource, base, component, patch or generator file that is not an existing path inside the source, such as a URL, a
+`git@` or go-getter spelling, or a bare `host/org/repo`, and any `helmCharts`). Local directories are followed,
+cycles are tolerated. Both gaps also exist on the plain Argo CD path (the repo-server) for apps not behind the gate;
+the plugin closes them only for gated apps.
 Paths and the chart tag are validated (relative, no `..` segment, no leading `-`). The sidecar's `git` and `helm` run with a
 bare environment, so the clearance token is not in their reach.
 

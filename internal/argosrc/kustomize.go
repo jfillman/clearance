@@ -132,6 +132,9 @@ func (st *state) kustomize(ctx context.Context, pos int, req Request, s Source, 
 			}
 		}
 	}
+	if err := CheckLocalKustomization(root, appPath); err != nil { // after the edits, so a component added above is checked too
+		return nil, fmt.Errorf("source %d: %w", pos, err)
+	}
 	args := []string{"build", appPath}
 	args = append(args, strings.Fields(req.KustomizeBuildOptions)...)
 	out, err := st.o.Run(ctx, root, nil, "kustomize", args...)

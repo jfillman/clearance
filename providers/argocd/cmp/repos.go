@@ -107,6 +107,11 @@ func redact(s string) string {
 	return s
 }
 
+// hasOCIScheme is whether s starts with oci:// in any case (URL schemes are case-insensitive).
+func hasOCIScheme(s string) bool {
+	return len(s) >= 6 && strings.EqualFold(s[:6], "oci://")
+}
+
 // repoSet maps each normalised allowed repository to the string the platform wrote for it: the allow list's entries,
 // plus the Application's own source repository (ARGOCD_APP_SOURCE_REPO_URL, which Argo CD matched against the
 // AppProject before it ran the plugin). That exemption applies only when a list is set: with none, nothing is
@@ -116,7 +121,7 @@ func (c Config) repoSet() (map[string]string, error) {
 	var errs []error
 	for _, r := range c.AllowedRepos {
 		r = strings.TrimSpace(r)
-		k, err := NormalizeRepo(r, strings.HasPrefix(r, "oci://"))
+		k, err := NormalizeRepo(r, hasOCIScheme(r))
 		if err != nil {
 			errs = append(errs, fmt.Errorf("CLEARANCE_CHART_REPOS entry %w", err))
 			continue
@@ -190,8 +195,8 @@ func (c Config) Canonical() (Config, error) {
 			return c, fmt.Errorf("refused: the %s %s is not one of the repositories this cluster's platform allows (CLEARANCE_CHART_REPOS); an app's chart must come from the platform's chart repository", w.what, redact(w.repo))
 		}
 		if w.oci { // argosrc reads an OCI registry as a URL with no scheme
-			own = strings.TrimPrefix(own, "oci://")
-		} else if strings.HasPrefix(own, "oci://") {
+			own = own[len("oci://"):] // an oci:// entry (any case of the scheme): the checks below ran on it
+		} else if hasOCIScheme(own) {
 			return c, fmt.Errorf("refused: the %s %s is listed as an OCI registry but is not one", w.what, redact(w.repo))
 		}
 		canon[i] = own
