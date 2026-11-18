@@ -768,3 +768,48 @@ func TestTheReleaseIdIsReadFromTheValuesFiles(t *testing.T) {
 		t.Errorf("%q", got)
 	}
 }
+
+// The plugin runs as `Generate(..., ".", ...)` from the checkout Argo CD hands it. 0.52.0 compared the resolved
+// relative value-file path with the resolved "." and refused every value file that existed ("resolves outside the
+// repository"), which stopped every gated app on hangar-prod. A relative srcDir must behave like the absolute one.
+func TestRelativeSourceDirRendersItsValueFiles(t *testing.T) {
+	e := newEnv(t)
+	for _, f := range e.cfg.ValueFiles {
+		p := filepath.Join(e.src, filepath.FromSlash(f))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("a: 1\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.core.answer = &client.Change{ID: "ch-rel", State: "cleared", Tier: 1, Outage: "allow-and-record", ExpiresAt: e.now.Add(time.Hour).Format(time.RFC3339Nano)}
+	t.Chdir(e.src)
+	e.src = "."
+	if o, _, err := e.generate(t); err != nil || o != Cleared {
+		t.Fatal(o, err)
+	}
+	var helm []string
+	for _, c := range e.exec.calls {
+		if c[0] == "helm" {
+			helm = c
+		}
+	}
+	got := map[string]bool{}
+	for i, a := range helm {
+		if a == "-f" && i+1 < len(helm) && filepath.IsAbs(helm[i+1]) {
+			got[filepath.ToSlash(helm[i+1])] = true
+		}
+	}
+	for _, f := range e.cfg.ValueFiles {
+		found := false
+		for p := range got {
+			if strings.HasSuffix(p, "/"+f) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("value file %s was not passed to helm as an absolute path: %v", f, helm)
+		}
+	}
+}

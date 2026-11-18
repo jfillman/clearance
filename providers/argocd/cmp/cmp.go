@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/jfillman/clearance/client"
@@ -41,6 +42,12 @@ const (
 func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Writer) (Outcome, error) {
 	var r *Rendered
 	var err error
+	// The plugin runs with srcDir "." (main below). Every containment check compares resolved paths, and a relative
+	// path resolves to a relative one, which never has the absolute root as its prefix: on 0.52.0 that refused every
+	// value file ("resolves outside the repository", hangar-prod 2026-11-18). Resolve it once, here.
+	if srcDir, err = filepath.Abs(srcDir); err != nil {
+		return "", err
+	}
 	// Before anything is fetched: the chart comes only from where the platform says, by the platform's own spelling.
 	cfg, err = cfg.Canonical()
 	if err != nil {
