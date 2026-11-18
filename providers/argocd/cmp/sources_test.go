@@ -14,6 +14,22 @@ import (
 
 // genericRun answers git and helm for the generic mode the way the real tools would for gate-api's sources: the
 // airframe chart (a git path) with the gitops repository as a `$gitops` ref source, rendering the recorded output.
+// ranCall is one command and the extra environment the plugin gave it.
+type ranCall struct {
+	argv []string
+	env  []string
+}
+
+// effective is the environment a process would see: the entries in order, a later one replacing an earlier one.
+func effective(env []string) map[string]string {
+	m := map[string]string{}
+	for _, e := range env {
+		k, v, _ := strings.Cut(e, "=")
+		m[k] = v
+	}
+	return m
+}
+
 type genericRun struct {
 	t      *testing.T
 	calls  [][]string
@@ -21,7 +37,7 @@ type genericRun struct {
 	render []byte
 	each   func(n int) []byte // when set, the n'th helm render (0-based) instead of render
 	helms  int
-	envs   map[string][]string // the environment of each call, by the first argument it ran ("git fetch", "helm template")
+	envs   []ranCall // every call with the environment it got, in order
 }
 
 const (
@@ -33,14 +49,7 @@ const (
 
 func (g *genericRun) run(_ context.Context, dir string, env []string, name string, args ...string) ([]byte, error) {
 	g.calls = append(g.calls, append([]string{name}, args...))
-	if g.envs == nil {
-		g.envs = map[string][]string{}
-	}
-	if len(args) > 0 {
-		g.envs[name+" "+args[0]] = env
-	} else {
-		g.envs[name] = env
-	}
+	g.envs = append(g.envs, ranCall{append([]string{name}, args...), env})
 	switch name {
 	case "git":
 		for i, a := range args {
@@ -136,14 +145,41 @@ func TestGenericModeRendersTheSameTreeAsTheChartParameters(t *testing.T) {
 		}
 	}
 	// the render step runs with the network off; the fetches (git) do not
-	off := strings.Join(g.envs["helm template"], "\n")
-	for _, w := range []string{"GIT_ALLOW_PROTOCOL=none", "HTTPS_PROXY=http://127.0.0.1:9", "https_proxy=http://127.0.0.1:9", "ALL_PROXY=", "NO_PROXY=\n", "HELM_REPOSITORY_CONFIG=", "HELM_REGISTRY_CONFIG=", "HELM_REPOSITORY_CACHE="} {
-		if !strings.Contains(off+"\n", w) {
-			t.Fatalf("helm template ran without %s:\n%s", w, off)
+	const dead = "http://127.0.0.1:9"
+	var fetches, renders int
+	for _, c := range g.envs {
+		eff := effective(c.env)
+		switch {
+		case c.argv[0] == "git" && indexOf2(c.argv, "fetch") >= 0:
+			fetches++
+			if eff["GIT_ALLOW_PROTOCOL"] == "none" || strings.HasPrefix(eff["GIT_ALLOW_PROTOCOL"], "file") {
+				t.Fatalf("our own fetch %v must keep its transports: %q", c.argv, eff["GIT_ALLOW_PROTOCOL"])
+			}
+			for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "HELM_REPOSITORY_CONFIG"} {
+				if _, set := eff[k]; set {
+					t.Fatalf("our own fetch %v must keep the network, but sets %s", c.argv, k)
+				}
+			}
+		case c.argv[0] == "helm" && c.argv[1] == "template":
+			renders++
+			want := map[string]string{"GIT_ALLOW_PROTOCOL": "none", "NO_PROXY": "", "no_proxy": ""}
+			for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
+				want[k] = dead
+			}
+			for k, v := range want {
+				if got, set := eff[k]; !set || got != v {
+					t.Fatalf("helm template: %s = %q (set %v), want %q", k, got, set, v)
+				}
+			}
+			for k, base := range map[string]string{"HELM_REPOSITORY_CONFIG": "no-repositories.yaml", "HELM_REGISTRY_CONFIG": "no-registry.json", "HELM_REPOSITORY_CACHE": "no-repo-cache"} {
+				if got := eff[k]; filepath.Base(got) != base || !filepath.IsAbs(got) {
+					t.Fatalf("helm template: %s = %q, want an absolute path ending in %s", k, got, base)
+				}
+			}
 		}
 	}
-	if strings.Contains(strings.Join(g.envs["git fetch"], "\n"), "PROXY") || strings.Contains(strings.Join(g.envs["git fetch"], "\n"), "GIT_ALLOW_PROTOCOL=none") {
-		t.Fatalf("our own fetch must keep the network: %v", g.envs["git fetch"])
+	if fetches != 2 || renders != 1 {
+		t.Fatalf("%d git fetches (want the chart and the gitops repository) and %d renders", fetches, renders)
 	}
 	var vals []string
 	for i, a := range helm {
@@ -225,4 +261,13 @@ func TestClusterScopedKindsParameterCorrectsTheBuiltInGuess(t *testing.T) {
 	if err != nil || strings.Join(c.ExtraCluster, "|") != "Composition|!Cluster" {
 		t.Fatal(c.ExtraCluster, err)
 	}
+}
+
+func indexOf2(xs []string, s string) int {
+	for i, x := range xs {
+		if x == s {
+			return i
+		}
+	}
+	return -1
 }

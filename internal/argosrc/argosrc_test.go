@@ -567,3 +567,27 @@ func TestPluginSourceKeepsItsParameters(t *testing.T) {
 		t.Fatal(srcs, err)
 	}
 }
+
+// A chart that mixes a vendored dependency (still naming its original remote repository) with one under file:// inside
+// the source renders offline: only the remote is refused, never a vendored dependency.
+func TestMixedVendoredAndFileDependenciesRenderOffline(t *testing.T) {
+	need(t, "helm")
+	files := map[string]string{
+		"app/Chart.yaml": "apiVersion: v2\nname: app\nversion: 0.1.0\ndependencies:\n" +
+			"- name: vend\n  version: 0.1.0\n  repository: https://charts.invalid/stable\n" +
+			"- name: lib\n  version: 0.1.0\n  repository: file://../lib\n",
+		"app/charts/vend/Chart.yaml":        "apiVersion: v2\nname: vend\nversion: 0.1.0\n",
+		"app/charts/vend/templates/cm.yaml": "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: vend}\n",
+		"lib/Chart.yaml":                    "apiVersion: v2\nname: lib\nversion: 0.1.0\n",
+		"lib/templates/cm.yaml":             "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: lib}\n",
+	}
+	repo := gitRepo(t, files)
+	res := mustRender(t, &recorder{}, Request{AppName: "mixed", Namespace: "ns", Sources: []Source{{RepoURL: repo, Path: "app", TargetRevision: "main"}}})
+	has(t, res, "name: vend", "name: lib")
+	// and a dependency that is neither vendored nor local is still refused
+	files["app/Chart.yaml"] += "- name: gone\n  version: 0.1.0\n  repository: https://charts.invalid/stable\n"
+	_, err := render(t, &recorder{}, Request{AppName: "mixed", Namespace: "ns", Sources: []Source{{RepoURL: gitRepo(t, files), Path: "app", TargetRevision: "main"}}})
+	if err == nil || !IsUnsupported(err) {
+		t.Fatalf("an unvendored remote dependency must be refused: %v", err)
+	}
+}

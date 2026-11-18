@@ -122,12 +122,18 @@ func (st *state) helm(ctx context.Context, pos int, req Request, s Source, env E
 	}
 	out, err := st.o.Run(ctx, appPath, netEnv, "helm", args...)
 	if err != nil && isMissingDependency(err) {
+		// A dependency under file:// inside the source is packaged into charts/ without a repository index, so a chart
+		// that mixes it with vendored dependencies renders offline (--skip-refresh below has no index for the others).
+		st.stageLocalDependencies(ctx, root, appPath, netEnv)
+		out, err = st.o.Run(ctx, appPath, netEnv, "helm", args...)
+	}
+	if err != nil && isMissingDependency(err) {
 		// runHelmBuild: Argo CD builds the chart's dependencies once, then retries. With the network off (netEnv): a
 		// Chart.yaml inside an allowed source cannot make Helm reach a repository the platform did not list, so a
 		// dependency that is not vendored or under file:// fails here (--skip-refresh: no repository index is fetched).
 		if _, berr := st.o.Run(ctx, appPath, netEnv, "helm", "dependency", "build", "--skip-refresh"); berr != nil {
 			return nil, unsupported(pos, "a chart dependency that cannot be built here",
-				"helm dependency build failed (the plugin holds no repository definitions or credentials): "+firstLine(berr.Error()))
+				"helm dependency build failed (the plugin holds no repository definitions or credentials, and no network): "+firstLine(berr.Error()))
 		}
 		out, err = st.o.Run(ctx, appPath, netEnv, "helm", args...)
 	}
@@ -340,4 +346,50 @@ func ReleaseIDFromValues(docs [][]byte) string {
 		}
 	}
 	return id
+}
+
+// stageLocalDependencies packages each `file://` dependency of the chart that lies inside the source into charts/,
+// unless charts/ already holds it. Best effort and offline: whatever it cannot do is left to the build that follows,
+// which refuses a remote dependency. (This reads Chart.yaml only to save work; it is not a security check, the
+// network-off environment is.)
+func (st *state) stageLocalDependencies(ctx context.Context, root, chartDir string, env []string) {
+	b, err := os.ReadFile(filepath.Join(chartDir, "Chart.yaml"))
+	if err != nil {
+		return
+	}
+	var c struct {
+		Dependencies []struct {
+			Name       string `yaml:"name"`
+			Repository string `yaml:"repository"`
+		} `yaml:"dependencies"`
+	}
+	if yaml.Unmarshal(b, &c) != nil {
+		return
+	}
+	rootReal, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return
+	}
+	for _, d := range c.Dependencies {
+		rest, ok := strings.CutPrefix(d.Repository, "file://")
+		if !ok || rest == "" || d.Name == "" || strings.ContainsAny(d.Name, "/\\") {
+			continue
+		}
+		if have, _ := filepath.Glob(filepath.Join(chartDir, "charts", d.Name+"*")); len(have) > 0 {
+			continue
+		}
+		src := rest
+		if !filepath.IsAbs(src) {
+			src = filepath.Join(chartDir, src)
+		}
+		real, err := filepath.EvalSymlinks(src)
+		if err != nil || (real != rootReal && !strings.HasPrefix(real, rootReal+string(os.PathSeparator))) {
+			continue
+		}
+		dest := filepath.Join(chartDir, "charts")
+		if os.MkdirAll(dest, 0o755) != nil {
+			continue
+		}
+		_, _ = st.o.Run(ctx, chartDir, env, "helm", "package", real, "--destination", dest)
+	}
 }
