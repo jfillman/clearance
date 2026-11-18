@@ -1776,9 +1776,13 @@ this list is the check on them. URLs are compared after normalising: scheme and 
 port dropped, `git@host:o/r` read as ssh, one trailing `/` and `.git` dropped; the path keeps its case. A local path,
 `file://`, `ext::`, an option, a query, or a `..` / `.` / empty path segment is refused whatever the list says. The
 Application's own source repository (`ARGOCD_APP_SOURCE_REPO_URL`, which Argo CD already matched against the project)
-is always allowed. There is no wildcard and no default: a sidecar with no list fetches no chart (the Application shows
-a comparison error naming `CLEARANCE_CHART_REPOS`), and an entry that is not a repository URL stops the plugin at start.
-An OCI registry is listed as `oci://host/path` and only the generic mode fetches one.
+counts as listed once a list is set; with no list nothing is fetched, that repository included, so there is one rule.
+There is no wildcard and no default: a sidecar with no list fetches no chart (the Application shows a comparison error
+naming `CLEARANCE_CHART_REPOS`), and an entry that is not a repository URL stops the plugin at start. IPv6 literals keep
+their brackets in the comparison; `.git` is dropped for git URLs only (it is part of an OCI name); a Helm repository at a
+host root (`https://charts.example.test`) is allowed when listed. An OCI registry is listed as `oci://host/path` and
+only the generic mode fetches one. What git or Helm is given is the list's own string for the matched repository, never
+the app's spelling of it, so a difference between this comparison and git's reading of a URL cannot reach an unlisted host.
 Paths and the chart tag are validated (relative, no `..` segment, no leading `-`). The sidecar's `git` and `helm` run with a
 bare environment, so the clearance token is not in their reach.
 

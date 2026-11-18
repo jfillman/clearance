@@ -3,6 +3,9 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/jfillman/clearance/client"
 )
 
 const allowedAirframe = "https://github.com/jfillman/airframe.git"
@@ -39,7 +42,7 @@ func TestNormalizeRepo(t *testing.T) {
 			t.Errorf("%q must not equal the allowed repository: %q, %v", s, got, err)
 		}
 	}
-	for _, s := range []string{"", "-oProxyCommand=x", "--upload-pack=x", "/etc", "../x", "file:///etc", "ext::sh -c id", "ftp://h/o/r", "https://github.com", "https://github.com/",
+	for _, s := range []string{"", "-oProxyCommand=x", "--upload-pack=x", "/etc", "../x", "file:///etc", "ext::sh -c id", "ftp://h/o/r", "ssh://github.com", "git://github.com/",
 		"https://github.com/jfillman/../evil/airframe.git", "https://github.com/jfillman//airframe", "https://github.com/jfillman/./airframe", "https://github.com/o/r?x=1", "https://github.com/o/r#f",
 		"ghcr.io/org/charts", "https://github.com/o/r\\x"} {
 		if got, err := NormalizeRepo(s, false); err == nil {
@@ -60,7 +63,7 @@ func TestParseRepoList(t *testing.T) {
 
 func refuses(t *testing.T, cfg Config, want ...string) {
 	t.Helper()
-	err := cfg.CheckRepos()
+	_, err := cfg.Canonical()
 	if err == nil {
 		t.Fatal("accepted")
 	}
@@ -76,13 +79,13 @@ func TestAllowedChartRepoIsAccepted(t *testing.T) {
 	for _, spelling := range []string{"https://github.com/jfillman/airframe", "https://GITHUB.com/jfillman/airframe.git/", "git@github.com:jfillman/airframe.git"} {
 		c.ChartRepo = spelling
 		c.AllowedRepos = []string{"https://github.com/jfillman/airframe.git", "git@github.com:jfillman/airframe.git"}
-		if err := c.CheckRepos(); err != nil {
+		if _, err := c.Canonical(); err != nil {
 			t.Errorf("%s: %v", spelling, err)
 		}
 	}
 	c.ChartRepo = "" // the chart is in the gitops repository: nothing is fetched, nothing is checked
 	c.AllowedRepos = nil
-	if err := c.CheckRepos(); err != nil {
+	if _, err := c.Canonical(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -165,7 +168,7 @@ func TestChartPathMustStayInsideTheChartRepository(t *testing.T) {
 // a Helm repository and an OCI registry (written with no scheme in the source, oci:// in the list).
 func TestGenericSourcesMeetTheSameList(t *testing.T) {
 	c := genericConfig(t)
-	if err := c.CheckRepos(); err != nil { // airframe from the list, the gitops repository because it is the Application's own source
+	if _, err := c.Canonical(); err != nil { // airframe from the list, the gitops repository because it is the Application's own source
 		t.Fatal(err)
 	}
 	c.Sources = `[{"repoURL":"https://github.com/evil/x.git","path":"."}]`
@@ -173,13 +176,13 @@ func TestGenericSourcesMeetTheSameList(t *testing.T) {
 	c.Sources = `[{"repoURL":"https://charts.example.test/stable","chart":"nginx","targetRevision":"1.2.3"}]`
 	refuses(t, c, "not one of the repositories")
 	c.AllowedRepos = append(c.AllowedRepos, "https://charts.example.test/stable/")
-	if err := c.CheckRepos(); err != nil {
+	if _, err := c.Canonical(); err != nil {
 		t.Fatal(err)
 	}
 	c.Sources = `[{"repoURL":"ghcr.io/org/charts","chart":"app","targetRevision":"1.2.3"}]`
 	refuses(t, c, "not one of the repositories")
 	c.AllowedRepos = append(c.AllowedRepos, "oci://ghcr.io/org/charts")
-	if err := c.CheckRepos(); err != nil {
+	if _, err := c.Canonical(); err != nil {
 		t.Fatal(err)
 	}
 	c.Sources = `[{"repoURL":"https://github.com/jfillman/airframe.git","path":"."},{"repoURL":"https://github.com/evil/x.git","ref":"x"}]`
@@ -187,4 +190,87 @@ func TestGenericSourcesMeetTheSameList(t *testing.T) {
 	c.AllowedRepos = nil
 	c.Sources = `[{"repoURL":"https://github.com/jfillman/airframe.git","path":"."}]`
 	refuses(t, c, "CLEARANCE_CHART_REPOS is not set")
+}
+
+// Two spellings that differ only in where a colon sits in an IPv6 literal are different hosts.
+func TestIPv6LiteralsKeepTheirBrackets(t *testing.T) {
+	a, err1 := NormalizeRepo("http://[fd00::1]:8080/o/r", false)
+	b, err2 := NormalizeRepo("http://[fd00::1:8080]/o/r", false)
+	if err1 != nil || err2 != nil || a == b || a != "http://[fd00::1]:8080/o/r" || b != "http://[fd00::1:8080]/o/r" {
+		t.Fatal(a, err1, b, err2)
+	}
+	c := gateAPIConfig()
+	c.AllowedRepos = []string{"http://[fd00::1]:8080/o/r"}
+	c.SourceRepo = ""
+	c.ChartRepo = "http://[fd00::1:8080]/o/r"
+	refuses(t, c, "not one of the repositories")
+}
+
+// ".git" is a git suffix; in an OCI namespace it is part of the name.
+func TestOCIKeepsDotGit(t *testing.T) {
+	a, _ := NormalizeRepo("oci://ghcr.io/team/charts", true)
+	b, _ := NormalizeRepo("oci://ghcr.io/team/charts.git", true)
+	if a == b || b != "oci://ghcr.io/team/charts.git" {
+		t.Fatal(a, b)
+	}
+	c := genericConfig(t)
+	c.AllowedRepos = append(c.AllowedRepos, "oci://ghcr.io/team/charts")
+	c.Sources = `[{"repoURL":"ghcr.io/team/charts.git","chart":"app","targetRevision":"1.2.3"}]`
+	refuses(t, c, "not one of the repositories")
+	if g, _ := NormalizeRepo("https://github.com/o/r.git", false); g != "https://github.com/o/r" {
+		t.Fatal(g)
+	}
+}
+
+// A Helm repository served at the host root has no path: it matches only when listed, and only as http(s).
+func TestHelmRepositoryAtTheHostRoot(t *testing.T) {
+	c := genericConfig(t)
+	c.Sources = `[{"repoURL":"https://charts.example.test","chart":"app","targetRevision":"1.2.3"}]`
+	refuses(t, c, "not one of the repositories")
+	c.AllowedRepos = append(c.AllowedRepos, "https://charts.example.test/")
+	got, err := c.Canonical()
+	if err != nil || !strings.Contains(got.Sources, `"repoURL":"https://charts.example.test/"`) {
+		t.Fatal(got.Sources, err)
+	}
+	c.Sources = `[{"repoURL":"https://charts.example.test/sub","chart":"app","targetRevision":"1.2.3"}]`
+	refuses(t, c, "not one of the repositories")
+	for _, s := range []string{"ssh://github.com", "oci://ghcr.io"} {
+		if _, err := NormalizeRepo(s, false); err == nil {
+			t.Errorf("%s accepted", s)
+		}
+	}
+}
+
+// What is fetched is the platform's own string for the repository, never the tenant's spelling of it.
+func TestTheFetchUsesTheAllowListEntryNotTheTenantsString(t *testing.T) {
+	e := newEnv(t)
+	e.cfg.ChartRepo = "HTTPS://user:pw@GitHub.com:443/jfillman/airframe/"
+	e.core.answer = &client.Change{ID: "ch-c", State: "cleared", Tier: 1, ExpiresAt: e.now.Add(time.Hour).Format(time.RFC3339Nano)}
+	if _, _, err := e.generate(t); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.exec.calls) == 0 {
+		t.Fatal("no clone")
+	}
+	if clone := e.exec.calls[0]; clone[8] != allowedAirframe {
+		t.Fatalf("cloned %q", clone[8])
+	}
+	c := genericConfig(t)
+	c.Sources = `[{"repoURL":"https://GITHUB.com/jfillman/airframe","path":"charts/x","targetRevision":"v1","helm":{"valueFiles":["a.yaml"]}}]`
+	got, err := c.Canonical()
+	if err != nil || !strings.Contains(got.Sources, `"repoURL":"`+allowedAirframe+`"`) || !strings.Contains(got.Sources, `"valueFiles":["a.yaml"]`) {
+		t.Fatal(got.Sources, err)
+	}
+}
+
+// With no list nothing is fetched, the Application's own source repository included.
+func TestNoListRefusesTheOwnSourceToo(t *testing.T) {
+	c := genericConfig(t)
+	c.AllowedRepos = nil
+	c.Sources = `[{"repoURL":"` + c.SourceRepo + `","path":"."}]`
+	refuses(t, c, "CLEARANCE_CHART_REPOS is not set")
+	c.AllowedRepos = []string{allowedAirframe}
+	if _, err := c.Canonical(); err != nil {
+		t.Fatal(err)
+	}
 }
