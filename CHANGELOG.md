@@ -9,6 +9,18 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.52.1] - 2026-11-18
+
+### Fixed
+
+- **The `clearance-cmp` plugin no longer refuses every value file** (#188). In 0.52.0 the check that a value file
+  stays inside the repository compared a relative path with an absolute one, because the plugin runs with the source
+  directory `.`. Every value file that existed was refused with "resolves outside the repository", so no gated
+  Application could render or sync. The plugin now resolves the source directory once, before any check. Upgrade
+  straight from 0.51.0 to 0.52.1, skipping 0.52.0. The
+  [0.52.0 upgrade notes](https://github.com/jfillman/clearance/blob/main/CHANGELOG.md#0520---2026-11-18) still apply,
+  including the required `CLEARANCE_CHART_REPOS`.
+
 ## [0.52.0] - 2026-11-18
 
 ### Changed
