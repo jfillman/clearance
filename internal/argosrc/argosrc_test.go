@@ -399,10 +399,84 @@ func TestKustomize(t *testing.T) {
 	// The type is also found from a kustomization file with no kustomize section.
 	res = mustRender(t, &recorder{}, Request{AppName: "k", Namespace: "ns", Sources: []Source{{RepoURL: repo, Path: "app"}}})
 	has(t, res, "kind: Deployment")
-	// Build options other than helm ones pass through; helm inflation is refused.
+	// An allow-listed build option passes through; helm inflation is refused (TestKustomizeBuildOptions has the rest).
+	mustRender(t, &recorder{}, Request{AppName: "k", Namespace: "ns", KustomizeBuildOptions: "--reorder legacy", Sources: []Source{{RepoURL: repo, Path: "app"}}})
 	_, err := render(t, &recorder{}, Request{AppName: "k", Namespace: "ns", KustomizeBuildOptions: "--enable-helm", Sources: []Source{{RepoURL: repo, Path: "app"}}})
 	if !IsUnsupported(err) {
 		t.Fatalf("err %v", err)
+	}
+}
+
+// TestKustomizeBuildOptions: the build options are a parameter the Application's author controls, so only an allow
+// list passes. A refused option never reaches kustomize (no kustomize command runs at all); an allowed one is passed
+// on exactly as written. Uses a fake kustomize, so it needs git but not kustomize or helm.
+func TestKustomizeBuildOptions(t *testing.T) {
+	need(t, "git")
+	repo := gitRepo(t, map[string]string{"app/kustomization.yaml": "resources: []\n"})
+	run := func(bo string) (*recorder, error) {
+		r := &recorder{fake: func(dir, name string, args []string) ([]byte, bool, error) {
+			if name == "kustomize" {
+				return []byte("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\n"), true, nil
+			}
+			return nil, false, nil
+		}}
+		_, err := Render(context.Background(), opts(t, r), Request{AppName: "k", Namespace: "ns", KustomizeBuildOptions: bo,
+			Sources: []Source{{RepoURL: repo, Path: "app", Kustomize: &Kustomize{}}}})
+		return r, err
+	}
+	kustomizeCalls := func(r *recorder) (n int, build []string) {
+		for _, c := range r.calls {
+			if c[0] == "kustomize" {
+				n++
+				if c[1] == "build" {
+					build = c[3:]
+				}
+			}
+		}
+		return
+	}
+	for _, bo := range []string{
+		"--load-restrictor LoadRestrictionsNone", "--load-restrictor=LoadRestrictionsNone", "--load-restrictor", "--load-restrictor=",
+		"--load-restrictor LoadRestrictionsRootOnly --load-restrictor LoadRestrictionsNone",
+		"--enable-alpha-plugins", "--enable-exec", "--enable-alpha-plugins --enable-exec", "--enable-helm", "--enable-helm=true",
+		"--helm-command /bin/sh", "--helm-command=/bin/sh", "--helm-api-versions v1", "--helm-kube-version 1.30", "--helm-debug",
+		"--mount type=bind,src=/etc,dst=/x", "--network", "--network-name host", "--env FOO", "-e FOO", "--env=FOO",
+		"--output /tmp/out", "-o /tmp/out", "--output=/tmp/out", "--reorder bogus", "--reorder", "--reorder=",
+		"--enable-managedby-label=maybe", "--enable-managedby-label yes", "--unknown-flag", "--stack-trace", "positional", "../escape",
+		"--reorder legacy extra", "-", "--",
+	} {
+		r, err := run(bo)
+		if !IsUnsupported(err) {
+			t.Errorf("%q: want an UnsupportedError, got %v", bo, err)
+			continue
+		}
+		if !strings.Contains(err.Error(), "only allow-listed options are accepted") {
+			t.Errorf("%q: the refusal does not say so: %v", bo, err)
+		}
+		if n, _ := kustomizeCalls(r); n != 0 {
+			t.Errorf("%q: refused, but kustomize ran %d time(s): %v", bo, n, r.calls)
+		}
+	}
+	// The refusal names the flag.
+	if _, err := run("--enable-exec"); err == nil || !strings.Contains(err.Error(), "--enable-exec") {
+		t.Errorf("the refusal does not name the flag: %v", err)
+	}
+	for bo, want := range map[string][]string{
+		"": nil, "   ": nil,
+		"--reorder legacy": {"--reorder", "legacy"}, "--reorder=none": {"--reorder=none"}, "--reorder none": {"--reorder", "none"},
+		"--enable-managedby-label": {"--enable-managedby-label"}, "--enable-managedby-label=true": {"--enable-managedby-label=true"},
+		"--load-restrictor LoadRestrictionsRootOnly": {"--load-restrictor", "LoadRestrictionsRootOnly"},
+		"--load-restrictor=LoadRestrictionsRootOnly": {"--load-restrictor=LoadRestrictionsRootOnly"},
+		"--reorder legacy --enable-managedby-label":  {"--reorder", "legacy", "--enable-managedby-label"},
+	} {
+		r, err := run(bo)
+		if err != nil {
+			t.Errorf("%q: %v", bo, err)
+			continue
+		}
+		if _, got := kustomizeCalls(r); strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+			t.Errorf("%q: kustomize build got options %q, want %q", bo, got, want)
+		}
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -15,8 +16,7 @@ import (
 // The directory is the renderer's own checkout, so the edits never touch anything shared.
 //
 // Not rendered, and refused: kustomize.patches (Argo CD rewrites kustomization.yaml itself), kustomize.version (a
-// different binary), and a build option that turns on Helm chart inflation (a network fetch with its own
-// repositories and credentials).
+// different binary), and any build option that is not on the allow list (checkBuildOptions).
 func (st *state) kustomize(ctx context.Context, pos int, req Request, s Source, env Env, root, appPath string) ([]byte, error) {
 	k := s.Kustomize
 	if k == nil {
@@ -28,8 +28,9 @@ func (st *state) kustomize(ctx context.Context, pos int, req Request, s Source, 
 	if len(k.Patches) > 0 {
 		return nil, unsupported(pos, "kustomize.patches", "Argo CD edits kustomization.yaml to add them; the plugin does not reproduce that")
 	}
-	if strings.Contains(req.KustomizeBuildOptions, "--enable-helm") || strings.Contains(req.KustomizeBuildOptions, "--helm-") {
-		return nil, unsupported(pos, "kustomize with Helm chart inflation", "kustomize.buildOptions enables --enable-helm")
+	buildOpts, err := checkBuildOptions(pos, req.KustomizeBuildOptions)
+	if err != nil {
+		return nil, err
 	}
 	netEnv, err := st.renderEnv(false) // kustomize fetches remote bases itself (git, HTTP): the network is off for it
 	if err != nil {
@@ -137,7 +138,7 @@ func (st *state) kustomize(ctx context.Context, pos int, req Request, s Source, 
 		}
 	}
 	args := []string{"build", appPath}
-	args = append(args, strings.Fields(req.KustomizeBuildOptions)...)
+	args = append(args, buildOpts...)
 	out, err := st.o.Run(ctx, root, netEnv, "kustomize", args...)
 	if err != nil {
 		return nil, fmt.Errorf("source %d: kustomize build: %w", pos, err)
@@ -159,4 +160,91 @@ func replicaCount(raw json.RawMessage) (int, error) {
 		return 0, fmt.Errorf("expected integer value for count. Received: %s", s)
 	}
 	return 0, fmt.Errorf("expected integer value for count. Received: %s", string(raw))
+}
+
+// buildOptionSpec is one allowed `kustomize build` option. values is the set of values it accepts; nil means a
+// boolean flag (bare, or =true / =false).
+type buildOptionSpec struct {
+	values map[string]bool
+}
+
+// allowedBuildOptions is the whole set of kustomize build options the plugin passes on (kustomize 5.8.1). The build
+// options arrive as a plugin parameter, which the Application's author controls, so this is an allow list: an option
+// is here only when it cannot widen what kustomize reads or runs. Everything else is refused, notably
+// --load-restrictor LoadRestrictionsNone (reads files outside the kustomization, such as the verifier token),
+// --enable-alpha-plugins and --enable-exec (run code in the sidecar), --enable-helm and --helm-* (chart inflation),
+// --mount, --network and --network-name (container function runtimes), --env (passes environment through) and
+// --output (writes a file). Adding to this list is a security decision.
+var allowedBuildOptions = map[string]buildOptionSpec{
+	"--reorder":                {values: map[string]bool{"legacy": true, "none": true}},
+	"--enable-managedby-label": {},
+	"--load-restrictor":        {values: map[string]bool{"LoadRestrictionsRootOnly": true}}, // the default
+}
+
+// checkBuildOptions parses the build options (--flag, --flag=value and --flag value forms) and returns the tokens to
+// pass to `kustomize build`, unchanged. Anything that is not an allow-listed option with an allowed value is an
+// UnsupportedError naming it; nothing runs.
+func checkBuildOptions(pos int, raw string) ([]string, error) {
+	toks := strings.Fields(raw)
+	var out []string
+	refuse := func(tok, why string) error {
+		return unsupported(pos, "kustomize build option "+strconv.Quote(tok),
+			why+"; only allow-listed options are accepted ("+allowedBuildOptionList()+")")
+	}
+	for i := 0; i < len(toks); i++ {
+		tok := toks[i]
+		name, val, hasVal := strings.Cut(tok, "=")
+		spec, ok := allowedBuildOptions[name]
+		if !ok || !strings.HasPrefix(tok, "--") {
+			return nil, refuse(tok, "it is not an allowed option")
+		}
+		if spec.values == nil { // boolean
+			if hasVal && val != "true" && val != "false" {
+				return nil, refuse(tok, "a boolean option takes only true or false")
+			}
+			out = append(out, tok)
+			continue
+		}
+		if !hasVal {
+			if i+1 >= len(toks) {
+				return nil, refuse(tok, "the option needs a value")
+			}
+			i++
+			val = toks[i]
+			out = append(out, tok, val)
+		} else {
+			out = append(out, tok)
+		}
+		if !spec.values[val] {
+			return nil, refuse(tok+" "+val, "the value is not allowed")
+		}
+	}
+	return out, nil
+}
+
+func allowedBuildOptionList() string {
+	var parts []string
+	for _, n := range sortedSpecNames() {
+		spec := allowedBuildOptions[n]
+		if spec.values == nil {
+			parts = append(parts, n)
+			continue
+		}
+		var vs []string
+		for v := range spec.values {
+			vs = append(vs, v)
+		}
+		sort.Strings(vs)
+		parts = append(parts, n+" "+strings.Join(vs, "|"))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func sortedSpecNames() []string {
+	var ns []string
+	for n := range allowedBuildOptions {
+		ns = append(ns, n)
+	}
+	sort.Strings(ns)
+	return ns
 }
