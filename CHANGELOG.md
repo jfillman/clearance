@@ -9,6 +9,34 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.52.0] - 2026-11-18
+
+### Changed
+
+- **Upgrading from 0.51.0: read this before rolling out the `clearance-cmp` sidecar.**
+  - **The `clearance-cmp` plugin now requires `CLEARANCE_CHART_REPOS` on its sidecar.** It is the list of repository
+    URLs a chart may be fetched from (comma or white-space separated; there is no wildcard and no default). Without it
+    **every chart is refused**: the Application shows a comparison error naming `CLEARANCE_CHART_REPOS`. Set it per cluster
+    (apron renders it) before the 0.52.0 sidecar image reaches a cluster.
+  - **Helm network dependencies are refused.** `helm template` and `helm dependency build --skip-refresh` run with the
+    network off, so a chart whose dependencies are not on disk fails the render. Vendor them under `charts/`. In the
+    generic mode only, a `file://` dependency inside the source is still accepted.
+  - **Kustomize remote bases are refused.** `kustomize` runs with the network off too, so a base that is not in the source
+    fails the render.
+  - **Symlinks that leave the source are refused.** Any tree Helm or Kustomize reads (the cloned chart, a `file://`
+    dependency, the kustomize directory, each value file) must resolve inside the repository it came from.
+  - A `..` anywhere in a path parameter is now refused, even one that cleans to a path inside.
+  - No schema change. Rolling back the sidecar to 0.51.0 restores the old behaviour.
+- **The Argo CD plugin fetches a chart only from a repository the platform lists** (#186). Behind the gate the plugin,
+  not Argo CD, fetches the chart, so the AppProject's `sourceRepos` did not apply to it. `CLEARANCE_CHART_REPOS` is
+  set by the platform on the sidecar and is deliberately not a plugin parameter, since the parameters come from values the
+  tenant writes. URLs are compared after normalising, and what git or Helm is given is the list's own string. A local path,
+  `file://`, `ext::`, an option, a query, or a `..` / `.` / empty path segment is refused whatever the list says. An entry
+  that is not a repository URL stops the plugin at start. An OCI registry is listed as `oci://host/path`.
+- **Helm and Kustomize run network-sandboxed** (#186): `GIT_ALLOW_PROTOCOL=none`, proxy variables pointing at a closed
+  local port, and empty Helm repository, cache and registry config files. Not covered, and said so in docs/gate.md:
+  loopback inside the sidecar's pod, and a Helm index that names a package URL on another host.
+
 ### Added
 
 - **See the API's memory.** Two opt-in listeners, off by default and never on the service port:
@@ -1698,7 +1726,8 @@ What the Autopilot gateway needs of the core before the hangar-dev cutover (R-3e
   scope, narrow-only limits, CEL policy, sessions, the hash-chained audit log and the gateway; the Hangar pack's
   `glidepath.*` and `airframe.*` tools over glidepath-api and a GET-only Kubernetes adapter.
 
-[Unreleased]: https://github.com/jfillman/clearance/compare/v0.51.0...HEAD
+[Unreleased]: https://github.com/jfillman/clearance/compare/v0.52.0...HEAD
+[0.52.0]: https://github.com/jfillman/clearance/compare/v0.51.0...v0.52.0
 [0.51.0]: https://github.com/jfillman/clearance/compare/v0.50.0...v0.51.0
 [0.50.0]: https://github.com/jfillman/clearance/compare/v0.49.0...v0.50.0
 [0.49.0]: https://github.com/jfillman/clearance/compare/v0.48.0...v0.49.0
