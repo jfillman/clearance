@@ -1885,7 +1885,8 @@ and `ARGOCD_APP_REVISION` (the plugin's own source commit, which the registratio
 parameters `app`, `env` and `cluster` are required as before. Two optional ones: `clusterScopedKinds` (comma
 separated; as before, and now also `!Kind` to say that a kind the built-in rules take for cluster-scoped is
 namespaced, CloudNativePG's `Cluster` being the one found) and `kustomizeBuildOptions` (argocd-cm's
-`kustomize.buildOptions`, which a plugin cannot read; empty on both clusters). An Application with no destination
+`kustomize.buildOptions`, which a plugin cannot read; empty on both clusters; only the allow-listed options below are
+accepted). An Application with no destination
 namespace renders (Helm gets no `--namespace`, as under Argo CD) but the plugin's own configuration still requires
 `ARGOCD_APP_NAMESPACE`, so it is refused until the gate decides what stamping a namespace-less object means.
 
@@ -1913,7 +1914,8 @@ An unsupported feature is an `UnsupportedError` naming the gap: the plugin exits
 | --- | --- |
 | a source field the plugin does not know | Argo CD may act on it |
 | another plugin (`plugin:`), `jsonnet` (a selected `.jsonnet` file), an `oci://` artifact source | different renderers |
-| `kustomize.patches`, `kustomize.version`, kustomize Helm inflation (`--enable-helm` in the build options) | Argo CD rewrites `kustomization.yaml`, picks a binary, or fetches charts with its own repositories and credentials |
+| `kustomize.patches`, `kustomize.version` | Argo CD rewrites `kustomization.yaml` or picks a binary |
+| any kustomize build option that is not allow-listed (see below), among them `--enable-helm` and `--helm-*`, `--load-restrictor` other than `LoadRestrictionsRootOnly`, `--enable-alpha-plugins`, `--enable-exec`, `--mount`, `--network`, `--env`, `--output`, and any positional argument | the option string is a parameter the Application's author sets: these fetch charts with their own credentials, read files outside the kustomization (the verifier token), run code in the sidecar, or write files |
 | a remote value file URL, `helm.version` other than 3 | a fetch the plugin does not make; a renderer it does not have |
 | `.argocd-source.yaml` or `.argocd-source-<app>.yaml` in a source's path | Argo CD merges parameter overrides from them |
 | a version constraint (`1.*`, `^1.2`) as a chart version, a git revision that is a semver constraint, `tagPrefix`, an OCI chart with no version | the plugin pins exact revisions; Argo CD resolves a range against the tag list |
@@ -1922,6 +1924,12 @@ An unsupported feature is an `UnsupportedError` naming the gap: the plugin exits
 | a repository URL that is not `https`, `http`, `ssh`, `git` or scp-like (`file://`, `ext::`, a local path) | a read of the sidecar's own disk |
 | a private repository or registry | the sidecar has no credential (see the risks below); git or Helm fails and the error says so |
 | a render the stamping reader will not read | see finding 4 below |
+
+**Kustomize build options are an allow list.** `kustomizeBuildOptions` is read from the Application, so the plugin
+passes on only options that cannot widen what kustomize reads or runs, in the `--flag`, `--flag=value` or
+`--flag value` form: `--reorder legacy|none`, `--enable-managedby-label` (bare, or `=true` / `=false`) and
+`--load-restrictor LoadRestrictionsRootOnly` (the default). Any other option, value or argument is refused as
+unsupported, by name, before kustomize runs.
 
 #### The parity suite
 
