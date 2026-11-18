@@ -16,6 +16,8 @@ require (
 	golang.org/x/mod v0.41.0
 )
 
+require github.com/Masterminds/semver/v3 v3.4.0
+
 require (
 	cel.dev/expr v0.25.1 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect

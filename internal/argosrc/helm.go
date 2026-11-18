@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/bmatcuk/doublestar/v4"
 	"go.yaml.in/yaml/v3"
 )
@@ -124,7 +125,9 @@ func (st *state) helm(ctx context.Context, pos int, req Request, s Source, env E
 	if err != nil && isMissingDependency(err) {
 		// A dependency under file:// inside the source is packaged into charts/ without a repository index, so a chart
 		// that mixes it with vendored dependencies renders offline (--skip-refresh below has no index for the others).
-		st.stageLocalDependencies(ctx, root, appPath, netEnv)
+		if serr := st.stageLocalDependencies(ctx, root, appPath, netEnv); serr != nil {
+			return nil, unsupported(pos, "a file:// chart dependency that does not match its constraint", serr.Error())
+		}
 		out, err = st.o.Run(ctx, appPath, netEnv, "helm", args...)
 	}
 	if err != nil && isMissingDependency(err) {
@@ -352,23 +355,24 @@ func ReleaseIDFromValues(docs [][]byte) string {
 // unless charts/ already holds it. Best effort and offline: whatever it cannot do is left to the build that follows,
 // which refuses a remote dependency. (This reads Chart.yaml only to save work; it is not a security check, the
 // network-off environment is.)
-func (st *state) stageLocalDependencies(ctx context.Context, root, chartDir string, env []string) {
+func (st *state) stageLocalDependencies(ctx context.Context, root, chartDir string, env []string) error {
 	b, err := os.ReadFile(filepath.Join(chartDir, "Chart.yaml"))
 	if err != nil {
-		return
+		return nil
 	}
 	var c struct {
 		Dependencies []struct {
 			Name       string `yaml:"name"`
+			Version    string `yaml:"version"`
 			Repository string `yaml:"repository"`
 		} `yaml:"dependencies"`
 	}
 	if yaml.Unmarshal(b, &c) != nil {
-		return
+		return nil
 	}
 	rootReal, err := filepath.EvalSymlinks(root)
 	if err != nil {
-		return
+		return nil
 	}
 	for _, d := range c.Dependencies {
 		rest, ok := strings.CutPrefix(d.Repository, "file://")
@@ -386,6 +390,9 @@ func (st *state) stageLocalDependencies(ctx context.Context, root, chartDir stri
 		if err != nil || (real != rootReal && !strings.HasPrefix(real, rootReal+string(os.PathSeparator))) {
 			continue
 		}
+		if err := checkLocalVersion(real, d.Name, d.Version); err != nil {
+			return err
+		}
 		dest := filepath.Join(chartDir, "charts")
 		if os.MkdirAll(dest, 0o755) != nil {
 			continue
@@ -395,4 +402,36 @@ func (st *state) stageLocalDependencies(ctx context.Context, root, chartDir stri
 		}
 		_, _ = st.o.Run(ctx, chartDir, env, "helm", "package", real, "--destination", dest)
 	}
+	return nil
+}
+
+// checkLocalVersion is what `helm dependency build` asks of a file:// dependency: the chart there must satisfy the
+// version constraint Chart.yaml declares (an empty constraint accepts any version).
+func checkLocalVersion(dir, name, constraint string) error {
+	constraint = strings.TrimSpace(constraint)
+	if constraint == "" {
+		return nil
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "Chart.yaml"))
+	if err != nil {
+		return nil // helm package reports a directory that is not a chart
+	}
+	var m struct {
+		Version string `yaml:"version"`
+	}
+	if yaml.Unmarshal(b, &m) != nil {
+		return nil
+	}
+	c, err := semver.NewConstraint(constraint)
+	if err != nil {
+		return fmt.Errorf("dependency %q: the version constraint %q is not valid: %v", name, constraint, err)
+	}
+	v, err := semver.NewVersion(m.Version)
+	if err != nil {
+		return fmt.Errorf("dependency %q: the local chart's version %q is not a semantic version: %v", name, m.Version, err)
+	}
+	if !c.Check(v) {
+		return fmt.Errorf("dependency %q: the local chart is version %s, which does not satisfy %q", name, m.Version, constraint)
+	}
+	return nil
 }

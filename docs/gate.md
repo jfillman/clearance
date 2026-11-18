@@ -1792,8 +1792,10 @@ runs for a remote base, refuses every transport), `HTTP_PROXY`, `HTTPS_PROXY` an
 closed local port with `NO_PROXY` empty (Helm's repository, index, package and OCI requests and Kustomize's HTTP
 resources cannot connect), and `HELM_REPOSITORY_CONFIG`, `HELM_REPOSITORY_CACHE` and `HELM_REGISTRY_CONFIG` pointing at
 empty files (no stored repository or credential). A dependency or base that is not on disk fails the render, which Argo
-CD shows as a comparison error: vendor the chart under `charts/` or use `file://` inside the source (a `file://` dependency
-inside the source is packaged into `charts/` offline, so it mixes with vendored ones). Helm and Kustomize follow symlinks (verified for
+CD shows as a comparison error: vendor the chart under `charts/`. In the generic mode only, a `file://` dependency inside the source is also
+accepted: it is packaged into `charts/` offline (so it mixes with vendored ones) after its version is checked against the
+constraint in Chart.yaml. The chart-parameter path (`chartRepo`) does not stage anything: its chart's dependencies must be
+vendored under `charts/`. Helm and Kustomize follow symlinks (verified for
 `helm template`), so before any of them runs every tree they read (the cloned chart, a `file://` dependency about to be
 packaged, the kustomize directory, each value file) must resolve inside the repository it came from; a link to a host
 file is refused. Not covered: a

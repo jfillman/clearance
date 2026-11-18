@@ -635,3 +635,25 @@ func TestSymlinksOutOfTheSourceAreRefusedForTheChartAndItsFileDependency(t *test
 		t.Fatalf("a link inside the source renders: %v", err)
 	}
 }
+
+// A file:// dependency whose chart does not satisfy the constraint Chart.yaml declares is refused, as helm dependency
+// build would; one that satisfies it (a range) renders.
+func TestFileDependencyMustSatisfyItsVersionConstraint(t *testing.T) {
+	need(t, "helm")
+	mk := func(constraint string) Request {
+		repo := gitRepo(t, map[string]string{
+			"app/Chart.yaml":        "apiVersion: v2\nname: app\nversion: 0.1.0\ndependencies:\n- name: lib\n  version: \"" + constraint + "\"\n  repository: file://../lib\n",
+			"app/templates/cm.yaml": "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: app}\n",
+			"lib/Chart.yaml":        "apiVersion: v2\nname: lib\nversion: 0.1.0\n",
+			"lib/templates/cm.yaml": "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: lib}\n",
+		})
+		return Request{AppName: "x", Namespace: "ns", Sources: []Source{{RepoURL: repo, Path: "app", TargetRevision: "main"}}}
+	}
+	if _, err := render(t, &recorder{}, mk("~0.1.0")); err != nil {
+		t.Fatalf("a satisfied range renders: %v", err)
+	}
+	_, err := render(t, &recorder{}, mk("^2.0.0"))
+	if err == nil || !IsUnsupported(err) || !strings.Contains(err.Error(), `the local chart is version 0.1.0, which does not satisfy "^2.0.0"`) {
+		t.Fatalf("%v", err)
+	}
+}
