@@ -9,14 +9,18 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.52.2] - 2026-11-18
+
 ### Security
 
-- **The `clearance-cmp` plugin accepts only an allow list of kustomize build options** (I-39). In generic mode the
+- **The `clearance-cmp` plugin accepts only an allow list of kustomize build options** (#190). In generic mode the
   Application's `kustomizeBuildOptions` parameter was passed to `kustomize build` with only `--enable-helm` and
   `--helm-*` refused, so `--load-restrictor LoadRestrictionsNone` (read files outside the kustomization, such as the
   verifier token) or `--enable-alpha-plugins --enable-exec` (run code in the sidecar) went through. The plugin now
   passes on only `--reorder legacy|none`, `--enable-managedby-label` and `--load-restrictor LoadRestrictionsRootOnly`,
-  and refuses anything else by name before kustomize runs.
+  and refuses anything else by name before kustomize runs. **Upgrading:** an Application in generic mode that sets
+  any other build option now shows a ComparisonError naming the option; the chart (legacy) mode used by apron is not
+  affected.
 
 ## [0.52.1] - 2026-11-18
 
