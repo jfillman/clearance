@@ -10,6 +10,9 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/jfillman/clearance/client"
 )
 
 // fakeBin puts executables that print their environment first on PATH.
@@ -176,5 +179,87 @@ func TestRealKustomizeDoesNotFetchAnHTTPBaseUnderTheSandbox(t *testing.T) {
 	}
 	if got := hits(); got != before {
 		t.Fatalf("the sandboxed kustomize sent %d requests to the test endpoint", got-before)
+	}
+}
+
+// outsideFile is a file that is not in any source: a stand-in for a host file such as a service-account token.
+func outsideFile(t *testing.T) string {
+	p := filepath.Join(t.TempDir(), "token")
+	writeFile(t, p, "secret\n")
+	return p
+}
+
+// Helm and Kustomize follow symlinks, so a link that leaves its repository is refused before either runs; one that
+// stays inside the repository still renders. Checked for the cloned chart, a kustomize directory and a value file.
+func TestSymlinksThatLeaveTheRepositoryAreRefusedBeforeHelmOrKustomize(t *testing.T) {
+	out := outsideFile(t)
+	clone := func(link string) func(*env) {
+		return func(e *env) {
+			inner := e.exec.run
+			e.d.Exec = func(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+				if name == "git" && args[0] == "clone" {
+					dest := args[len(args)-1]
+					writeFile(t, filepath.Join(dest, "charts/airframe-application/Chart.yaml"), "apiVersion: v2\nname: a\nversion: 1\n")
+					writeFile(t, filepath.Join(dest, "charts/airframe-application/values.yaml"), "a: b\n")
+					target := out
+					if link == "inside" {
+						target = filepath.Join(dest, "charts/airframe-application/values.yaml")
+					}
+					if err := os.Symlink(target, filepath.Join(dest, "charts/airframe-application/templates-link")); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return inner(ctx, dir, name, args...)
+			}
+		}
+	}
+	for name, tc := range map[string]struct {
+		setup   func(*env)
+		refused string
+	}{
+		"chart link outside": {clone("outside"), "refused: the chart"},
+		"chart link inside":  {clone("inside"), ""},
+		"kustomize link out": {func(e *env) {
+			e.cfg.KustomizeDir = "k"
+			writeFile(t, filepath.Join(e.src, "k/kustomization.yaml"), "resources: []\n")
+			if err := os.Symlink(out, filepath.Join(e.src, "k/leak.yaml")); err != nil {
+				t.Fatal(err)
+			}
+		}, "refused: kustomize k"},
+		"kustomize link inside": {func(e *env) {
+			e.cfg.KustomizeDir = "k"
+			writeFile(t, filepath.Join(e.src, "k/kustomization.yaml"), "resources: []\n")
+			writeFile(t, filepath.Join(e.src, "shared.yaml"), "a: b\n")
+			if err := os.Symlink(filepath.Join(e.src, "shared.yaml"), filepath.Join(e.src, "k/shared.yaml")); err != nil {
+				t.Fatal(err)
+			}
+		}, ""},
+		"value file link outside": {func(e *env) {
+			writeFile(t, filepath.Join(e.src, "real/values.yaml"), "a: b\n")
+			if err := os.MkdirAll(filepath.Join(e.src, "hangar-prod/prod"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(out, filepath.Join(e.src, "hangar-prod/prod/values.yaml")); err != nil {
+				t.Fatal(err)
+			}
+		}, "refused: value file"},
+	} {
+		e := newEnv(t)
+		e.core.answer = &client.Change{ID: "ch-s", State: "cleared", Tier: 1, ExpiresAt: e.now.Add(time.Hour).Format(time.RFC3339Nano)}
+		tc.setup(e)
+		_, _, err := e.generate(t)
+		if tc.refused == "" && err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+		if tc.refused != "" && (err == nil || !strings.Contains(err.Error(), tc.refused)) {
+			t.Errorf("%s: %v", name, err)
+		}
+		if tc.refused != "" {
+			for _, c := range e.exec.calls {
+				if c[0] == "kustomize" || (c[0] == "helm" && !strings.HasPrefix(name, "kustomize")) { // helm renders before kustomize
+					t.Errorf("%s: %s ran after the refusal", name, c[0])
+				}
+			}
+		}
 	}
 }

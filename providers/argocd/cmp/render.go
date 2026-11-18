@@ -99,11 +99,23 @@ func Render(ctx context.Context, run Exec, cfg Config, srcDir string) (*Rendered
 		chart = dest
 	}
 	chart = filepath.Join(chart, filepath.FromSlash(cfg.ChartPath))
+	// Helm and Kustomize follow symlinks, and git keeps them: a link to a host file (a service-account token) would
+	// put that file into the render. Every tree they read must resolve inside the repository it came from.
+	chartRoot := srcDir
+	if cfg.ChartRepo != "" {
+		chartRoot = filepath.Join(tmp, "chart")
+	}
+	if err := argosrc.CheckSymlinksIn(chart, chartRoot); err != nil {
+		return nil, fmt.Errorf("refused: the chart: %w", err)
+	}
 
 	args := []string{"template", cfg.AppName, chart, "--namespace", cfg.Destination}
 	for _, f := range cfg.ValueFiles {
 		p := filepath.Join(srcDir, filepath.FromSlash(f))
 		if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() { // a missing one is skipped (ignoreMissingValueFiles)
+			if real, err := filepath.EvalSymlinks(p); err != nil || !strings.HasPrefix(real+"/", realDir(srcDir)+"/") {
+				return nil, fmt.Errorf("refused: value file %s resolves outside the repository", f)
+			}
 			args = append(args, "-f", p)
 		}
 	}
@@ -121,6 +133,9 @@ func Render(ctx context.Context, run Exec, cfg Config, srcDir string) (*Rendered
 	out.Manifests = helm
 	if cfg.KustomizeDir != "" {
 		if st, err := os.Stat(filepath.Join(srcDir, filepath.FromSlash(cfg.KustomizeDir))); err == nil && st.IsDir() {
+			if err := argosrc.CheckSymlinksIn(filepath.Join(srcDir, filepath.FromSlash(cfg.KustomizeDir)), srcDir); err != nil {
+				return nil, fmt.Errorf("refused: kustomize %s: %w", cfg.KustomizeDir, err)
+			}
 			k, err := run(ctx, srcDir, "kustomize", "build", filepath.Join(srcDir, filepath.FromSlash(cfg.KustomizeDir)))
 			if err != nil {
 				return nil, fmt.Errorf("kustomize build: %w", err)
@@ -180,4 +195,13 @@ func RenderSources(ctx context.Context, run argosrc.Runner, cfg Config) (*Render
 		return nil, err
 	}
 	return &Rendered{Manifests: res.Manifests, Generic: true, Sources: res.Sources, Release: argosrc.ReleaseIDFromValues(res.ValueDocs)}, nil
+}
+
+// realDir is dir with its symlinks resolved ("\x00", which no path starts with, when that fails).
+func realDir(dir string) string {
+	r, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "\x00"
+	}
+	return r
 }

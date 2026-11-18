@@ -390,6 +390,9 @@ func (st *state) stageLocalDependencies(ctx context.Context, root, chartDir stri
 		if os.MkdirAll(dest, 0o755) != nil {
 			continue
 		}
+		if CheckSymlinksIn(real, rootReal) != nil { // helm package follows links: never package a tree that reaches outside the source
+			continue
+		}
 		_, _ = st.o.Run(ctx, chartDir, env, "helm", "package", real, "--destination", dest)
 	}
 }

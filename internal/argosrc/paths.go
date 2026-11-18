@@ -96,12 +96,30 @@ func sourcePath(root, rel string) (string, error) {
 }
 
 // checkSymlinks is CheckOutOfBoundsSymlinks: a symbolic link in a checkout that points outside it is refused.
-func checkSymlinks(root string) error {
+func checkSymlinks(root string) error { return CheckSymlinksIn(root, root) }
+
+// CheckSymlinksIn refuses a symbolic link under dir (dir itself included) whose target resolves outside root. Helm and
+// Kustomize follow symlinks when they read a chart or a kustomization, so a link to a host file (a service-account
+// token, say) would put that file into the render. Every tree the render reads is checked before it is read. A link
+// whose target does not exist is skipped: there is nothing to read through it.
+func CheckSymlinksIn(dir, root string) error {
+	if _, err := os.Lstat(dir); os.IsNotExist(err) {
+		return nil // nothing there to read
+	}
 	rootReal, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return err
 	}
-	return filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
+	within := func(t string) bool { return t == rootReal || strings.HasPrefix(t, rootReal+string(os.PathSeparator)) }
+	if t, err := filepath.EvalSymlinks(dir); err != nil {
+		if os.IsNotExist(err) {
+			return nil // nothing there to read
+		}
+		return err
+	} else if !within(t) {
+		return fmt.Errorf("%s resolves outside the source", filepath.Base(dir))
+	}
+	return filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -115,8 +133,8 @@ func checkSymlinks(root string) error {
 			}
 			return err
 		}
-		if t != rootReal && !strings.HasPrefix(t, rootReal+string(os.PathSeparator)) {
-			rel, _ := filepath.Rel(root, p)
+		if !within(t) {
+			rel, _ := filepath.Rel(dir, p)
 			return fmt.Errorf("the source contains an out-of-bounds symlink: %s", rel)
 		}
 		return nil

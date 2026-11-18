@@ -1793,7 +1793,10 @@ closed local port with `NO_PROXY` empty (Helm's repository, index, package and O
 resources cannot connect), and `HELM_REPOSITORY_CONFIG`, `HELM_REPOSITORY_CACHE` and `HELM_REGISTRY_CONFIG` pointing at
 empty files (no stored repository or credential). A dependency or base that is not on disk fails the render, which Argo
 CD shows as a comparison error: vendor the chart under `charts/` or use `file://` inside the source (a `file://` dependency
-inside the source is packaged into `charts/` offline, so it mixes with vendored ones). Not covered: a
+inside the source is packaged into `charts/` offline, so it mixes with vendored ones). Helm and Kustomize follow symlinks (verified for
+`helm template`), so before any of them runs every tree they read (the cloned chart, a `file://` dependency about to be
+packaged, the kustomize directory, each value file) must resolve inside the repository it came from; a link to a host
+file is refused. Not covered: a
 fetch the plugin makes itself is as wide as the repository the platform listed (a Helm index may name a package URL on
 another host), and a tool that ignores the proxy variables, and loopback (Go clients do not proxy localhost, so a render can still reach a service on 127.0.0.1 in the sidecar's pod; tracked as a follow-up to render in its own network namespace). Both gaps also exist on the plain Argo CD path (the
 repo-server) for apps not behind the gate; the plugin closes them only for gated apps.
