@@ -1,8 +1,6 @@
 package main
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -286,32 +284,13 @@ func TestOCISchemeCaseIsNormalised(t *testing.T) {
 	if err != nil || !strings.Contains(got.Sources, `"repoURL":"GHCR.io/team/charts"`) {
 		t.Fatal(got.Sources, err)
 	}
-	c.Sources = `[{"repoURL":"https://github.com/jfillman/airframe.git","path":"."}]`
-	c.AllowedRepos = []string{"Oci://ghcr.io/team/charts"}
-	if _, err := c.Canonical(); err == nil {
-		t.Fatal("an oci entry is not a git repository")
-	}
 }
 
-// kustomize would clone a remote base by itself, so the plugin does not build a kustomization that has one, listed
-// repositories or not.
-func TestARemoteKustomizeBaseIsRefusedBeforeKustomizeRuns(t *testing.T) {
-	e := newEnv(t)
-	e.cfg.KustomizeDir = "hangar-prod/prod/configmap"
-	dir := filepath.Join(e.src, "hangar-prod/prod/configmap")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "kustomization.yaml"), []byte("resources:\n- https://evil.test/o/r//base?ref=main\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	_, _, err := e.generate(t)
-	if err == nil || !strings.Contains(err.Error(), "refuses remote") || len(e.core.reqs) != 0 {
-		t.Fatal(err)
-	}
-	for _, c := range e.exec.calls {
-		if c[0] == "kustomize" {
-			t.Fatalf("kustomize ran: %v", c)
-		}
-	}
+// A source that is the listed oci:// repository but is a git source (a path, no chart) reaches the guard: an OCI
+// registry is not a git repository.
+func TestAnOCIEntryIsNotAGitRepository(t *testing.T) {
+	c := genericConfig(t)
+	c.AllowedRepos = append(c.AllowedRepos, "oci://ghcr.io/team/charts")
+	c.Sources = `[{"repoURL":"oci://ghcr.io/team/charts","path":"."}]`
+	refuses(t, c, "listed as an OCI registry but is not one")
 }

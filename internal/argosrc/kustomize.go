@@ -31,8 +31,12 @@ func (st *state) kustomize(ctx context.Context, pos int, req Request, s Source, 
 	if strings.Contains(req.KustomizeBuildOptions, "--enable-helm") || strings.Contains(req.KustomizeBuildOptions, "--helm-") {
 		return nil, unsupported(pos, "kustomize with Helm chart inflation", "kustomize.buildOptions enables --enable-helm")
 	}
+	netEnv, err := st.renderEnv(false) // kustomize fetches remote bases itself (git, HTTP): the network is off for it
+	if err != nil {
+		return nil, err
+	}
 	edit := func(args ...string) error {
-		_, err := st.o.Run(ctx, appPath, nil, "kustomize", append([]string{"edit"}, args...)...)
+		_, err := st.o.Run(ctx, appPath, netEnv, "kustomize", append([]string{"edit"}, args...)...)
 		if err != nil {
 			return fmt.Errorf("source %d: kustomize %s: %w", pos, strings.Join(args[:2], " "), err)
 		}
@@ -132,12 +136,9 @@ func (st *state) kustomize(ctx context.Context, pos int, req Request, s Source, 
 			}
 		}
 	}
-	if err := CheckLocalKustomization(root, appPath); err != nil { // after the edits, so a component added above is checked too
-		return nil, fmt.Errorf("source %d: %w", pos, err)
-	}
 	args := []string{"build", appPath}
 	args = append(args, strings.Fields(req.KustomizeBuildOptions)...)
-	out, err := st.o.Run(ctx, root, nil, "kustomize", args...)
+	out, err := st.o.Run(ctx, root, netEnv, "kustomize", args...)
 	if err != nil {
 		return nil, fmt.Errorf("source %d: kustomize build: %w", pos, err)
 	}

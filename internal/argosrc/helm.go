@@ -116,18 +116,20 @@ func (st *state) helm(ctx context.Context, pos int, req Request, s Source, env E
 			os.Remove(lock)
 		}
 	}()
-	out, err := st.o.Run(ctx, appPath, st.o.helmEnv(), "helm", args...)
+	netEnv, nerr := st.renderEnv(true)
+	if nerr != nil {
+		return nil, nerr
+	}
+	out, err := st.o.Run(ctx, appPath, netEnv, "helm", args...)
 	if err != nil && isMissingDependency(err) {
-		// runHelmBuild: Argo CD builds the chart's dependencies once, then retries. Only local ones here: a Chart.yaml
-		// inside an allowed source must not pick a repository the platform did not list (localrefs.go).
-		if cerr := checkChartDependencies(root, appPath, pos); cerr != nil {
-			return nil, cerr
-		}
-		if _, berr := st.o.Run(ctx, appPath, st.o.helmEnv(), "helm", "dependency", "build"); berr != nil {
+		// runHelmBuild: Argo CD builds the chart's dependencies once, then retries. With the network off (netEnv): a
+		// Chart.yaml inside an allowed source cannot make Helm reach a repository the platform did not list, so a
+		// dependency that is not vendored or under file:// fails here (--skip-refresh: no repository index is fetched).
+		if _, berr := st.o.Run(ctx, appPath, netEnv, "helm", "dependency", "build", "--skip-refresh"); berr != nil {
 			return nil, unsupported(pos, "a chart dependency that cannot be built here",
 				"helm dependency build failed (the plugin holds no repository definitions or credentials): "+firstLine(berr.Error()))
 		}
-		out, err = st.o.Run(ctx, appPath, st.o.helmEnv(), "helm", args...)
+		out, err = st.o.Run(ctx, appPath, netEnv, "helm", args...)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("source %d: helm template: %w", pos, err)

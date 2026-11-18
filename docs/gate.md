@@ -1784,14 +1784,18 @@ host root (`https://charts.example.test`) is allowed when listed. An OCI registr
 only the generic mode fetches one. What git or Helm is given is the list's own string for the matched repository, never
 the app's spelling of it, so a difference between this comparison and git's reading of a URL cannot reach an unlisted host.
 
-The list covers the plugin's own fetches. Two renderers fetch by themselves, from files inside an allowed source, so the
-plugin refuses them instead: `helm dependency build` (generic mode; a chart whose Chart.yaml, requirements.yaml or
-Chart.lock names a dependency repository other than an empty one or a `file://` path inside the source: vendor the
-chart under `charts/`), and `kustomize build` (the tenant's `kustomizeDir` and generic-mode kustomize sources: any
-resource, base, component, patch or generator file that is not an existing path inside the source, such as a URL, a
-`git@` or go-getter spelling, or a bare `host/org/repo`, and any `helmCharts`). Local directories are followed,
-cycles are tolerated. Both gaps also exist on the plain Argo CD path (the repo-server) for apps not behind the gate;
-the plugin closes them only for gated apps.
+The list covers the plugin's own fetches. Everything after them runs with the network off, by the environment and not
+by parsing: a Chart.yaml, Chart.lock or kustomization inside an allowed source can name any repository or base, and
+Helm and Kustomize read those files in their own ways, so the plugin does not try to. Each `helm template`,
+`helm dependency build --skip-refresh` and `kustomize` command gets `GIT_ALLOW_PROTOCOL=none` (git, which kustomize
+runs for a remote base, refuses every transport), `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` (both cases) set to a
+closed local port with `NO_PROXY` empty (Helm's repository, index, package and OCI requests and Kustomize's HTTP
+resources cannot connect), and `HELM_REPOSITORY_CONFIG`, `HELM_REPOSITORY_CACHE` and `HELM_REGISTRY_CONFIG` pointing at
+empty files (no stored repository or credential). A dependency or base that is not on disk fails the render, which Argo
+CD shows as a comparison error: vendor the chart under `charts/` or use `file://` inside the source. Not covered: a
+fetch the plugin makes itself is as wide as the repository the platform listed (a Helm index may name a package URL on
+another host), and a tool that ignores the proxy variables. Both gaps also exist on the plain Argo CD path (the
+repo-server) for apps not behind the gate; the plugin closes them only for gated apps.
 Paths and the chart tag are validated (relative, no `..` segment, no leading `-`). The sidecar's `git` and `helm` run with a
 bare environment, so the clearance token is not in their reach.
 

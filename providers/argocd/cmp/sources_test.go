@@ -21,6 +21,7 @@ type genericRun struct {
 	render []byte
 	each   func(n int) []byte // when set, the n'th helm render (0-based) instead of render
 	helms  int
+	envs   map[string][]string // the environment of each call, by the first argument it ran ("git fetch", "helm template")
 }
 
 const (
@@ -30,8 +31,16 @@ const (
 	shaGitops   = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 )
 
-func (g *genericRun) run(_ context.Context, dir string, _ []string, name string, args ...string) ([]byte, error) {
+func (g *genericRun) run(_ context.Context, dir string, env []string, name string, args ...string) ([]byte, error) {
 	g.calls = append(g.calls, append([]string{name}, args...))
+	if g.envs == nil {
+		g.envs = map[string][]string{}
+	}
+	if len(args) > 0 {
+		g.envs[name+" "+args[0]] = env
+	} else {
+		g.envs[name] = env
+	}
 	switch name {
 	case "git":
 		for i, a := range args {
@@ -125,6 +134,16 @@ func TestGenericModeRendersTheSameTreeAsTheChartParameters(t *testing.T) {
 		if !strings.Contains(line, w) {
 			t.Fatalf("helm was run as %s", line)
 		}
+	}
+	// the render step runs with the network off; the fetches (git) do not
+	off := strings.Join(g.envs["helm template"], "\n")
+	for _, w := range []string{"GIT_ALLOW_PROTOCOL=none", "HTTPS_PROXY=http://127.0.0.1:9", "https_proxy=http://127.0.0.1:9", "ALL_PROXY=", "NO_PROXY=\n", "HELM_REPOSITORY_CONFIG=", "HELM_REGISTRY_CONFIG=", "HELM_REPOSITORY_CACHE="} {
+		if !strings.Contains(off+"\n", w) {
+			t.Fatalf("helm template ran without %s:\n%s", w, off)
+		}
+	}
+	if strings.Contains(strings.Join(g.envs["git fetch"], "\n"), "PROXY") || strings.Contains(strings.Join(g.envs["git fetch"], "\n"), "GIT_ALLOW_PROTOCOL=none") {
+		t.Fatalf("our own fetch must keep the network: %v", g.envs["git fetch"])
 	}
 	var vals []string
 	for i, a := range helm {
