@@ -58,8 +58,9 @@ func gateAPIConfig() Config {
 		SourceRepo: "https://github.com/jfillman/gitops-gate-api.git", SourcePath: ".",
 		App: "gate-api", Env: "prod", Cluster: "hangar-prod",
 		ChartRepo: "https://github.com/jfillman/airframe.git", ChartRev: "v0.3.168", ChartPath: "charts/airframe-application",
-		ValueFiles: []string{"hangar-prod/base.yaml", "hangar-prod/prod/values.yaml", "hangar-prod/prod/release.yaml"},
-		CoreURL:    "http://clearance.test", CacheTTL: 2 * time.Minute, WaitImage: "ghcr.io/jfillman/clearance-wait:test",
+		ValueFiles:   []string{"hangar-prod/base.yaml", "hangar-prod/prod/values.yaml", "hangar-prod/prod/release.yaml"},
+		AllowedRepos: []string{"https://github.com/jfillman/airframe.git"},
+		CoreURL:      "http://clearance.test", CacheTTL: 2 * time.Minute, WaitImage: "ghcr.io/jfillman/clearance-wait:test",
 		WaitTimeout: time.Hour}
 }
 
@@ -603,7 +604,7 @@ func TestParseConfig(t *testing.T) {
 	good := map[string]string{"ARGOCD_APP_NAME": "gate-api-prod", "ARGOCD_APP_NAMESPACE": "app-gate-api-prod", "ARGOCD_APP_REVISION": mergeSHA,
 		"ARGOCD_APP_SOURCE_REPO_URL": "git@github.com:Jfillman/gitops-gate-api.git", "PARAM_APP": "gate-api", "PARAM_ENV": "prod", "PARAM_CLUSTER": "hangar-prod",
 		"PARAM_CHARTREPO": "https://github.com/jfillman/airframe.git", "PARAM_CHARTREVISION": "v0.3.168", "PARAM_CHARTPATH": "charts/airframe-application",
-		"PARAM_VALUEFILES": "a.yaml, b/c.yaml,", "CLEARANCE_URL": "http://clearance.test"}
+		"PARAM_VALUEFILES": "a.yaml, b/c.yaml,", "CLEARANCE_CHART_REPOS": "https://github.com/jfillman/airframe.git", "CLEARANCE_URL": "http://clearance.test"}
 	get := func(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
 	c, err := ParseConfig(get(good))
 	if err != nil || strings.Join(c.ValueFiles, "|") != "a.yaml|b/c.yaml" || c.TokenFile != "/var/run/secrets/tokens/clearance" {
@@ -622,6 +623,8 @@ func TestParseConfig(t *testing.T) {
 		"bad alias":         {"CLEARANCE_WAIT_HOST_ALIAS": "nope"},
 		"bad duration":      {"CLEARANCE_WAIT_TIMEOUT": "soon"},
 		"bad app name":      {"PARAM_ENV": "Prod_1"},
+		"bad list entry":    {"CLEARANCE_CHART_REPOS": "file:///etc"},
+		"dot-dot in path":   {"PARAM_CHARTPATH": "charts/../../etc"},
 	} {
 		m := map[string]string{}
 		for k, v := range good {

@@ -1765,8 +1765,21 @@ The tenant-onboarding ApplicationSet sets the plugin's parameters (all strings; 
 paths in the gitops repo), `valuesJson`, `kustomizeDir`, and optionally `clusterScopedKinds`. The sidecar's
 environment: `CLEARANCE_URL`, `CLEARANCE_TOKEN_FILE` (default `/var/run/secrets/tokens/clearance`, read on every call),
 `CLEARANCE_WAIT_IMAGE`, `CLEARANCE_WAIT_HOST_ALIAS` (`ip=host`, for the Job's pod when the core is on another cluster),
-`CLEARANCE_WAIT_TIMEOUT`, `CLEARANCE_CMP_CACHE_DIR`, `CLEARANCE_CMP_CACHE_TTL`.
-Paths and the chart tag are validated (relative, no `..`, no leading `-`). The sidecar's `git` and `helm` run with a
+`CLEARANCE_WAIT_TIMEOUT`, `CLEARANCE_CMP_CACHE_DIR`, `CLEARANCE_CMP_CACHE_TTL` and `CLEARANCE_CHART_REPOS`.
+
+**Where a chart may come from.** Behind the gate Argo CD does not fetch the chart, the plugin does, so the AppProject's
+`sourceRepos` no longer apply to it. `CLEARANCE_CHART_REPOS` (repository URLs, comma or white-space separated) is the
+platform's list, and the plugin refuses, before it fetches anything, a `chartRepo` (or, in the generic mode, any source
+repository) that is not on it. It is an environment variable of the sidecar, set per cluster by the platform, and
+deliberately not a plugin parameter: the parameters are built from values the tenant writes (`identity.yaml`), and
+this list is the check on them. URLs are compared after normalising: scheme and host lowercased, user and default
+port dropped, `git@host:o/r` read as ssh, one trailing `/` and `.git` dropped; the path keeps its case. A local path,
+`file://`, `ext::`, an option, a query, or a `..` / `.` / empty path segment is refused whatever the list says. The
+Application's own source repository (`ARGOCD_APP_SOURCE_REPO_URL`, which Argo CD already matched against the project)
+is always allowed. There is no wildcard and no default: a sidecar with no list fetches no chart (the Application shows
+a comparison error naming `CLEARANCE_CHART_REPOS`), and an entry that is not a repository URL stops the plugin at start.
+An OCI registry is listed as `oci://host/path` and only the generic mode fetches one.
+Paths and the chart tag are validated (relative, no `..` segment, no leading `-`). The sidecar's `git` and `helm` run with a
 bare environment, so the clearance token is not in their reach.
 
 Images: `providers/argocd/cmp/Dockerfile` (alpine with git, helm and kustomize pinned and checksum-verified, the static

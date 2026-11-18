@@ -147,6 +147,7 @@ func TestGenericModeRefusesWhatItCannotReproduce(t *testing.T) {
 	e.d.Run = g.run
 	e.cfg = genericConfig(t)
 	e.cfg.Sources = `[{"repoURL":"https://example.test/x.git","path":".","plugin":{"name":"other"}}]`
+	e.cfg.AllowedRepos = append(e.cfg.AllowedRepos, "https://example.test/x.git")
 	o, objs, err := e.generate(t)
 	if err == nil || o != "" || len(objs) != 0 || !strings.Contains(err.Error(), "another config management plugin") || len(e.core.reqs) != 0 {
 		t.Fatalf("%q %v %v, %d registrations", o, objs, err, len(e.core.reqs))

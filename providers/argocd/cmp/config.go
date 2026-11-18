@@ -42,6 +42,7 @@ type Config struct {
 	KustomizeBuildOptions string // argocd-cm's kustomize.buildOptions, when the cluster sets any
 
 	// The sidecar.
+	AllowedRepos []string // CLEARANCE_CHART_REPOS: the repositories a chart may be fetched from (repos.go); platform-set, never a parameter
 	CoreURL      string
 	TokenFile    string
 	CacheDir     string
@@ -71,8 +72,9 @@ func ParseConfig(get func(string) string) (Config, error) {
 		App: p("app"), Env: p("env"), Cluster: p("cluster"), ChartRepo: p("chartRepo"), ChartRev: p("chartRevision"),
 		ChartPath: p("chartPath"), ValuesJSON: p("valuesJson"), KustomizeDir: p("kustomizeDir"),
 		CoreURL: get("CLEARANCE_URL"), TokenFile: orDefault(get("CLEARANCE_TOKEN_FILE"), "/var/run/secrets/tokens/clearance"),
-		CacheDir:  orDefault(get("CLEARANCE_CMP_CACHE_DIR"), "/tmp/clearance-cmp-cache"),
-		WaitImage: get("CLEARANCE_WAIT_IMAGE"), WaitHost: get("CLEARANCE_WAIT_HOST_ALIAS"),
+		CacheDir:     orDefault(get("CLEARANCE_CMP_CACHE_DIR"), "/tmp/clearance-cmp-cache"),
+		AllowedRepos: ParseRepoList(get("CLEARANCE_CHART_REPOS")),
+		WaitImage:    get("CLEARANCE_WAIT_IMAGE"), WaitHost: get("CLEARANCE_WAIT_HOST_ALIAS"),
 	}
 	for _, f := range strings.Split(p("valueFiles"), ",") {
 		if f = strings.TrimSpace(f); f != "" {
@@ -159,6 +161,9 @@ func (c Config) validate() error {
 			errs = append(errs, fmt.Errorf("path %q must be relative and stay inside its repository", f))
 		}
 	}
+	if _, err := c.repoSet(); err != nil {
+		errs = append(errs, err)
+	}
 	if c.WaitHost != "" && !hostRx.MatchString(c.WaitHost) {
 		errs = append(errs, fmt.Errorf("CLEARANCE_WAIT_HOST_ALIAS %q is ip=host[,host]", c.WaitHost))
 	}
@@ -177,8 +182,12 @@ func safeRel(p string) bool {
 	if path.IsAbs(p) || strings.ContainsRune(p, 0) {
 		return false
 	}
-	clean := path.Clean(p)
-	return clean != ".." && !strings.HasPrefix(clean, "../")
+	for _, seg := range strings.Split(p, "/") { // a ".." anywhere is refused, even one that cleans to a path inside
+		if seg == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 // RepoName is "owner/name" of the gitops repository, lowercased, from the Application's source URL
