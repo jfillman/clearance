@@ -567,3 +567,93 @@ func TestPluginSourceKeepsItsParameters(t *testing.T) {
 		t.Fatal(srcs, err)
 	}
 }
+
+// A chart that mixes a vendored dependency (still naming its original remote repository) with one under file:// inside
+// the source renders offline: only the remote is refused, never a vendored dependency.
+func TestMixedVendoredAndFileDependenciesRenderOffline(t *testing.T) {
+	need(t, "helm")
+	files := map[string]string{
+		"app/Chart.yaml": "apiVersion: v2\nname: app\nversion: 0.1.0\ndependencies:\n" +
+			"- name: vend\n  version: 0.1.0\n  repository: https://charts.invalid/stable\n" +
+			"- name: lib\n  version: 0.1.0\n  repository: file://../lib\n",
+		"app/charts/vend/Chart.yaml":        "apiVersion: v2\nname: vend\nversion: 0.1.0\n",
+		"app/charts/vend/templates/cm.yaml": "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: vend}\n",
+		"lib/Chart.yaml":                    "apiVersion: v2\nname: lib\nversion: 0.1.0\n",
+		"lib/templates/cm.yaml":             "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: lib}\n",
+	}
+	repo := gitRepo(t, files)
+	res := mustRender(t, &recorder{}, Request{AppName: "mixed", Namespace: "ns", Sources: []Source{{RepoURL: repo, Path: "app", TargetRevision: "main"}}})
+	has(t, res, "name: vend", "name: lib")
+	// and a dependency that is neither vendored nor local is still refused
+	files["app/Chart.yaml"] += "- name: gone\n  version: 0.1.0\n  repository: https://charts.invalid/stable\n"
+	_, err := render(t, &recorder{}, Request{AppName: "mixed", Namespace: "ns", Sources: []Source{{RepoURL: gitRepo(t, files), Path: "app", TargetRevision: "main"}}})
+	if err == nil || !IsUnsupported(err) {
+		t.Fatalf("an unvendored remote dependency must be refused: %v", err)
+	}
+}
+
+// A symlink out of the source is refused for the source chart and for a file:// dependency (helm package follows
+// links); one that stays inside the source renders.
+func TestSymlinksOutOfTheSourceAreRefusedForTheChartAndItsFileDependency(t *testing.T) {
+	need(t, "helm")
+	outside := filepath.Join(t.TempDir(), "token")
+	write(t, filepath.Dir(outside), "token", "secret\n")
+	base := func() map[string]string {
+		return map[string]string{
+			"app/Chart.yaml":        "apiVersion: v2\nname: app\nversion: 0.1.0\ndependencies:\n- name: lib\n  version: 0.1.0\n  repository: file://../lib\n",
+			"app/templates/cm.yaml": "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: app}\n",
+			"lib/Chart.yaml":        "apiVersion: v2\nname: lib\nversion: 0.1.0\n",
+			"lib/templates/cm.yaml": "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: lib}\n",
+			"lib/files/real.txt":    "x\n",
+		}
+	}
+	linked := func(t *testing.T, repo, rel, target string) string {
+		t.Helper()
+		if err := os.Symlink(target, filepath.Join(repo, rel)); err != nil {
+			t.Fatal(err)
+		}
+		r := &recorder{}
+		for _, a := range [][]string{{"add", "-A"}, {"commit", "-q", "-m", "link"}} {
+			if _, err := r.run(context.Background(), repo, nil, "git", a...); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return repo
+	}
+	req := func(repo string) Request {
+		return Request{AppName: "x", Namespace: "ns", Sources: []Source{{RepoURL: repo, Path: "app", TargetRevision: "main"}}}
+	}
+	for name, rel := range map[string]string{"the source chart": "app/templates/leak.yaml", "a file:// dependency": "lib/files/leak.txt"} {
+		repo := linked(t, gitRepo(t, base()), rel, outside)
+		if _, err := render(t, &recorder{}, req(repo)); err == nil || !strings.Contains(err.Error(), "out-of-bounds symlink") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	repo := gitRepo(t, base())
+	repo = linked(t, repo, "lib/files/alias.txt", "real.txt")
+	if _, err := render(t, &recorder{}, req(repo)); err != nil {
+		t.Fatalf("a link inside the source renders: %v", err)
+	}
+}
+
+// A file:// dependency whose chart does not satisfy the constraint Chart.yaml declares is refused, as helm dependency
+// build would; one that satisfies it (a range) renders.
+func TestFileDependencyMustSatisfyItsVersionConstraint(t *testing.T) {
+	need(t, "helm")
+	mk := func(constraint string) Request {
+		repo := gitRepo(t, map[string]string{
+			"app/Chart.yaml":        "apiVersion: v2\nname: app\nversion: 0.1.0\ndependencies:\n- name: lib\n  version: \"" + constraint + "\"\n  repository: file://../lib\n",
+			"app/templates/cm.yaml": "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: app}\n",
+			"lib/Chart.yaml":        "apiVersion: v2\nname: lib\nversion: 0.1.0\n",
+			"lib/templates/cm.yaml": "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: lib}\n",
+		})
+		return Request{AppName: "x", Namespace: "ns", Sources: []Source{{RepoURL: repo, Path: "app", TargetRevision: "main"}}}
+	}
+	if _, err := render(t, &recorder{}, mk("~0.1.0")); err != nil {
+		t.Fatalf("a satisfied range renders: %v", err)
+	}
+	_, err := render(t, &recorder{}, mk("^2.0.0"))
+	if err == nil || !IsUnsupported(err) || !strings.Contains(err.Error(), `the local chart is version 0.1.0, which does not satisfy "^2.0.0"`) {
+		t.Fatalf("%v", err)
+	}
+}

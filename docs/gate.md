@@ -1765,8 +1765,44 @@ The tenant-onboarding ApplicationSet sets the plugin's parameters (all strings; 
 paths in the gitops repo), `valuesJson`, `kustomizeDir`, and optionally `clusterScopedKinds`. The sidecar's
 environment: `CLEARANCE_URL`, `CLEARANCE_TOKEN_FILE` (default `/var/run/secrets/tokens/clearance`, read on every call),
 `CLEARANCE_WAIT_IMAGE`, `CLEARANCE_WAIT_HOST_ALIAS` (`ip=host`, for the Job's pod when the core is on another cluster),
-`CLEARANCE_WAIT_TIMEOUT`, `CLEARANCE_CMP_CACHE_DIR`, `CLEARANCE_CMP_CACHE_TTL`.
-Paths and the chart tag are validated (relative, no `..`, no leading `-`). The sidecar's `git` and `helm` run with a
+`CLEARANCE_WAIT_TIMEOUT`, `CLEARANCE_CMP_CACHE_DIR`, `CLEARANCE_CMP_CACHE_TTL` and `CLEARANCE_CHART_REPOS`.
+
+**Where a chart may come from.** Behind the gate Argo CD does not fetch the chart, the plugin does, so the AppProject's
+`sourceRepos` no longer apply to it. `CLEARANCE_CHART_REPOS` (repository URLs, comma or white-space separated) is the
+platform's list, and the plugin refuses, before it fetches anything, a `chartRepo` (or, in the generic mode, any source
+repository) that is not on it. It is an environment variable of the sidecar, set per cluster by the platform, and
+deliberately not a plugin parameter: the parameters are built from values the tenant writes (`identity.yaml`), and
+this list is the check on them. URLs are compared after normalising: scheme and host lowercased, user and default
+port dropped, `git@host:o/r` read as ssh, one trailing `/` and `.git` dropped; the path keeps its case. A local path,
+`file://`, `ext::`, an option, a query, or a `..` / `.` / empty path segment is refused whatever the list says. The
+Application's own source repository (`ARGOCD_APP_SOURCE_REPO_URL`, which Argo CD already matched against the project)
+counts as listed once a list is set; with no list nothing is fetched, that repository included, so there is one rule.
+There is no wildcard and no default: a sidecar with no list fetches no chart (the Application shows a comparison error
+naming `CLEARANCE_CHART_REPOS`), and an entry that is not a repository URL stops the plugin at start. IPv6 literals keep
+their brackets in the comparison; `.git` is dropped for git URLs only (it is part of an OCI name); a Helm repository at a
+host root (`https://charts.example.test`) is allowed when listed. An OCI registry is listed as `oci://host/path` and
+only the generic mode fetches one. What git or Helm is given is the list's own string for the matched repository, never
+the app's spelling of it, so a difference between this comparison and git's reading of a URL cannot reach an unlisted host.
+
+The list covers the plugin's own fetches. Everything after them runs with the network off, by the environment and not
+by parsing: a Chart.yaml, Chart.lock or kustomization inside an allowed source can name any repository or base, and
+Helm and Kustomize read those files in their own ways, so the plugin does not try to. Each `helm template`,
+`helm dependency build --skip-refresh` and `kustomize` command gets `GIT_ALLOW_PROTOCOL=none` (git, which kustomize
+runs for a remote base, refuses every transport), `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` (both cases) set to a
+closed local port with `NO_PROXY` empty (Helm's repository, index, package and OCI requests and Kustomize's HTTP
+resources cannot connect), and `HELM_REPOSITORY_CONFIG`, `HELM_REPOSITORY_CACHE` and `HELM_REGISTRY_CONFIG` pointing at
+empty files (no stored repository or credential). A dependency or base that is not on disk fails the render, which Argo
+CD shows as a comparison error: vendor the chart under `charts/`. In the generic mode only, a `file://` dependency inside the source is also
+accepted: it is packaged into `charts/` offline (so it mixes with vendored ones) after its version is checked against the
+constraint in Chart.yaml. The chart-parameter path (`chartRepo`) does not stage anything: its chart's dependencies must be
+vendored under `charts/`. Helm and Kustomize follow symlinks (verified for
+`helm template`), so before any of them runs every tree they read (the cloned chart, a `file://` dependency about to be
+packaged, the kustomize directory, each value file) must resolve inside the repository it came from; a link to a host
+file is refused. Not covered: a
+fetch the plugin makes itself is as wide as the repository the platform listed (a Helm index may name a package URL on
+another host), and a tool that ignores the proxy variables, and loopback (Go clients do not proxy localhost, so a render can still reach a service on 127.0.0.1 in the sidecar's pod; tracked as a follow-up to render in its own network namespace). Both gaps also exist on the plain Argo CD path (the
+repo-server) for apps not behind the gate; the plugin closes them only for gated apps.
+Paths and the chart tag are validated (relative, no `..` segment, no leading `-`). The sidecar's `git` and `helm` run with a
 bare environment, so the clearance token is not in their reach.
 
 Images: `providers/argocd/cmp/Dockerfile` (alpine with git, helm and kustomize pinned and checksum-verified, the static

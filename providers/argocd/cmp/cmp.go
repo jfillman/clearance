@@ -41,6 +41,11 @@ const (
 func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Writer) (Outcome, error) {
 	var r *Rendered
 	var err error
+	// Before anything is fetched: the chart comes only from where the platform says, by the platform's own spelling.
+	cfg, err = cfg.Canonical()
+	if err != nil {
+		return "", err
+	}
 	if cfg.Sources != "" {
 		run := d.Run
 		if run == nil {
