@@ -2251,6 +2251,14 @@ and the merged grant goes. An Application without the annotation is read and nev
 | each opted-in Application's parent | the entry in [What the parent must say](#what-the-parent-must-say) |
 | the CMP sidecar | as for 10b (the plugin, its credential and egress); the opt-in does not change it |
 
+**What a plain install must also have in place** (an installer that is not apron meets these first): every namespace in `protectedNamespaces`
+exists before the agent chart syncs (the chart creates a `Role` and `RoleBinding` in each, and the agent writes a namespaced `ClearanceGrant`
+into it); the core's and clearance-api's `NetworkPolicy` admit the agent and, for the plugin, the repo-server (`networkPolicy.core.from`,
+`networkPolicy.api.from`); the core knows both callers (`providers` for the agent with its `principals`, `protection` and `kinds`,
+`verifiers` for the repo-server's service account, `feedReaders` for the agent); the agent's `environment` is set (the chart default is
+`prod`, which is what an unlabelled protected namespace is cleared as, wrong on a cluster that is not production); and a source the plugin
+renders is reachable without a credential, from a repository listed in the sidecar's `CLEARANCE_CHART_REPOS` or the Application's own first git source.
+
 The agent's flags (each also an environment variable): `--optin` (`CLEARANCE_OPTIN`), `--optin-plugin-name`, `--optin-deny`,
 `--optin-namespaces` (the chart's `protectedNamespaces`), `--optin-interval` (30 s), `--optin-report-every` (5 min),
 `--optin-max-grant-bytes` (1,500,000).
