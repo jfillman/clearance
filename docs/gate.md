@@ -2463,7 +2463,9 @@ after an opt-out and the restored source is only the snapshot taken at the switc
 wait until the original is put back; (2) remove the parent's `ignoreDifferences` entry for `/spec/source` and `/spec/sources`; (3) edit the
 child's source in the parent's git; (4) sync the parent and wait until the child shows the new source; (5) restore the entry; (6) annotate
 again (the agent refuses to switch while the entry is missing). Under an **ApplicationSet**: (1) remove the opt-in annotation from the
-template and wait until the original is put back; (2) remove the `ignoreApplicationDifferences` entry and wait for the controller to write the
+changed child only and wait until its original is put back. The annotation in a shared template opts in every child, so removing it
+there opts them all out: make it per child first (a template condition on a generator field, or one ApplicationSet per child) and
+remove it only for the child being changed; (2) remove the `ignoreApplicationDifferences` entry and wait for the controller to write the
 template's source; (3) edit the template's source and wait until the edited source is on the generated Application; (4) put the entry back and
 add the annotation again. Without that order a new opt-in switches the old snapshot, and the parent can still show `Synced`. The agent does not
 adopt the new sources: it has no way to read the parent's rendered manifest. **If the entry has no `name:` it covers every child of the parent**:
