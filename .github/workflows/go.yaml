@@ -24,6 +24,16 @@ jobs:
           # Pinned to the newest 1.26 patch (govulncheck fails on standard-library vulnerabilities fixed in later
           # patches; "1.26.x" lags while setup-go's version list catches up). Bump when a new patch ships.
           go-version: "1.26.11"
+      # helm and kustomize at the versions (and checksums) the clearance-cmp image pins in its Dockerfile, first on PATH:
+      # the tests that run the real binaries (TestKustomize, TestRealKustomize..., TestRealHelm..., the chart tests)
+      # then run against what Argo CD's plugin sidecar ships, and do not skip for want of a tool.
+      - run: |
+          tools/install-cmp-tools.sh "$RUNNER_TEMP/cmp-tools"
+          echo "$RUNNER_TEMP/cmp-tools" >> "$GITHUB_PATH"
+      - run: |
+          set -euo pipefail
+          helm version --template '{{.Version}}{{"\n"}}' | grep -x "$(sed -n 's/^ARG HELM_VERSION=//p' providers/argocd/cmp/Dockerfile)"
+          kustomize version | grep -x "$(sed -n 's/^ARG KUSTOMIZE_VERSION=//p' providers/argocd/cmp/Dockerfile)"
       - run: go vet ./...
       - run: go build -o /dev/null ./providers/argocd/agent/cmd/argocd-agent
       - run: go build -o /dev/null ./providers/observe-aws/cmd/observe-aws
@@ -33,9 +43,34 @@ jobs:
         env:
           CLEARANCE_TEST_DSN: postgres://postgres:test@localhost:5432/clearance?sslmode=disable
           CLEARANCE_AGENT_SCHEMA: ${{ github.workspace }}/.autopilot/src/autopilot/engine/schemas/agent-definition.schema.json
+      # The real-binary tests ran, they did not skip: a tool missing from PATH would skip them silently above.
+      - run: |
+          set -euo pipefail
+          go test -count=1 -v ./internal/argosrc ./providers/argocd/cmp ./tools/charttest 2>&1 | tee "$RUNNER_TEMP/real-binary.log"
+          for t in TestKustomize TestRealKustomizeDoesNotFetchAnHTTPBaseUnderTheSandbox TestRealHelmDoesNotReachAnHTTPDependencyUnderTheSandbox; do
+            grep -E "^--- PASS: $t " "$RUNNER_TEMP/real-binary.log"
+          done
+          ! grep -E 'is not installed|is not on PATH' "$RUNNER_TEMP/real-binary.log"
+        env:
+          CLEARANCE_AGENT_SCHEMA: ${{ github.workspace }}/.autopilot/src/autopilot/engine/schemas/agent-definition.schema.json
       # Fuzz the parsers (section 12): every Fuzz* target in the module, 10s each (tools/fuzz-all.sh finds them).
       - run: tools/fuzz-all.sh 10s
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+  # The built clearance-cmp image, run the way Argo CD runs the plugin (tools/cmp-smoke.sh; docs/gate.md, "The smoke
+  # test of the built image"): cwd is the checkout, Argo CD's environment, uid 999, a read-only root, a tmpfs /tmp, a
+  # chart served over git://, and a fake core that answers "cleared". 0.52.0 passed every unit test and failed this.
+  cmp-image-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.11"
+      # Built for the runner's architecture, loaded into the local daemon, never pushed.
+      - run: docker build -f providers/argocd/cmp/Dockerfile --build-arg VERSION=smoke -t clearance-cmp:smoke .
+        env:
+          DOCKER_BUILDKIT: "1"
+      - run: tools/cmp-smoke.sh clearance-cmp:smoke
   # The Python client (clients/python): generated from the contract, tested against a real `clearance core --memory`.
   python-client:
     runs-on: ubuntu-latest

@@ -1809,6 +1809,27 @@ Images: `providers/argocd/cmp/Dockerfile` (alpine with git, helm and kustomize p
 binary, `plugin.yaml`; uid 999) and `providers/argocd/wait/Dockerfile` (distroless static). Both build from the
 repository root; neither is in a release workflow yet.
 
+### The smoke test of the built image
+
+The unit tests fake git and helm and pass the plugin an absolute directory, so they cannot see how the plugin behaves
+as Argo CD runs it: 0.52.0 passed all of them and refused every value file on its first real run (I-38), because Argo CD
+runs `clearance-cmp` with the source directory `.`. CI therefore builds the image from `providers/argocd/cmp/Dockerfile`
+for the runner's architecture (never pushed) and runs `tools/cmp-smoke.sh IMAGE` (the `cmp-image-smoke` job in
+`.github/workflows/go.yaml`). The script creates a gitops checkout on disk with real value files and a kustomize
+directory, a chart repository served by `git daemon` and listed in `CLEARANCE_CHART_REPOS`, and a fake core
+(`tools/cmpsmoke`) that answers the register call as cleared. It runs the image's `clearance-cmp` with the checkout as
+the working directory, the `ARGOCD_APP_*`, `PARAM_*` and `KUBE_*` environment Argo CD sets, uid 999, a read-only root
+filesystem, a tmpfs `/tmp` and no capabilities, as apron renders the sidecar. It asserts that the good checkout exits 0
+with the rendered objects (value files from all three layers, the platform's injected values, the kustomize directory,
+the change's stamp) after one register call; that a checkout whose value file is a symlink out of the repository is
+refused with `refused: value file ... resolves outside the repository`, writing nothing and registering nothing; and that
+the image's `helm` and `kustomize` are `/usr/local/bin` binaries at the versions its Dockerfile pins. It fails against
+the 0.52.0 image. To run it locally, build the image and run the script with the engine and the address the container
+reaches the host on (see the header of `tools/cmp-smoke.sh`).
+
+The other CI jobs install the same pinned helm and kustomize (`tools/install-cmp-tools.sh`, which reads the versions and
+checksums from the Dockerfile), so the tests that run the real binaries run, and a step fails the job if they skip.
+
 ### Parity with the Tekton check, and what is not yet the same
 
 `providers/argocd/cmp/testdata/parity-gate-api` holds gate-api's `hangar-prod/prod` values, a recorded `helm template`
