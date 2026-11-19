@@ -61,10 +61,9 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 	}
 	rkey := renderKey(cfg)
 	if e, ok := d.Cache.GetRender(rkey, d.Now(), cfg.RenderCacheTTL); ok {
-		fmt.Fprintf(d.Stderr, "clearance: %s/%s is unchanged (chart %s@%s, gitops %s): serving the cleared render %s from the cache, tree %s\n",
-			cfg.App, cfg.Env, cfg.ChartRev, shortRes(cfg.chartCommit), shortRes(cfg.Revision), e.ID, shortRes(e.Tree))
-		_, err := out.Write(e.Stream)
-		return Cleared, err
+		if o, handled, err := serveRender(ctx, d, cfg, e, out); handled {
+			return o, err
+		}
 	}
 	if cfg.Sources != "" {
 		run := d.Run
@@ -96,9 +95,9 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 		fmt.Fprintf(d.Stderr, ", source %d %s %s@%s", s.Position, s.Type, what, shortRes(s.Resolved))
 	}
 	if r.ChartMerge != "" {
-		fmt.Fprintf(d.Stderr, ", chart %s@%s (%s)", cfg.ChartRepo, cfg.ChartRev, r.ChartMerge[:12])
+		fmt.Fprintf(d.Stderr, ", chart %s@%s (%s), chart-cache=%s", cfg.ChartRepo, cfg.ChartRev, r.ChartMerge[:12], r.ChartFetch)
 	}
-	fmt.Fprintln(d.Stderr)
+	fmt.Fprintf(d.Stderr, ", netns=%s\n", NetnsState())
 
 	now := d.Now()
 	started := time.Now() // wall clock, against the decisions DropRenders records
@@ -108,8 +107,8 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 		if _, err := emit(tree, &buf, Cleared, e.ID, cfg); err != nil {
 			return "", err
 		}
-		if rkey != "" && (cfg.ChartRepo == "" || r.ChartMerge == cfg.chartCommit) {
-			d.Cache.PutRender(renderEntry{Key: rkey, ID: e.ID, Tier: e.Tier, Outage: e.Outage, Tree: tree.Root, App: cfg.App, Env: cfg.Env, Cluster: cfg.Cluster, CachedAt: e.CachedAt, ExpiresAt: e.ExpiresAt, Stream: buf.Bytes()}, started)
+		if req, rerr := registration(cfg, tree); rkey != "" && rerr == nil && (cfg.ChartRepo == "" || r.ChartMerge == cfg.chartCommit) {
+			d.Cache.PutRender(renderEntry{Key: rkey, Request: req, ID: e.ID, Tier: e.Tier, Outage: e.Outage, Tree: tree.Root, App: cfg.App, Env: cfg.Env, Cluster: cfg.Cluster, CachedAt: e.CachedAt, ExpiresAt: e.ExpiresAt, Stream: buf.Bytes()}, started)
 		}
 		_, err := out.Write(buf.Bytes())
 		return Cleared, err
@@ -223,6 +222,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "clearance-cmp:", err)
 		os.Exit(2)
 	}
+	SetNetns(cfg.Netns)
 	core, err := newCore(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "clearance-cmp:", err)

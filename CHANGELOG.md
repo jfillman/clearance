@@ -9,6 +9,34 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Security
+
+- **The `clearance-cmp` plugin renders in a private network namespace when the kernel allows it, so loopback is
+  unreachable** (W-31). Since 0.52.0 the render steps had the proxy settings pointing at a dead port, but Go clients
+  never proxy `127.0.0.1`, so a tenant chart or kustomization could still reach services on the repo-server pod's
+  loopback (Argo CD repo-server ports and the like; a pathname UNIX socket such as the cmp-server's is not covered by a
+  network namespace). `helm template`, `helm dependency build` and
+  `kustomize` now start in their own user and network namespace (`CLONE_NEWUSER|CLONE_NEWNET`, the current uid mapped
+  to itself; no capability) with a down loopback; chart fetches stay outside it. The new setting
+  `CLEARANCE_CMP_NETNS` is `try` (the default), `require` or `off`: `try` isolates when the kernel allows it and
+  otherwise renders as before and prints one warning line per process; `require` refuses to render without the
+  namespace and names the missing capability; `off` never attempts it. The per-render summary line on stderr ends
+  with `netns=on|unavailable|off`. **Upgrading:** nothing is needed; with the default the sidecar behaves as before
+  where its seccomp profile (`RuntimeDefault`) blocks the namespace, and is isolated where it is allowed. To get
+  isolation under `RuntimeDefault`-like profiles, give the container a `Localhost` seccomp profile that allows
+  `unshare`/`clone` with `CLONE_NEWUSER|CLONE_NEWNET` and set `CLEARANCE_CMP_NETNS=require`. See docs/gate.md.
+
+### Tests
+
+- **CI smoke-tests the built `clearance-cmp` image as Argo CD runs it.** A new `cmp-image-smoke` job builds the image
+  and runs it with the checkout as the working directory, Argo CD's environment, uid 999, a read-only root and a tmpfs
+  `/tmp`, against a chart served over `git://` and a fake core (`tools/cmp-smoke.sh`). It asserts the rendered
+  manifests, the refusal of a symlinked value file and the image's helm and kustomize versions, and fails on the 0.52.0
+  image (the relative source directory, I-38). The go job also installs helm and kustomize at the versions and
+  checksums the image pins (`tools/install-cmp-tools.sh`), so `TestKustomize`,
+  `TestRealKustomizeDoesNotFetchAnHTTPBaseUnderTheSandbox` and the other real-binary tests run instead of skipping,
+  and fails if they skip. See [docs/gate.md](docs/gate.md#the-smoke-test-of-the-built-image).
+
 ### Changed
 
 - **The `clearance-cmp` plugin caches the chart it fetches and skips an unchanged render** (hardening S1 and S2).
@@ -22,10 +50,15 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
     `CLEARANCE_CMP_CHART_CACHE_MAX_ENTRIES` (32), least recently used first. The symlink and containment checks still
     run on what Helm reads.
   - **Pre-render cache.** An Application whose inputs did not change (gitops revision, resolved chart commit, every
-    parameter, Kubernetes and API versions, plugin version) is answered from the stored cleared stream with no clone,
-    Helm or core call, while the clearance is valid and for at most `CLEARANCE_CMP_RENDER_CACHE_TTL` (15 minutes).
-    A hold or a denial is never cached. The outage policy is unchanged.
-  - Generic mode (`PARAM_SOURCES`) is not cached yet. Set the new sizes or TTL to 0 to turn a cache off.
+    parameter, Kubernetes and API versions, plugin version) skips the clone, Helm and kustomize: the stored cleared
+    stream is served. It never decides: the core is asked exactly as often as before (not at all within
+    `CLEARANCE_CMP_CACHE_TTL`, otherwise once with the stored registration request), and the stream is served only if
+    the core answers `cleared` as the same change. Another change, a hold or a denial drops the entry and renders in
+    full (a hold emits the wait Job as before); an unreachable core follows the outage policy unchanged. No decision
+    is cached longer than before. `CLEARANCE_CMP_RENDER_CACHE_TTL` (15 minutes) bounds only how long rendered bytes
+    are reused, never past the clearance's expiry. A hold or denial also drops every cached render of its tree.
+  - Generic mode (`PARAM_SOURCES`) is not cached yet. Set the new sizes or TTL to 0 to turn a cache off. The per-render summary line gains `chart-cache=hit|miss|off`
+    (before `netns=`). The CI smoke test gains a case that a second render in one `/tmp` reuses the chart.
 
 ## [0.52.2] - 2026-11-18
 

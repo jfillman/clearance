@@ -93,47 +93,51 @@ func resolveChart(ctx context.Context, run Exec, repo, rev string) string {
 // what resolveChart said ("" when unknown). Without a cache it is the plain shallow clone, as before. A failure of the
 // cache itself (a directory that cannot be written, a full disk) never fails the render: it fetches for this render
 // alone, as it did before there was a cache. A failure of git, or the render's own deadline, does fail it.
-func (c ChartCache) Fetch(ctx context.Context, run Exec, repo, rev, hint, dest string) (string, error) {
+func (c ChartCache) Fetch(ctx context.Context, run Exec, repo, rev, hint, dest string) (commit, how string, err error) {
+	plain := func() (string, string, error) {
+		commit, err := cloneChart(ctx, run, repo, rev, dest)
+		return commit, "off", err
+	}
 	if !c.enabled() {
-		return cloneChart(ctx, run, repo, rev, dest)
+		return plain()
 	}
 	if err := os.MkdirAll(c.Dir, 0o700); err != nil {
-		return cloneChart(ctx, run, repo, rev, dest)
+		return plain()
 	}
 	if hint != "" {
 		if err := c.restore(repo, hint, dest); err == nil {
-			return hint, nil
+			return hint, "hit", nil
 		}
 		unlock, err := lockFile(ctx, c.lockPath(repo, hint))
 		if err != nil {
 			if ctx.Err() != nil {
-				return "", err
+				return "", "", err
 			}
-			return cloneChart(ctx, run, repo, rev, dest)
+			return plain()
 		}
 		defer unlock()
 		// Another render may have populated the entry while this one waited for the lock.
 		if err := c.restore(repo, hint, dest); err == nil {
-			return hint, nil
+			return hint, "hit", nil // another render fetched it while this one waited
 		}
 	}
 	commit, served, err := c.populate(ctx, run, repo, rev, dest)
 	var ge *gitError
 	switch {
 	case err == nil && served:
-		return commit, nil
+		return commit, "off", nil
 	case errors.As(err, &ge) || ctx.Err() != nil:
-		return "", err
+		return "", "", err
 	case err != nil:
 		os.RemoveAll(dest)
-		return cloneChart(ctx, run, repo, rev, dest)
+		return plain()
 	}
 	if err := c.restore(repo, commit, dest); err != nil {
 		// The entry cannot be used (a full disk, an eviction that raced): fetch for this render alone.
 		os.RemoveAll(dest)
-		return cloneChart(ctx, run, repo, rev, dest)
+		return plain()
 	}
-	return commit, nil
+	return commit, "miss", nil
 }
 
 // lockPath is the lock file of a key. There are 256 of them, named by the key's first byte and never removed: a lock

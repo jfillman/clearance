@@ -1,15 +1,21 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime/debug"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/jfillman/clearance/client"
 )
 
 // The pre-render cache (hardening S2): an unchanged Application skips the render and the core call.
@@ -21,12 +27,11 @@ import (
 // image, and with it Helm's and kustomize's). The value is the stream the plugin emitted, already stamped, and the
 // cleared change's id.
 //
-// Only a cleared outcome is stored. A hold or a denial is never served from here: it goes to the core every time,
-// and one that comes back drops the entry. An entry is served while the clearance is (its ExpiresAt) and for at most
-// the cache's own lifetime (CLEARANCE_CMP_RENDER_CACHE_TTL), which bounds how long a clearance withdrawn since stays
-// served by the plugin (admission and the grant feed decide at the cluster either way). The outage policy is not
-// involved: a served entry asks nothing of the core, and a render that has to ask and finds the core unreachable
-// goes through Generate's outage path unchanged.
+// Only a cleared outcome is stored, with the registration request the render sent. The cache skips the clone, Helm and
+// kustomize, never the decision: serveRender asks the core as often as without the cache (not at all inside the tree
+// cache's CLEARANCE_CMP_CACHE_TTL, otherwise with the stored request) and serves the stored stream only for the same
+// cleared change. A hold, a denial or another change drops the entry and renders in full. CLEARANCE_CMP_RENDER_CACHE_TTL
+// bounds how long rendered bytes are reused, never past the clearance's ExpiresAt.
 //
 // Generic mode (PARAM_SOURCES) is not cached here: its sources have no commit to key on without fetching them.
 
@@ -41,18 +46,21 @@ const (
 
 // renderEntry is one cached render.
 type renderEntry struct {
-	Key       string    `json:"key"`
-	App       string    `json:"app"`
-	Env       string    `json:"env"`
-	Cluster   string    `json:"cluster"`
-	ID        string    `json:"id"`
-	Tier      int       `json:"tier"`
-	Outage    string    `json:"outage"`
-	Tree      string    `json:"tree"`
-	CachedAt  time.Time `json:"cachedAt"`  // when the core last said cleared
-	ExpiresAt time.Time `json:"expiresAt"` // the clearance's own expiry
-	StreamSum string    `json:"streamSha256"`
-	Stream    []byte    `json:"stream"`
+	Key     string `json:"key"`
+	App     string `json:"app"`
+	Env     string `json:"env"`
+	Cluster string `json:"cluster"`
+	ID      string `json:"id"`
+	// Request is the registration a fresh render of these inputs sends (registration(cfg, tree)): a hit past the tree
+	// cache's lifetime asks the core with it instead of rendering, and serves the stream only for the same change.
+	Request   *client.ChangeRequest `json:"request"`
+	Tier      int                   `json:"tier"`
+	Outage    string                `json:"outage"`
+	Tree      string                `json:"tree"`
+	CachedAt  time.Time             `json:"cachedAt"`  // when the core last said cleared
+	ExpiresAt time.Time             `json:"expiresAt"` // the clearance's own expiry
+	StreamSum string                `json:"streamSha256"`
+	Stream    []byte                `json:"stream"`
 }
 
 // renderKey is the key of a run, or "" when the run may not use the cache: generic mode, a revision that is not a
@@ -219,4 +227,63 @@ func (c Cache) pruneRenders(dir string) {
 func sumHex(b []byte) string {
 	s := sha256.Sum256(b)
 	return hex.EncodeToString(s[:])
+}
+
+// DropRender forgets one render by key (its stamp no longer matches the tree cache's change).
+func (c Cache) DropRender(key string) {
+	if key != "" && c.Dir != "" {
+		os.Remove(c.renderPath(key))
+	}
+}
+
+// serveRender answers a pre-render hit. The cache skips the clone, Helm and kustomize; it never decides. The core is
+// asked exactly as often as without the cache:
+//
+//	the tree cache says cleared within CLEARANCE_CMP_CACHE_TTL, same change  -> serve, no core call (as before)
+//	otherwise                                                                -> RegisterChange(stored request)
+//	  cleared, the change the stream is stamped with                         -> refresh the tree cache, serve
+//	  cleared as another change, holding, denied, anything else              -> drop the entries, render in full
+//	  the core is unreachable                                                -> the outage policy, allow-and-record only
+//
+// handled is false when the caller must render in full.
+func serveRender(ctx context.Context, d Deps, cfg Config, e renderEntry, out io.Writer) (o Outcome, handled bool, err error) {
+	now := d.Now()
+	serve := func(how string) (Outcome, bool, error) {
+		fmt.Fprintf(d.Stderr, "clearance: %s/%s is unchanged (chart %s@%s, gitops %s): %s; serving the cleared render %s from the cache without a clone, helm or kustomize, tree %s\n",
+			cfg.App, cfg.Env, cfg.ChartRev, shortRes(cfg.chartCommit), shortRes(cfg.Revision), how, e.ID, shortRes(e.Tree))
+		_, werr := out.Write(e.Stream)
+		return Cleared, true, werr
+	}
+	te, tok := d.Cache.Get(cfg.App, cfg.Env, cfg.Cluster, e.Tree, now)
+	if tok && te.ID != e.ID || e.Request == nil {
+		d.Cache.DropRender(e.Key) // stamped with a change the tree cache no longer names: render and ask
+		return "", false, nil
+	}
+	if tok && now.Sub(te.CachedAt) < cfg.CacheTTL {
+		return serve("the tree cache confirmed it within " + cfg.CacheTTL.String())
+	}
+	ch, err := d.Core.RegisterChange(ctx, e.Request)
+	if err != nil {
+		if errors.Is(err, client.ErrCoreUnavailable) {
+			if tok && te.Outage == "allow-and-record" {
+				fmt.Fprintf(d.Stderr, "clearance: the core is unreachable (%v); serving %s from the cache (tier %d, allow-and-record)\n", err, te.ID, te.Tier)
+				return serve("outage policy")
+			}
+			return "", true, fmt.Errorf("clearance outage hold: the core is unreachable and tree %s has no cleared, allow-and-record entry: %w", shortRes(e.Tree), err)
+		}
+		return "", true, fmt.Errorf("clearance refused the change: %w", err)
+	}
+	if ch.State == "cleared" && ch.ID == e.ID {
+		exp, _ := time.Parse(time.RFC3339Nano, ch.ExpiresAt)
+		if exp.IsZero() {
+			exp = now.Add(cfg.CacheTTL)
+		}
+		d.Cache.Put(cfg.App, cfg.Env, cfg.Cluster, CacheEntry{ID: ch.ID, Tier: ch.Tier, Outage: ch.Outage, Tree: e.Tree, CachedAt: now, ExpiresAt: exp})
+		return serve("the core confirmed the same change")
+	}
+	// Another change, a hold, a denial: nothing of this entry is served. The full render decides and emits (a hold
+	// gets its wait Job exactly as without the cache).
+	d.Cache.DropRenders(cfg.App, cfg.Env, cfg.Cluster, e.Tree)
+	d.Cache.Drop(cfg.App, cfg.Env, cfg.Cluster, e.Tree)
+	return "", false, nil
 }

@@ -1778,7 +1778,7 @@ doubtful entry is discarded and the work is done again.
 | Cache | Skips | Keyed by | Lives |
 | --- | --- | --- | --- |
 | **Chart fetch** (`charts/`) | the `git clone` (about nine tenths of a render) | the allow list's spelling of the repository and the **commit the tag resolves to now** | until evicted (bounds below) |
-| **Pre-render** (`renders/`) | the fetch, `helm`, `kustomize` and the core call | a hash of every input of the output (below) | until the clearance's `expiresAt`, and at most `CLEARANCE_CMP_RENDER_CACHE_TTL` |
+| **Pre-render** (`renders/`) | the fetch, `helm` and `kustomize` (never the decision) | a hash of every input of the output (below) | the rendered bytes are reused until the clearance's `expiresAt`, and at most `CLEARANCE_CMP_RENDER_CACHE_TTL` |
 | **Cleared tree** (`*.json`) | the core call, after a render | app, environment, cluster and tree digest | `CLEARANCE_CMP_CACHE_TTL` (2 min), and the outage policy above |
 
 **Chart fetch cache.** Every render asks the remote what the pinned revision is (`git ls-remote`, one round trip), so a tag
@@ -1800,16 +1800,31 @@ be written (read-only, full) never fails a render, which then clones for itself 
 **Pre-render cache.** The key is a hash of the Application (name, destination namespace, project, app, environment,
 cluster), `ARGOCD_APP_REVISION`, the resolved chart commit (the same lookup), every plugin parameter, the destination's
 Kubernetes version and API versions, the core's URL and the plugin's version. The value is the emitted stream, already
-stamped, with the change id. Only a **cleared** outcome is stored: a hold or a denial is never served from this cache,
-always goes to the core, and drops every entry of the same app, environment, cluster and tree (whatever its key), also refusing a cleared answer that was already in flight when the decision was recorded. A hit asks the core nothing, so it is also what a refresh
-within the lifetime costs while the core is down. An entry is served while the clearance's own `expiresAt` is ahead, and for
-at most `CLEARANCE_CMP_RENDER_CACHE_TTL` (default 15 minutes, longer than Argo CD's reconcile interval; 0 turns it off),
-which bounds how long the plugin keeps stamping a clearance that was withdrawn in the meantime (admission and the grant
-feed decide at the cluster regardless). The stream is checked against its recorded SHA-256 on every read. At most 256
-entries are kept (least recently used first) and one stream may be at most 8 MiB. **Not cached:** the generic mode
-(`PARAM_SOURCES`), whose sources have no resolved commit without fetching them, and any run whose
-`ARGOCD_APP_REVISION` is not a full commit or whose chart tag did not resolve. The outage policy above is unchanged and
-applies only to a render that had to ask the core.
+stamped, the change id, and **the registration request** a fresh render of these inputs sends. The cache skips the
+clone, Helm and kustomize; **it never decides**. A hit is handled like this:
+
+| On a hit | The plugin | Core call |
+| --- | --- | --- |
+| the tree cache says cleared, same change, within `CLEARANCE_CMP_CACHE_TTL` (2 min) | serves the stored stream | none (as before the cache) |
+| otherwise, the core answers `cleared` with the change the stream is stamped with | refreshes the tree cache, serves the stored stream | one, with the stored request |
+| `cleared` as another change, `holding`, `denied`, or any other state | drops every render of the tree and renders in full: a hold emits the wait Job, a denial refuses | one, then the full render's own |
+| the core is unreachable | the outage policy above: served only for a tree whose cached tier is `allow-and-record`, otherwise an outage hold | one (failed) |
+
+Net effect: an unchanged, cleared app skips the clone, Helm and kustomize; **the core is asked exactly as often as before
+this change, and no decision is cached longer than before** (`CLEARANCE_CMP_CACHE_TTL` still bounds it).
+`CLEARANCE_CMP_RENDER_CACHE_TTL` (default 15 minutes; 0 turns it off) bounds only how long rendered bytes are reused, and
+never past the clearance's `expiresAt`. A hold or a denial is never stored; one also drops every entry of the same app,
+environment, cluster and tree (whatever its key) and refuses a cleared answer that was already in flight when the
+decision was recorded. The stream is checked against its recorded SHA-256 on every read. At most 256 entries are kept
+(least recently used first) and one stream may be at most 8 MiB. **Not cached:** the generic mode (`PARAM_SOURCES`),
+whose sources have no resolved commit without fetching them, and any run whose `ARGOCD_APP_REVISION` is not a full
+commit or whose chart tag did not resolve.
+
+**What a warm render still costs.** Every render asks the remote what the tag is (`git ls-remote`), because that is how a
+moved tag is seen. Measured from a laptop against GitHub (airframe v0.3.176): an uncached render 1.4 s, a warm one 0.8 to
+1.0 s, `ls-remote` alone about 0.85 s, so the lookup is now most of a warm render. Caching the tag-to-commit answer is a
+separate decision (it trades the moved-tag guarantee for time) and is not done here. The summary line on stderr reports
+`chart-cache=hit|miss|off` for the render.
 
 **Where a chart may come from.** Behind the gate Argo CD does not fetch the chart, the plugin does, so the AppProject's
 `sourceRepos` no longer apply to it. `CLEARANCE_CHART_REPOS` (repository URLs, comma or white-space separated) is the
@@ -1844,14 +1859,74 @@ vendored under `charts/`. Helm and Kustomize follow symlinks (verified for
 packaged, the kustomize directory, each value file) must resolve inside the repository it came from; a link to a host
 file is refused. Not covered: a
 fetch the plugin makes itself is as wide as the repository the platform listed (a Helm index may name a package URL on
-another host), and a tool that ignores the proxy variables, and loopback (Go clients do not proxy localhost, so a render can still reach a service on 127.0.0.1 in the sidecar's pod; tracked as a follow-up to render in its own network namespace). Both gaps also exist on the plain Argo CD path (the
-repo-server) for apps not behind the gate; the plugin closes them only for gated apps.
+another host), and a tool that ignores the proxy variables (the namespace below closes that for
+the render steps). The first gap also exists on the plain Argo CD path (the repo-server) for apps not behind the gate;
+the plugin does not close it for gated apps either: the namespace restricts render traffic only, and `git` and `helm pull` stay outside it.
+
+**Private network namespace.** The proxy settings do not stop a render from reaching loopback: Go clients (Helm,
+Kustomize) never proxy `localhost` or `127.0.0.1`, so a chart or kustomization could still reach Argo CD repo-server
+ports and any other service on the pod's loopback. So each `helm template`, `helm dependency build` and `kustomize` command
+(every command `argosrc.NetworkOffFor` selects) can be started with `CLONE_NEWUSER|CLONE_NEWNET`, the current uid and
+gid mapped to themselves: the process sees one interface, a loopback that is down, and nothing else, so no address is
+reachable, the pod's own 127.0.0.1 included. The plugin itself keeps the network (it reaches the core and clones the
+allow-listed chart outside the namespace; `git` and `helm pull` are not sandboxed). It needs no capability, which is
+why it is a user namespace and not `CAP_SYS_ADMIN`. The loopback is left down on purpose: Helm and Kustomize need no
+local service. A network namespace isolates IP networking and abstract UNIX sockets, not pathname UNIX sockets: the
+cmp-server socket (under `/home/argocd/cmp-server/plugins`) stays reachable by a render running as the same uid, and
+needs its own access control.
+
+`CLEARANCE_CMP_NETNS` sets the policy; the values are exact and anything else stops the plugin at start:
+
+| Value | Namespace can be created | Namespace refused |
+| --- | --- | --- |
+| `try` (default, also unset) | renders inside it | renders without it; one warning line on stderr at the first fallback in the process, naming what was refused and how to get isolation |
+| `require` | renders inside it | refuses to render (fails closed), naming the missing capability; the tool never runs |
+| `off` | never attempted | never attempted |
+
+The kernel is probed once per process and the answer remembered, so a refused kernel is not retried per subprocess.
+The state is in the summary line on stderr, `clearance: <app>/<env> rendered ..., netns=on|unavailable|off`: `on` is
+isolated, `unavailable` is `try` that fell back, `off` is the setting. On a platform without namespaces (the parity
+tool on a laptop, the unit tests on macOS) the state is `unavailable`; the sidecar image is Linux only.
+
+*Sidecar requirements.* The default needs nothing from the node: where the namespace is refused the render runs as
+it did before. To be isolated, and to be sure of it with `require`, creating the namespace needs unprivileged user
+namespaces: the container's seccomp profile must permit `unshare`/`clone` with `CLONE_NEWUSER` and `CLONE_NEWNET`, and
+the node kernel must allow them (`user.max_user_namespaces` above 0; on Ubuntu 24.04 and later,
+`kernel.apparmor_restrict_unprivileged_userns` must not block the container). The runtimes' `RuntimeDefault` seccomp
+profile blocks these calls without `CAP_SYS_ADMIN`, so the `clearance-cmp` container needs a seccomp profile that
+allows them (a `Localhost` profile that adds those two calls to the default; `Unconfined` also works but drops every
+other filter). Nothing else changes: it still runs non-root, with all capabilities dropped and privilege escalation
+off. A cluster that has done this sets `CLEARANCE_CMP_NETNS=require`, so a node that stops allowing it fails the render
+instead of silently losing the isolation.
 Paths and the chart tag are validated (relative, no `..` segment, no leading `-`). The sidecar's `git` and `helm` run with a
 bare environment, so the clearance token is not in their reach.
 
 Images: `providers/argocd/cmp/Dockerfile` (alpine with git, helm and kustomize pinned and checksum-verified, the static
 binary, `plugin.yaml`; uid 999) and `providers/argocd/wait/Dockerfile` (distroless static). Both build from the
 repository root; neither is in a release workflow yet.
+
+### The smoke test of the built image
+
+The unit tests fake git and helm and pass the plugin an absolute directory, so they cannot see how the plugin behaves
+as Argo CD runs it: 0.52.0 passed all of them and refused every value file on its first real run (I-38), because Argo CD
+runs `clearance-cmp` with the source directory `.`. CI therefore builds the image from `providers/argocd/cmp/Dockerfile`
+for the runner's architecture (never pushed) and runs `tools/cmp-smoke.sh IMAGE` (the `cmp-image-smoke` job in
+`.github/workflows/go.yaml`). The script creates a gitops checkout on disk with real value files and a kustomize
+directory, a chart repository served by `git daemon` and listed in `CLEARANCE_CHART_REPOS`, and a fake core
+(`tools/cmpsmoke`) that answers the register call as cleared. It runs the image's `clearance-cmp` with the checkout as
+the working directory, the `ARGOCD_APP_*`, `PARAM_*` and `KUBE_*` environment Argo CD sets, uid 999, a read-only root
+filesystem, a tmpfs `/tmp` and no capabilities, as apron renders the sidecar. It asserts that the good checkout exits 0
+with the rendered objects (value files from all three layers, the platform's injected values, the kustomize directory,
+the change's stamp) after one register call; that a checkout whose value file is a symlink out of the repository is
+refused with `refused: value file ... resolves outside the repository`, writing nothing and registering nothing; and that
+the image's `helm` and `kustomize` are `/usr/local/bin` binaries at the versions its Dockerfile pins. It fails against
+the 0.52.0 image. It also prints the `netns=` state from the summary line (reported, not required): the job runs the
+image under docker's default seccomp profile, so it shows what a `RuntimeDefault`-like profile does to the default `try` mode
+on the runner. To run it locally, build the image and run the script with the engine and the address the container
+reaches the host on (see the header of `tools/cmp-smoke.sh`).
+
+The other CI jobs install the same pinned helm and kustomize (`tools/install-cmp-tools.sh`, which reads the versions and
+checksums from the Dockerfile), so the tests that run the real binaries run, and a step fails the job if they skip.
 
 ### Parity with the Tekton check, and what is not yet the same
 

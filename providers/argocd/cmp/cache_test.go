@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -53,9 +54,9 @@ func renderOnce(t *testing.T, e *env) *Rendered {
 
 func TestChartCacheHitAndMiss(t *testing.T) {
 	e := cachedEnv(t)
-	for i := 1; i <= 3; i++ {
-		if r := renderOnce(t, e); r.ChartMerge != chartSHA {
-			t.Fatalf("render %d: commit %s", i, r.ChartMerge)
+	for i, how := range []string{"miss", "hit", "hit"} {
+		if r := renderOnce(t, e); r.ChartMerge != chartSHA || r.ChartFetch != how {
+			t.Fatalf("render %d: commit %s, chart cache %q, want %q", i+1, r.ChartMerge, r.ChartFetch, how)
 		}
 	}
 	// Every render asks the remote what the tag is now; only the first fetches.
@@ -327,15 +328,15 @@ func TestAChangedInputMissesThePreRenderCache(t *testing.T) {
 func TestAPreRenderEntryExpiresWithTheClearanceAndTheCacheLifetime(t *testing.T) {
 	e := cachedEnv(t)
 	e.gen(t)
-	e.now = e.now.Add(14 * time.Minute) // inside both
+	e.now = e.now.Add(14 * time.Minute) // inside the lifetime: the bytes are reused, the core is asked (past 2 minutes)
 	e.gen(t)
-	if len(e.core.reqs) != 1 {
-		t.Fatal("a hit within the lifetime went to the core")
+	if n := e.exec.count("helm", ""); n != 1 {
+		t.Fatalf("%d renders: the bytes were not reused inside the lifetime", n)
 	}
 	e.now = e.now.Add(2 * time.Minute) // 16 minutes: past the cache lifetime, not the clearance
 	e.gen(t)
-	if len(e.core.reqs) != 2 {
-		t.Fatal("served past the cache lifetime")
+	if n := e.exec.count("helm", ""); n != 2 {
+		t.Fatal("rendered bytes were reused past the cache lifetime")
 	}
 	// The clearance's own expiry bounds it, whatever the lifetime.
 	e = cachedEnv(t)
@@ -344,8 +345,113 @@ func TestAPreRenderEntryExpiresWithTheClearanceAndTheCacheLifetime(t *testing.T)
 	e.gen(t)
 	e.now = e.now.Add(6 * time.Minute)
 	e.gen(t)
-	if len(e.core.reqs) != 2 {
+	if e.exec.count("helm", "") != 2 {
 		t.Fatal("served after the clearance expired")
+	}
+}
+
+func TestAHitWithinTheTreeCacheLifetimeMakesNoCoreCallAndOneAfterItMakesExactlyOne(t *testing.T) {
+	e := cachedEnv(t)
+	first := e.gen(t)
+	e.now = e.now.Add(90 * time.Second) // inside CLEARANCE_CMP_CACHE_TTL (2 minutes)
+	if e.gen(t) != first || len(e.core.reqs) != 1 {
+		t.Fatalf("%d core calls inside the tree cache's lifetime", len(e.core.reqs))
+	}
+	e.now = e.now.Add(3 * time.Minute) // past it: the decision is confirmed, the render is not redone
+	before := len(e.exec.calls)
+	if e.gen(t) != first {
+		t.Fatal("the stream differs")
+	}
+	if len(e.core.reqs) != 2 {
+		t.Fatalf("%d core calls, want exactly one more", len(e.core.reqs))
+	}
+	if got := e.exec.calls[before:]; len(got) != 1 || got[0][1] != "ls-remote" {
+		t.Fatalf("a confirmed hit ran %v: only the tag lookup", got)
+	}
+	// The stored request is what a fresh render sends: the same call, byte for byte.
+	a, _ := json.Marshal(e.core.reqs[0])
+	b, _ := json.Marshal(e.core.reqs[1])
+	if !bytes.Equal(a, b) {
+		t.Fatalf("the stored request differs from a fresh render's:\n%s\n%s", a, b)
+	}
+	// The confirmation refreshed the tree cache: a minute later no core call is made.
+	e.now = e.now.Add(time.Minute)
+	e.gen(t)
+	if len(e.core.reqs) != 2 {
+		t.Fatalf("%d core calls: the confirmation did not refresh the tree cache", len(e.core.reqs))
+	}
+}
+
+func TestAHitThatTheCoreDoesNotConfirmIsDroppedAndRenderedInFull(t *testing.T) {
+	reason := "no"
+	for name, answer := range map[string]*client.Change{
+		"another change": {ID: "ch-other", State: "cleared", Tier: 1, Outage: "allow-and-record"},
+		"a hold":         {ID: "ch-held", State: "holding", Tier: 2},
+		"a denial":       {ID: "ch-d", State: "denied", Tier: 3, DenyReason: &reason},
+		"expired":        {ID: "ch-abc", State: "expired", Tier: 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := cachedEnv(t)
+			e.gen(t)
+			e.now = e.now.Add(5 * time.Minute)
+			answer.ExpiresAt = e.now.Add(time.Hour).Format(time.RFC3339Nano)
+			e.core.answer = answer
+			var out bytes.Buffer
+			o, err := Generate(context.Background(), e.d, e.cfg, e.src, &out)
+			if e.exec.count("helm", "") != 2 {
+				t.Fatalf("the unconfirmed entry was served (%d renders)", e.exec.count("helm", ""))
+			}
+			switch answer.State {
+			case "holding":
+				if err != nil || o != Held || !strings.Contains(out.String(), "clearance-awaiting-approval") {
+					t.Fatalf("a hold must emit the wait Job: %v %v", o, err)
+				}
+			case "cleared":
+				if err != nil || o != Cleared || !strings.Contains(out.String(), "ch-other") || strings.Contains(out.String(), `"grant":"ch-abc"`) {
+					t.Fatalf("%v %v", o, err)
+				}
+			default:
+				if err == nil {
+					t.Fatal("a denial rendered")
+				}
+			}
+			if len(e.core.reqs) != 3 { // the first render, the confirmation, the full render's own call
+				t.Fatalf("%d core calls", len(e.core.reqs))
+			}
+		})
+	}
+}
+
+// unreachable is a core that cannot be reached.
+type unreachable struct{ calls *int }
+
+func (u unreachable) RegisterChange(context.Context, *client.ChangeRequest) (*client.Change, error) {
+	*u.calls++
+	return nil, fmt.Errorf("%w: dial tcp: refused", client.ErrCoreUnavailable)
+}
+
+func TestAHitWhileTheCoreIsUnreachableFollowsTheOutagePolicy(t *testing.T) {
+	for outage, serves := range map[string]bool{"allow-and-record": true, "hold": false} {
+		t.Run(outage, func(t *testing.T) {
+			e := cachedEnv(t)
+			e.core.answer.Outage = outage
+			first := e.gen(t)
+			e.now = e.now.Add(5 * time.Minute)
+			calls := 0
+			e.d.Core = unreachable{&calls}
+			var out bytes.Buffer
+			_, err := Generate(context.Background(), e.d, e.cfg, e.src, &out)
+			if serves {
+				if err != nil || out.String() != first {
+					t.Fatalf("an allow-and-record tree is served during an outage: %v", err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), "outage hold") || out.Len() != 0 {
+				t.Fatalf("any other tier holds: %v", err)
+			}
+			if e.exec.count("helm", "") != 1 || calls != 1 {
+				t.Fatalf("%d renders, %d calls", e.exec.count("helm", ""), calls)
+			}
+		})
 	}
 }
 
