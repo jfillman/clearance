@@ -1800,8 +1800,33 @@ vendored under `charts/`. Helm and Kustomize follow symlinks (verified for
 packaged, the kustomize directory, each value file) must resolve inside the repository it came from; a link to a host
 file is refused. Not covered: a
 fetch the plugin makes itself is as wide as the repository the platform listed (a Helm index may name a package URL on
-another host), and a tool that ignores the proxy variables, and loopback (Go clients do not proxy localhost, so a render can still reach a service on 127.0.0.1 in the sidecar's pod; tracked as a follow-up to render in its own network namespace). Both gaps also exist on the plain Argo CD path (the
-repo-server) for apps not behind the gate; the plugin closes them only for gated apps.
+another host), and a tool that ignores the proxy variables (the namespace below closes that for
+the render steps). The first gap also exists on the plain Argo CD path (the repo-server) for apps not behind the gate;
+the plugin closes it only for gated apps.
+
+**Private network namespace.** The proxy settings do not stop a render from reaching loopback: Go clients (Helm,
+Kustomize) never proxy `localhost` or `127.0.0.1`, so a chart or kustomization could still reach Argo CD repo-server
+ports or the cmp-server socket in the same pod. So each `helm template`, `helm dependency build` and `kustomize` command
+(every command `argosrc.NetworkOffFor` selects) is started with `CLONE_NEWUSER|CLONE_NEWNET`, the current uid and gid
+mapped to themselves: the process sees one interface, a loopback that is down, and nothing else, so no address is
+reachable, the pod's own 127.0.0.1 included. The plugin itself keeps the network (it reaches the core and clones the
+allow-listed chart outside the namespace; `git` and `helm pull` are not sandboxed). It needs no capability, which is
+why it is a user namespace and not `CAP_SYS_ADMIN`.
+
+*Sidecar requirements.* Creating the namespace needs unprivileged user namespaces: the container's seccomp profile must
+permit `unshare`/`clone` with `CLONE_NEWUSER` and `CLONE_NEWNET`, and the node kernel must allow them
+(`user.max_user_namespaces` above 0; on Ubuntu 24.04 and later, `kernel.apparmor_restrict_unprivileged_userns` must not
+block the container). The runtimes' `RuntimeDefault` seccomp profile blocks these calls without `CAP_SYS_ADMIN`, so
+the `clearance-cmp` container needs a seccomp profile that allows them (a `Localhost` profile that adds those two
+calls to the default; `Unconfined` also works but drops every other filter). Nothing else changes: it still runs
+non-root, with all capabilities dropped and privilege escalation off.
+
+*Fails closed.* If the namespace cannot be created the plugin refuses to render, with an error that names the missing
+capability, and never runs the tool. `CLEARANCE_CMP_ALLOW_NO_NETNS=true` lets a render run without it (the proxy
+settings above still apply, loopback is reachable); it is off unless set to exactly `true`, and is meant for a cluster
+that cannot grant the seccomp profile yet, not as a setting to leave on. On a platform without namespaces (the parity
+tool on a laptop, the unit tests on macOS) nothing is applied and the environment settings are all a render gets; the
+sidecar image is Linux only. The loopback is left down on purpose: Helm and Kustomize need no local service.
 Paths and the chart tag are validated (relative, no `..` segment, no leading `-`). The sidecar's `git` and `helm` run with a
 bare environment, so the clearance token is not in their reach.
 
