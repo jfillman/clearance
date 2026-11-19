@@ -57,9 +57,12 @@ LABEL org.opencontainers.image.title="clearance-cmp" \
       org.opencontainers.image.source="https://github.com/jfillman/clearance" \
       org.opencontainers.image.licenses="NOASSERTION" \
       org.opencontainers.image.version="${VERSION}"
-RUN apk add --no-cache git ca-certificates && mkdir -p /home/argocd/cmp-server/config /home/argocd/cmp-server/plugins && chown -R 999:999 /home/argocd
+RUN apk add --no-cache git ca-certificates && mkdir -p /home/argocd/cmp-server/config /home/argocd/cmp-server/config-canary /home/argocd/cmp-server/plugins && chown -R 999:999 /home/argocd
 COPY --from=tools /usr/local/bin/helm /usr/local/bin/kustomize /usr/local/bin/
 COPY --from=build /out/clearance-cmp /usr/local/bin/clearance-cmp
 COPY providers/argocd/cmp/plugin.yaml /home/argocd/cmp-server/config/plugin.yaml
+# The same plugin as `clearance-canary`, for a second sidecar that starts with --config-dir-path (docs/gate.md,
+# "Rolling out a plugin release"). Unused unless a sidecar points at it.
+COPY providers/argocd/cmp/plugin-canary.yaml /home/argocd/cmp-server/config-canary/plugin.yaml
 ENV HOME=/home/argocd
 USER 999:999
