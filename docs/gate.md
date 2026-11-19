@@ -1304,7 +1304,7 @@ stamp literally).
 | HTTPRoute | `Exact /v1/records`, `/v1/breakglass` on the core's host; `/v1/keys` and `/v1/grant-feeds/*` on clearance-api's |
 
 On hangar-prod: the chart `charts/clearance-argocd-agent` (values: `cluster`, `apiURL`, `coreURL`, `argocd.namespace`,
-`argocd.projects`, `protectedNamespaces`, `hostAliases`, `networkPolicy`), the image `ghcr.io/jfillman/clearance-argocd-agent`.
+`argocd.projects`, `scope`, `protectedNamespaces`, `hostAliases`, `networkPolicy`), the image `ghcr.io/jfillman/clearance-argocd-agent`.
 
 **Proof on hangar-prod** (Unverified until run; the manager runs it, with the agent deployed, the namespace
 `app-<x>-prod` labelled `clearance.hangar.io/protected=true`, G-ARGO-2's CRD and policy installed):
@@ -1322,6 +1322,40 @@ On hangar-prod: the chart `charts/clearance-argocd-agent` (values: `cluster`, `a
    `v1/ConfigMap/by-hand`, `coverage: out-of-band-detected`. `kubectl delete configmap by-hand` afterwards.
 5. Fail closed: scale the core's route down or block the agent's egress; the agent logs `grants stay as they are`,
    no grant changes, no workload restarts; restore, and it recovers on the next tick.
+
+### Cluster-wide scope (`scope: cluster`)
+
+By default (`scope: namespaces`) the agent is granted access to the namespaces in `protectedNamespaces` and no others: one
+Role and RoleBinding each, so each must exist when the chart is applied, and with the annotation opt-in get and patch on
+exactly those Namespace objects. `scope: cluster` is for an install that does not want to keep that list current. Choose
+it when the protected namespaces change often or are most of the cluster; keep `namespaces` when the list is short and
+stable and you want the grant to name them. `protectedNamespaces` must then be empty (the chart refuses both together), and
+the default render is unchanged by the option's existence.
+
+| | `scope: namespaces` (default) | `scope: cluster` |
+| --- | --- | --- |
+| Workload reads (`list` on services, configmaps, serviceaccounts, deployments, statefulsets, daemonsets, cronjobs, jobs, networkpolicies, ingresses, rollouts) | a Role and RoleBinding per listed namespace | one ClusterRole and ClusterRoleBinding (`<name>-scan`), the same rules and verbs |
+| Namespaces, no opt-in | `list` (cluster-wide, as always) | the same |
+| Namespaces, opt-in | `get`, `patch` with `resourceNames` = the list | `get`, `patch` on any namespace (no `resourceNames`) |
+| ClearanceGrants, the state ConfigMap, Applications, the CRD read | unchanged | unchanged |
+| Agent flag `--optin-namespaces` | the list | `*` |
+
+Nothing else is widened: still no Secret, no `create`, `update`, `delete` or `watch` on Namespaces, and no write to a workload.
+
+What cluster scope still limits:
+
+- **Only Applications in `argocd.projects`.** The agent switches and protects only Applications of those Argo CD projects
+  that carry the opt-in annotation and are not in `optIn.denyApplications`. A namespace is labelled protected only as the
+  destination of such an Application, once its merged grant is active.
+- **The labels the agent writes.** It writes `clearance.hangar.io/protected` and `clearance.hangar.io/protected-by` only, and
+  takes the label off only a namespace it labelled itself (`protected-by` says so). Kubernetes RBAC cannot restrict `patch`
+  to labels, or to one label, so the service account could patch any field of any Namespace if the agent were
+  compromised; the limit is the agent's code, not RBAC. In the listed mode the same patch right is bounded to the named
+  namespaces, which is the reason to keep the list where it is short.
+- **The consequence of cluster scope:** an Application of a listed project that targets any namespace, `kube-system`
+  included, can be switched and the namespace labelled protected. Restrict what a project may deploy to in the Argo CD
+  AppProject (`destinations`), which is the control point for this; do not rely on the agent's scope for it.
+- **The observer's audit-policy list is separate** and is not affected by this option.
 
 ## The Go core (R-1c, Built, deployed on hangar-dev 2026-11-03)
 

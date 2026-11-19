@@ -22,12 +22,21 @@ rules:
     resources: [clearancegrants/status]
     verbs: [get, patch, update]
   {{- if .Values.optIn.enabled }}
+  {{- if eq .Values.scope "cluster" }}
+  # scope=cluster: the opt-in labels a namespace protected (and takes its own label off): get and patch, on ANY namespace.
+  # RBAC cannot limit a patch to labels, nor to one label; the agent itself only writes clearance.hangar.io/protected and
+  # protected-by. Discovery (/api, /apis) needs no rule: every authenticated user has it.
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, patch]
+  {{- else }}
   # The opt-in labels a namespace protected (and takes its own label off): get and patch, on the namespaces named in
   # protectedNamespaces and no other. Discovery (/api, /apis) needs no rule: every authenticated user has it.
   - apiGroups: [""]
     resources: [namespaces]
     verbs: [get, patch]
     resourceNames: {{ .Values.protectedNamespaces | toJson }}
+  {{- end }}
   # The opt-in reads the ClearanceGrant CRD's schema (and only that CRD) and does not run against one that lacks the fields it writes.
   - apiGroups: [apiextensions.k8s.io]
     resources: [customresourcedefinitions]
@@ -91,6 +100,40 @@ metadata:
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "agent.fullname" . }}-applications}
 subjects:
   - {kind: ServiceAccount, name: {{ .Values.serviceAccount.name }}, namespace: {{ .Release.Namespace }}}
+{{- if eq .Values.scope "cluster" }}
+---
+# scope=cluster: read the workloads of every namespace, the same list verbs the per-namespace Roles grant. No Secret, no write.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "agent.fullname" . }}-scan
+  labels: {{- include "agent.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [services, configmaps, serviceaccounts]
+    verbs: [list]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, daemonsets]
+    verbs: [list]
+  - apiGroups: [batch]
+    resources: [cronjobs, jobs]
+    verbs: [list]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies, ingresses]
+    verbs: [list]
+  - apiGroups: [argoproj.io]
+    resources: [rollouts]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "agent.fullname" . }}-scan
+  labels: {{- include "agent.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ include "agent.fullname" . }}-scan}
+subjects:
+  - {kind: ServiceAccount, name: {{ .Values.serviceAccount.name }}, namespace: {{ .Release.Namespace }}}
+{{- else }}
 {{- range .Values.protectedNamespaces }}
 ---
 # Read the workloads of a protected namespace (the exception scan, the outcome's stamps). No Secret, no write.
@@ -126,4 +169,5 @@ metadata:
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "agent.fullname" $ }}-scan}
 subjects:
   - {kind: ServiceAccount, name: {{ $.Values.serviceAccount.name }}, namespace: {{ $.Release.Namespace }}}
+{{- end }}
 {{- end }}

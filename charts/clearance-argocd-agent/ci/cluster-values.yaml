@@ -1,0 +1,10 @@
+# scope: cluster with the annotation opt-in on (W-41). Example names only.
+cluster: cluster-a
+apiURL: https://clearance-api.example.test
+coreURL: https://clearance.example.test
+argocd:
+  namespace: argocd
+  projects: [tenants]
+scope: cluster
+optIn:
+  enabled: true
