@@ -11,6 +11,22 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ### Added
 
+- **`clearance-cmp doctor`: a preflight for the Argo CD plugin's sidecar, and an install guide any Argo CD can follow**
+  (W-34 I1 to I3). `clearance-cmp doctor` runs in the sidecar (`kubectl -n argocd exec deploy/argocd-repo-server -c
+  clearance-cmp -- clearance-cmp doctor`) or anywhere with the same environment, prints one line per check (`ok`,
+  `warn` or `fail`, with the fix) and exits 1 if any fails (2 for a usage error). It reports every settings problem at
+  once, not the first (the per-run `ARGOCD_APP_*` and `PARAM_*` variables are not required), and checks the token file
+  (exists, readable, non-empty, mode; never printed), that the core is reachable and accepts the token (`GET /healthz`,
+  then a read of a change that does not exist, which cannot change anything), the chart allow list (non-empty, each
+  entry canonical), that the cache directory is writable, the versions of git, helm and kustomize, the network
+  namespace (`on`, `off`, `unavailable`), and the plugin socket directory. It writes nothing but a probe file in the
+  cache directory. It also reports the chart cache (on or off, its bounds, a warning when the cache volume is smaller than the byte bound) and the render cache's TTL. CI runs it in the built image (`tools/cmp-smoke.sh`). New
+  [docs/install-argocd-plugin.md](docs/install-argocd-plugin.md): prerequisites, the sidecar for the official `argo-cd`
+  Helm chart and for plain manifests or kustomize, every setting and plugin parameter in one table, gating an
+  Application by hand and from an ApplicationSet, turning it off, verifying, a troubleshooting table built from the
+  plugin's own error strings, upgrade and rollback (settings before image, then hard-refresh), and what the plugin does
+  not do. **Upgrading:** nothing is needed; `doctor` is a new subcommand and the plugin's `generate` is unchanged.
+
 - **The `clearance-cmp` image can run as a second, canary plugin** (`clearance-canary`). The image carries
   `config-canary/plugin.yaml` (the same plugin with `version: canary`); a second sidecar started with
   `--config-dir-path /home/argocd/cmp-server/config-canary` registers under that name, so one Application can try a
