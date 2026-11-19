@@ -2401,11 +2401,35 @@ spec:
 spec:
   ignoreApplicationDifferences:
     - jsonPointers: [/spec/source, /spec/sources]
+  preservedFields:
+    annotations: [clearance.hangar.io/switched]
+  template:
+    metadata:
+      annotations:
+        clearance.hangar.io/protect: "true"     # the opt-in itself lives in the template, not on the generated Application
 ```
 
 `RespectIgnoreDifferences=true` matters: `ignoreDifferences` alone only hides the difference from the comparison, and any sync of
 the parent would still write the original over the switched source. The annotation `clearance.hangar.io/switched` is not in git, so
 Argo CD leaves it alone; the `clearance.hangar.io/protect` annotation, if it is in git, is not ignored and stays what git says.
+
+**An ApplicationSet needs one more entry, and its annotations are not the app-of-apps's.** An app-of-apps leaves an annotation that
+is not in git alone. An ApplicationSet does not: its controller sets a generated Application's annotations to the template's
+(plus the ones it preserves: refresh, hydrate and notification state), so an annotation added to the generated Application by hand
+or by the agent is removed on the next reconcile (Argo CD v3.5.0, `applicationset_controller.go`: `found.Annotations =
+generatedApp.Annotations`; the controller reconciles again whenever one of its Applications changes). Two consequences:
+
+- the opt-in annotation (`clearance.hangar.io/protect`) must be in the template (as above). One added to the generated Application
+  with `kubectl annotate` is dropped at once, and the opt-in with it;
+- the agent's own marker (`clearance.hangar.io/switched`) must be listed under `spec.preservedFields.annotations`. Without it the
+  controller removes the marker after the agent writes it; the agent then sees an Application on the plugin whose marker has only
+  one half (see "The marker has two halves"), calls it its own no longer, and **leaves it on the plugin** (it cannot restore it, and
+  an opt-out has nothing to put back): the checks on the parent below do not look for this entry. (Read from the code of both Argo CD and
+the agent; **Unverified** on a live cluster until the opt-in is first run.)
+
+`ignoreApplicationDifferences` also stays in force after the opt-out: the restored source is the snapshot the agent took when it
+switched the Application, and a later change to the template's source is not applied to the live Application until the Application
+is deleted and generated again (or the entry is removed). Scope the entry with `name:` to the Applications that opt in.
 
 **This check is a guard against fighting the app-of-apps, not a security boundary.** The tracking annotation and the instance label are
 written by whoever created the child, so a child can name a parent of its own making. The check prefers an owner reference to the labels,

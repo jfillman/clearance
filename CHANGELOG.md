@@ -9,6 +9,15 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Fixed
+
+- **docs/gate.md, "What the parent must say": an ApplicationSet needs `preservedFields.annotations: [clearance.hangar.io/switched]`
+  and the opt-in annotation in its template.** The ApplicationSet controller replaces a generated Application's annotations with the
+  template's, so the agent's marker (and an annotation added to the generated Application by hand) is removed on the next reconcile;
+  the agent then stops treating the Application as its own and leaves it on the plugin. The section said only
+  `ignoreApplicationDifferences`. Documentation only; the agent does not check `preservedFields` yet. Also says that the ignore entry
+  stays in force after an opt-out (the restored source is the snapshot taken at the switch).
+
 ### Added
 
 - **The `clearance-cmp` image can run as a second, canary plugin** (`clearance-canary`). The image carries
