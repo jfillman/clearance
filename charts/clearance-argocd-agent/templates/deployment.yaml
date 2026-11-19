@@ -2,7 +2,9 @@
 {{- if not .Values.apiURL }}{{ fail "apiURL is required (clearance-api)" }}{{ end }}
 {{- if not .Values.coreURL }}{{ fail "coreURL is required (the core)" }}{{ end }}
 {{- if not .Values.argocd.projects }}{{ fail "argocd.projects is required (the protected Argo CD projects, or [\"*\"])" }}{{ end }}
-{{- if and .Values.optIn.enabled (not .Values.protectedNamespaces) }}{{ fail "optIn.enabled needs protectedNamespaces: the namespaces the agent may label and read (docs/gate.md, Annotation opt-in)" }}{{ end }}
+{{- if not (has .Values.scope (list "namespaces" "cluster")) }}{{ fail "scope must be namespaces or cluster" }}{{ end }}
+{{- if and (eq .Values.scope "cluster") .Values.protectedNamespaces }}{{ fail "scope: cluster takes no protectedNamespaces: empty the list, or use scope: namespaces" }}{{ end }}
+{{- if and .Values.optIn.enabled (eq .Values.scope "namespaces") (not .Values.protectedNamespaces) }}{{ fail "optIn.enabled needs protectedNamespaces (the namespaces the agent may label and read), or scope: cluster (docs/gate.md, Annotation opt-in)" }}{{ end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -51,7 +53,7 @@ spec:
             - --optin
             - --optin-plugin-name={{ .Values.optIn.pluginName }}
             - --optin-deny={{ join "," .Values.optIn.denyApplications }}
-            - --optin-namespaces={{ join "," .Values.protectedNamespaces }}
+            - --optin-namespaces={{ if eq .Values.scope "cluster" }}*{{ else }}{{ join "," .Values.protectedNamespaces }}{{ end }}
             - --optin-interval={{ .Values.optIn.interval }}
             - --optin-report-every={{ .Values.optIn.reportEvery }}
             - --optin-max-grant-bytes={{ .Values.optIn.maxGrantBytes | int64 }}

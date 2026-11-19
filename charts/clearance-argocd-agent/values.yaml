@@ -33,9 +33,15 @@ argocd:
   namespace: argocd
   projects: []
 
+# How the agent is granted access to namespaces. `namespaces` (default): only the ones in protectedNamespaces, one Role and
+# RoleBinding each. `cluster`: every namespace, through one ClusterRole and ClusterRoleBinding (workload list verbs, and with
+# optIn.enabled get and patch on Namespaces), so no list is kept; protectedNamespaces must then be empty. The agent still only
+# acts on Applications in argocd.projects. docs/gate.md, "Cluster-wide scope", says what cluster scope still limits.
+scope: namespaces
+
 # The namespaces labelled clearance.hangar.io/protected=true. The agent reads (never writes) workloads only in these
 # namespaces: one Role and RoleBinding per entry, so each namespace must exist when the chart is applied. It reads no Secret anywhere. With optIn.enabled the list is also the
-# only set of namespaces the agent may label: it gets get and patch on exactly these Namespace objects.
+# only set of namespaces the agent may label: it gets get and patch on exactly these Namespace objects. Ignored (must be empty) with scope: cluster.
 protectedNamespaces: []
 
 # The ClearanceGrant CRD's group/version (G-ARGO-2).

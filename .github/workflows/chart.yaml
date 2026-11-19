@@ -31,6 +31,7 @@ jobs:
       - run: helm lint charts/clearance --strict -f charts/clearance/ci/verify-values.yaml
       - run: helm lint charts/clearance-argocd-agent --strict -f charts/clearance-argocd-agent/ci/minimal-values.yaml
       - run: helm lint charts/clearance-argocd-agent --strict -f charts/clearance-argocd-agent/ci/optin-values.yaml
+      - run: helm lint charts/clearance-argocd-agent --strict -f charts/clearance-argocd-agent/ci/cluster-values.yaml
       - run: helm lint charts/clearance-observe-aws --strict -f charts/clearance-observe-aws/ci/minimal-values.yaml
       - run: helm lint charts/clearance-observe-k8s --strict -f charts/clearance-observe-k8s/ci/minimal-values.yaml
       - run: helm lint charts/clearance-witness --strict -f charts/clearance-witness/ci/minimal-values.yaml

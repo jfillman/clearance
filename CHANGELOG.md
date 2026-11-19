@@ -9,6 +9,13 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Added
+
+- **Argo CD agent chart: `scope: cluster` (W-41).** An install no longer has to list `protectedNamespaces`: `scope: cluster` renders one
+  ClusterRole and ClusterRoleBinding (`<name>-scan`, the per-namespace scan Role's rules) instead of a Role per namespace, and with the
+  opt-in `get`/`patch` on any Namespace instead of on the named ones. The default (`scope: namespaces`) renders as before. The agent
+  binary is unchanged (the chart passes `--optin-namespaces=*`). docs/gate.md, "Cluster-wide scope", says what cluster scope still limits.
+
 ### Fixed
 
 - **docs/gate.md, "What the parent must say": an ApplicationSet needs `preservedFields.annotations: [clearance.hangar.io/switched]`

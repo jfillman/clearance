@@ -257,3 +257,66 @@ func TestTheOptInDenyListIsNotLabSpecific(t *testing.T) {
 		t.Errorf("an empty deny list is passed as empty: %s", args)
 	}
 }
+
+// scope: cluster (W-41): no per-namespace Roles, one ClusterRole and ClusterRoleBinding for the workload reads, and (opt-in)
+// get and patch on Namespaces with no resourceNames. The default scope renders exactly as before (the golden test above).
+func TestClusterScopeGrantsTheSameVerbsThroughClusterRoles(t *testing.T) {
+	objs := renderAgent(t, "--set", "scope=cluster", "--set", "protectedNamespaces=null", "--set", "optIn.enabled=true")
+	for _, o := range objs {
+		if o["kind"] == "Role" && get(o, "metadata", "namespace") != "argocd" && get(o, "metadata", "namespace") != nil {
+			t.Errorf("cluster scope still renders a per-namespace Role: %v", get(o, "metadata", "name"))
+		}
+	}
+	// The scan ClusterRole has the very rules the per-namespace scan Role has.
+	namespaced := renderAgent(t)
+	wantRules := rulesOf(find(namespaced, "Role", "clearance-argocd-agent-scan"))
+	scan := find(objs, "ClusterRole", "clearance-argocd-agent-scan")
+	if len(wantRules) == 0 || !reflect.DeepEqual(rulesOf(scan), wantRules) {
+		t.Errorf("the scan ClusterRole's rules differ from the scan Role's:\n%v\n%v", rulesOf(scan), wantRules)
+	}
+	crb := find(objs, "ClusterRoleBinding", "clearance-argocd-agent-scan")
+	if fmt.Sprint(get(crb, "roleRef", "kind"), "/", get(crb, "roleRef", "name")) != "ClusterRole/clearance-argocd-agent-scan" {
+		t.Errorf("the scan ClusterRoleBinding: %v", crb)
+	}
+	// Namespaces: the unnamed list, and get/patch with no resourceNames, and nothing else (no create, update, delete, watch).
+	cr := find(objs, "ClusterRole", "clearance-argocd-agent")
+	var verbs []string
+	for _, r := range rulesOf(cr) {
+		if res, _ := get(r, "resources").([]any); slices.Contains(res, any("namespaces")) {
+			if get(r, "resourceNames") != nil {
+				t.Errorf("a namespaces rule has resourceNames in cluster scope: %v", r)
+			}
+			verbs = append(verbs, verbsOf(r)...)
+		}
+	}
+	slices.Sort(verbs)
+	if fmt.Sprint(verbs) != "[get list patch]" {
+		t.Errorf("namespaces verbs %v, want get, list, patch", verbs)
+	}
+	// The agent's own args: every namespace is configured; the projects limit is unchanged.
+	d := find(objs, "Deployment", "clearance-argocd-agent")
+	args, _ := get(d, "spec", "template", "spec", "containers", 0, "args").([]any)
+	if !slices.Contains(args, any("--optin-namespaces=*")) || !slices.Contains(args, any("--projects=tenants")) {
+		t.Errorf("args %v", args)
+	}
+}
+
+func TestClusterScopeWithoutTheOptInHasNoNamespaceWrite(t *testing.T) {
+	objs := renderAgent(t, "--set", "scope=cluster", "--set", "protectedNamespaces=null")
+	for _, r := range rulesOf(find(objs, "ClusterRole", "clearance-argocd-agent")) {
+		if res, _ := get(r, "resources").([]any); slices.Contains(res, any("namespaces")) && fmt.Sprint(verbsOf(r)) != "[list]" {
+			t.Errorf("namespaces rule %v", r)
+		}
+	}
+}
+
+func TestClusterScopeIsRefusedWithAListOrABadValue(t *testing.T) {
+	text, err := helmAgent(t, "--set", "scope=cluster")
+	if err == nil || !strings.Contains(text, "scope: cluster takes no protectedNamespaces") {
+		t.Fatalf("cluster scope rendered with a list: %v\n%s", err, text)
+	}
+	text, err = helmAgent(t, "--set", "scope=everything")
+	if err == nil || !strings.Contains(text, "scope must be namespaces or cluster") {
+		t.Fatalf("a bad scope rendered: %v\n%s", err, text)
+	}
+}

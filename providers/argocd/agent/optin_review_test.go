@@ -627,3 +627,16 @@ func TestTheProtectedNamespacesAreListedOncePerGrantPass(t *testing.T) {
 		t.Fatalf("%d listings in one pass with six Applications", got)
 	}
 }
+
+// scope: cluster (W-41) hands the agent the glob "*": an Application in any namespace is switched, as the listed mode switches
+// one in a named namespace.
+func TestAnOptInAgentConfiguredWithAStarSwitchesAnApplicationInAnyNamespace(t *testing.T) {
+	w := newOptWorld(t)
+	w.a = mustAgent(t, w, func(c *agent.Config) { c.OptIn.Namespaces = []string{"*"} })
+	w.addApp("web-prod", "app-a", protect())
+	w.addApp("other-prod", "app-z", protect())
+	w.mustReconcile()
+	if !w.isSwitched("web-prod") || !w.isSwitched("other-prod") {
+		t.Fatalf("switched web %v other %v", w.isSwitched("web-prod"), w.isSwitched("other-prod"))
+	}
+}
