@@ -9,6 +9,14 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Added
+
+- **The `clearance-cmp` image can run as a second, canary plugin** (`clearance-canary`). The image carries
+  `config-canary/plugin.yaml` (the same plugin with `version: canary`); a second sidecar started with
+  `--config-dir-path /home/argocd/cmp-server/config-canary` registers under that name, so one Application can try a
+  release before the rest and a rollback is one line per Application. The default plugin name `clearance` and
+  `config/plugin.yaml` are unchanged. See `docs/gate.md`, "Rolling out a plugin release".
+
 ## [0.52.2] - 2026-11-18
 
 ### Security

@@ -1,0 +1,15 @@
+# The same plugin under a second name, for a canary (docs/gate.md, "Rolling out a plugin release"), baked into the
+# image at /home/argocd/cmp-server/config-canary/plugin.yaml. The default sidecar reads config/plugin.yaml and registers
+# `clearance`; a second sidecar from the new image starts argocd-cmp-server with
+# `--config-dir-path /home/argocd/cmp-server/config-canary`, which registers the socket plugins/clearance-canary.sock.
+# Because `version` is set, an Application names it `clearance-canary` (<metadata.name>-<spec.version>); the bare name
+# `clearance` does not resolve to this plugin. Nothing but the name differs from plugin.yaml.
+apiVersion: argoproj.io/v1alpha1
+kind: ConfigManagementPlugin
+metadata:
+  name: clearance
+spec:
+  version: canary
+  generate:
+    command: [/usr/local/bin/clearance-cmp]
+  preserveFileMode: false
