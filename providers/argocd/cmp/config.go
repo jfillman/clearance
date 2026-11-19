@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net/url"
 	"path"
+	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -47,10 +49,15 @@ type Config struct {
 	TokenFile    string
 	CacheDir     string
 	CacheTTL     time.Duration
-	WaitImage    string
-	WaitHost     string // "ip=host1,host2": a hostAlias for the wait Job's pod
-	WaitTimeout  time.Duration
-	RegisterWait time.Duration // how long one call to the core may take
+	// The caches of the hardening track (docs/gate.md, "Caches"): the chart fetch cache (fetchcache.go; a zero
+	// ChartCache is off) and the pre-render cache (renderCache.go; a zero RenderCacheTTL is off).
+	ChartCache     ChartCache
+	RenderCacheTTL time.Duration
+	chartCommit    string // what the chart's tag resolved to this run, when Generate asked (unexported: never a parameter)
+	WaitImage      string
+	WaitHost       string // "ip=host1,host2": a hostAlias for the wait Job's pod
+	WaitTimeout    time.Duration
+	RegisterWait   time.Duration // how long one call to the core may take
 }
 
 var (
@@ -103,11 +110,27 @@ func ParseConfig(get func(string) string) (Config, error) {
 		}
 		return d
 	}
+	num := func(name string, def int64) int64 {
+		v := get(name)
+		if v == "" || err != nil {
+			return def
+		}
+		n, e := strconv.ParseInt(v, 10, 64)
+		if e != nil || n < 0 {
+			err = fmt.Errorf("%s is a non-negative integer (0 turns the cache off), got %q", name, v)
+		}
+		return n
+	}
 	c.CacheTTL = dur("CLEARANCE_CMP_CACHE_TTL", 2*time.Minute)
+	c.RenderCacheTTL = dur("CLEARANCE_CMP_RENDER_CACHE_TTL", 15*time.Minute)
+	chartBytes, chartEntries := num("CLEARANCE_CMP_CHART_CACHE_MAX_BYTES", 512<<20), num("CLEARANCE_CMP_CHART_CACHE_MAX_ENTRIES", 32)
 	c.WaitTimeout = dur("CLEARANCE_WAIT_TIMEOUT", 24*time.Hour)
 	c.RegisterWait = dur("CLEARANCE_CMP_CALL_TIMEOUT", 20*time.Second)
 	if err != nil {
 		return c, err
+	}
+	if c.CacheDir != "" && chartBytes > 0 && chartEntries > 0 {
+		c.ChartCache = ChartCache{Dir: filepath.Join(c.CacheDir, "charts"), MaxBytes: chartBytes, MaxEntries: int(chartEntries)}
 	}
 	return c, c.validate()
 }

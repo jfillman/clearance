@@ -9,6 +9,24 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Changed
+
+- **The `clearance-cmp` plugin caches the chart it fetches and skips an unchanged render** (hardening S1 and S2).
+  An independent review measured a render at about 1.5 s for a 9.9 MB chart, nine tenths of it the `git clone`, with
+  nothing kept between renders and a plugin cache (2 minutes) shorter than Argo CD's reconcile interval.
+  - **Chart fetch cache.** The checked-out chart is kept under `CLEARANCE_CMP_CACHE_DIR/charts`, keyed by the
+    repository and the **commit the tag resolves to** (a `git ls-remote` on every render, so a moved tag is fetched,
+    never served by name). Entries are written atomically, verified by a digest of every file while they are copied
+    out for the render (a corrupted entry is discarded and refetched), safe under concurrent renders (one fetch per
+    commit), and bounded by `CLEARANCE_CMP_CHART_CACHE_MAX_BYTES` (512 MiB) and
+    `CLEARANCE_CMP_CHART_CACHE_MAX_ENTRIES` (32), least recently used first. The symlink and containment checks still
+    run on what Helm reads.
+  - **Pre-render cache.** An Application whose inputs did not change (gitops revision, resolved chart commit, every
+    parameter, Kubernetes and API versions, plugin version) is answered from the stored cleared stream with no clone,
+    Helm or core call, while the clearance is valid and for at most `CLEARANCE_CMP_RENDER_CACHE_TTL` (15 minutes).
+    A hold or a denial is never cached. The outage policy is unchanged.
+  - Generic mode (`PARAM_SOURCES`) is not cached yet. Set the new sizes or TTL to 0 to turn a cache off.
+
 ## [0.52.2] - 2026-11-18
 
 ### Security

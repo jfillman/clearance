@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -53,6 +54,18 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 	if err != nil {
 		return "", err
 	}
+	// The pre-render cache (rendercache.go): an unchanged Application is answered before anything is fetched or rendered.
+	// It needs the commit the chart's tag resolves to now, one lookup on the remote.
+	if cfg.RenderCacheTTL > 0 && cfg.Sources == "" && cfg.ChartRepo != "" {
+		cfg.chartCommit = resolveChart(ctx, d.Exec, cfg.ChartRepo, cfg.ChartRev)
+	}
+	rkey := renderKey(cfg)
+	if e, ok := d.Cache.GetRender(rkey, d.Now(), cfg.RenderCacheTTL); ok {
+		fmt.Fprintf(d.Stderr, "clearance: %s/%s is unchanged (chart %s@%s, gitops %s): serving the cleared render %s from the cache, tree %s\n",
+			cfg.App, cfg.Env, cfg.ChartRev, shortRes(cfg.chartCommit), shortRes(cfg.Revision), e.ID, shortRes(e.Tree))
+		_, err := out.Write(e.Stream)
+		return Cleared, err
+	}
 	if cfg.Sources != "" {
 		run := d.Run
 		if run == nil {
@@ -88,8 +101,20 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 	fmt.Fprintln(d.Stderr)
 
 	now := d.Now()
+	// cleared emits the stamped stream and remembers it (rendercache.go) when the render is what the key names.
+	cleared := func(e CacheEntry) (Outcome, error) {
+		var buf bytes.Buffer
+		if _, err := emit(tree, &buf, Cleared, e.ID, cfg); err != nil {
+			return "", err
+		}
+		if rkey != "" && (cfg.ChartRepo == "" || r.ChartMerge == cfg.chartCommit) {
+			d.Cache.PutRender(renderEntry{Key: rkey, ID: e.ID, Tier: e.Tier, Outage: e.Outage, Tree: tree.Root, CachedAt: e.CachedAt, ExpiresAt: e.ExpiresAt, Stream: buf.Bytes()})
+		}
+		_, err := out.Write(buf.Bytes())
+		return Cleared, err
+	}
 	if e, ok := d.Cache.Get(cfg.App, cfg.Env, cfg.Cluster, tree.Root, now); ok && now.Sub(e.CachedAt) < cfg.CacheTTL {
-		return emit(tree, out, Cleared, e.ID, cfg)
+		return cleared(e)
 	}
 	req, err := registration(cfg, tree)
 	if err != nil {
@@ -114,12 +139,15 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 		if exp.IsZero() {
 			exp = now.Add(cfg.CacheTTL)
 		}
-		d.Cache.Put(cfg.App, cfg.Env, cfg.Cluster, CacheEntry{ID: ch.ID, Tier: ch.Tier, Outage: ch.Outage, Tree: tree.Root, CachedAt: now, ExpiresAt: exp})
-		return emit(tree, out, Cleared, ch.ID, cfg)
+		ce := CacheEntry{ID: ch.ID, Tier: ch.Tier, Outage: ch.Outage, Tree: tree.Root, CachedAt: now, ExpiresAt: exp}
+		d.Cache.Put(cfg.App, cfg.Env, cfg.Cluster, ce)
+		return cleared(ce)
 	case "holding":
+		d.Cache.DropRender(rkey) // a hold is never served from the cache
 		d.Cache.Drop(cfg.App, cfg.Env, cfg.Cluster, tree.Root)
 		return emit(tree, out, Held, ch.ID, cfg)
 	default:
+		d.Cache.DropRender(rkey)
 		d.Cache.Drop(cfg.App, cfg.Env, cfg.Cluster, tree.Root)
 		why := ""
 		if ch.DenyReason != nil {
