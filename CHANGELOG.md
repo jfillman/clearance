@@ -9,6 +9,17 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Fixed
+
+- **docs/gate.md, "What the parent must say": an ApplicationSet needs `preservedFields.annotations: [clearance.hangar.io/switched]`
+  and the opt-in annotation in its template.** The ApplicationSet controller replaces a generated Application's annotations with the
+  template's, so the agent's marker (and an annotation added to the generated Application by hand) is removed on the next reconcile;
+  the agent then stops treating the Application as its own and leaves it on the plugin. The section said only
+  `ignoreApplicationDifferences`. Documentation only; the agent does not check `preservedFields` yet. Also says that the ignore entry
+  stays in force after an opt-out (the restored source is the snapshot taken at the switch).
+  Also lists what a non-apron install must have in place first for the opt-in (the protected namespaces exist, the core's NetworkPolicy and
+  provider entries, the agent's `environment`) and comments the chart's `environment` and `protectedNamespaces` values the same way.
+
 ## [0.53.0] - 2026-11-19
 
 **Upgrading from 0.52.x.** No setting is newly required and nothing a 0.52.2 install renders is refused. Three things change

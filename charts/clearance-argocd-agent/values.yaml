@@ -15,7 +15,9 @@ serviceAccount:
 
 # The protected cluster's name as the core knows it: its grant feed GET /v1/grant-feeds/<cluster>.
 cluster: ""
-# The environment of a protected namespace that carries no clearance.hangar.io/environment label.
+# The environment of a protected namespace that carries no clearance.hangar.io/environment label. `prod` suits the cluster that is
+# protected; on any other cluster (a rehearsal, a lower zone) set it, or an unlabelled namespace is cleared as prod. With optIn.enabled it is
+# the environment of every opted-in Application whose namespace has no label.
 environment: prod
 
 # clearance-api (the keys, the grant feed) and the core (records, break-glass), reached from this cluster.
@@ -32,7 +34,7 @@ argocd:
   projects: []
 
 # The namespaces labelled clearance.hangar.io/protected=true. The agent reads (never writes) workloads only in these
-# namespaces: one Role and RoleBinding per entry. It reads no Secret anywhere. With optIn.enabled the list is also the
+# namespaces: one Role and RoleBinding per entry, so each namespace must exist when the chart is applied. It reads no Secret anywhere. With optIn.enabled the list is also the
 # only set of namespaces the agent may label: it gets get and patch on exactly these Namespace objects.
 protectedNamespaces: []
 

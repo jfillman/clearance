@@ -2266,6 +2266,14 @@ and the merged grant goes. An Application without the annotation is read and nev
 | each opted-in Application's parent | the entry in [What the parent must say](#what-the-parent-must-say) |
 | the CMP sidecar | as for 10b (the plugin, its credential and egress); the opt-in does not change it |
 
+**What a plain install must also have in place** (an installer that is not apron meets these first): every namespace in `protectedNamespaces`
+exists before the agent chart syncs (the chart creates a `Role` and `RoleBinding` in each, and the agent writes a namespaced `ClearanceGrant`
+into it); the core's and clearance-api's `NetworkPolicy` admit the agent and, for the plugin, the repo-server (`networkPolicy.core.from`,
+`networkPolicy.api.from`); the core knows both callers (`providers` for the agent with its `principals`, `protection` and `kinds`,
+`verifiers` for the repo-server's service account, `feedReaders` for the agent); the agent's `environment` is set (the chart default is
+`prod`, which is what an unlabelled protected namespace is cleared as, wrong on a cluster that is not production); and a source the plugin
+renders is reachable without a credential, from a repository listed in the sidecar's `CLEARANCE_CHART_REPOS` or the Application's own first git source.
+
 The agent's flags (each also an environment variable): `--optin` (`CLEARANCE_OPTIN`), `--optin-plugin-name`, `--optin-deny`,
 `--optin-namespaces` (the chart's `protectedNamespaces`), `--optin-interval` (30 s), `--optin-report-every` (5 min),
 `--optin-max-grant-bytes` (1,500,000).
@@ -2416,11 +2424,37 @@ spec:
 spec:
   ignoreApplicationDifferences:
     - jsonPointers: [/spec/source, /spec/sources]
+  preservedFields:
+    annotations: [clearance.hangar.io/switched]
+  template:
+    metadata:
+      annotations:
+        clearance.hangar.io/protect: "true"     # the opt-in itself lives in the template, not on the generated Application
 ```
 
 `RespectIgnoreDifferences=true` matters: `ignoreDifferences` alone only hides the difference from the comparison, and any sync of
 the parent would still write the original over the switched source. The annotation `clearance.hangar.io/switched` is not in git, so
 Argo CD leaves it alone; the `clearance.hangar.io/protect` annotation, if it is in git, is not ignored and stays what git says.
+
+**An ApplicationSet needs one more entry, and its annotations are not the app-of-apps's.** An app-of-apps leaves an annotation that
+is not in git alone. An ApplicationSet does not: its controller sets a generated Application's annotations to the template's
+(plus the ones it preserves: refresh, hydrate and notification state), so an annotation added to the generated Application by hand
+or by the agent is removed on the next reconcile (Argo CD v3.5.0, `applicationset_controller.go`: `found.Annotations =
+generatedApp.Annotations`; the controller reconciles again whenever one of its Applications changes). Two consequences:
+
+- the opt-in annotation (`clearance.hangar.io/protect`) must be in the template (as above). One added to the generated Application
+  with `kubectl annotate` is dropped at once, and the opt-in with it;
+- the agent's own marker (`clearance.hangar.io/switched`) must be listed under `spec.preservedFields.annotations`. Without it the
+  controller removes the marker after the agent writes it; the agent then sees an Application on the plugin whose marker has only
+  one half (see "The marker has two halves"), calls it its own no longer, and **leaves it on the plugin** (it cannot restore it, and
+  an opt-out has nothing to put back): the checks on the parent below do not look for this entry. (Read from the code of both Argo CD and
+the agent; **Unverified** on a live cluster until the opt-in is first run.)
+
+`ignoreApplicationDifferences` also stays in force after the opt-out: the restored source is the snapshot the agent took when it
+switched the Application, and a later change to the template's source is not applied to the live Application until the Application
+is deleted and generated again (or the entry is removed). Deleting the Application also deletes its managed workloads, because the generated
+Application carries the resources finalizer unless the ApplicationSet sets `syncPolicy.preserveResourcesOnDeletion: true`: prefer removing the
+entry. Scope the entry with `name:` to the Applications that opt in.
 
 **This check is a guard against fighting the app-of-apps, not a security boundary.** The tracking annotation and the instance label are
 written by whoever created the child, so a child can name a parent of its own making. The check prefers an owner reference to the labels,
@@ -2439,8 +2473,30 @@ the entry above to the parent's source in git; the next pass switches the Applic
 
 **What the entry costs, and is not fixed here.** While an Application is opted in, an edit to its `spec.source` in the parent's git
 (a chart version bump, say) is ignored: the live Application keeps the sources it was switched with and the parent shows `Synced`.
-To change them, remove the annotation (the original is put back), edit, and annotate again. The agent does not adopt the new
-sources: it has no way to read the parent's rendered manifest.
+To change them, the parent's ignore entry has to be out of the way while the new source is written, because the entry stays in force
+after an opt-out and the restored source is only the snapshot taken at the switch. Under an **app-of-apps** (turn off automated sync on the child, in the parent's git, and wait until the live child shows it
+off before step (1); if the parent ignores `/spec` or `/spec/syncPolicy` the git change cannot reach the child: first replace an
+entry with no `name:` by entries scoped by `name:` to each child (as below), then narrow only this child's entry to
+`/spec/source` and `/spec/sources`, so no sibling's sync policy changes; restore it only once the child is on the plugin again, not when step (6) adds the annotation, since the
+agent switches on a later pass: step (4) writes the new source and an automated sync would deploy it before the switch): (1) remove the annotation and
+wait until the original is put back; (2) remove the parent's `ignoreDifferences` entry for `/spec/source` and `/spec/sources`; (3) edit the
+child's source in the parent's git; (4) sync the parent and wait until the child shows the new source; (5) restore the entry; (6) annotate
+again (the agent refuses to switch while the entry is missing). Under an **ApplicationSet** (turn off automated sync on that child for the whole procedure, through the template, for
+example a per-child generator value its `syncPolicy` reads: a hand edit of the child's `spec.syncPolicy` is reverted by the
+controller on its next reconcile. Wait until the live child shows automated sync off before step (1), and restore it only once
+the child is on the plugin again (the agent switches on a pass after the annotation returns). While the child's ignore entry is out of the way the controller writes whatever source the
+template holds, which may be an intermediate one, and an automated sync would deploy it): (1) remove the opt-in annotation from the
+changed child only and wait until its original is put back. The annotation in a shared template opts in every child, so removing it
+there opts them all out: make it per child first with a template condition on a generator field (do not split the
+ApplicationSet to get there: deleting the original deletes its generated Applications, and with the default resources
+finalizer their workloads too) and
+remove it only for the child being changed; (2) remove the `ignoreApplicationDifferences` entry and wait for the controller to write the
+template's source; (3) edit the source for that child only (a per-child generator value the template reads, not the
+literal template source, which every child and every new child would take) and wait until the edited source is on the generated Application; (4) put the entry back and
+add the annotation again. Without that order a new opt-in switches the old snapshot, and the parent can still show `Synced`. The agent does not
+adopt the new sources: it has no way to read the parent's rendered manifest. **If the entry has no `name:` it covers every child of the parent**:
+before step (2) replace it with entries scoped by `name:` to each child that stays opted in, keep those through the sync, and only the changed
+child's entry is out of the way; otherwise the sync writes the original source over every other switched child.
 
 #### The merged grant
 
