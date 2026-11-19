@@ -11,9 +11,11 @@ metadata:
   labels:
     app.kubernetes.io/part-of: clearance
   annotations:
-    # The schema's revision, for the opt-in agent (G-ARGO-10c): 2 adds objects[].app and objects[].expiresAt. The agent reads the
-    # schema itself and does not run the opt-in against a CRD that lacks them; the number is for people and for `kubectl get crd`.
-    clearance.hangar.io/schema-revision: "2"
+    # The schema's revision, for the opt-in agent (G-ARGO-10c): 2 adds objects[].app and objects[].expiresAt; 3 makes spec required
+    # at the root (the agent always creates a grant with its spec and writes status afterwards, through the status subresource).
+    # The agent reads the schema itself and does not run the opt-in against a CRD that lacks the revision-2 fields; the number is
+    # for people and for `kubectl get crd`.
+    clearance.hangar.io/schema-revision: "3"
 spec:
   group: clearance.hangar.io
   names: {kind: ClearanceGrant, listKind: ClearanceGrantList, plural: clearancegrants, singular: clearancegrant, shortNames: [cgrant]}
@@ -32,6 +34,7 @@ spec:
       schema:
         openAPIV3Schema:
           type: object
+          required: [spec]
           properties:
             spec:
               type: object
