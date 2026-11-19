@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -79,5 +80,54 @@ func TestRenderStepCannotReachLoopback(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	if got := conns(); got != before {
 		t.Fatalf("the listener saw %d connection(s) from the sandboxed render step", got-before)
+	}
+}
+
+// badNamespace makes the kernel refuse the namespace at Start (a uid mapping to a host id this process may not map),
+// the way a seccomp profile or sysctl would.
+func badNamespace(t *testing.T) {
+	t.Helper()
+	if os.Getuid() == 0 {
+		t.Skip("root may map any id")
+	}
+	old := isolate
+	isolate = func(cmd *exec.Cmd) (bool, error) {
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			Cloneflags:  syscall.CLONE_NEWUSER | syscall.CLONE_NEWNET,
+			UidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getuid() + 1, Size: 1}},
+		}
+		return true, nil
+	}
+	t.Cleanup(func() { isolate = old })
+}
+
+// A namespace the kernel refuses at Start fails closed by default, and with the explicit switch the tool runs once,
+// in a fresh unisolated attempt.
+func TestStartTimeNamespaceFailureFailsClosedUnlessSwitched(t *testing.T) {
+	badNamespace(t)
+	dir := t.TempDir()
+	log := filepath.Join(dir, "runs")
+	script := "#!/bin/sh\necho x >> '" + log + "'\n"
+	if err := os.WriteFile(filepath.Join(dir, "kustomize"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	t.Setenv(AllowNoNetnsEnv, "")
+	_, err := OSRun(context.Background(), t.TempDir(), nil, "kustomize", "build", ".")
+	if err == nil || !strings.Contains(err.Error(), "private network namespace") {
+		t.Fatalf("want the namespace refusal, got %v", err)
+	}
+	if _, e := os.Stat(log); e == nil {
+		t.Fatal("the tool ran although the namespace was refused")
+	}
+
+	t.Setenv(AllowNoNetnsEnv, "true")
+	if _, err := OSRun(context.Background(), t.TempDir(), nil, "kustomize", "build", "."); err != nil {
+		t.Fatalf("with the switch: %v", err)
+	}
+	b, _ := os.ReadFile(log)
+	if got := strings.Count(string(b), "x"); got != 1 {
+		t.Fatalf("the tool ran %d times, want 1", got)
 	}
 }

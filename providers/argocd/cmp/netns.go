@@ -1,10 +1,11 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
+	"syscall"
 
 	"github.com/jfillman/clearance/internal/argosrc"
 )
@@ -18,7 +19,7 @@ const AllowNoNetnsEnv = "CLEARANCE_CMP_ALLOW_NO_NETNS"
 var isolate = isolateNetwork
 
 // netnsRequired is whether a render step that cannot get its namespace must stop.
-func netnsRequired() bool { return strings.ToLower(os.Getenv(AllowNoNetnsEnv)) != "true" }
+func netnsRequired() bool { return os.Getenv(AllowNoNetnsEnv) != "true" }
 
 // errNoNetns says what is missing, naming the capability and the way out.
 func errNoNetns(name string, cause error) error {
@@ -60,7 +61,5 @@ func startFailedForNetns(err error) bool {
 	if _, ok := err.(*exec.Error); ok { // not found in PATH
 		return false
 	}
-	s := err.Error()
-	return strings.Contains(s, "operation not permitted") || strings.Contains(s, "invalid argument") ||
-		strings.Contains(s, "no space left") || strings.Contains(s, "permission denied")
+	return errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.ENOSPC) || errors.Is(err, syscall.EACCES)
 }

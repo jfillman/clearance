@@ -78,9 +78,11 @@ func TestExplicitSwitchAllowsRenderWithoutNetworkNamespace(t *testing.T) {
 	if _, err := os.Stat(m); err != nil {
 		t.Fatal("kustomize did not run")
 	}
-	t.Setenv(AllowNoNetnsEnv, "yes")
-	os.Remove(m)
-	if _, err := OSRun(context.Background(), t.TempDir(), nil, "kustomize", "build", "."); err == nil {
-		t.Fatal(`only "true" opens the switch`)
+	for _, v := range []string{"yes", "TRUE", "True", "1"} {
+		t.Setenv(AllowNoNetnsEnv, v)
+		os.Remove(m)
+		if _, err := OSRun(context.Background(), t.TempDir(), nil, "kustomize", "build", "."); err == nil {
+			t.Fatalf("%q opened the switch; only exactly \"true\" does", v)
+		}
 	}
 }
