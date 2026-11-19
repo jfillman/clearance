@@ -57,7 +57,7 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 	// The pre-render cache (rendercache.go): an unchanged Application is answered before anything is fetched or rendered.
 	// It needs the commit the chart's tag resolves to now, one lookup on the remote.
 	if cfg.RenderCacheTTL > 0 && cfg.Sources == "" && cfg.ChartRepo != "" {
-		cfg.chartCommit = resolveChart(ctx, d.Exec, cfg.ChartRepo, cfg.ChartRev)
+		cfg.chartCommit, cfg.chartLooked = resolveChart(ctx, d.Exec, cfg.ChartRepo, cfg.ChartRev), true
 	}
 	rkey := renderKey(cfg)
 	if e, ok := d.Cache.GetRender(rkey, d.Now(), cfg.RenderCacheTTL); ok {
@@ -101,6 +101,7 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 	fmt.Fprintln(d.Stderr)
 
 	now := d.Now()
+	started := time.Now() // wall clock, against the decisions DropRenders records
 	// cleared emits the stamped stream and remembers it (rendercache.go) when the render is what the key names.
 	cleared := func(e CacheEntry) (Outcome, error) {
 		var buf bytes.Buffer
@@ -108,7 +109,7 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 			return "", err
 		}
 		if rkey != "" && (cfg.ChartRepo == "" || r.ChartMerge == cfg.chartCommit) {
-			d.Cache.PutRender(renderEntry{Key: rkey, ID: e.ID, Tier: e.Tier, Outage: e.Outage, Tree: tree.Root, CachedAt: e.CachedAt, ExpiresAt: e.ExpiresAt, Stream: buf.Bytes()})
+			d.Cache.PutRender(renderEntry{Key: rkey, ID: e.ID, Tier: e.Tier, Outage: e.Outage, Tree: tree.Root, App: cfg.App, Env: cfg.Env, Cluster: cfg.Cluster, CachedAt: e.CachedAt, ExpiresAt: e.ExpiresAt, Stream: buf.Bytes()}, started)
 		}
 		_, err := out.Write(buf.Bytes())
 		return Cleared, err
@@ -143,11 +144,11 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 		d.Cache.Put(cfg.App, cfg.Env, cfg.Cluster, ce)
 		return cleared(ce)
 	case "holding":
-		d.Cache.DropRender(rkey) // a hold is never served from the cache
+		d.Cache.DropRenders(cfg.App, cfg.Env, cfg.Cluster, tree.Root) // a hold is never served from the cache
 		d.Cache.Drop(cfg.App, cfg.Env, cfg.Cluster, tree.Root)
 		return emit(tree, out, Held, ch.ID, cfg)
 	default:
-		d.Cache.DropRender(rkey)
+		d.Cache.DropRenders(cfg.App, cfg.Env, cfg.Cluster, tree.Root)
 		d.Cache.Drop(cfg.App, cfg.Env, cfg.Cluster, tree.Root)
 		why := ""
 		if ch.DenyReason != nil {

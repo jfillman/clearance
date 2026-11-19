@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -117,11 +119,8 @@ func TestAMovedTagIsRefetched(t *testing.T) {
 func TestATagThatMovesBetweenTheLookupAndTheCloneIsKeyedByWhatWasCloned(t *testing.T) {
 	e := cachedEnv(t)
 	e.cfg.chartCommit = chartSHA2 // what the lookup said; the clone below is at chartSHA
-	if r := renderOnce(t, e); r.ChartMerge != chartSHA2 {
-		// the fake's clone and rev-parse answer head (chartSHA): the recorded commit is the clone's, not the hint
-		if r.ChartMerge != chartSHA {
-			t.Fatal(r.ChartMerge)
-		}
+	if r := renderOnce(t, e); r.ChartMerge != chartSHA {
+		t.Fatalf("recorded %s: the lookup's answer, not the clone's", r.ChartMerge)
 	}
 	e.cfg.chartCommit = ""
 	if r := renderOnce(t, e); r.ChartMerge != chartSHA || e.exec.count("git", "clone") != 1 {
@@ -208,12 +207,46 @@ func TestEvictionKeepsTheCacheWithinItsBounds(t *testing.T) {
 	if !exists(shas[1]) || !exists(shas[0]) || exists(shas[2]) {
 		t.Fatalf("least recently used order: %v %v %v", exists(shas[0]), exists(shas[1]), exists(shas[2]))
 	}
-	// A byte bound too: one entry is far more than 10 bytes, so only the entry just fetched stays.
-	e.cfg.ChartCache.MaxEntries, e.cfg.ChartCache.MaxBytes = 0, 10
+	// A byte bound too: an entry is 56 bytes, so 100 holds one, and the one just fetched stays.
+	e.cfg.ChartCache.MaxEntries, e.cfg.ChartCache.MaxBytes = 0, 100
 	e.exec.head = shas[2]
 	renderOnce(t, e)
 	if exists(shas[0]) || exists(shas[1]) || !exists(shas[2]) {
 		t.Fatalf("byte bound: %v %v %v", exists(shas[0]), exists(shas[1]), exists(shas[2]))
+	}
+}
+
+func TestAChartLargerThanTheBoundIsServedButNotKept(t *testing.T) {
+	e := cachedEnv(t)
+	e.cfg.ChartCache.MaxBytes = 10
+	for i := 0; i < 2; i++ {
+		if r := renderOnce(t, e); r.ChartMerge != chartSHA {
+			t.Fatal(r.ChartMerge)
+		}
+	}
+	if n := e.exec.count("git", "clone"); n != 2 {
+		t.Fatalf("%d clones: each render fetches once, none twice", n)
+	}
+	ents, _ := os.ReadDir(e.cfg.ChartCache.Dir)
+	for _, x := range ents {
+		if x.IsDir() {
+			t.Fatalf("the oversized checkout was kept: %v", x.Name())
+		}
+	}
+}
+
+func TestAnUnwritableCacheFallsBackToAPlainClone(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes anywhere")
+	}
+	e := cachedEnv(t)
+	os.MkdirAll(e.cfg.ChartCache.Dir, 0o500)
+	if r := renderOnce(t, e); r.ChartMerge != chartSHA {
+		t.Fatal(r.ChartMerge)
+	}
+	e.exec.fail = map[string]error{"git": errors.New("git is down")}
+	if _, err := Render(context.Background(), e.exec.run, e.cfg, e.src); err == nil {
+		t.Fatal("a git failure was swallowed")
 	}
 }
 
@@ -329,8 +362,11 @@ func TestAHoldOrADenialIsNeverCachedAndDropsAnEarlierEntry(t *testing.T) {
 			if len(e.core.reqs) != 3 {
 				t.Fatalf("%d calls to the core for 3 renders: a %s was served from the cache", len(e.core.reqs), state)
 			}
-			if ents, _ := os.ReadDir(filepath.Join(e.d.Cache.Dir, "renders")); len(ents) != 0 {
-				t.Fatalf("%s left %d entries", state, len(ents))
+			ents, _ := os.ReadDir(filepath.Join(e.d.Cache.Dir, "renders"))
+			for _, x := range ents {
+				if strings.HasSuffix(x.Name(), ".json") {
+					t.Fatalf("%s left an entry: %s", state, x.Name())
+				}
 			}
 			// An entry from an earlier clearance of the same inputs does not outlive a hold the core then reports.
 			e.core.answer = &client.Change{ID: "ch-abc", State: "cleared", Tier: 1, ExpiresAt: e.now.Add(time.Hour).Format(time.RFC3339Nano)}
@@ -347,6 +383,59 @@ func TestAHoldOrADenialIsNeverCachedAndDropsAnEarlierEntry(t *testing.T) {
 				t.Fatal("a cleared entry was served after the core said " + state)
 			}
 		})
+	}
+}
+
+// holdAfter is a core that, while it is asked, has another run's cleared render land in the cache (as it can when two
+// renders of one app overlap), and then answers hold or denied.
+type holdAfter struct {
+	e     *env
+	state string
+}
+
+func (h holdAfter) RegisterChange(_ context.Context, r *client.ChangeRequest) (*client.Change, error) {
+	cfg := h.e.cfg
+	cfg.chartCommit = chartSHA
+	ent := renderEntry{Key: renderKey(cfg), App: cfg.App, Env: cfg.Env, Cluster: cfg.Cluster, ID: "ch-old", Tree: r.TreeDigest, CachedAt: h.e.now,
+		ExpiresAt: h.e.now.Add(time.Hour), Stream: []byte("{}\n")}
+	h.e.d.Cache.PutRender(ent, time.Now())
+	return &client.Change{ID: "ch-y", State: h.state, Tier: 2}, nil
+}
+
+func TestAHoldOrDenialDropsAClearedRenderOfTheSameTreeWhateverItsKey(t *testing.T) {
+	for _, state := range []string{"holding", "denied"} {
+		e := cachedEnv(t)
+		e.d.Core = holdAfter{e: e, state: state}
+		var out bytes.Buffer
+		Generate(context.Background(), e.d, e.cfg, e.src, &out)
+		if ents, _ := os.ReadDir(filepath.Join(e.d.Cache.Dir, "renders")); len(ents) != 1 || !strings.HasPrefix(ents[0].Name(), ".dropped-") {
+			t.Fatalf("%s: a cleared entry survived the decision: %v", state, ents)
+		}
+	}
+}
+
+func TestADecisionDropsEveryKeyOfTheTreeAndRefusesALateClearedPublish(t *testing.T) {
+	c := Cache{Dir: t.TempDir()}
+	now := time.Now()
+	put := func(key, tree string, started time.Time) {
+		c.PutRender(renderEntry{Key: key, App: "a", Env: "e", Cluster: "c", ID: "id", Tree: tree, CachedAt: now, ExpiresAt: now.Add(time.Hour), Stream: []byte("s")}, started)
+	}
+	put("k1", "T", now)
+	put("k2", "T", now)
+	put("k3", "U", now)
+	c.DropRenders("a", "e", "c", "T")
+	for k, want := range map[string]bool{"k1": false, "k2": false, "k3": true} {
+		if _, ok := c.GetRender(k, now, time.Hour); ok != want {
+			t.Fatalf("%s present=%v", k, ok)
+		}
+	}
+	put("k4", "T", now.Add(-time.Minute)) // the answer was asked for before the decision
+	if _, ok := c.GetRender("k4", now, time.Hour); ok {
+		t.Fatal("a cleared answer older than a hold was stored")
+	}
+	put("k5", "T", time.Now().Add(time.Second)) // asked for after it
+	if _, ok := c.GetRender("k5", now, time.Hour); !ok {
+		t.Fatal("a cleared answer newer than the hold was refused")
 	}
 }
 
@@ -407,10 +496,14 @@ func BenchmarkRender(b *testing.B) {
 			cfg.ChartCache = ChartCache{Dir: filepath.Join(dir, "charts"), MaxBytes: 1 << 30, MaxEntries: 8}
 			cfg.RenderCacheTTL = 1000 * time.Hour
 			cfg.CacheTTL = 0 // the tree cache is not what is measured
-			d := Deps{Exec: ex.run, Core: core, Cache: Cache{Dir: dir}, Now: func() time.Time { return now }, Stderr: new(bytes.Buffer)}
+			d := Deps{Exec: ex.run, Core: core, Cache: Cache{Dir: dir}, Now: func() time.Time { return now }, Stderr: io.Discard}
 			src := b.TempDir()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
+				ex.mu.Lock()
+				ex.calls = ex.calls[:0]
+				ex.mu.Unlock()
+				core.reqs = core.reqs[:0]
 				switch mode {
 				case "cold":
 					os.RemoveAll(dir)
@@ -452,7 +545,10 @@ func TestCacheSettings(t *testing.T) {
 	if c, err = parse(map[string]string{"CLEARANCE_CMP_CHART_CACHE_MAX_BYTES": "0"}); err != nil || c.ChartCache.enabled() {
 		t.Fatalf("0 turns the chart cache off: %+v %v", c.ChartCache, err)
 	}
-	for _, bad := range []map[string]string{{"CLEARANCE_CMP_CHART_CACHE_MAX_ENTRIES": "-1"}, {"CLEARANCE_CMP_CHART_CACHE_MAX_BYTES": "lots"}, {"CLEARANCE_CMP_RENDER_CACHE_TTL": "0s"}} {
+	if c, err = parse(map[string]string{"CLEARANCE_CMP_RENDER_CACHE_TTL": "0"}); err != nil || c.RenderCacheTTL != 0 {
+		t.Fatalf("0 turns the pre-render cache off: %v %v", c.RenderCacheTTL, err)
+	}
+	for _, bad := range []map[string]string{{"CLEARANCE_CMP_CHART_CACHE_MAX_ENTRIES": "-1"}, {"CLEARANCE_CMP_CHART_CACHE_MAX_BYTES": "lots"}, {"CLEARANCE_CMP_RENDER_CACHE_TTL": "-1s"}} {
 		if _, err := parse(bad); err == nil {
 			t.Fatalf("%v was accepted", bad)
 		}

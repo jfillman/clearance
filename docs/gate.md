@@ -1793,13 +1793,15 @@ alter in the cache. The checks that Helm and kustomize only read inside the repo
 on every render, on the copy. Bounds: `CLEARANCE_CMP_CHART_CACHE_MAX_BYTES` (default 512 MiB, the trees' total) and
 `CLEARANCE_CMP_CHART_CACHE_MAX_ENTRIES` (default 32); past either the entry used longest ago goes first. Either set to 0
 turns the chart cache off. If the lookup fails or says nothing, the render clones as before and stores what it got under
-the commit it really has.
+the commit it really has. A checkout larger than the byte bound is used for that render and not kept; a cache that cannot
+be written (read-only, full) never fails a render, which then clones for itself as before. The 256 lock files
+(`lock-xx`) are stable and never removed.
 
 **Pre-render cache.** The key is a hash of the Application (name, destination namespace, project, app, environment,
 cluster), `ARGOCD_APP_REVISION`, the resolved chart commit (the same lookup), every plugin parameter, the destination's
 Kubernetes version and API versions, the core's URL and the plugin's version. The value is the emitted stream, already
 stamped, with the change id. Only a **cleared** outcome is stored: a hold or a denial is never served from this cache,
-always goes to the core, and drops an entry of the same key. A hit asks the core nothing, so it is also what a refresh
+always goes to the core, and drops every entry of the same app, environment, cluster and tree (whatever its key), also refusing a cleared answer that was already in flight when the decision was recorded. A hit asks the core nothing, so it is also what a refresh
 within the lifetime costs while the core is down. An entry is served while the clearance's own `expiresAt` is ahead, and for
 at most `CLEARANCE_CMP_RENDER_CACHE_TTL` (default 15 minutes, longer than Argo CD's reconcile interval; 0 turns it off),
 which bounds how long the plugin keeps stamping a clearance that was withdrawn in the meantime (admission and the grant

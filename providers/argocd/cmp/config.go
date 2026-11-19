@@ -53,6 +53,7 @@ type Config struct {
 	// ChartCache is off) and the pre-render cache (renderCache.go; a zero RenderCacheTTL is off).
 	ChartCache     ChartCache
 	RenderCacheTTL time.Duration
+	chartLooked    bool   // Generate already asked the remote for chartCommit (it may have got no answer)
 	chartCommit    string // what the chart's tag resolved to this run, when Generate asked (unexported: never a parameter)
 	WaitImage      string
 	WaitHost       string // "ip=host1,host2": a hostAlias for the wait Job's pod
@@ -122,7 +123,11 @@ func ParseConfig(get func(string) string) (Config, error) {
 		return n
 	}
 	c.CacheTTL = dur("CLEARANCE_CMP_CACHE_TTL", 2*time.Minute)
-	c.RenderCacheTTL = dur("CLEARANCE_CMP_RENDER_CACHE_TTL", 15*time.Minute)
+	if v := strings.TrimSpace(get("CLEARANCE_CMP_RENDER_CACHE_TTL")); v == "0" || v == "0s" {
+		c.RenderCacheTTL = 0 // off
+	} else {
+		c.RenderCacheTTL = dur("CLEARANCE_CMP_RENDER_CACHE_TTL", 15*time.Minute)
+	}
 	chartBytes, chartEntries := num("CLEARANCE_CMP_CHART_CACHE_MAX_BYTES", 512<<20), num("CLEARANCE_CMP_CHART_CACHE_MAX_ENTRIES", 32)
 	c.WaitTimeout = dur("CLEARANCE_WAIT_TIMEOUT", 24*time.Hour)
 	c.RegisterWait = dur("CLEARANCE_CMP_CALL_TIMEOUT", 20*time.Second)

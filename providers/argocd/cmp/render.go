@@ -88,7 +88,7 @@ func Render(ctx context.Context, run Exec, cfg Config, srcDir string) (*Rendered
 		// The chart cache (fetchcache.go) answers by the commit the tag resolves to now; a cfg.chartCommit hint is
 		// what Generate already resolved for its own cache key.
 		hint := cfg.chartCommit
-		if hint == "" && cfg.ChartCache.enabled() {
+		if hint == "" && !cfg.chartLooked && cfg.ChartCache.enabled() {
 			hint = resolveChart(ctx, run, cfg.ChartRepo, cfg.ChartRev)
 		}
 		commit, err := cfg.ChartCache.Fetch(ctx, run, cfg.ChartRepo, cfg.ChartRev, hint, dest)

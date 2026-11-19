@@ -42,6 +42,9 @@ const (
 // renderEntry is one cached render.
 type renderEntry struct {
 	Key       string    `json:"key"`
+	App       string    `json:"app"`
+	Env       string    `json:"env"`
+	Cluster   string    `json:"cluster"`
 	ID        string    `json:"id"`
 	Tier      int       `json:"tier"`
 	Outage    string    `json:"outage"`
@@ -110,13 +113,18 @@ func (c Cache) GetRender(key string, now time.Time, ttl time.Duration) (renderEn
 	return e, true
 }
 
-// PutRender stores a cleared render atomically. A failure only costs the next render its work.
-func (c Cache) PutRender(e renderEntry) {
+// PutRender stores a cleared render atomically. started is when this run began asking the core: if a hold or a
+// denial for the same tree was recorded since (DropRenders), the cleared answer is older than that decision and is
+// not stored. A failure only costs the next render its work.
+func (c Cache) PutRender(e renderEntry, started time.Time) {
 	if c.Dir == "" || e.Key == "" || e.ID == "" || len(e.Stream) == 0 || len(e.Stream) > renderCacheMaxStream {
 		return
 	}
 	dir := filepath.Join(c.Dir, "renders")
 	if os.MkdirAll(dir, 0o700) != nil {
+		return
+	}
+	if st, err := os.Stat(c.tombstone(e.App, e.Env, e.Cluster, e.Tree)); err == nil && !st.ModTime().Before(started) {
 		return
 	}
 	e.StreamSum = sumHex(e.Stream)
@@ -137,10 +145,40 @@ func (c Cache) PutRender(e renderEntry) {
 	c.pruneRenders(dir)
 }
 
-// DropRender forgets a render (the core now says hold or denied for its tree).
-func (c Cache) DropRender(key string) {
-	if key != "" && c.Dir != "" {
-		os.Remove(c.renderPath(key))
+// tombstone is the file whose time says when a hold or denial of the tree was last recorded.
+func (c Cache) tombstone(app, env, cluster, tree string) string {
+	return filepath.Join(c.Dir, "renders", ".dropped-"+sumHex([]byte(app+"\x00"+env+"\x00"+cluster+"\x00"+tree)))
+}
+
+// DropRenders forgets every render of this app, environment, cluster and tree, whatever its key (the key also has
+// parameters that do not change the tree, and the core's answer is about the tree), and records the decision so a
+// cleared answer that was already in flight is not stored after it. Called when the core says hold or denied.
+func (c Cache) DropRenders(app, env, cluster, tree string) {
+	if c.Dir == "" || tree == "" {
+		return
+	}
+	dir := filepath.Join(c.Dir, "renders")
+	if os.MkdirAll(dir, 0o700) != nil {
+		return
+	}
+	ts := c.tombstone(app, env, cluster, tree)
+	os.WriteFile(ts, nil, 0o600)
+	now := time.Now()
+	os.Chtimes(ts, now, now)
+	ents, _ := os.ReadDir(dir)
+	for _, e := range ents {
+		if !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		var x renderEntry
+		if err == nil && json.Unmarshal(b, &x) == nil && x.Tree != tree {
+			continue // not this tree; a file that does not parse is removed below
+		}
+		if err == nil && (x.App != app || x.Env != env || x.Cluster != cluster) {
+			continue
+		}
+		os.Remove(filepath.Join(dir, e.Name()))
 	}
 }
 
@@ -161,8 +199,8 @@ func (c Cache) pruneRenders(dir string) {
 			continue
 		}
 		switch {
-		case strings.HasPrefix(e.Name(), ".entry-"):
-			if time.Since(info.ModTime()) > 10*time.Minute {
+		case strings.HasPrefix(e.Name(), ".entry-"), strings.HasPrefix(e.Name(), ".dropped-"):
+			if time.Since(info.ModTime()) > time.Hour {
 				os.Remove(filepath.Join(dir, e.Name()))
 			}
 		case strings.HasSuffix(e.Name(), ".json"):
