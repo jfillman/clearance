@@ -2437,7 +2437,9 @@ the agent; **Unverified** on a live cluster until the opt-in is first run.)
 
 `ignoreApplicationDifferences` also stays in force after the opt-out: the restored source is the snapshot the agent took when it
 switched the Application, and a later change to the template's source is not applied to the live Application until the Application
-is deleted and generated again (or the entry is removed). Scope the entry with `name:` to the Applications that opt in.
+is deleted and generated again (or the entry is removed). Deleting the Application also deletes its managed workloads, because the generated
+Application carries the resources finalizer unless the ApplicationSet sets `syncPolicy.preserveResourcesOnDeletion: true`: prefer removing the
+entry. Scope the entry with `name:` to the Applications that opt in.
 
 **This check is a guard against fighting the app-of-apps, not a security boundary.** The tracking annotation and the instance label are
 written by whoever created the child, so a child can name a parent of its own making. The check prefers an owner reference to the labels,
