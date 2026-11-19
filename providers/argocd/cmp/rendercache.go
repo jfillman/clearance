@@ -304,6 +304,11 @@ func serveRender(ctx context.Context, d Deps, cfg Config, e renderEntry, out io.
 			exp = now.Add(cfg.CacheTTL)
 		}
 		d.Cache.PutUndecided(cfg.App, cfg.Env, cfg.Cluster, CacheEntry{ID: ch.ID, Tier: ch.Tier, Outage: ch.Outage, Tree: e.Tree, CachedAt: now, ExpiresAt: exp}, started)
+		if d.Cache.decidedSince(cfg.App, cfg.Env, cfg.Cluster, e.Tree, started) {
+			// A hold or denial of this tree was recorded while the call was pending: the answer is older than it.
+			d.Cache.DropRender(e.Key)
+			return "", false, nil
+		}
 		return serve("the core confirmed the same change")
 	}
 	// Another change, a hold, a denial: nothing of this entry is served. The full render decides and emits (a hold

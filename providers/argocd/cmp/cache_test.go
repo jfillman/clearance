@@ -697,6 +697,9 @@ func TestAClearedAnswerOlderThanAHoldIsStoredInNeitherCache(t *testing.T) {
 	e.now = e.now.Add(5 * time.Minute)
 	e.d.Core = decideDuring{e: e, answer: e.core.answer}
 	e.gen(t)
+	if e.exec.count("helm", "") != 2 {
+		t.Fatal("a confirmation older than a hold was served from the cache instead of rendering in full")
+	}
 	e.d.Core = e.core
 	n := len(e.core.reqs)
 	e.now = e.now.Add(time.Second)
@@ -713,6 +716,9 @@ func TestAnOutageDuringAConfirmationRechecksWhatTheCacheNowHolds(t *testing.T) {
 	e.d.Core = decideDuring{e: e, err: fmt.Errorf("%w: refused", client.ErrCoreUnavailable)}
 	var out bytes.Buffer
 	_, err := Generate(context.Background(), e.d, e.cfg, e.src, &out)
+	if e.exec.count("helm", "") != 1 {
+		t.Fatal("the test did not reach the cached confirmation: the render ran")
+	}
 	if err == nil || !strings.Contains(err.Error(), "outage hold") || out.Len() != 0 {
 		t.Fatalf("a clearance withdrawn while the call was pending was served: %v", err)
 	}
