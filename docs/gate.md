@@ -1837,10 +1837,12 @@ finds them) and `var-files`. Both may mount the same projected token: the canary
 so a release that registers wrongly does so under that identity. Apron renders this when `clearance.gate.canary` is set.
 
 1. **Canary one Application.** Run the new image as the canary sidecar and list one low-risk app (a dev environment's):
-   its Application now names `clearance-canary`, every other Application still names `clearance`. When the app first
-   moves to the canary name the source changes, so it re-renders; **when the canary sidecar's image later changes under
-   the same name, hard-refresh the app once the sidecar is ready**: Argo CD's manifest cache key does not include the
-   sidecar image (see "Open for G-ARGO-10c and G-ARGO-10e"), so it can keep serving the previous image's output.
+   its Application now names `clearance-canary`, every other Application still names `clearance`. **Hard-refresh the
+   app once the canary sidecar is ready, every time**: when it moves to the canary name, and when the canary image
+   changes later. Argo CD's manifest cache key covers the source and its commit but not the sidecar image (see "Open for
+   G-ARGO-10c and G-ARGO-10e"), so a render cached from an earlier canary image (an app moving back to
+   `clearance-canary` at the same commit, or the same name with a new image) can hide a failing new image. Do not
+   take a quiet canary as passed until the app has been hard-refreshed after the image changed.
 2. **Watch.** The Application's sync, the plugin's `generate` log in the `clearance-cmp-canary` container, and the
    changes it registers (`proposer: system:argocd-cmp`). A render that fails shows as a ComparisonError on that
    Application alone.
@@ -1848,7 +1850,8 @@ so a release that registers wrongly does so under that identity. Apron renders t
    `clearance`). Once the default sidecar is ready, **hard-refresh every Application that names `clearance`**: the
    cache key is the same as before the image changed, so without it an Application keeps the old image's render until
    the cache expires.
-4. **Roll back.** For a bad canary, remove the app from the canary list: the app names `clearance` again. For a bad
+4. **Roll back.** For a bad canary, remove the app from the canary list (the last one: delete apron's whole `clearance.gate.canary` block, an empty list is
+   refused): the app names `clearance` again; hard-refresh it so a cached canary render is not what it shows. For a bad
    release already promoted, re-pin the previous image digest as the default sidecar's, then hard-refresh the
    affected Applications once it is ready (a restart of the repo-server does not clear cached output or cached
    plugin errors in Redis). There is no per-app step then;
