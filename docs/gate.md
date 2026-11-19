@@ -2474,13 +2474,15 @@ the entry above to the parent's source in git; the next pass switches the Applic
 **What the entry costs, and is not fixed here.** While an Application is opted in, an edit to its `spec.source` in the parent's git
 (a chart version bump, say) is ignored: the live Application keeps the sources it was switched with and the parent shows `Synced`.
 To change them, the parent's ignore entry has to be out of the way while the new source is written, because the entry stays in force
-after an opt-out and the restored source is only the snapshot taken at the switch. Under an **app-of-apps** (turn off automated sync on the child, in the parent's git, before step (1) and restore it after
-step (6): step (4) writes the new source and an automated sync would deploy it before the child is switched back): (1) remove the annotation and
+after an opt-out and the restored source is only the snapshot taken at the switch. Under an **app-of-apps** (turn off automated sync on the child, in the parent's git, and wait until the live child shows it
+off before step (1); restore it only once the child is on the plugin again, not when step (6) adds the annotation, since the
+agent switches on a later pass: step (4) writes the new source and an automated sync would deploy it before the switch): (1) remove the annotation and
 wait until the original is put back; (2) remove the parent's `ignoreDifferences` entry for `/spec/source` and `/spec/sources`; (3) edit the
 child's source in the parent's git; (4) sync the parent and wait until the child shows the new source; (5) restore the entry; (6) annotate
 again (the agent refuses to switch while the entry is missing). Under an **ApplicationSet** (turn off automated sync on that child for the whole procedure, through the template, for
 example a per-child generator value its `syncPolicy` reads: a hand edit of the child's `spec.syncPolicy` is reverted by the
-controller on its next reconcile. While the child's ignore entry is out of the way the controller writes whatever source the
+controller on its next reconcile. Wait until the live child shows automated sync off before step (1), and restore it only once
+the child is on the plugin again (the agent switches on a pass after the annotation returns). While the child's ignore entry is out of the way the controller writes whatever source the
 template holds, which may be an intermediate one, and an automated sync would deploy it): (1) remove the opt-in annotation from the
 changed child only and wait until its original is put back. The annotation in a shared template opts in every child, so removing it
 there opts them all out: make it per child first with a template condition on a generator field (do not split the
