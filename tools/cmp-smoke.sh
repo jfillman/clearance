@@ -212,6 +212,33 @@ grep -q 'refused: value file hangar-smoke/dev/values.yaml resolves outside the r
 [ ! -s "$work/link.out" ] && ok "no manifests were written" || bad "manifests were written for a refused checkout"
 [ ! -s "$work/register.log" ] && ok "nothing was registered" || bad "a refused checkout was registered"
 
+echo "== doctor: the preflight, in the built image, with the sidecar's own environment (no PARAM_*, no ARGOCD_APP_*)"
+run_doctor() { # OUT CHART_REPOS : echoes the exit code
+  local out="$1" repos="$2"
+  # shellcheck disable=SC2086
+  "$engine" run --rm $net_args --user 999:999 --read-only --tmpfs "$tmpfs_opt" --cap-drop ALL \
+    -v "$work/token:/var/run/secrets/tokens/clearance:ro" \
+    --entrypoint /usr/local/bin/clearance-cmp \
+    -e CLEARANCE_URL="$core_url" -e CLEARANCE_TOKEN_FILE=/var/run/secrets/tokens/clearance \
+    -e CLEARANCE_CHART_REPOS="$repos" -e CLEARANCE_WAIT_IMAGE=registry.example.test/clearance-wait:smoke \
+    -e CLEARANCE_CMP_CACHE_DIR=/tmp/clearance-cmp-cache \
+    "$image" doctor > "$out" 2>&1
+  echo $?
+}
+: > "$work/register.log"
+code="$(run_doctor "$work/doctor.out" "$chart_url")"
+sed 's/^/     doctor: /' "$work/doctor.out"
+[ "$code" = 0 ] && ok "doctor exits 0 on a good setup" || bad "doctor exit $code, want 0"
+for want in '^ok    settings' '^(ok|warn)  *token' '^ok    core ' '^ok    core-auth' '^ok    chart-repos' '^ok    cache' '^ok    git ' '^ok    helm .*'"$want_helm" '^ok    kustomize .*'"$want_kustomize" '^(ok|warn)  *netns' '^doctor: [0-9]+ ok, [0-9]+ warn, 0 fail'; do
+  grep -Eq "$want" "$work/doctor.out" && ok "doctor prints $want" || bad "doctor output lacks $want"
+done
+grep -q 'smoke-token' "$work/doctor.out" && bad "doctor printed the token" || ok "doctor did not print the token"
+[ ! -s "$work/register.log" ] && ok "doctor registered nothing" || bad "doctor registered a change"
+code="$(run_doctor "$work/doctor-bad.out" "")"
+sed 's/^/     doctor: /' "$work/doctor-bad.out"
+[ "$code" != 0 ] && ok "doctor exit $code (non-zero) with CLEARANCE_CHART_REPOS empty" || bad "doctor passed with no chart allow list"
+grep -Eq '^fail  chart-repos' "$work/doctor-bad.out" && ok "doctor names the failing check" || bad "doctor does not name chart-repos"
+
 echo "== the chart cache: a second render in the same /tmp does not fetch the chart again"
 cache="$work/cmp-cache"; mkdir -p "$cache"; chmod 777 "$cache"
 code="$(run_plugin "$good" "$work/c1.out" "$work/c1.err" "$cache")"

@@ -20,7 +20,40 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   Also lists what a non-apron install must have in place first for the opt-in (the protected namespaces exist, the core's NetworkPolicy and
   provider entries, the agent's `environment`) and comments the chart's `environment` and `protectedNamespaces` values the same way.
 
+## [0.53.0] - 2026-11-19
+
+**Upgrading from 0.52.x.** No setting is newly required and nothing a 0.52.2 install renders is refused. Three things change
+for an operator:
+- The plugin now keeps a chart cache under `CLEARANCE_CMP_CACHE_DIR` (default bound 512 MiB and 32 entries). If the
+  sidecar's `/tmp` volume has a `sizeLimit`, keep it above `CLEARANCE_CMP_CHART_CACHE_MAX_BYTES` plus room for the
+  renders that run at once (each works in its own directory under `/tmp`), or lower that bound; `0` turns the cache off.
+- Render subprocesses try a private network namespace (`CLEARANCE_CMP_NETNS=try`, the default). Under a container
+  runtime's default seccomp profile this is usually refused and the plugin renders as before, logging one warning per
+  process and `netns=unavailable` on each render. Where the namespace is allowed, a render step can no longer reach
+  anything on the pod's loopback either: a chart or kustomization that fetched from a loopback address now fails, so
+  set `CLEARANCE_CMP_NETNS=off` if you depend on that. Otherwise nothing to do unless you want `require`.
+- After rolling the new image, hard-refresh every gated Application: Argo CD caches a plugin's output by source and
+  parameters, not by the sidecar image.
+
+Run `clearance-cmp doctor` in the new sidecar first (docs/install-argocd-plugin.md).
+
 ### Added
+
+- **`clearance-cmp doctor`: a preflight for the Argo CD plugin's sidecar, and an install guide any Argo CD can follow**
+  (W-34 I1 to I3). `clearance-cmp doctor` runs in the sidecar (`kubectl -n argocd exec deploy/argocd-repo-server -c
+  clearance-cmp -- clearance-cmp doctor`) or anywhere with the same environment, prints one line per check (`ok`,
+  `warn` or `fail`, with the fix) and exits 1 if any fails (2 for a usage error). It reports every settings problem at
+  once, not the first (the per-run `ARGOCD_APP_*` and `PARAM_*` variables are not required), and checks the token file
+  (exists, readable, non-empty, mode; never printed), that the core is reachable and accepts the token (`GET /healthz`,
+  then a read of a change that does not exist, which cannot change anything), the chart allow list (non-empty, each
+  entry canonical), that the cache directory is writable, the versions of git, helm and kustomize, the network
+  namespace (`on`, `off`, `unavailable`), and the plugin socket directory. It writes nothing but a probe file in the
+  cache directory. It also reports the chart cache (on or off, its bounds, a warning when the cache volume is smaller than the byte bound) and the render cache's TTL. CI runs it in the built image (`tools/cmp-smoke.sh`). New
+  [docs/install-argocd-plugin.md](docs/install-argocd-plugin.md): prerequisites, the sidecar for the official `argo-cd`
+  Helm chart and for plain manifests or kustomize, every setting and plugin parameter in one table, gating an
+  Application by hand and from an ApplicationSet, turning it off, verifying, a troubleshooting table built from the
+  plugin's own error strings, upgrade and rollback (settings before image, then hard-refresh), and what the plugin does
+  not do. **Upgrading:** nothing is needed; `doctor` is a new subcommand and the plugin's `generate` is unchanged.
 
 - **The `clearance-cmp` image can run as a second, canary plugin** (`clearance-canary`). The image carries
   `config-canary/plugin.yaml` (the same plugin with `version: canary`); a second sidecar started with
