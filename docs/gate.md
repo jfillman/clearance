@@ -2556,6 +2556,15 @@ Kubernetes CEL in admission has no clock, so the policy never reads `expiresAt`;
 - **Per-change grants.** A namespace with a switched Application and a merged grant has the merged grant and no per-change
   grant. A namespace with no merged grant to write or hold keeps what it had, so a namespace an operator already labelled is not left
   without a grant while the first clearance is awaited.
+- **After an opt-out the namespace gets its per-change grant back (I-46).** When the last Application that asked for protection in a
+  namespace opts out, the label comes off, the merged grant is removed, and in the same pass the namespace's per-change grant (the
+  one the feed names for its live clearance, `ch-<id>`) is written and activated, because per-change grants are written for every
+  namespace the feed names, labelled or not (the grant-before-label rule above). This is intended and harmless: the admission policy's
+  `namespaceSelector` matches only `clearance.hangar.io/protected: "true"`, so a grant in a namespace the agent unlabelled is never read and
+  nothing there is enforced or refused. (A namespace an operator labelled keeps its label through an opt-out, as above, and stays enforced
+  under this grant: the case this grant is for.) The agent expires it on its own pass after its `expiresAt`, so with the agent stopped it
+  can outlast its clearance, as any grant can; it removes it when the change leaves the feed. It is what a namespace an operator labels later would need anyway. The agent never labels a
+  namespace because of it; only a switched Application's merged grant does.
 - **The flip to or from a merged grant activates the new grant before it deactivates the old.** For a moment both are active; the policy
   needs an object to pass *each* active grant (an intersection, not a union), so what is admitted in that moment is what both list, never
   more than either, and nothing that ran under the old grant is refused, because the merged grant lists every object of its
@@ -2628,8 +2637,8 @@ The agent keeps nothing the cluster does not: a restart starts from the Applicat
 | the merged grant is active, before the label | grant active and valid; the namespace not labelled | labels it |
 | the label is written | protected, with its grant | nothing |
 | opt-out: the removal is reported, nothing else | pair gone at the core; Application on the plugin; namespace labelled (over-protected, never under) | label off, then the Application, then the grant |
-| opt-out: label off, Application not yet put back | not enforced; the plugin's stamped objects are harmless without a label | puts it back; the grant is removed |
-| opt-out: Application put back, grant not yet removed | not enforced; a grant with no label | removes it |
+| opt-out: label off, Application not yet put back | not enforced (the agent's label is off); the plugin's stamped objects are harmless without a label | puts it back; the grant is removed |
+| opt-out: Application put back, grant not yet removed | not enforced (when the agent removed the label); a grant with no label | removes it (a per-change grant of a live clearance then takes its place, never read without the label) |
 | a label that cannot come off | the Application is not put back and the grant is not removed | retries |
 | the core cannot be reached | no removal acted on and **no new Application switched** (a pair is added at the core before its Application is switched); Applications already switched stay | reports, then switches and removes |
 | the core refuses reports (429, 409) | removals wait; additions are never refused by the bound; after 10 minutes the status says so and one exception is posted | retries |
