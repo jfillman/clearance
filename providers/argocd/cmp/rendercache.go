@@ -86,19 +86,18 @@ func renderKey(cfg Config) string {
 		ExtraCluster                                []string
 		KubeVersion                                 string
 		APIVersions                                 []string
-		CoreURL                                     string
+		CoreURL, Netns                              string
 	}{renderKeyVersion, build, cfg.AppName, cfg.Destination, cfg.Revision, cfg.SourceRepo,
 		cfg.SourcePath, cfg.Project, cfg.App, cfg.Env, cfg.Cluster,
 		cfg.ChartRepo, cfg.ChartRev, cfg.ChartPath, cfg.chartCommit,
-		cfg.ValueFiles, cfg.ValuesJSON, cfg.KustomizeDir, cfg.ExtraCluster, cfg.KubeVersion, api, cfg.CoreURL})
+		cfg.ValueFiles, cfg.ValuesJSON, cfg.KustomizeDir, cfg.ExtraCluster, cfg.KubeVersion, api, cfg.CoreURL, cfg.Netns})
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
 
 func (c Cache) renderPath(key string) string { return filepath.Join(c.Dir, "renders", key+".json") }
 
-// GetRender is the cached render for key, if it is still within its clearance and lifetime and is whole. An entry
-// that is not (a file that does not parse, a stream that does not match its sum, a key that is not its own) is removed.
+// GetRender is the cached render for key, if it is still within its clearance and lifetime and is whole.
 func (c Cache) GetRender(key string, now time.Time, ttl time.Duration) (renderEntry, bool) {
 	if key == "" || c.Dir == "" {
 		return renderEntry{}, false
@@ -109,12 +108,12 @@ func (c Cache) GetRender(key string, now time.Time, ttl time.Duration) (renderEn
 		return renderEntry{}, false
 	}
 	var e renderEntry
+	// A miss never removes the file: another render may have replaced it since it was read. A bad or expired entry is
+	// overwritten by the next full render of the key, or pruned.
 	if json.Unmarshal(b, &e) != nil || e.Key != key || e.ID == "" || len(e.Stream) == 0 || e.StreamSum != sumHex(e.Stream) {
-		os.Remove(p)
 		return renderEntry{}, false
 	}
 	if !now.Before(e.ExpiresAt) || now.Sub(e.CachedAt) >= ttl {
-		os.Remove(p)
 		return renderEntry{}, false
 	}
 	os.Chtimes(p, now, now) // last used
@@ -132,7 +131,7 @@ func (c Cache) PutRender(e renderEntry, started time.Time) {
 	if os.MkdirAll(dir, 0o700) != nil {
 		return
 	}
-	if st, err := os.Stat(c.tombstone(e.App, e.Env, e.Cluster, e.Tree)); err == nil && !st.ModTime().Before(started) {
+	if c.decidedSince(e.App, e.Env, e.Cluster, e.Tree, started) {
 		return
 	}
 	e.StreamSum = sumHex(e.Stream)
@@ -150,7 +149,29 @@ func (c Cache) PutRender(e renderEntry, started time.Time) {
 		os.Remove(tmp.Name())
 		return
 	}
+	if c.decidedSince(e.App, e.Env, e.Cluster, e.Tree, started) { // a decision landed while this was written
+		os.Remove(c.renderPath(e.Key))
+		return
+	}
 	c.pruneRenders(dir)
+}
+
+// decidedSince is whether a hold or denial of the tree was recorded (DropRenders) at or after t.
+func (c Cache) decidedSince(app, env, cluster, tree string, t time.Time) bool {
+	st, err := os.Stat(c.tombstone(app, env, cluster, tree))
+	return err == nil && !st.ModTime().Before(t)
+}
+
+// PutUndecided is Put for a tree cache entry, refused (and undone) if a hold or denial of the tree was recorded since
+// started, when this run began asking the core: the cleared answer is older than that decision.
+func (c Cache) PutUndecided(app, env, cluster string, e CacheEntry, started time.Time) {
+	if c.decidedSince(app, env, cluster, e.Tree, started) {
+		return
+	}
+	c.Put(app, env, cluster, e)
+	if c.decidedSince(app, env, cluster, e.Tree, started) {
+		c.Drop(app, env, cluster, e.Tree)
+	}
 }
 
 // tombstone is the file whose time says when a hold or denial of the tree was last recorded.
@@ -262,10 +283,14 @@ func serveRender(ctx context.Context, d Deps, cfg Config, e renderEntry, out io.
 	if tok && now.Sub(te.CachedAt) < cfg.CacheTTL {
 		return serve("the tree cache confirmed it within " + cfg.CacheTTL.String())
 	}
+	started := time.Now()
 	ch, err := d.Core.RegisterChange(ctx, e.Request)
 	if err != nil {
 		if errors.Is(err, client.ErrCoreUnavailable) {
-			if tok && te.Outage == "allow-and-record" {
+			// Read the tree cache again, as the uncached path does after the failure: a hold another render met while
+			// this call was pending has removed the clearance.
+			te, tok = d.Cache.Get(cfg.App, cfg.Env, cfg.Cluster, e.Tree, d.Now())
+			if tok && te.ID == e.ID && te.Outage == "allow-and-record" {
 				fmt.Fprintf(d.Stderr, "clearance: the core is unreachable (%v); serving %s from the cache (tier %d, allow-and-record)\n", err, te.ID, te.Tier)
 				return serve("outage policy")
 			}
@@ -278,7 +303,7 @@ func serveRender(ctx context.Context, d Deps, cfg Config, e renderEntry, out io.
 		if exp.IsZero() {
 			exp = now.Add(cfg.CacheTTL)
 		}
-		d.Cache.Put(cfg.App, cfg.Env, cfg.Cluster, CacheEntry{ID: ch.ID, Tier: ch.Tier, Outage: ch.Outage, Tree: e.Tree, CachedAt: now, ExpiresAt: exp})
+		d.Cache.PutUndecided(cfg.App, cfg.Env, cfg.Cluster, CacheEntry{ID: ch.ID, Tier: ch.Tier, Outage: ch.Outage, Tree: e.Tree, CachedAt: now, ExpiresAt: exp}, started)
 		return serve("the core confirmed the same change")
 	}
 	// Another change, a hold, a denial: nothing of this entry is served. The full render decides and emits (a hold

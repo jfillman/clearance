@@ -1785,7 +1785,7 @@ doubtful entry is discarded and the work is done again.
 that moved is a different key and is fetched; the tag's name is never a key. An entry is the checked-out tree (no `.git`)
 plus `meta.json` (repository, commit, a digest of every file with its executable bit, every link target, and the tree's
 size). It is written once into a temporary directory beside the cache and renamed to its key; two renders of one commit
-take a file lock, so it is fetched once, and a rename onto an entry that exists loses to it. It is never edited. On use
+take a file lock, so it is fetched once. The clone goes into the render's own scratch directory and is then copied into the cache (a cache that cannot be written never fails a render); publishing, discarding and eviction happen under one directory lock, and a rename onto an entry that exists loses to it. It is never edited. On use
 the render copies the tree into its own scratch directory and hashes the bytes in the same pass: a digest that is not
 `meta.json`'s, a `meta.json` that is not the key's repository and commit, or any read error discards the entry and
 fetches again. Helm therefore reads a private copy of exactly the verified bytes, which neither an eviction nor Helm can
@@ -1810,8 +1810,11 @@ clone, Helm and kustomize; **it never decides**. A hit is handled like this:
 | `cleared` as another change, `holding`, `denied`, or any other state | drops every render of the tree and renders in full: a hold emits the wait Job, a denial refuses | one, then the full render's own |
 | the core is unreachable | the outage policy above: served only for a tree whose cached tier is `allow-and-record`, otherwise an outage hold | one (failed) |
 
-Net effect: an unchanged, cleared app skips the clone, Helm and kustomize; **the core is asked exactly as often as before
-this change, and no decision is cached longer than before** (`CLEARANCE_CMP_CACHE_TTL` still bounds it).
+Net effect: an unchanged, cleared app skips the clone, Helm and kustomize. **The core is asked exactly as often as before
+this change for an app whose clearance holds** (not at all inside `CLEARANCE_CMP_CACHE_TTL`, once after it), and **no
+decision is cached longer than before** (`CLEARANCE_CMP_CACHE_TTL` still bounds it). When the core does not confirm the
+entry (another change, a hold, a denial) the confirmation is followed by the full render's own registration: two calls
+that render, as without the cache, would have made one. The sandbox mode (`CLEARANCE_CMP_NETNS`) is part of the key.
 `CLEARANCE_CMP_RENDER_CACHE_TTL` (default 15 minutes; 0 turns it off) bounds only how long rendered bytes are reused, and
 never past the clearance's `expiresAt`. A hold or a denial is never stored; one also drops every entry of the same app,
 environment, cluster and tree (whatever its key) and refuses a cleared answer that was already in flight when the

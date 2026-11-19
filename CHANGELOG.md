@@ -51,8 +51,9 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
     run on what Helm reads.
   - **Pre-render cache.** An Application whose inputs did not change (gitops revision, resolved chart commit, every
     parameter, Kubernetes and API versions, plugin version) skips the clone, Helm and kustomize: the stored cleared
-    stream is served. It never decides: the core is asked exactly as often as before (not at all within
-    `CLEARANCE_CMP_CACHE_TTL`, otherwise once with the stored registration request), and the stream is served only if
+    stream is served. It never decides: the core is asked as often as before (not at all within
+    `CLEARANCE_CMP_CACHE_TTL`, otherwise once with the stored registration request; when it does not confirm, the
+    full render registers again as it would have without the cache), and the stream is served only if
     the core answers `cleared` as the same change. Another change, a hold or a denial drops the entry and renders in
     full (a hold emits the wait Job as before); an unreachable core follows the outage policy unchanged. No decision
     is cached longer than before. `CLEARANCE_CMP_RENDER_CACHE_TTL` (15 minutes) bounds only how long rendered bytes

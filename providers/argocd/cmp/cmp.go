@@ -140,7 +140,7 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 			exp = now.Add(cfg.CacheTTL)
 		}
 		ce := CacheEntry{ID: ch.ID, Tier: ch.Tier, Outage: ch.Outage, Tree: tree.Root, CachedAt: now, ExpiresAt: exp}
-		d.Cache.Put(cfg.App, cfg.Env, cfg.Cluster, ce)
+		d.Cache.PutUndecided(cfg.App, cfg.Env, cfg.Cluster, ce, started)
 		return cleared(ce)
 	case "holding":
 		d.Cache.DropRenders(cfg.App, cfg.Env, cfg.Cluster, tree.Root) // a hold is never served from the cache

@@ -312,6 +312,7 @@ func TestAChangedInputMissesThePreRenderCache(t *testing.T) {
 		"the kube version":    func(e *env) { e.cfg.KubeVersion = "1.99.0" },
 		"the api versions":    func(e *env) { e.cfg.APIVersions = []string{"v1", "apps/v1"} },
 		"the cluster":         func(e *env) { e.cfg.Cluster = "other-cluster" },
+		"the sandbox mode":    func(e *env) { e.cfg.Netns = "require" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := cachedEnv(t)
@@ -557,6 +558,10 @@ func TestGenericModeAndANonCommitRevisionAreNotPreRenderCached(t *testing.T) {
 		t.Fatal("a branch name was a cache key")
 	}
 	cfg := e.cfg
+	cfg.chartCommit, cfg.Revision = chartSHA, "main"
+	if renderKey(cfg) != "" {
+		t.Fatal("a branch name has a key")
+	}
 	cfg.Revision, cfg.Sources = mergeSHA, "[]"
 	if renderKey(cfg) != "" {
 		t.Fatal("generic mode has a key")
@@ -658,5 +663,57 @@ func TestCacheSettings(t *testing.T) {
 		if _, err := parse(bad); err == nil {
 			t.Fatalf("%v was accepted", bad)
 		}
+	}
+}
+
+// decideDuring is a core that records a hold of the tree (what another render's hold does) while it is being asked,
+// then answers as configured.
+type decideDuring struct {
+	e      *env
+	answer *client.Change
+	err    error
+}
+
+func (h decideDuring) RegisterChange(_ context.Context, r *client.ChangeRequest) (*client.Change, error) {
+	c := h.e.d.Cache
+	c.DropRenders(h.e.cfg.App, h.e.cfg.Env, h.e.cfg.Cluster, r.TreeDigest)
+	c.Drop(h.e.cfg.App, h.e.cfg.Env, h.e.cfg.Cluster, r.TreeDigest)
+	return h.answer, h.err
+}
+
+func TestAClearedAnswerOlderThanAHoldIsStoredInNeitherCache(t *testing.T) {
+	e := cachedEnv(t)
+	e.d.Core = decideDuring{e: e, answer: e.core.answer}
+	e.gen(t) // cleared, but a hold of the same tree was recorded while the core was being asked
+	e.now = e.now.Add(time.Second)
+	e.d.Core = e.core
+	e.gen(t)
+	if len(e.core.reqs) != 1 {
+		t.Fatalf("the stale clearance was served without asking the core (%d calls)", len(e.core.reqs))
+	}
+	// The same for a confirmation of a cached render.
+	e = cachedEnv(t)
+	e.gen(t)
+	e.now = e.now.Add(5 * time.Minute)
+	e.d.Core = decideDuring{e: e, answer: e.core.answer}
+	e.gen(t)
+	e.d.Core = e.core
+	n := len(e.core.reqs)
+	e.now = e.now.Add(time.Second)
+	e.gen(t)
+	if len(e.core.reqs) != n+1 {
+		t.Fatal("a confirmation older than a hold refreshed the tree cache")
+	}
+}
+
+func TestAnOutageDuringAConfirmationRechecksWhatTheCacheNowHolds(t *testing.T) {
+	e := cachedEnv(t)
+	e.gen(t)
+	e.now = e.now.Add(5 * time.Minute)
+	e.d.Core = decideDuring{e: e, err: fmt.Errorf("%w: refused", client.ErrCoreUnavailable)}
+	var out bytes.Buffer
+	_, err := Generate(context.Background(), e.d, e.cfg, e.src, &out)
+	if err == nil || !strings.Contains(err.Error(), "outage hold") || out.Len() != 0 {
+		t.Fatalf("a clearance withdrawn while the call was pending was served: %v", err)
 	}
 }

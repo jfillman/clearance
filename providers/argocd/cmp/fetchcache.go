@@ -89,20 +89,27 @@ func resolveChart(ctx context.Context, run Exec, repo, rev string) string {
 	return ""
 }
 
-// Fetch puts the chart repository's tree at rev into dest (which must not exist) and returns the commit it is. hint is
-// what resolveChart said ("" when unknown). Without a cache it is the plain shallow clone, as before. A failure of the
-// cache itself (a directory that cannot be written, a full disk) never fails the render: it fetches for this render
-// alone, as it did before there was a cache. A failure of git, or the render's own deadline, does fail it.
+// Fetch puts the chart repository's tree at rev into dest (which must not exist) and returns the commit it is, and how:
+// "hit" (restored from the cache), "miss" (fetched, and kept) or "off" (fetched, not kept: no cache, a cache that cannot
+// be written, a checkout above the byte bound). hint is what resolveChart said ("" when unknown). Without a cache it is
+// the plain shallow clone, as before. The clone always goes to dest, the render's own scratch: a failure of the cache
+// (a directory that cannot be written, a full disk) never fails the render, only a failure of git, or the render's own
+// deadline, does. The checkout is then copied into the cache.
 func (c ChartCache) Fetch(ctx context.Context, run Exec, repo, rev, hint, dest string) (commit, how string, err error) {
-	plain := func() (string, string, error) {
+	clone := func() (string, string, error) {
+		commit, err := cloneChart(ctx, run, repo, rev, dest)
+		if err != nil {
+			return "", "", err
+		}
+		os.RemoveAll(filepath.Join(dest, ".git")) // Helm reads files; the cache keeps files
+		if c.enabled() && c.publish(ctx, repo, commit, dest) {
+			return commit, "miss", nil
+		}
+		return commit, "off", nil
+	}
+	if !c.enabled() || os.MkdirAll(c.Dir, 0o700) != nil {
 		commit, err := cloneChart(ctx, run, repo, rev, dest)
 		return commit, "off", err
-	}
-	if !c.enabled() {
-		return plain()
-	}
-	if err := os.MkdirAll(c.Dir, 0o700); err != nil {
-		return plain()
 	}
 	if hint != "" {
 		if err := c.restore(repo, hint, dest); err == nil {
@@ -113,31 +120,19 @@ func (c ChartCache) Fetch(ctx context.Context, run Exec, repo, rev, hint, dest s
 			if ctx.Err() != nil {
 				return "", "", err
 			}
-			return plain()
+			return clone()
 		}
 		defer unlock()
-		// Another render may have populated the entry while this one waited for the lock.
-		if err := c.restore(repo, hint, dest); err == nil {
-			return hint, "hit", nil // another render fetched it while this one waited
+		// Another render may have fetched it while this one waited for the lock.
+		err = c.restore(repo, hint, dest)
+		if err == nil {
+			return hint, "hit", nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			c.discardIfBad(ctx, repo, hint)
 		}
 	}
-	commit, served, err := c.populate(ctx, run, repo, rev, dest)
-	var ge *gitError
-	switch {
-	case err == nil && served:
-		return commit, "off", nil
-	case errors.As(err, &ge) || ctx.Err() != nil:
-		return "", "", err
-	case err != nil:
-		os.RemoveAll(dest)
-		return plain()
-	}
-	if err := c.restore(repo, commit, dest); err != nil {
-		// The entry cannot be used (a full disk, an eviction that raced): fetch for this render alone.
-		os.RemoveAll(dest)
-		return plain()
-	}
-	return commit, "miss", nil
+	return clone()
 }
 
 // lockPath is the lock file of a key. There are 256 of them, named by the key's first byte and never removed: a lock
@@ -145,12 +140,6 @@ func (c ChartCache) Fetch(ctx context.Context, run Exec, repo, rev, hint, dest s
 func (c ChartCache) lockPath(repo, commit string) string {
 	return filepath.Join(c.Dir, "lock-"+c.key(repo, commit)[:2])
 }
-
-// gitError is a failure of git itself (as opposed to the cache): the render reports it.
-type gitError struct{ err error }
-
-func (e *gitError) Error() string { return e.err.Error() }
-func (e *gitError) Unwrap() error { return e.err }
 
 // cloneChart is the uncached fetch: a shallow clone at the pinned tag, and the commit it peels to.
 func cloneChart(ctx context.Context, run Exec, repo, rev, dest string) (string, error) {
@@ -168,54 +157,59 @@ func cloneChart(ctx context.Context, run Exec, repo, rev, dest string) (string, 
 	return commit, nil
 }
 
-// populate clones into a temporary directory in the cache, records what it holds and renames it to its key. The key
-// is the commit the clone really has, which is not the hint when the tag moved between the lookup and the clone.
-// A checkout larger than the byte bound is not kept (it would break the bound): it is moved to dest for this render
-// and served is true.
-func (c ChartCache) populate(ctx context.Context, run Exec, repo, rev, dest string) (commit string, served bool, err error) {
+// publish copies the checkout in dest into the cache as the entry for (repo, commit): into a temporary directory, with
+// its digest, then renamed into place under the directory lock (which also orders it against another render's eviction
+// and discard). A checkout above the byte bound is not kept. It reports whether the entry is there; the render does not
+// depend on it.
+func (c ChartCache) publish(ctx context.Context, repo, commit, dest string) bool {
 	tmp, err := os.MkdirTemp(c.Dir, ".tmp-")
 	if err != nil {
-		return "", false, err
+		return false
 	}
 	defer os.RemoveAll(tmp)
-	tree := filepath.Join(tmp, "tree")
-	commit, err = cloneChart(ctx, run, repo, rev, tree)
-	if err != nil {
-		return "", false, &gitError{err}
-	}
-	if err := os.RemoveAll(filepath.Join(tree, ".git")); err != nil {
-		return "", false, err
-	}
-	digest, size, err := copyTree(tree, "")
-	if err != nil {
-		return "", false, fmt.Errorf("the fetched chart: %w", err)
-	}
-	if c.MaxBytes > 0 && size > c.MaxBytes {
-		if _, _, err := copyTree(tree, dest); err != nil {
-			return "", false, err
-		}
-		return commit, true, nil
+	digest, size, err := copyTree(dest, filepath.Join(tmp, "tree"))
+	if err != nil || (c.MaxBytes > 0 && size > c.MaxBytes) {
+		return false
 	}
 	b, _ := json.Marshal(chartMeta{Version: chartMetaVersion, Repo: repo, Commit: commit, Digest: digest, Size: size, Created: c.now().UTC()})
-	if err := os.WriteFile(filepath.Join(tmp, "meta.json"), b, 0o600); err != nil {
-		return "", false, err
+	meta := filepath.Join(tmp, "meta.json")
+	if os.WriteFile(meta, b, 0o600) != nil {
+		return false
 	}
-	final := filepath.Join(c.Dir, c.key(repo, commit))
-	if err := os.Rename(tmp, final); err != nil {
-		// Rename onto a non-empty directory fails: another render got there first, and its entry stands. Verified on
-		// use like any other, and replaced below if it is not good.
-		if _, serr := os.Stat(final); serr != nil {
-			return "", false, err
-		}
-		if c.verify(repo, commit) != nil {
-			c.discard(final)
-			if err := os.Rename(tmp, final); err != nil {
-				return "", false, err
-			}
-		}
+	now := c.now()
+	os.Chtimes(meta, now, now) // last used, for the eviction order, from the start
+	unlock, err := lockFile(ctx, filepath.Join(c.Dir, "lock-dir"))
+	if err != nil {
+		return false
 	}
-	c.evict(c.key(repo, commit))
-	return commit, false, nil
+	defer unlock()
+	key := c.key(repo, commit)
+	final := filepath.Join(c.Dir, key)
+	if _, err := os.Stat(final); err == nil {
+		if c.verify(repo, commit) == nil {
+			return true // another render's entry stands
+		}
+		c.discard(final)
+	}
+	if os.Rename(tmp, final) != nil {
+		return false
+	}
+	c.evict(key)
+	return true
+}
+
+// discardIfBad removes the entry for (repo, commit) if, under the directory lock, it still does not verify: an entry
+// that another render replaced since is not removed.
+func (c ChartCache) discardIfBad(ctx context.Context, repo, commit string) {
+	unlock, err := lockFile(ctx, filepath.Join(c.Dir, "lock-dir"))
+	if err != nil {
+		return
+	}
+	defer unlock()
+	dir := filepath.Join(c.Dir, c.key(repo, commit))
+	if _, err := os.Stat(dir); err == nil && c.verify(repo, commit) != nil {
+		c.discard(dir)
+	}
 }
 
 // verify is whether the entry for (repo, commit) is there and is what it claims, without copying it.
@@ -250,15 +244,12 @@ func (c ChartCache) meta(dir, repo, commit string) (chartMeta, error) {
 	return m, nil
 }
 
-// restore copies the entry for (repo, commit) to dest, verifying it while it copies. An entry that is absent is an
-// error; one that is present and bad is discarded as well.
+// restore copies the entry for (repo, commit) to dest, verifying it while it copies. An entry that is absent
+// (fs.ErrNotExist) or bad is an error; removing a bad one is discardIfBad's, under the lock.
 func (c ChartCache) restore(repo, commit, dest string) error {
 	dir := filepath.Join(c.Dir, c.key(repo, commit))
 	m, err := c.meta(dir, repo, commit)
 	if err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			c.discard(dir)
-		}
 		return err
 	}
 	digest, _, err := copyTree(filepath.Join(dir, "tree"), dest)
@@ -267,9 +258,6 @@ func (c ChartCache) restore(repo, commit, dest string) error {
 	}
 	if err != nil {
 		os.RemoveAll(dest)
-		if !errors.Is(err, fs.ErrNotExist) {
-			c.discard(dir)
-		}
 		return err
 	}
 	now := c.now()
@@ -290,7 +278,7 @@ func (c ChartCache) discard(dir string) {
 	os.RemoveAll(trash)
 }
 
-// evict brings the cache within its bounds, least recently used first, never the entry named keep, and clears what
+// evict (called under the directory lock) brings the cache within its bounds, least recently used first, never the entry named keep, and clears what
 // an interrupted populate left (temporary directories older than ten minutes).
 func (c ChartCache) evict(keep string) {
 	ents, err := os.ReadDir(c.Dir)
