@@ -2458,12 +2458,15 @@ the entry above to the parent's source in git; the next pass switches the Applic
 
 **What the entry costs, and is not fixed here.** While an Application is opted in, an edit to its `spec.source` in the parent's git
 (a chart version bump, say) is ignored: the live Application keeps the sources it was switched with and the parent shows `Synced`.
-To change them under an app-of-apps, remove the annotation (the original is put back), edit, and annotate again. The agent does not adopt the new
-sources: it has no way to read the parent's rendered manifest. **Under an ApplicationSet that does not work**: the `ignoreApplicationDifferences`
-entry stays in force while the Application is opted out, so the restored source is still the snapshot and a new opt-in switches that one. Order
-for an ApplicationSet-generated Application: (1) remove the opt-in annotation from the template and wait for the opt-out to finish (the original is
-put back); (2) remove the `ignoreApplicationDifferences` entry and wait for the controller to write the template's source; (3) edit the template's
-source; (4) put the entry back and add the annotation again.
+To change them, the parent's ignore entry has to be out of the way while the new source is written, because the entry stays in force
+after an opt-out and the restored source is only the snapshot taken at the switch. Under an **app-of-apps**: (1) remove the annotation and
+wait until the original is put back; (2) remove the parent's `ignoreDifferences` entry for `/spec/source` and `/spec/sources`; (3) edit the
+child's source in the parent's git; (4) sync the parent and wait until the child shows the new source; (5) restore the entry; (6) annotate
+again (the agent refuses to switch while the entry is missing). Under an **ApplicationSet**: (1) remove the opt-in annotation from the
+template and wait until the original is put back; (2) remove the `ignoreApplicationDifferences` entry and wait for the controller to write the
+template's source; (3) edit the template's source and wait until the edited source is on the generated Application; (4) put the entry back and
+add the annotation again. Without that order a new opt-in switches the old snapshot, and the parent can still show `Synced`. The agent does not
+adopt the new sources: it has no way to read the parent's rendered manifest.
 
 #### The merged grant
 
