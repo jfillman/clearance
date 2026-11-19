@@ -1844,7 +1844,21 @@ bare environment, so the clearance token is not in their reach.
 
 Images: `providers/argocd/cmp/Dockerfile` (alpine with git, helm and kustomize pinned and checksum-verified, the static
 binary, `plugin.yaml` and `plugin-canary.yaml`; uid 999) and `providers/argocd/wait/Dockerfile` (distroless static). Both build from the
-repository root; neither is in a release workflow yet.
+repository root; the release workflow publishes both (`ghcr.io/jfillman/clearance-cmp` and `clearance-wait`).
+
+**Install guide and preflight.** [Installing the Argo CD plugin](install-argocd-plugin.md) is the step-by-step install for any
+Argo CD (the sidecar's Helm values and manifest patch, every setting and parameter, an ApplicationSet pattern, turning it
+off, troubleshooting by error message, upgrade and rollback). `clearance-cmp doctor` is its preflight: run in the
+sidecar (`kubectl -n argocd exec deploy/argocd-repo-server -c clearance-cmp -- clearance-cmp doctor`) or anywhere with the
+same environment, it prints one line per check (`ok`, `warn` or `fail`, with the fix) and exits 1 if any fails. It reports
+every settings problem at once (the rules are `ParseConfig`'s; the per-run `ARGOCD_APP_*` and `PARAM_*` variables are not
+required), the token file (exists, readable, non-empty, mode; the content is never printed), the core (`GET /healthz`, then
+an authenticated read of a change that does not exist, `GET /v1/clearances/{id}`: 404 is an accepted token, 401 a rejected
+one; it cannot register anything, and it cannot show the principal is a verifier, which the core checks at registration),
+the chart allow list (non-empty, each entry through `NormalizeRepo`), the cache directory (one probe file, removed), git,
+helm and kustomize with their versions, the network namespace (`on`, `off` or `unavailable`; `unavailable` fails only under
+`CLEARANCE_CMP_NETNS=require`) and the plugin socket directory and cmp-server binary (a warning outside the sidecar). It
+writes nothing outside the cache directory. The smoke test runs it in the built image (below).
 
 ### Rolling out a plugin release
 
@@ -1917,7 +1931,7 @@ image under docker's default seccomp profile, so it shows what a `RuntimeDefault
 on the runner. To run it locally, build the image and run the script with the engine and the address the container
 reaches the host on (see the header of `tools/cmp-smoke.sh`).
 
-It also checks the canary plugin config in the built image ("Rolling out a plugin release"): `config-canary/plugin.yaml` exists, is name `clearance` with version `canary` and the same generate command, differs from `config/plugin.yaml` only by the version, and the default file still has no version.
+It also runs `clearance-cmp doctor` in the built image with the sidecar's environment and no `PARAM_*` (exit 0, every check line, the token never printed, nothing registered), and again with `CLEARANCE_CHART_REPOS` empty (exit non-zero, `fail  chart-repos`); the fake core answers `/healthz` and the authenticated read doctor makes. It also checks the canary plugin config in the built image ("Rolling out a plugin release"): `config-canary/plugin.yaml` exists, is name `clearance` with version `canary` and the same generate command, differs from `config/plugin.yaml` only by the version, and the default file still has no version.
 
 The other CI jobs install the same pinned helm and kustomize (`tools/install-cmp-tools.sh`, which reads the versions and
 checksums from the Dockerfile), so the tests that run the real binaries run, and a step fails the job if they skip.

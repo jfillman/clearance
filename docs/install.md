@@ -67,6 +67,13 @@ The core authenticates it as `<namespace>/<serviceaccount>`, which is what `prov
 Services: `<release>-core` and `<release>-api` on port 8080 (`clearance-core` and `clearance-api` when the release is
 named `clearance`).
 
+## The Argo CD plugin
+
+The deployment gate's Argo CD half, the `clearance-cmp` plugin, is a sidecar of Argo CD's repo-server and installs
+separately from this chart: [Installing the Argo CD plugin](install-argocd-plugin.md) (the sidecar for the official
+`argo-cd` Helm chart or plain manifests, every setting, `clearance-cmp doctor`, troubleshooting, upgrade). On the core
+the one step is to list the repo-server's service account (`<namespace>/<serviceaccount>`) in `verifiers`.
+
 ## Every value
 
 Each value becomes one of the variables in [core.md](core.md#configuration); an empty value leaves the variable

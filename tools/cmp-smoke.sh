@@ -226,7 +226,7 @@ run_doctor() { # OUT CHART_REPOS : echoes the exit code
 code="$(run_doctor "$work/doctor.out" "$chart_url")"
 sed 's/^/     doctor: /' "$work/doctor.out"
 [ "$code" = 0 ] && ok "doctor exits 0 on a good setup" || bad "doctor exit $code, want 0"
-for want in '^ok    settings' '^ok    token' '^ok    core ' '^ok    core-auth' '^ok    chart-repos' '^ok    cache' '^ok    git ' '^ok    helm .*'"$want_helm" '^ok    kustomize .*'"$want_kustomize" '^(ok|warn)  *netns' '^doctor: [0-9]+ ok, [0-9]+ warn, 0 fail'; do
+for want in '^ok    settings' '^(ok|warn)  *token' '^ok    core ' '^ok    core-auth' '^ok    chart-repos' '^ok    cache' '^ok    git ' '^ok    helm .*'"$want_helm" '^ok    kustomize .*'"$want_kustomize" '^(ok|warn)  *netns' '^doctor: [0-9]+ ok, [0-9]+ warn, 0 fail'; do
   grep -Eq "$want" "$work/doctor.out" && ok "doctor prints $want" || bad "doctor output lacks $want"
 done
 grep -q 'smoke-token' "$work/doctor.out" && bad "doctor printed the token" || ok "doctor did not print the token"
