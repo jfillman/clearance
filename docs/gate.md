@@ -2262,7 +2262,7 @@ and the merged grant goes. An Application without the annotation is read and nev
 | --- | --- |
 | core, `CLEARANCE_PROVIDERS` | the agent's entry gets `"protection": ["<the agent's principal>=<cluster>"]`, e.g. `["hangar-prod/clearance-system/clearance-argocd-agent=hangar-prod"]` (the principal as the core knows it; the glob must match one of the entry's `principals`). No `protection`, no reports: the agent's pair reports are refused (403) |
 | agent chart | `optIn.enabled: true`; `protectedNamespaces` lists every namespace an opted-in Application may target (the chart then also lets the agent get and patch exactly those Namespace objects); `optIn.denyApplications` names Clearance's own Applications (default `clearance`, `clearance-*`, `*-clearance`) |
-| the ClearanceGrant CRD | **applied first**: `providers/argocd/crd/clearancegrant-crd.yaml` (schema revision 2, annotation `clearance.hangar.io/schema-revision`) adds `objects[].app` and `objects[].expiresAt`; the order is **CRD, then the agent, then `optIn.enabled`** |
+| the ClearanceGrant CRD | **applied first**: `providers/argocd/crd/clearancegrant-crd.yaml` (schema revision 3, annotation `clearance.hangar.io/schema-revision`) adds `objects[].app` and `objects[].expiresAt`; the order is **CRD, then the agent, then `optIn.enabled`** |
 | each opted-in Application's parent | the entry in [What the parent must say](#what-the-parent-must-say) |
 | the CMP sidecar | as for 10b (the plugin, its credential and egress); the opt-in does not change it |
 
