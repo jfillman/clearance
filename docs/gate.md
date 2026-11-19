@@ -2475,8 +2475,9 @@ the entry above to the parent's source in git; the next pass switches the Applic
 (a chart version bump, say) is ignored: the live Application keeps the sources it was switched with and the parent shows `Synced`.
 To change them, the parent's ignore entry has to be out of the way while the new source is written, because the entry stays in force
 after an opt-out and the restored source is only the snapshot taken at the switch. Under an **app-of-apps** (turn off automated sync on the child, in the parent's git, and wait until the live child shows it
-off before step (1); if the parent ignores `/spec` or `/spec/syncPolicy` the git change cannot reach the child, so narrow that
-ignore entry to `/spec/source` and `/spec/sources` first; restore it only once the child is on the plugin again, not when step (6) adds the annotation, since the
+off before step (1); if the parent ignores `/spec` or `/spec/syncPolicy` the git change cannot reach the child: first replace an
+entry with no `name:` by entries scoped by `name:` to each child (as below), then narrow only this child's entry to
+`/spec/source` and `/spec/sources`, so no sibling's sync policy changes; restore it only once the child is on the plugin again, not when step (6) adds the annotation, since the
 agent switches on a later pass: step (4) writes the new source and an automated sync would deploy it before the switch): (1) remove the annotation and
 wait until the original is put back; (2) remove the parent's `ignoreDifferences` entry for `/spec/source` and `/spec/sources`; (3) edit the
 child's source in the parent's git; (4) sync the parent and wait until the child shows the new source; (5) restore the entry; (6) annotate
