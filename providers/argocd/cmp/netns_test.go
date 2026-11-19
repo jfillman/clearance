@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -10,13 +11,13 @@ import (
 	"testing"
 )
 
-// marker puts a fake helm and kustomize on PATH that leave a file behind when they run.
+// marker puts a fake helm and kustomize on PATH that append a line to a file when they run.
 func marker(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	m := filepath.Join(dir, "ran")
 	for _, n := range []string{"helm", "kustomize"} {
-		if err := os.WriteFile(filepath.Join(dir, n), []byte("#!/bin/sh\ntouch '"+m+"'\n"), 0o755); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("#!/bin/sh\necho x >> '"+m+"'\n"), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -24,65 +25,144 @@ func marker(t *testing.T) string {
 	return m
 }
 
-func failIsolate(t *testing.T) {
-	t.Helper()
-	old := isolate
-	isolate = func(*exec.Cmd) (bool, error) { return false, errors.New("injected: operation not permitted") }
-	t.Cleanup(func() { isolate = old })
+func runs(m string) int {
+	b, _ := os.ReadFile(m)
+	return strings.Count(string(b), "x")
 }
 
-// When the namespace cannot be created the plugin refuses to render, names the missing capability, and never runs
-// the tool.
-func TestRenderFailsClosedWithoutANetworkNamespace(t *testing.T) {
+// netnsMode sets the mode for one test, captures the warning and restores the defaults afterwards.
+func withNetns(t *testing.T, mode string) *bytes.Buffer {
+	t.Helper()
+	var w bytes.Buffer
+	oldW, oldI := netnsWarn, isolate
+	netnsWarn = &w
+	SetNetns(mode)
+	t.Cleanup(func() { netnsWarn, isolate = oldW, oldI; SetNetns("") })
+	return &w
+}
+
+// refuse makes every namespace attempt fail, counting the attempts.
+func refuse(t *testing.T) *int {
+	t.Helper()
+	n := 0
+	isolate = func(*exec.Cmd) (bool, error) { n++; return false, errors.New("injected: operation not permitted") }
+	return &n
+}
+
+func kustomizeBuild(t *testing.T) error {
+	t.Helper()
+	_, err := OSRun(context.Background(), t.TempDir(), nil, "kustomize", "build", ".")
+	return err
+}
+
+// try, the default (and with the value unset): the kernel refuses, the render runs without the namespace, one warning
+// for the whole process, one attempt only, and the state says so.
+func TestTryRendersWithoutTheNamespaceAndWarnsOnce(t *testing.T) {
 	m := marker(t)
-	failIsolate(t)
-	t.Setenv(AllowNoNetnsEnv, "")
+	w := withNetns(t, NetnsTry)
+	attempts := refuse(t)
+	for i := 0; i < 3; i++ {
+		if err := kustomizeBuild(t); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if runs(m) != 3 {
+		t.Fatalf("the tool ran %d times, want 3", runs(m))
+	}
+	if got := strings.Count(w.String(), "WITHOUT a private network namespace"); got != 1 {
+		t.Fatalf("%d warnings, want 1:\n%s", got, w.String())
+	}
+	for _, want := range []string{NetnsEnv + "=" + NetnsRequire, "CLONE_NEWUSER", "operation not permitted"} {
+		if !strings.Contains(w.String(), want) {
+			t.Errorf("the warning lacks %q: %s", want, w.String())
+		}
+	}
+	if *attempts != 1 {
+		t.Fatalf("the kernel was asked %d times, want once per process", *attempts)
+	}
+	if s := NetnsState(); s != "unavailable" {
+		t.Fatalf("state %q, want unavailable", s)
+	}
+}
+
+// require: refused means fail closed, the tool never runs, and the error names the capability.
+func TestRequireFailsClosedWithoutANetworkNamespace(t *testing.T) {
+	m := marker(t)
+	w := withNetns(t, NetnsRequire)
+	refuse(t)
 	for _, c := range [][]string{{"helm", "template", "x", "."}, {"helm", "dependency", "build", "--skip-refresh"}, {"kustomize", "build", "."}} {
 		_, err := OSRun(context.Background(), t.TempDir(), nil, c[0], c[1:]...)
 		if err == nil {
 			t.Fatalf("%v rendered without a network namespace", c)
 		}
-		for _, want := range []string{"private network namespace", "CLONE_NEWUSER", AllowNoNetnsEnv} {
+		for _, want := range []string{"private network namespace", "CLONE_NEWUSER", NetnsEnv} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("%v: error does not mention %q: %v", c, want, err)
 			}
 		}
 	}
-	if _, err := os.Stat(m); err == nil {
+	if runs(m) != 0 {
 		t.Fatal("a render tool ran although the namespace could not be created")
+	}
+	if w.Len() != 0 {
+		t.Fatalf("require printed a fallback warning: %s", w.String())
 	}
 }
 
-// Only a command that is not a render step (helm pull, git: the plugin's own fetches) keeps the network and needs no
-// namespace.
+// off: the namespace is never attempted, the render runs, and the state says off.
+func TestOffNeverAttemptsTheNamespace(t *testing.T) {
+	m := marker(t)
+	w := withNetns(t, NetnsOff)
+	attempts := refuse(t)
+	if err := kustomizeBuild(t); err != nil {
+		t.Fatal(err)
+	}
+	if *attempts != 0 || runs(m) != 1 || w.Len() != 0 {
+		t.Fatalf("attempts %d, runs %d, warning %q", *attempts, runs(m), w.String())
+	}
+	if s := NetnsState(); s != "off" {
+		t.Fatalf("state %q, want off", s)
+	}
+}
+
+// The plugin's own fetches (helm pull, git) are not render steps: no namespace, no attempt, even under require.
 func TestFetchesNeedNoNetworkNamespace(t *testing.T) {
 	m := marker(t)
-	failIsolate(t)
-	t.Setenv(AllowNoNetnsEnv, "")
+	withNetns(t, NetnsRequire)
+	attempts := refuse(t)
 	if _, err := OSRun(context.Background(), t.TempDir(), nil, "helm", "pull", "--repo", "https://charts.example.test", "app"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(m); err != nil {
-		t.Fatal("helm pull did not run")
+	if runs(m) != 1 || *attempts != 0 {
+		t.Fatalf("runs %d, attempts %d", runs(m), *attempts)
 	}
 }
 
-// The explicit switch lets the render run without the namespace; anything but "true" stays closed.
-func TestExplicitSwitchAllowsRenderWithoutNetworkNamespace(t *testing.T) {
-	m := marker(t)
-	failIsolate(t)
-	t.Setenv(AllowNoNetnsEnv, "true")
-	if _, err := OSRun(context.Background(), t.TempDir(), nil, "kustomize", "build", "."); err != nil {
-		t.Fatalf("with %s=true: %v", AllowNoNetnsEnv, err)
-	}
-	if _, err := os.Stat(m); err != nil {
-		t.Fatal("kustomize did not run")
-	}
-	for _, v := range []string{"yes", "TRUE", "True", "1"} {
-		t.Setenv(AllowNoNetnsEnv, v)
-		os.Remove(m)
-		if _, err := OSRun(context.Background(), t.TempDir(), nil, "kustomize", "build", "."); err == nil {
-			t.Fatalf("%q opened the switch; only exactly \"true\" does", v)
+// Only the three exact values are accepted, at ParseConfig, so a typo stops the plugin at start.
+func TestNetnsSettingIsParsedStrictly(t *testing.T) {
+	for v, want := range map[string]string{"": NetnsTry, "try": NetnsTry, "require": NetnsRequire, "off": NetnsOff} {
+		if got, err := ParseNetns(v); err != nil || got != want {
+			t.Errorf("%q: %q, %v", v, got, err)
 		}
+	}
+	base := map[string]string{"ARGOCD_APP_NAME": "gate-api-prod", "ARGOCD_APP_NAMESPACE": "app-gate-api-prod", "ARGOCD_APP_REVISION": mergeSHA,
+		"ARGOCD_APP_SOURCE_REPO_URL": "git@github.com:Jfillman/gitops-gate-api.git", "PARAM_APP": "gate-api", "PARAM_ENV": "prod", "PARAM_CLUSTER": "hangar-prod",
+		"PARAM_CHARTREPO": "https://github.com/jfillman/airframe.git", "PARAM_CHARTREVISION": "v0.3.168", "PARAM_CHARTPATH": "charts/airframe-application",
+		"CLEARANCE_CHART_REPOS": "https://github.com/jfillman/airframe.git", "CLEARANCE_URL": "http://clearance.test"}
+	for _, v := range []string{"TRUE", "Require", "on", "true", "1", "required"} {
+		base[NetnsEnv] = v
+		_, err := ParseConfig(func(k string) string { return base[k] })
+		if err == nil {
+			t.Fatalf("%q accepted", v)
+		}
+		for _, want := range []string{"try", "require", "off"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%q: the message does not list %q: %v", v, want, err)
+			}
+		}
+	}
+	base[NetnsEnv] = "require"
+	if c, err := ParseConfig(func(k string) string { return base[k] }); err != nil || c.Netns != NetnsRequire {
+		t.Fatal(c.Netns, err)
 	}
 }

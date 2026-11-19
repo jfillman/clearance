@@ -2,9 +2,14 @@
 
 package main
 
-import "os/exec"
+import (
+	"errors"
+	"os/exec"
+)
 
-// isolateNetwork on a platform without network namespaces: nothing to apply (false). The sidecar image is Linux
-// only; this is for an operator's laptop running the parity tool and for the unit tests, where the environment
-// settings of argosrc/sandbox.go are all the render step gets.
-func isolateNetwork(cmd *exec.Cmd) (bool, error) { return false, nil }
+// isolateNetwork on a platform without network namespaces: unavailable. In try mode (the default) the render runs
+// without it and says so once; that is the case for an operator's laptop running the parity tool and for the unit
+// tests. The sidecar image is Linux only.
+func isolateNetwork(cmd *exec.Cmd) (bool, error) {
+	return false, errors.New("network namespaces are Linux only")
+}

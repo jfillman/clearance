@@ -40,7 +40,7 @@ func OSRun(ctx context.Context, dir string, env []string, name string, args ...s
 	var out, errb bytes.Buffer
 	// The sidecar's environment carries no credential for these tools: git and helm get a bare one.
 	fullEnv := append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1"}, env...)
-	// A render step also runs in a user+network namespace of its own (netns.go): no loopback, no outside address.
+	// A render step runs in a user+network namespace of its own when the mode and the kernel allow (netns.go).
 	run := func(isolated bool) error {
 		out.Reset()
 		errb.Reset()
@@ -57,10 +57,7 @@ func OSRun(ctx context.Context, dir string, env []string, name string, args ...s
 		}
 		err := cmd.Start()
 		if err != nil && isolated && startFailedForNetns(err) {
-			if netnsRequired() {
-				return errNoNetns(name, err)
-			}
-			return errRetryBare
+			return noteStartRefused(name, err)
 		}
 		if err == nil {
 			err = cmd.Wait()
@@ -68,7 +65,7 @@ func OSRun(ctx context.Context, dir string, env []string, name string, args ...s
 		return err
 	}
 	err := run(true)
-	if err == errRetryBare { // only with the explicit switch (AllowNoNetnsEnv)
+	if err == errRetryBare { // try mode, the kernel refused the namespace
 		err = run(false)
 	}
 	if err != nil {

@@ -51,6 +51,7 @@ type Config struct {
 	WaitHost     string // "ip=host1,host2": a hostAlias for the wait Job's pod
 	WaitTimeout  time.Duration
 	RegisterWait time.Duration // how long one call to the core may take
+	Netns        string        // CLEARANCE_CMP_NETNS: try (default), require or off (netns.go)
 }
 
 var (
@@ -92,6 +93,9 @@ func ParseConfig(get func(string) string) (Config, error) {
 		}
 	}
 	var err error
+	if c.Netns, err = ParseNetns(get(NetnsEnv)); err != nil {
+		return c, err
+	}
 	dur := func(name string, def time.Duration) time.Duration {
 		v := get(name)
 		if v == "" || err != nil {

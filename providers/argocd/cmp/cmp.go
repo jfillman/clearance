@@ -85,7 +85,7 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 	if r.ChartMerge != "" {
 		fmt.Fprintf(d.Stderr, ", chart %s@%s (%s)", cfg.ChartRepo, cfg.ChartRev, r.ChartMerge[:12])
 	}
-	fmt.Fprintln(d.Stderr)
+	fmt.Fprintf(d.Stderr, ", netns=%s\n", NetnsState())
 
 	now := d.Now()
 	if e, ok := d.Cache.Get(cfg.App, cfg.Env, cfg.Cluster, tree.Root, now); ok && now.Sub(e.CachedAt) < cfg.CacheTTL {
@@ -194,6 +194,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "clearance-cmp:", err)
 		os.Exit(2)
 	}
+	SetNetns(cfg.Netns)
 	core, err := newCore(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "clearance-cmp:", err)
