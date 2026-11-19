@@ -551,3 +551,17 @@ func TestDoctorCaches(t *testing.T) {
 		}
 	})
 }
+
+func TestDoctorDoesNotReadATokenFileTheTokenCheckRejected(t *testing.T) {
+	f := newDoctorFixture(t)
+	f.env["CLEARANCE_TOKEN_FILE"] = "/dev/zero" // a device: reading it would never end
+	done := make(chan []Check, 1)
+	go func() { cs, _, _ := f.run(t); done <- cs }()
+	select {
+	case cs := <-done:
+		doctorWant(t, cs, "token", levelFail, "not a regular file")
+		doctorWant(t, cs, "core-auth", levelFail, "not checked")
+	case <-time.After(20 * time.Second):
+		t.Fatal("doctor read a rejected token file")
+	}
+}

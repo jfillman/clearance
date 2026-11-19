@@ -121,8 +121,8 @@ func Doctor(ctx context.Context, env DoctorEnv) []Check {
 	var out []Check
 	add := func(level, name, msg, fix string) { out = append(out, Check{level, name, msg, fix}) }
 	cfg := doctorSettings(env, add)
-	doctorToken(env, cfg, add)
-	doctorCore(ctx, env, cfg, add)
+	tokenOK := doctorToken(env, cfg, add)
+	doctorCore(ctx, env, cfg, tokenOK, add)
 	doctorRepos(cfg, add)
 	doctorCache(cfg, add)
 	doctorCaches(env, add)
@@ -219,7 +219,9 @@ func flatten(err error) []error {
 
 // doctorToken checks the file, never its content: exists, readable, not empty, one line of printable characters, and
 // not world-readable.
-func doctorToken(env DoctorEnv, cfg Config, add func(level, name, msg, fix string)) {
+// It returns whether the token is usable (a regular, bounded, non-empty, single-token file), so no later check reads a
+// file this check rejected.
+func doctorToken(env DoctorEnv, cfg Config, add func(level, name, msg, fix string)) bool {
 	p := cfg.TokenFile
 	if p == "" {
 		p = orDefault(env.Get("CLEARANCE_TOKEN_FILE"), "/var/run/secrets/tokens/clearance")
@@ -229,41 +231,42 @@ func doctorToken(env DoctorEnv, cfg Config, add func(level, name, msg, fix strin
 	if err != nil {
 		add(levelFail, name, fmt.Sprintf("%s does not exist or cannot be read (%v)", p, errReason(err)),
 			"mount a projected service-account token with audience clearance at that path (docs/install-argocd-plugin.md), or point CLEARANCE_TOKEN_FILE at it")
-		return
+		return false
 	}
 	if !st.Mode().IsRegular() {
 		add(levelFail, name, p+" is not a regular file", "mount the projected token as a file")
-		return
+		return false
 	}
 	f, err := os.Open(p)
 	if err != nil {
 		add(levelFail, name, fmt.Sprintf("%s is not readable by this user (%v)", p, errReason(err)), "the sidecar runs as uid 999: make the token readable by it (projected volume defaultMode 0444 or 0440 with fsGroup 999)")
-		return
+		return false
 	}
 	defer f.Close()
 	raw, err := io.ReadAll(io.LimitReader(f, client.MaxTokenBytes+1))
 	if err != nil {
 		add(levelFail, name, fmt.Sprintf("%s cannot be read (%v)", p, errReason(err)), "check the volume mount")
-		return
+		return false
 	}
 	tok := strings.TrimSpace(string(raw))
 	switch {
 	case len(raw) > client.MaxTokenBytes:
 		add(levelFail, name, fmt.Sprintf("%s is over %d bytes", p, client.MaxTokenBytes), "it should hold one service-account token")
-		return
+		return false
 	case tok == "":
 		add(levelFail, name, p+" is empty", "the kubelet writes a projected token shortly after the pod starts; check the serviceAccountToken source and its path")
-		return
+		return false
 	case strings.ContainsFunc(tok, func(r rune) bool { return r < 0x21 || r == 0x7f }):
 		add(levelFail, name, p+" holds whitespace or control characters inside the token", "it should hold exactly one token")
-		return
+		return false
 	}
 	if st.Mode().Perm()&0o004 != 0 {
 		add(levelWarn, name, fmt.Sprintf("%s is non-empty and readable, and world-readable (mode %04o)", p, st.Mode().Perm()),
 			"a projected token is 0644 by default; set the volume's defaultMode to 0440 with the pod's fsGroup 999 so only the sidecar's user reads it")
-		return
+		return true
 	}
 	add(levelOK, name, fmt.Sprintf("%s is non-empty and readable (mode %04o); its content is never printed", p, st.Mode().Perm()), "")
+	return true
 }
 
 func errReason(err error) string {
@@ -281,7 +284,7 @@ func errReason(err error) string {
 // read cannot show the principal may act on a real change (the handler looks the change up before it checks who is
 // asking), nor that it is a registered verifier: that is checked when the plugin registers a change, and the report
 // says so.
-func doctorCore(ctx context.Context, env DoctorEnv, cfg Config, add func(level, name, msg, fix string)) {
+func doctorCore(ctx context.Context, env DoctorEnv, cfg Config, tokenOK bool, add func(level, name, msg, fix string)) {
 	const name = "core"
 	if !validCoreURL(cfg.CoreURL) {
 		add(levelFail, name, "not checked: CLEARANCE_URL is missing or not valid", "fix CLEARANCE_URL first")
@@ -316,7 +319,7 @@ func doctorCore(ctx context.Context, env DoctorEnv, cfg Config, add func(level, 
 		return
 	}
 	add(levelOK, name, shown+" is reachable (GET /healthz)", "")
-	if cfg.TokenFile == "" || tokenUnusable(cfg.TokenFile) {
+	if !tokenOK {
 		add(levelFail, "core-auth", "not checked: there is no usable token file (see the token check)", "fix the token first")
 		return
 	}
@@ -343,12 +346,6 @@ func doctorCore(ctx context.Context, env DoctorEnv, cfg Config, add func(level, 
 func validCoreURL(s string) bool {
 	u, err := url.Parse(s)
 	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && u.User == nil
-}
-
-func tokenUnusable(p string) bool {
-	b, err := os.ReadFile(p)
-	t := strings.TrimSpace(string(b))
-	return err != nil || t == "" || strings.ContainsFunc(t, func(r rune) bool { return r < 0x21 || r == 0x7f })
 }
 
 // doctorRepos applies NormalizeRepo, the rule Canonical uses, to every entry.

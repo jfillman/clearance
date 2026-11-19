@@ -390,7 +390,9 @@ stops a tenant naming an arbitrary repository.
 
 ## Turning it off again
 
-Per Application: put back the Helm source (remove `plugin.name`). The Application is an ordinary Argo CD Application
+Per Application: put back its original `source` or `sources` (the chart repository, path and value files it had before; for an
+ApplicationSet, drop the `templatePatch` for that environment). Removing `plugin.name` alone does not do it: the source would
+still point at the gitops repository with plugin parameters. The Application is then an ordinary Argo CD Application
 again and the plugin is never called for it. **If the admission policy is enforcing, remove the Application's protection
 first** ([gate.md](gate.md#annotation-opt-in-g-argo-10c-built)), or objects without a stamp are refused.
 
@@ -469,8 +471,11 @@ being refused (skip 0.52.0); 0.52.2 refused kustomize build options outside an a
 
 The order is **settings before image**:
 
-1. Run the new image's `doctor` against the settings you intend to use (a one-off pod, or `kubectl run` with the same
-   env), and fix every `fail`.
+1. Run the new image's `doctor` with the settings you intend to use. The easiest way is a canary sidecar of the new image
+   (below), which has the token and volumes already, then `kubectl exec` into it. A separate one-off pod must be given
+   what the sidecar has: the repo-server's service account (or any account the core authenticates, which then needs the
+   verifier entry for the `core-auth` check to mean anything), the projected `clearance` token mounted at
+   `CLEARANCE_TOKEN_FILE`, a writable `/tmp`, user 999 and the same environment. Fix every `fail`.
 2. Change the sidecar's **environment** first when the notes say a setting is required: the old image ignores a setting it
    does not know, so settings added ahead of the image are harmless.
 3. Then pin the new image (by digest), and let the repo-server roll.
