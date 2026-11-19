@@ -1800,8 +1800,45 @@ vendored under `charts/`. Helm and Kustomize follow symlinks (verified for
 packaged, the kustomize directory, each value file) must resolve inside the repository it came from; a link to a host
 file is refused. Not covered: a
 fetch the plugin makes itself is as wide as the repository the platform listed (a Helm index may name a package URL on
-another host), and a tool that ignores the proxy variables, and loopback (Go clients do not proxy localhost, so a render can still reach a service on 127.0.0.1 in the sidecar's pod; tracked as a follow-up to render in its own network namespace). Both gaps also exist on the plain Argo CD path (the
-repo-server) for apps not behind the gate; the plugin closes them only for gated apps.
+another host), and a tool that ignores the proxy variables (the namespace below closes that for
+the render steps). The first gap also exists on the plain Argo CD path (the repo-server) for apps not behind the gate;
+the plugin does not close it for gated apps either: the namespace restricts render traffic only, and `git` and `helm pull` stay outside it.
+
+**Private network namespace.** The proxy settings do not stop a render from reaching loopback: Go clients (Helm,
+Kustomize) never proxy `localhost` or `127.0.0.1`, so a chart or kustomization could still reach Argo CD repo-server
+ports and any other service on the pod's loopback. So each `helm template`, `helm dependency build` and `kustomize` command
+(every command `argosrc.NetworkOffFor` selects) can be started with `CLONE_NEWUSER|CLONE_NEWNET`, the current uid and
+gid mapped to themselves: the process sees one interface, a loopback that is down, and nothing else, so no address is
+reachable, the pod's own 127.0.0.1 included. The plugin itself keeps the network (it reaches the core and clones the
+allow-listed chart outside the namespace; `git` and `helm pull` are not sandboxed). It needs no capability, which is
+why it is a user namespace and not `CAP_SYS_ADMIN`. The loopback is left down on purpose: Helm and Kustomize need no
+local service. A network namespace isolates IP networking and abstract UNIX sockets, not pathname UNIX sockets: the
+cmp-server socket (under `/home/argocd/cmp-server/plugins`) stays reachable by a render running as the same uid, and
+needs its own access control.
+
+`CLEARANCE_CMP_NETNS` sets the policy; the values are exact and anything else stops the plugin at start:
+
+| Value | Namespace can be created | Namespace refused |
+| --- | --- | --- |
+| `try` (default, also unset) | renders inside it | renders without it; one warning line on stderr at the first fallback in the process, naming what was refused and how to get isolation |
+| `require` | renders inside it | refuses to render (fails closed), naming the missing capability; the tool never runs |
+| `off` | never attempted | never attempted |
+
+The kernel is probed once per process and the answer remembered, so a refused kernel is not retried per subprocess.
+The state is in the summary line on stderr, `clearance: <app>/<env> rendered ..., netns=on|unavailable|off`: `on` is
+isolated, `unavailable` is `try` that fell back, `off` is the setting. On a platform without namespaces (the parity
+tool on a laptop, the unit tests on macOS) the state is `unavailable`; the sidecar image is Linux only.
+
+*Sidecar requirements.* The default needs nothing from the node: where the namespace is refused the render runs as
+it did before. To be isolated, and to be sure of it with `require`, creating the namespace needs unprivileged user
+namespaces: the container's seccomp profile must permit `unshare`/`clone` with `CLONE_NEWUSER` and `CLONE_NEWNET`, and
+the node kernel must allow them (`user.max_user_namespaces` above 0; on Ubuntu 24.04 and later,
+`kernel.apparmor_restrict_unprivileged_userns` must not block the container). The runtimes' `RuntimeDefault` seccomp
+profile blocks these calls without `CAP_SYS_ADMIN`, so the `clearance-cmp` container needs a seccomp profile that
+allows them (a `Localhost` profile that adds those two calls to the default; `Unconfined` also works but drops every
+other filter). Nothing else changes: it still runs non-root, with all capabilities dropped and privilege escalation
+off. A cluster that has done this sets `CLEARANCE_CMP_NETNS=require`, so a node that stops allowing it fails the render
+instead of silently losing the isolation.
 Paths and the chart tag are validated (relative, no `..` segment, no leading `-`). The sidecar's `git` and `helm` run with a
 bare environment, so the clearance token is not in their reach.
 
@@ -1859,6 +1896,31 @@ so a release that registers wrongly does so under that identity. Apron renders t
 
 The default and canary sidecars may run different images at once, so a canary can also be the *old* release held for
 one app while the default moves ahead.
+
+### The smoke test of the built image
+
+The unit tests fake git and helm and pass the plugin an absolute directory, so they cannot see how the plugin behaves
+as Argo CD runs it: 0.52.0 passed all of them and refused every value file on its first real run (I-38), because Argo CD
+runs `clearance-cmp` with the source directory `.`. CI therefore builds the image from `providers/argocd/cmp/Dockerfile`
+for the runner's architecture (never pushed) and runs `tools/cmp-smoke.sh IMAGE` (the `cmp-image-smoke` job in
+`.github/workflows/go.yaml`). The script creates a gitops checkout on disk with real value files and a kustomize
+directory, a chart repository served by `git daemon` and listed in `CLEARANCE_CHART_REPOS`, and a fake core
+(`tools/cmpsmoke`) that answers the register call as cleared. It runs the image's `clearance-cmp` with the checkout as
+the working directory, the `ARGOCD_APP_*`, `PARAM_*` and `KUBE_*` environment Argo CD sets, uid 999, a read-only root
+filesystem, a tmpfs `/tmp` and no capabilities, as apron renders the sidecar. It asserts that the good checkout exits 0
+with the rendered objects (value files from all three layers, the platform's injected values, the kustomize directory,
+the change's stamp) after one register call; that a checkout whose value file is a symlink out of the repository is
+refused with `refused: value file ... resolves outside the repository`, writing nothing and registering nothing; and that
+the image's `helm` and `kustomize` are `/usr/local/bin` binaries at the versions its Dockerfile pins. It fails against
+the 0.52.0 image. It also prints the `netns=` state from the summary line (reported, not required): the job runs the
+image under docker's default seccomp profile, so it shows what a `RuntimeDefault`-like profile does to the default `try` mode
+on the runner. To run it locally, build the image and run the script with the engine and the address the container
+reaches the host on (see the header of `tools/cmp-smoke.sh`).
+
+It also checks the canary plugin config in the built image ("Rolling out a plugin release"): `config-canary/plugin.yaml` exists, is name `clearance` with version `canary` and the same generate command, differs from `config/plugin.yaml` only by the version, and the default file still has no version.
+
+The other CI jobs install the same pinned helm and kustomize (`tools/install-cmp-tools.sh`, which reads the versions and
+checksums from the Dockerfile), so the tests that run the real binaries run, and a step fails the job if they skip.
 
 ### Parity with the Tekton check, and what is not yet the same
 

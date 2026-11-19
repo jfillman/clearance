@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -36,13 +37,42 @@ func OSRun(ctx context.Context, dir string, env []string, name string, args ...s
 		}
 		env = append(append([]string{}, env...), off...)
 	}
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Dir = dir
 	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
 	// The sidecar's environment carries no credential for these tools: git and helm get a bare one.
-	cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1"}, env...)
-	if err := cmd.Run(); err != nil {
+	fullEnv := append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1"}, env...)
+	// A render step runs in a user+network namespace of its own when the mode and the kernel allow (netns.go).
+	run := func(isolated bool) error {
+		out.Reset()
+		errb.Reset()
+		cmd := exec.CommandContext(ctx, name, args...)
+		cmd.Dir = dir
+		cmd.Stdout, cmd.Stderr = &out, &errb
+		cmd.Env = fullEnv
+		if isolated {
+			ok, err := sandboxStart(cmd, name, args)
+			if err != nil {
+				return err
+			}
+			isolated = ok
+		}
+		err := cmd.Start()
+		if err != nil && isolated && startFailedForNetns(err) {
+			return noteStartRefused(name, err)
+		}
+		if err == nil {
+			err = cmd.Wait()
+		}
+		return err
+	}
+	err := run(true)
+	if err == errRetryBare { // try mode, the kernel refused the namespace
+		err = run(false)
+	}
+	if err != nil {
+		var ne *netnsError
+		if errors.As(err, &ne) {
+			return nil, err
+		}
 		msg := strings.TrimSpace(errb.String())
 		if len(msg) > 2000 {
 			msg = msg[:2000] + "..."
@@ -51,6 +81,8 @@ func OSRun(ctx context.Context, dir string, env []string, name string, args ...s
 	}
 	return out.Bytes(), nil
 }
+
+var errRetryBare = errors.New("retry without a network namespace")
 
 func firstArg(a []string) string {
 	if len(a) > 0 {
