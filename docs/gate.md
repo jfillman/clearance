@@ -2466,7 +2466,9 @@ again (the agent refuses to switch while the entry is missing). Under an **Appli
 template and wait until the original is put back; (2) remove the `ignoreApplicationDifferences` entry and wait for the controller to write the
 template's source; (3) edit the template's source and wait until the edited source is on the generated Application; (4) put the entry back and
 add the annotation again. Without that order a new opt-in switches the old snapshot, and the parent can still show `Synced`. The agent does not
-adopt the new sources: it has no way to read the parent's rendered manifest.
+adopt the new sources: it has no way to read the parent's rendered manifest. **If the entry has no `name:` it covers every child of the parent**:
+before step (2) replace it with entries scoped by `name:` to each child that stays opted in, keep those through the sync, and only the changed
+child's entry is out of the way; otherwise the sync writes the original source over every other switched child.
 
 #### The merged grant
 
