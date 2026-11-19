@@ -138,6 +138,23 @@ echo "$tools_out" | grep -qx '/usr/local/bin/helm' && echo "$tools_out" | grep -
 echo "$tools_out" | grep -qxF "$want_helm" && ok "the image ships helm $want_helm" || bad "the image's helm is not $want_helm"
 echo "$tools_out" | grep -qxF "$want_kustomize" && ok "the image ships kustomize $want_kustomize" || bad "the image's kustomize is not $want_kustomize"
 
+# ---- the canary plugin config baked into the image (docs/gate.md, "Rolling out a plugin release") ---------------------
+# A second sidecar is started with --config-dir-path /home/argocd/cmp-server/config-canary: that directory's plugin.yaml
+# must be in the BUILT image, be the same plugin (name clearance, the same generate command) with version canary, so it
+# registers as clearance-canary; and the default plugin.yaml must still have no version (its name stays clearance).
+echo "== canary plugin config in the image"
+cfg_dir=/home/argocd/cmp-server
+strip() { grep -v '^[[:space:]]*#' | grep -v '^[[:space:]]*$'; }
+def_cfg="$("$engine" run --rm --entrypoint cat "$image" "$cfg_dir/config/plugin.yaml" 2>&1)"
+can_cfg="$("$engine" run --rm --entrypoint cat "$image" "$cfg_dir/config-canary/plugin.yaml" 2>&1)"
+echo "$can_cfg" | grep -q 'kind: ConfigManagementPlugin' && ok "config-canary/plugin.yaml exists in the image and is a ConfigManagementPlugin" || bad "config-canary/plugin.yaml is missing or not a plugin: $can_cfg"
+echo "$can_cfg" | grep -qx '  name: clearance' && ok "the canary plugin's metadata.name is clearance" || bad "the canary plugin's metadata.name is not clearance"
+echo "$can_cfg" | grep -qx '  version: canary' && ok "the canary plugin's spec.version is canary (so it is clearance-canary)" || bad "the canary plugin's spec.version is not canary"
+echo "$def_cfg" | grep -q 'version:' && bad "the default plugin.yaml has a version: its name would no longer be clearance" || ok "the default plugin.yaml has no version (its name stays clearance)"
+echo "$can_cfg" | grep -qF 'command: [/usr/local/bin/clearance-cmp]' && echo "$def_cfg" | grep -qF 'command: [/usr/local/bin/clearance-cmp]' \
+  && ok "both generate commands are /usr/local/bin/clearance-cmp" || bad "a generate command is not /usr/local/bin/clearance-cmp"
+[ "$(echo "$def_cfg" | strip)" = "$(echo "$can_cfg" | strip | grep -vx '  version: canary')" ] && ok "the two plugin files differ only by the version" || bad "the canary plugin.yaml differs from the default beyond its version"
+
 # ---- run the plugin as Argo CD does -----------------------------------------------------------------------------
 run_plugin() { # CHECKOUT OUT ERR : echoes the exit code
   local dir="$1" out="$2" err="$3" rev

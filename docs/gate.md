@@ -1843,8 +1843,59 @@ Paths and the chart tag are validated (relative, no `..` segment, no leading `-`
 bare environment, so the clearance token is not in their reach.
 
 Images: `providers/argocd/cmp/Dockerfile` (alpine with git, helm and kustomize pinned and checksum-verified, the static
-binary, `plugin.yaml`; uid 999) and `providers/argocd/wait/Dockerfile` (distroless static). Both build from the
+binary, `plugin.yaml` and `plugin-canary.yaml`; uid 999) and `providers/argocd/wait/Dockerfile` (distroless static). Both build from the
 repository root; neither is in a release workflow yet.
+
+### Rolling out a plugin release
+
+Every Application that names `plugin.name: clearance` goes through one sidecar, so one bad `clearance-cmp` release stops
+every gated Application at once (2026-11-18, 0.52.0). To try a release on one Application first, run two sidecars from
+two images and name the second plugin from the Applications that should try it.
+
+**What Argo CD does (v3.5.0, `docs/operator-manual/config-management-plugins.md`; `cmpserver/plugin/config.go`,
+`cmd/argocd-cmp-server`, `reposerver/repository`).** A `ConfigManagementPlugin` has `metadata.name` and an optional
+`spec.version`. With a version, the plugin is addressed as `<metadata.name>-<spec.version>` in
+`spec.source.plugin.name`, and its CMP server listens on `/home/argocd/cmp-server/plugins/<name>-<version>.sock`
+(`<name>.sock` without one). The repo-server finds a plugin by the socket's file name, so **the bare name does not
+resolve when a version is set**: `clearance` reaches only the sidecar whose socket is `clearance.sock`. This plugin has no
+`discover` block, so nothing is picked by file name and an Application always names it. The CMP server reads
+`plugin.yaml` from `--config-dir-path` (default `/home/argocd/cmp-server/config`).
+
+**What the image ships.** `config/plugin.yaml` is name `clearance`, no version: the default sidecar is unchanged.
+`config-canary/plugin.yaml` is the same file with `version: canary`, so a sidecar started with
+`--config-dir-path /home/argocd/cmp-server/config-canary` registers as `clearance-canary`. A test holds the two files
+identical apart from the version. (Another name or version: mount your own `plugin.yaml` from a ConfigMap at the
+config directory, as Argo CD documents.)
+
+**Two sidecars must not share state.** Give the second its own `/tmp` volume (the render cache,
+`CLEARANCE_CMP_CACHE_DIR`, defaults to `/tmp/clearance-cmp-cache`, and a render's work directory is there too), never the
+other sidecar's `cmp-tmp` or the repo-server's. Both share the `plugins` socket volume (that is how the repo-server
+finds them) and `var-files`. Both may mount the same projected token: the canary calls the core as the same verifier,
+so a release that registers wrongly does so under that identity. Apron renders this when `clearance.gate.canary` is set.
+
+1. **Canary one Application.** Run the new image as the canary sidecar and list one low-risk app (a dev environment's):
+   its Application now names `clearance-canary`, every other Application still names `clearance`. **Hard-refresh the
+   app once the canary sidecar is ready, every time**: when it moves to the canary name, and when the canary image
+   changes later. Argo CD's manifest cache key covers the source and its commit but not the sidecar image (see "Open for
+   G-ARGO-10c and G-ARGO-10e"), so a render cached from an earlier canary image (an app moving back to
+   `clearance-canary` at the same commit, or the same name with a new image) can hide a failing new image. Do not
+   take a quiet canary as passed until the app has been hard-refreshed after the image changed.
+2. **Watch.** The Application's sync, the plugin's `generate` log in the `clearance-cmp-canary` container, and the
+   changes it registers (`proposer: system:argocd-cmp`). A render that fails shows as a ComparisonError on that
+   Application alone.
+3. **Promote.** Pin the new image as the default sidecar's, then remove the canary block (the app returns to
+   `clearance`). Once the default sidecar is ready, **hard-refresh every Application that names `clearance`**: the
+   cache key is the same as before the image changed, so without it an Application keeps the old image's render until
+   the cache expires.
+4. **Roll back.** For a bad canary, remove the app from the canary list (the last one: delete apron's whole `clearance.gate.canary` block, an empty list is
+   refused): the app names `clearance` again; hard-refresh it so a cached canary render is not what it shows. For a bad
+   release already promoted, re-pin the previous image digest as the default sidecar's, then hard-refresh the
+   affected Applications once it is ready (a restart of the repo-server does not clear cached output or cached
+   plugin errors in Redis). There is no per-app step then;
+   which is why a release goes through a canary first.
+
+The default and canary sidecars may run different images at once, so a canary can also be the *old* release held for
+one app while the default moves ahead.
 
 ### The smoke test of the built image
 
@@ -1865,6 +1916,8 @@ the 0.52.0 image. It also prints the `netns=` state from the summary line (repor
 image under docker's default seccomp profile, so it shows what a `RuntimeDefault`-like profile does to the default `try` mode
 on the runner. To run it locally, build the image and run the script with the engine and the address the container
 reaches the host on (see the header of `tools/cmp-smoke.sh`).
+
+It also checks the canary plugin config in the built image ("Rolling out a plugin release"): `config-canary/plugin.yaml` exists, is name `clearance` with version `canary` and the same generate command, differs from `config/plugin.yaml` only by the version, and the default file still has no version.
 
 The other CI jobs install the same pinned helm and kustomize (`tools/install-cmp-tools.sh`, which reads the versions and
 checksums from the Dockerfile), so the tests that run the real binaries run, and a step fails the job if they skip.
