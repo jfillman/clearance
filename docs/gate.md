@@ -2458,8 +2458,12 @@ the entry above to the parent's source in git; the next pass switches the Applic
 
 **What the entry costs, and is not fixed here.** While an Application is opted in, an edit to its `spec.source` in the parent's git
 (a chart version bump, say) is ignored: the live Application keeps the sources it was switched with and the parent shows `Synced`.
-To change them, remove the annotation (the original is put back), edit, and annotate again. The agent does not adopt the new
-sources: it has no way to read the parent's rendered manifest.
+To change them under an app-of-apps, remove the annotation (the original is put back), edit, and annotate again. The agent does not adopt the new
+sources: it has no way to read the parent's rendered manifest. **Under an ApplicationSet that does not work**: the `ignoreApplicationDifferences`
+entry stays in force while the Application is opted out, so the restored source is still the snapshot and a new opt-in switches that one. Order
+for an ApplicationSet-generated Application: (1) remove the opt-in annotation from the template and wait for the opt-out to finish (the original is
+put back); (2) remove the `ignoreApplicationDifferences` entry and wait for the controller to write the template's source; (3) edit the template's
+source; (4) put the entry back and add the annotation again.
 
 #### The merged grant
 
