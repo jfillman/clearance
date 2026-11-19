@@ -169,6 +169,14 @@ sed 's/^/     stderr: /' "$work/good.err"
 for want in '"name":"smoke-app-dev-config"' '"base":"from-base"' '"env":"from-env-values"' '"tag":"1.2.3"' '"injected":"from-platform"' '"name":"kz-extra"' '"from":"kustomize"' '"app.kubernetes.io/managed-by":"Helm"' 'chg-smoke'; do
   grep -q "$want" "$work/good.out" && ok "output has $want" || bad "output lacks $want"
 done
+# The private network namespace (CLEARANCE_CMP_NETNS, default try): the state is part of the summary line. Under
+# docker's default seccomp profile (the RuntimeDefault stand-in) it is expected to be "unavailable" and the render
+# still passes; it is reported, not required, so the smoke job shows what such a profile does on the runner.
+netns_state="$(sed -n 's/.*, netns=\([a-z]*\).*/\1/p' "$work/good.err" | head -1)"
+case "$netns_state" in
+  on|unavailable|off) ok "the summary line reports netns=$netns_state (CLEARANCE_CMP_NETNS unset = try)";;
+  *) bad "the summary line has no netns= state";;
+esac
 n="$(wc -l < "$work/register.log" | tr -d ' ')"
 [ "$n" = 1 ] && ok "one register call reached the core" || bad "$n register calls reached the core, want 1"
 grep -q '"app":"smoke-app"' "$work/register.log" && grep -q '"_authorization":true' "$work/register.log" && grep -q '"render":"ok"' "$work/register.log" \
