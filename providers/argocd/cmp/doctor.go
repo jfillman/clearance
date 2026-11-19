@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -57,10 +58,11 @@ type DoctorEnv struct {
 	PluginDir string
 	CmpServer string // path of argocd-cmp-server
 	Timeout   time.Duration
+	FreeBytes func(dir string) (int64, bool) // free space of the volume holding dir; false when it cannot be read
 }
 
 func osDoctorEnv() DoctorEnv {
-	return DoctorEnv{Get: os.Getenv, LookPath: exec.LookPath, PluginDir: DefaultPluginDir, CmpServer: cmpServerBinary, Timeout: 10 * time.Second,
+	return DoctorEnv{Get: os.Getenv, LookPath: exec.LookPath, PluginDir: DefaultPluginDir, CmpServer: cmpServerBinary, Timeout: 10 * time.Second, FreeBytes: freeBytes,
 		Run: func(ctx context.Context, name string, args ...string) (string, error) {
 			out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
 			return strings.TrimSpace(string(out)), err
@@ -123,6 +125,7 @@ func Doctor(ctx context.Context, env DoctorEnv) []Check {
 	doctorCore(ctx, env, cfg, add)
 	doctorRepos(cfg, add)
 	doctorCache(cfg, add)
+	doctorCaches(env, add)
 	doctorTools(ctx, env, add)
 	doctorNetns(env, add)
 	doctorSocket(env, add)
@@ -146,6 +149,20 @@ func doctorSettings(env DoctorEnv, add func(level, name, msg, fix string)) Confi
 				bad("setting", fmt.Sprintf("%s is a positive duration, got %q", d, v), "write it like 2m or 30s, or remove it")
 				blank[d] = true
 			}
+		}
+	}
+	for _, n := range []string{"CLEARANCE_CMP_CHART_CACHE_MAX_BYTES", "CLEARANCE_CMP_CHART_CACHE_MAX_ENTRIES"} {
+		if v := strings.TrimSpace(env.Get(n)); v != "" {
+			if p, err := strconv.ParseInt(v, 10, 64); err != nil || p < 0 {
+				bad("setting", fmt.Sprintf("%s is a non-negative integer (0 turns the cache off), got %q", n, v), "write a whole number of bytes or entries, 0 to turn the chart cache off, or remove it")
+				blank[n] = true
+			}
+		}
+	}
+	if v := strings.TrimSpace(env.Get("CLEARANCE_CMP_RENDER_CACHE_TTL")); v != "" && v != "0" && v != "0s" {
+		if p, err := time.ParseDuration(v); err != nil || p <= 0 {
+			bad("setting", fmt.Sprintf("CLEARANCE_CMP_RENDER_CACHE_TTL is a positive duration (0 turns the cache off), got %q", v), "write it like 15m, 0 to turn the render cache off, or remove it")
+			blank["CLEARANCE_CMP_RENDER_CACHE_TTL"] = true
 		}
 	}
 	get := func(k string) string {
@@ -459,4 +476,62 @@ func doctorSocket(env DoctorEnv, add func(level, name, msg, fix string)) {
 		return
 	}
 	add(levelOK, "cmp-server", env.CmpServer+" is present", "")
+}
+
+// doctorCaches reports the chart fetch cache and the pre-render cache from the same settings ParseConfig reads. The
+// chart cache lives under the cache directory, so its byte bound must fit the volume that holds it.
+func doctorCaches(env DoctorEnv, add func(level, name, msg, fix string)) {
+	num := func(name string, def int64) int64 {
+		if v := strings.TrimSpace(env.Get(name)); v != "" {
+			if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
+				return n
+			}
+		}
+		return def
+	}
+	dir := orDefault(env.Get("CLEARANCE_CMP_CACHE_DIR"), "/tmp/clearance-cmp-cache")
+	maxBytes, maxEntries := num("CLEARANCE_CMP_CHART_CACHE_MAX_BYTES", 512<<20), num("CLEARANCE_CMP_CHART_CACHE_MAX_ENTRIES", 32)
+	switch {
+	case maxBytes == 0 || maxEntries == 0:
+		add(levelOK, "chart-cache", "off: CLEARANCE_CMP_CHART_CACHE_MAX_BYTES or _MAX_ENTRIES is 0, every render clones the chart", "")
+	default:
+		msg := fmt.Sprintf("on, under %s/charts: at most %s and %d entries", dir, humanBytes(maxBytes), maxEntries)
+		free, known := int64(0), false
+		if env.FreeBytes != nil {
+			free, known = env.FreeBytes(dir)
+		}
+		switch {
+		case !known:
+			add(levelOK, "chart-cache", msg+" (free space of the volume could not be read)", "")
+		case free < maxBytes:
+			add(levelWarn, "chart-cache", fmt.Sprintf("%s; the volume holding the cache dir has only %s free, less than the byte bound", msg, humanBytes(free)),
+				"size the emptyDir at /tmp (sizeLimit) to at least the bound plus room for renders, or lower CLEARANCE_CMP_CHART_CACHE_MAX_BYTES; a full volume never fails a render, it only loses cache hits")
+		default:
+			add(levelOK, "chart-cache", fmt.Sprintf("%s; the volume has %s free", msg, humanBytes(free)), "")
+		}
+	}
+	v := strings.TrimSpace(env.Get("CLEARANCE_CMP_RENDER_CACHE_TTL"))
+	ttl := 15 * time.Minute
+	if d, err := time.ParseDuration(v); v != "" && err == nil && d > 0 {
+		ttl = d
+	}
+	treeTTL := 2 * time.Minute
+	if d, err := time.ParseDuration(env.Get("CLEARANCE_CMP_CACHE_TTL")); err == nil && d > 0 {
+		treeTTL = d
+	}
+	if v == "0" || v == "0s" {
+		add(levelOK, "render-cache", fmt.Sprintf("off: CLEARANCE_CMP_RENDER_CACHE_TTL is 0, every render runs helm; the cleared-tree cache (CLEARANCE_CMP_CACHE_TTL) is %s", treeTTL), "")
+		return
+	}
+	add(levelOK, "render-cache", fmt.Sprintf("on: a rendered stream is reused for up to %s (never past the clearance's expiry); the cleared-tree cache TTL is %s", ttl, treeTTL), "")
+}
+
+func humanBytes(n int64) string {
+	switch {
+	case n >= 1<<30:
+		return fmt.Sprintf("%.1f GiB", float64(n)/(1<<30))
+	case n >= 1<<20:
+		return fmt.Sprintf("%d MiB", n>>20)
+	}
+	return fmt.Sprintf("%d KiB", n>>10)
 }

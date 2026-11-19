@@ -59,6 +59,7 @@ type doctorFixture struct {
 	plugin string
 	server string
 	core   *doctorStubCore
+	free   int64 // free bytes the fake volume reports (0: unknown)
 }
 
 func newDoctorFixture(t *testing.T) *doctorFixture {
@@ -75,6 +76,7 @@ func newDoctorFixture(t *testing.T) *doctorFixture {
 	if err := os.WriteFile(f.server, nil, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	f.free = 8 << 30
 	f.core = newDoctorStubCore(t, "tok-secret-value")
 	f.env = map[string]string{
 		"CLEARANCE_URL": f.core.srv.URL, "CLEARANCE_TOKEN_FILE": f.token, "CLEARANCE_CMP_CACHE_DIR": filepath.Join(dir, "cache"),
@@ -98,6 +100,7 @@ func (f *doctorFixture) run(t *testing.T) ([]Check, string, int) {
 			return f.tools[filepath.Base(path)] + "\nsecond line", nil
 		},
 		PluginDir: f.plugin, CmpServer: f.server, Timeout: 2 * time.Second,
+		FreeBytes: func(string) (int64, bool) { return f.free, f.free > 0 },
 	}
 	checks := Doctor(context.Background(), env)
 	var out bytes.Buffer
@@ -147,7 +150,7 @@ func TestDoctorAllGood(t *testing.T) {
 			t.Errorf("%s is %s: %s", c.Name, c.Level, c.Msg)
 		}
 	}
-	for _, name := range []string{"settings", "token", "core", "core-auth", "chart-repos", "cache", "git", "helm", "kustomize", "netns", "plugin-socket", "cmp-server"} {
+	for _, name := range []string{"settings", "token", "core", "core-auth", "chart-repos", "cache", "chart-cache", "render-cache", "git", "helm", "kustomize", "netns", "plugin-socket", "cmp-server"} {
 		if len(doctorFind(cs, name)) == 0 {
 			t.Errorf("no %s check", name)
 		}
@@ -483,4 +486,68 @@ func TestDoctorMainFlags(t *testing.T) {
 	if code := doctorMain([]string{"--no-such-flag"}, &out, &errb); code != 2 {
 		t.Errorf("a bad flag exits %d, want 2", code)
 	}
+}
+
+func TestDoctorCaches(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		f := newDoctorFixture(t)
+		cs, _, code := f.run(t)
+		doctorWant(t, cs, "chart-cache", levelOK, "512 MiB and 32 entries")
+		doctorWant(t, cs, "render-cache", levelOK, "up to 15m0s")
+		doctorWant(t, cs, "render-cache", levelOK, "cleared-tree cache TTL is 2m0s")
+		if code != 0 {
+			t.Errorf("exit %d", code)
+		}
+	})
+	t.Run("volume smaller than the bound warns, and does not fail", func(t *testing.T) {
+		f := newDoctorFixture(t)
+		f.free = 100 << 20
+		cs, _, code := f.run(t)
+		doctorWant(t, cs, "chart-cache", levelWarn, "less than the byte bound")
+		doctorWant(t, cs, "chart-cache", levelWarn, "sizeLimit")
+		if code != 0 {
+			t.Errorf("exit %d", code)
+		}
+	})
+	t.Run("custom bounds", func(t *testing.T) {
+		f := newDoctorFixture(t)
+		f.env["CLEARANCE_CMP_CHART_CACHE_MAX_BYTES"] = "1073741824"
+		f.env["CLEARANCE_CMP_CHART_CACHE_MAX_ENTRIES"] = "4"
+		f.env["CLEARANCE_CMP_RENDER_CACHE_TTL"] = "1h"
+		f.env["CLEARANCE_CMP_CACHE_TTL"] = "30s"
+		cs, _, _ := f.run(t)
+		doctorWant(t, cs, "chart-cache", levelOK, "1.0 GiB and 4 entries")
+		doctorWant(t, cs, "render-cache", levelOK, "up to 1h0m0s")
+		doctorWant(t, cs, "render-cache", levelOK, "TTL is 30s")
+	})
+	t.Run("zero turns each off", func(t *testing.T) {
+		f := newDoctorFixture(t)
+		f.env["CLEARANCE_CMP_CHART_CACHE_MAX_ENTRIES"] = "0"
+		f.env["CLEARANCE_CMP_RENDER_CACHE_TTL"] = "0"
+		cs, _, code := f.run(t)
+		doctorWant(t, cs, "chart-cache", levelOK, "off")
+		doctorWant(t, cs, "render-cache", levelOK, "off")
+		if code != 0 {
+			t.Errorf("exit %d", code)
+		}
+	})
+	t.Run("unknown free space is not a warning", func(t *testing.T) {
+		f := newDoctorFixture(t)
+		f.free = 0
+		cs, _, _ := f.run(t)
+		doctorWant(t, cs, "chart-cache", levelOK, "could not be read")
+	})
+	t.Run("malformed values fail in settings, all at once", func(t *testing.T) {
+		f := newDoctorFixture(t)
+		f.env["CLEARANCE_CMP_CHART_CACHE_MAX_BYTES"] = "lots"
+		f.env["CLEARANCE_CMP_CHART_CACHE_MAX_ENTRIES"] = "-1"
+		f.env["CLEARANCE_CMP_RENDER_CACHE_TTL"] = "soon"
+		cs, _, code := f.run(t)
+		for _, s := range []string{"MAX_BYTES", "MAX_ENTRIES", "RENDER_CACHE_TTL"} {
+			doctorWant(t, cs, "setting", levelFail, s)
+		}
+		if code != 1 {
+			t.Errorf("exit %d", code)
+		}
+	})
 }

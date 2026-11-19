@@ -107,8 +107,8 @@ host (Argo CD's own) and to the hosts in `CLEARANCE_CHART_REPOS`, if you restric
 
 ### With plain manifests or kustomize
 
-For the upstream `install.yaml` (the Deployment `argocd-repo-server` already has the `var-files` and `plugins`
-volumes), a strategic-merge patch adds the container and its two volumes. As a kustomize patch in the overlay that
+For the upstream `install.yaml` (the Deployment `argocd-repo-server` already has the `var-files` and `plugins` emptyDir
+volumes; checked against the v3.5.0 `manifests/install.yaml`, whose service account is `argocd-repo-server`), a strategic-merge patch adds the container and its two volumes. As a kustomize patch in the overlay that
 includes the Argo CD manifests:
 
 ```yaml
@@ -198,6 +198,8 @@ prints one line per check, `ok`, `warn` or `fail`, and a `fix:` for the last two
 | `core-auth` | the core accepts the token: an authenticated **read** of a change that does not exist (`GET /v1/clearances/{id}`). 404 means accepted, 401 rejected. The call cannot change anything. It does not prove the principal is a *verifier* (the core checks that when the plugin registers a change), and says so. | 401 or 403, or the core errors |
 | `chart-repos` | the allow list is non-empty and every entry passes the canonical rules the plugin applies (`NormalizeRepo`); each normalised form is printed | empty, or an entry is not a repository URL (the plugin refuses to start with one); duplicates warn |
 | `cache` | `CLEARANCE_CMP_CACHE_DIR` can be created and written: one probe file, removed | not writable (a read-only root with no `/tmp` volume) |
+| `chart-cache` | on or off, its bounds (bytes, entries), and the free space of the volume holding the cache dir | (warns) the volume has less free space than the byte bound |
+| `render-cache` | on or off, its TTL, and the cleared-tree cache TTL | never |
 | `git`, `helm`, `kustomize` | present on `PATH`, with their versions printed | missing |
 | `netns` | the private network namespace: `on`, `off` (set so) or `unavailable` | `unavailable` while `CLEARANCE_CMP_NETNS=require`; otherwise `unavailable` warns |
 | `plugin-socket`, `cmp-server` | `/home/argocd/cmp-server/plugins` exists (`--plugin-dir` changes it) and `/var/run/argocd/argocd-cmp-server` is present | (warns) either is missing, which is normal outside the sidecar |
@@ -235,10 +237,21 @@ parameter would not do, because parameters come from values a tenant writes.
 | `CLEARANCE_WAIT_IMAGE` | when a change can be held | none | The image of the injected PreSync wait Job (`clearance-wait`). Unset, a held change is refused with a message naming it. |
 | `CLEARANCE_WAIT_HOST_ALIAS` | no | none | `ip=host[,host]`: a `hostAlias` for the wait Job's pod, when the core's name does not resolve in the destination cluster. |
 | `CLEARANCE_WAIT_TIMEOUT` | no | `24h` | How long the wait Job waits for a person (a Go duration). |
-| `CLEARANCE_CMP_CACHE_DIR` | no | `/tmp/clearance-cmp-cache` | Where a cleared tree is remembered, one file per app, environment, cluster and tree. Must be writable. |
+| `CLEARANCE_CMP_CACHE_DIR` | no | `/tmp/clearance-cmp-cache` | The root of all three caches: the cleared-tree files (`*.json`), `charts/` and `renders/`. Must be writable. See the sizing note below. |
 | `CLEARANCE_CMP_CACHE_TTL` | no | `2m` | How long a cleared, unchanged render is answered from the cache before the core is asked again. Never served past the clearance's own expiry. |
+| `CLEARANCE_CMP_RENDER_CACHE_TTL` | no | `15m` | How long a rendered, stamped stream is reused without cloning or running helm and kustomize (the pre-render cache, under `renders/`). Never past the clearance's own expiry, and a hold or denial is never stored. `0` (or `0s`) turns it off. Chart mode only: the generic `sources` mode is not cached. |
+| `CLEARANCE_CMP_CHART_CACHE_MAX_BYTES` | no | `512Mi` (536870912) | Total size bound of the chart fetch cache (`charts/` under the cache dir). The entry used longest ago is evicted first. `0` turns the chart cache off. A single chart larger than the bound is used for that render and not kept. |
+| `CLEARANCE_CMP_CHART_CACHE_MAX_ENTRIES` | no | `32` | Number of charts kept. `0` turns the chart cache off. |
 | `CLEARANCE_CMP_CALL_TIMEOUT` | no | `20s` | How long one call to the core may take. The whole render has 80 s: Argo CD kills a plugin at 90 s (`ARGOCD_EXEC_TIMEOUT`). |
 | `CLEARANCE_CMP_NETNS` | no | `try` | `try`: isolate renders in a private network namespace when the kernel allows it, else render without it and warn once. `require`: refuse to render without it. `off`: never attempt it. Anything else stops the plugin at start. The render summary on stderr ends `netns=on\|unavailable\|off`. |
+
+**Sizing the cache.** The chart cache lives under `CLEARANCE_CMP_CACHE_DIR`, which by default is on the `/tmp` emptyDir, so
+the volume must fit the bound. The default is 512 MiB of charts plus the pre-render cache (at most 256 streams of at most
+8 MiB each) plus the work directory of a render in progress. An emptyDir without a `sizeLimit` is bounded by the node's
+disk; with one, set it above `CLEARANCE_CMP_CHART_CACHE_MAX_BYTES` with room to spare, or lower the bound. A full or
+read-only cache never fails a render (it clones for itself, as without the cache) but it stops giving hits, and an
+emptyDir that goes over its `sizeLimit` evicts the pod. `doctor` warns when the volume's free space is below the byte
+bound. The cache is lost whenever the pod restarts (an emptyDir); nothing depends on it.
 
 Set by Argo CD for every render (not yours to set): `ARGOCD_APP_NAME` (the Helm release name),
 `ARGOCD_APP_NAMESPACE` (the destination namespace), `ARGOCD_APP_REVISION` (the commit synced; must be a full commit
@@ -394,8 +407,14 @@ plugin), never an un-gated sync.
    (`kubectl -n argocd logs deploy/argocd-repo-server -c clearance-cmp`) has one summary line per render:
 
    ```text
-   clearance: shop/prod rendered 14 objects, tree 3f9a1c0b27de, chart https://git.example.test/platform/charts.git@v1.4.2 (c7e846a91b0d), netns=unavailable
+   clearance: shop/prod rendered 14 objects, tree 3f9a1c0b27de, chart https://git.example.test/platform/charts.git@v1.4.2 (c7e846a91b0d), chart-cache=miss, netns=unavailable
    ```
+
+   `chart-cache=` is `hit` (the chart came from the cache), `miss` (fetched, and kept) or `off`. `netns=` is `on`
+   (renders are isolated), `unavailable` (`try` fell back: the kernel or seccomp profile refused) or `off`. An unchanged
+   Application inside the pre-render cache's lifetime instead logs `... is unchanged ...: serving the cleared render <id>
+   from the cache without a clone, helm or kustomize`; that is the cache working, not a skipped gate (the core is still
+   asked once the tree cache's `CLEARANCE_CMP_CACHE_TTL` has passed).
 3. The rendered objects carry `clearance.hangar.io/rendered`, `clearance.hangar.io/tree` and, once cleared,
    `clearance.hangar.io/grant` annotations: `argocd app manifests shop-prod | grep clearance.hangar.io`.
 4. On the core, the change is registered (`proposer: system:argocd-cmp`, `pr: 0`). A tree nobody cleared **holds** for people:
@@ -438,7 +457,7 @@ These are the messages in the code, with their fixes. A configuration error exit
 | `a change is held for people but CLEARANCE_WAIT_IMAGE is not set: the PreSync wait Job cannot be injected` | A tree is waiting for a person and the sidecar cannot add the wait Job. | Set `CLEARANCE_WAIT_IMAGE`. |
 | `refusing to run helm: cannot create a private network namespace (...). CLEARANCE_CMP_NETNS=require needs ...` | `require` is set and the kernel or seccomp profile refuses the namespace. | Allow `unshare`/`clone` with `CLONE_NEWUSER\|CLONE_NEWNET` in the container's seccomp profile, or set `CLEARANCE_CMP_NETNS=try`. |
 | `context deadline exceeded` after about 80 s | A slow fetch plus a slow core call. | Check egress to the chart repository and the core; see `CLEARANCE_CMP_CALL_TIMEOUT`. |
-| Argo CD says the plugin cannot be found or reached (no clearance-cmp message at all) | The sidecar is not running, its socket is not in `plugins`, or the Application names another name. | `kubectl -n argocd get pod -l app.kubernetes.io/name=argocd-repo-server` should show all containers ready; check `var-files` and `plugins` are mounted at the two paths above and `plugin.name: clearance`. |
+| `could not find cmp-server plugin with name "clearance" supporting the given repository` (Argo CD's own message, `util/app/discovery/discovery.go` in v3.5.0; a `: <cause>` may follow, and the name is whatever `plugin.name` says) | The repo-server found no socket `<name>.sock` in `plugins`: the sidecar is not running or crashed, `plugins` is not mounted at `/home/argocd/cmp-server/plugins` in both containers, or the Application names another name (a plugin with a `version` is `<name>-<version>`). | `kubectl -n argocd get pod -l app.kubernetes.io/name=argocd-repo-server` should show all containers ready; check `var-files` and `plugins` are mounted at the two paths above and `plugin.name: clearance`. |
 
 ## Upgrade and rollback
 

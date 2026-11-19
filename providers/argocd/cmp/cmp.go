@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -53,6 +54,17 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 	if err != nil {
 		return "", err
 	}
+	// The pre-render cache (rendercache.go): an unchanged Application is answered before anything is fetched or rendered.
+	// It needs the commit the chart's tag resolves to now, one lookup on the remote.
+	if cfg.RenderCacheTTL > 0 && cfg.Sources == "" && cfg.ChartRepo != "" {
+		cfg.chartCommit, cfg.chartLooked = resolveChart(ctx, d.Exec, cfg.ChartRepo, cfg.ChartRev), true
+	}
+	rkey := renderKey(cfg)
+	if e, ok := d.Cache.GetRender(rkey, d.Now(), cfg.RenderCacheTTL); ok {
+		if o, handled, err := serveRender(ctx, d, cfg, e, out); handled {
+			return o, err
+		}
+	}
 	if cfg.Sources != "" {
 		run := d.Run
 		if run == nil {
@@ -83,13 +95,26 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 		fmt.Fprintf(d.Stderr, ", source %d %s %s@%s", s.Position, s.Type, what, shortRes(s.Resolved))
 	}
 	if r.ChartMerge != "" {
-		fmt.Fprintf(d.Stderr, ", chart %s@%s (%s)", cfg.ChartRepo, cfg.ChartRev, r.ChartMerge[:12])
+		fmt.Fprintf(d.Stderr, ", chart %s@%s (%s), chart-cache=%s", cfg.ChartRepo, cfg.ChartRev, r.ChartMerge[:12], r.ChartFetch)
 	}
 	fmt.Fprintf(d.Stderr, ", netns=%s\n", NetnsState())
 
 	now := d.Now()
+	started := time.Now() // wall clock, against the decisions DropRenders records
+	// cleared emits the stamped stream and remembers it (rendercache.go) when the render is what the key names.
+	cleared := func(e CacheEntry) (Outcome, error) {
+		var buf bytes.Buffer
+		if _, err := emit(tree, &buf, Cleared, e.ID, cfg); err != nil {
+			return "", err
+		}
+		if req, rerr := registration(cfg, tree); rkey != "" && rerr == nil && (cfg.ChartRepo == "" || r.ChartMerge == cfg.chartCommit) {
+			d.Cache.PutRender(renderEntry{Key: rkey, Request: req, ID: e.ID, Tier: e.Tier, Outage: e.Outage, Tree: tree.Root, App: cfg.App, Env: cfg.Env, Cluster: cfg.Cluster, CachedAt: e.CachedAt, ExpiresAt: e.ExpiresAt, Stream: buf.Bytes()}, started)
+		}
+		_, err := out.Write(buf.Bytes())
+		return Cleared, err
+	}
 	if e, ok := d.Cache.Get(cfg.App, cfg.Env, cfg.Cluster, tree.Root, now); ok && now.Sub(e.CachedAt) < cfg.CacheTTL {
-		return emit(tree, out, Cleared, e.ID, cfg)
+		return cleared(e)
 	}
 	req, err := registration(cfg, tree)
 	if err != nil {
@@ -114,12 +139,15 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 		if exp.IsZero() {
 			exp = now.Add(cfg.CacheTTL)
 		}
-		d.Cache.Put(cfg.App, cfg.Env, cfg.Cluster, CacheEntry{ID: ch.ID, Tier: ch.Tier, Outage: ch.Outage, Tree: tree.Root, CachedAt: now, ExpiresAt: exp})
-		return emit(tree, out, Cleared, ch.ID, cfg)
+		ce := CacheEntry{ID: ch.ID, Tier: ch.Tier, Outage: ch.Outage, Tree: tree.Root, CachedAt: now, ExpiresAt: exp}
+		d.Cache.PutUndecided(cfg.App, cfg.Env, cfg.Cluster, ce, started)
+		return cleared(ce)
 	case "holding":
+		d.Cache.DropRenders(cfg.App, cfg.Env, cfg.Cluster, tree.Root) // a hold is never served from the cache
 		d.Cache.Drop(cfg.App, cfg.Env, cfg.Cluster, tree.Root)
 		return emit(tree, out, Held, ch.ID, cfg)
 	default:
+		d.Cache.DropRenders(cfg.App, cfg.Env, cfg.Cluster, tree.Root)
 		d.Cache.Drop(cfg.App, cfg.Env, cfg.Cluster, tree.Root)
 		why := ""
 		if ch.DenyReason != nil {
