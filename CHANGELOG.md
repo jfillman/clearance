@@ -9,6 +9,17 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Tests
+
+- **CI smoke-tests the built `clearance-cmp` image as Argo CD runs it.** A new `cmp-image-smoke` job builds the image
+  and runs it with the checkout as the working directory, Argo CD's environment, uid 999, a read-only root and a tmpfs
+  `/tmp`, against a chart served over `git://` and a fake core (`tools/cmp-smoke.sh`). It asserts the rendered
+  manifests, the refusal of a symlinked value file and the image's helm and kustomize versions, and fails on the 0.52.0
+  image (the relative source directory, I-38). The go job also installs helm and kustomize at the versions and
+  checksums the image pins (`tools/install-cmp-tools.sh`), so `TestKustomize`,
+  `TestRealKustomizeDoesNotFetchAnHTTPBaseUnderTheSandbox` and the other real-binary tests run instead of skipping,
+  and fails if they skip. See [docs/gate.md](docs/gate.md#the-smoke-test-of-the-built-image).
+
 ## [0.52.2] - 2026-11-18
 
 ### Security
