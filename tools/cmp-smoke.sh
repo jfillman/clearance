@@ -135,8 +135,8 @@ chmod -R a+rX "$work/gitops-good" "$work/gitops-link"
 tools_out="$("$engine" run --rm --entrypoint sh "$image" -c 'command -v helm; helm version --template "{{.Version}}"; echo; command -v kustomize; kustomize version; command -v clearance-cmp' 2>&1)"
 echo "$tools_out" | sed 's/^/     image: /'
 echo "$tools_out" | grep -qx '/usr/local/bin/helm' && echo "$tools_out" | grep -qx '/usr/local/bin/kustomize' || bad "helm and kustomize are not the image's /usr/local/bin binaries"
-echo "$tools_out" | grep -q "^$want_helm" && ok "the image ships helm $want_helm" || bad "the image's helm is not $want_helm"
-echo "$tools_out" | grep -q "$want_kustomize" && ok "the image ships kustomize $want_kustomize" || bad "the image's kustomize is not $want_kustomize"
+echo "$tools_out" | grep -qxF "$want_helm" && ok "the image ships helm $want_helm" || bad "the image's helm is not $want_helm"
+echo "$tools_out" | grep -qxF "$want_kustomize" && ok "the image ships kustomize $want_kustomize" || bad "the image's kustomize is not $want_kustomize"
 
 # ---- run the plugin as Argo CD does -----------------------------------------------------------------------------
 run_plugin() { # CHECKOUT OUT ERR : echoes the exit code

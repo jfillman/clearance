@@ -39,7 +39,7 @@ func main() {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		req["_authorization"] = r.Header.Get("Authorization") != "" // that a token was sent, never its value
+		req["_authorization"] = r.Header.Get("Authorization") == "Bearer smoke-token" // that the fixture token was sent as a bearer, never its value
 		line, _ := json.Marshal(req)
 		mu.Lock()
 		f, ferr := os.OpenFile(*logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
