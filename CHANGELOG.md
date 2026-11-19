@@ -45,6 +45,30 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   `TestRealKustomizeDoesNotFetchAnHTTPBaseUnderTheSandbox` and the other real-binary tests run instead of skipping,
   and fails if they skip. See [docs/gate.md](docs/gate.md#the-smoke-test-of-the-built-image).
 
+### Changed
+
+- **The `clearance-cmp` plugin caches the chart it fetches and skips an unchanged render** (hardening S1 and S2).
+  An independent review measured a render at about 1.5 s for a 9.9 MB chart, nine tenths of it the `git clone`, with
+  nothing kept between renders and a plugin cache (2 minutes) shorter than Argo CD's reconcile interval.
+  - **Chart fetch cache.** The checked-out chart is kept under `CLEARANCE_CMP_CACHE_DIR/charts`, keyed by the
+    repository and the **commit the tag resolves to** (a `git ls-remote` on every render, so a moved tag is fetched,
+    never served by name). Entries are written atomically, verified by a digest of every file while they are copied
+    out for the render (a corrupted entry is discarded and refetched), safe under concurrent renders (one fetch per
+    commit), and bounded by `CLEARANCE_CMP_CHART_CACHE_MAX_BYTES` (512 MiB) and
+    `CLEARANCE_CMP_CHART_CACHE_MAX_ENTRIES` (32), least recently used first. The symlink and containment checks still
+    run on what Helm reads.
+  - **Pre-render cache.** An Application whose inputs did not change (gitops revision, resolved chart commit, every
+    parameter, Kubernetes and API versions, plugin version) skips the clone, Helm and kustomize: the stored cleared
+    stream is served. It never decides: the core is asked as often as before (not at all within
+    `CLEARANCE_CMP_CACHE_TTL`, otherwise once with the stored registration request; when it does not confirm, the
+    full render registers again as it would have without the cache), and the stream is served only if
+    the core answers `cleared` as the same change. Another change, a hold or a denial drops the entry and renders in
+    full (a hold emits the wait Job as before); an unreachable core follows the outage policy unchanged. No decision
+    is cached longer than before. `CLEARANCE_CMP_RENDER_CACHE_TTL` (15 minutes) bounds only how long rendered bytes
+    are reused, never past the clearance's expiry. A hold or denial also drops every cached render of its tree.
+  - Generic mode (`PARAM_SOURCES`) is not cached yet. Set the new sizes or TTL to 0 to turn a cache off. The per-render summary line gains `chart-cache=hit|miss|off`
+    (before `netns=`). The CI smoke test gains a case that a second render in one `/tmp` reuses the chart.
+
 ## [0.52.2] - 2026-11-18
 
 ### Security

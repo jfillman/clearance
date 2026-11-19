@@ -156,12 +156,15 @@ echo "$can_cfg" | grep -qF 'command: [/usr/local/bin/clearance-cmp]' && echo "$d
 [ "$(echo "$def_cfg" | strip)" = "$(echo "$can_cfg" | strip | grep -vx '  version: canary')" ] && ok "the two plugin files differ only by the version" || bad "the canary plugin.yaml differs from the default beyond its version"
 
 # ---- run the plugin as Argo CD does -----------------------------------------------------------------------------
-run_plugin() { # CHECKOUT OUT ERR : echoes the exit code
-  local dir="$1" out="$2" err="$3" rev
+default_injected='{"injected":"from-platform"}'
+run_plugin() { # CHECKOUT OUT ERR [CACHE_DIR [VALUESJSON]] : echoes the exit code. CACHE_DIR is a host directory mounted
+  # as the plugin's cache directory, so that two runs share it as two renders in one sidecar's /tmp do.
+  local dir="$1" out="$2" err="$3" cachedir="${4:-}" injected="${5:-$default_injected}" rev cache_mount=()
+  [ -n "$cachedir" ] && cache_mount=(-v "$cachedir:/tmp/clearance-cmp-cache")
   rev="$(git -C "$dir" rev-parse HEAD)"
   # shellcheck disable=SC2086
   "$engine" run --rm $net_args --user 999:999 --read-only --tmpfs "$tmpfs_opt" --cap-drop ALL \
-    --workdir /src -v "$dir:/src:ro" -v "$work/token:/var/run/secrets/tokens/clearance:ro" \
+    --workdir /src ${cache_mount[@]+"${cache_mount[@]}"} -v "$dir:/src:ro" -v "$work/token:/var/run/secrets/tokens/clearance:ro" \
     --entrypoint /usr/local/bin/clearance-cmp \
     -e ARGOCD_APP_NAME=smoke-app-dev -e ARGOCD_APP_NAMESPACE=app-smoke-app-dev -e ARGOCD_APP_REVISION="$rev" \
     -e ARGOCD_APP_SOURCE_REPO_URL=https://git.example.test/acme/gitops-smoke.git -e ARGOCD_APP_SOURCE_PATH=. \
@@ -169,7 +172,7 @@ run_plugin() { # CHECKOUT OUT ERR : echoes the exit code
     -e PARAM_APP=smoke-app -e PARAM_ENV=dev -e PARAM_CLUSTER=hangar-smoke \
     -e PARAM_CHARTREPO="$chart_url" -e PARAM_CHARTREVISION=v0.0.1 -e PARAM_CHARTPATH=charts/app \
     -e PARAM_VALUEFILES=hangar-smoke/base.yaml,hangar-smoke/dev/values.yaml,hangar-smoke/dev/release.yaml \
-    -e PARAM_VALUESJSON='{"injected":"from-platform"}' -e PARAM_KUSTOMIZEDIR=configmap \
+    -e PARAM_VALUESJSON="$injected" -e PARAM_KUSTOMIZEDIR=configmap \
     -e CLEARANCE_URL="$core_url" -e CLEARANCE_TOKEN_FILE=/var/run/secrets/tokens/clearance \
     -e CLEARANCE_CHART_REPOS="$chart_url" -e CLEARANCE_WAIT_IMAGE=registry.example.test/clearance-wait:smoke \
     -e CLEARANCE_CMP_CACHE_DIR=/tmp/clearance-cmp-cache \
@@ -208,6 +211,25 @@ grep -q 'refused: value file hangar-smoke/dev/values.yaml resolves outside the r
   && ok "the refusal names the value file" || bad "the expected refusal is missing"
 [ ! -s "$work/link.out" ] && ok "no manifests were written" || bad "manifests were written for a refused checkout"
 [ ! -s "$work/register.log" ] && ok "nothing was registered" || bad "a refused checkout was registered"
+
+echo "== the chart cache: a second render in the same /tmp does not fetch the chart again"
+cache="$work/cmp-cache"; mkdir -p "$cache"; chmod 777 "$cache"
+code="$(run_plugin "$good" "$work/c1.out" "$work/c1.err" "$cache")"
+sed 's/^/     run 1 stderr: /' "$work/c1.err"
+[ "$code" = 0 ] && grep -q 'chart-cache=miss' "$work/c1.err" && ok "the first render fetched the chart and kept it (chart-cache=miss)" || bad "the first render did not report chart-cache=miss (exit $code)"
+# Different platform values: the render is not the same one (no pre-render hit), but the chart commit is.
+code="$(run_plugin "$good" "$work/c2.out" "$work/c2.err" "$cache" '{"injected":"from-platform-2"}')"
+sed 's/^/     run 2 stderr: /' "$work/c2.err"
+[ "$code" = 0 ] && grep -q 'chart-cache=hit' "$work/c2.err" && ok "the second render used the cached chart (chart-cache=hit)" || bad "the second render did not report chart-cache=hit (exit $code)"
+grep -q '"injected":"from-platform-2"' "$work/c2.out" && ok "and rendered the new values" || bad "the second render's output lacks the new values"
+# The identical render again: answered by the pre-render cache (no clone, helm or kustomize), and the core is asked
+# only if the tree cache's two minutes are over (here they are not).
+: > "$work/register.log"
+code="$(run_plugin "$good" "$work/c3.out" "$work/c3.err" "$cache" '{"injected":"from-platform-2"}')"
+sed 's/^/     run 3 stderr: /' "$work/c3.err"
+[ "$code" = 0 ] && grep -q 'serving the cleared render' "$work/c3.err" && cmp -s "$work/c2.out" "$work/c3.out" \
+  && ok "an unchanged render is served from the cache, byte for byte" || bad "the unchanged render was not served from the cache (exit $code)"
+[ ! -s "$work/register.log" ] && ok "and asked the core nothing inside the tree cache's lifetime" || bad "a cached hit inside the lifetime reached the core"
 
 [ "$fail" = 0 ] && echo "cmp-smoke: PASS" || echo "cmp-smoke: FAIL"
 exit "$fail"

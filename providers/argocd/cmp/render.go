@@ -99,6 +99,7 @@ type Rendered struct {
 	Manifests  []byte
 	ChartRepo  string
 	ChartTag   string
+	ChartFetch string // the chart cache: hit, miss (fetched and kept) or off
 	ChartMerge string // the peeled commit of the tag ("" when the chart is in the source directory)
 }
 
@@ -117,17 +118,17 @@ func Render(ctx context.Context, run Exec, cfg Config, srcDir string) (*Rendered
 	chart := srcDir
 	if cfg.ChartRepo != "" {
 		dest := filepath.Join(tmp, "chart")
-		if _, err := run(ctx, tmp, "git", "clone", "--quiet", "--depth", "1", "--branch", cfg.ChartRev, "--", cfg.ChartRepo, dest); err != nil {
-			return nil, fmt.Errorf("fetch the chart at %s: %w", cfg.ChartRev, err)
+		// The chart cache (fetchcache.go) answers by the commit the tag resolves to now; a cfg.chartCommit hint is
+		// what Generate already resolved for its own cache key.
+		hint := cfg.chartCommit
+		if hint == "" && !cfg.chartLooked && cfg.ChartCache.enabled() {
+			hint = resolveChart(ctx, run, cfg.ChartRepo, cfg.ChartRev)
 		}
-		sha, err := run(ctx, dest, "git", "rev-parse", "HEAD^{commit}")
+		commit, how, err := cfg.ChartCache.Fetch(ctx, run, cfg.ChartRepo, cfg.ChartRev, hint, dest)
 		if err != nil {
-			return nil, fmt.Errorf("peel the chart tag: %w", err)
+			return nil, err
 		}
-		out.ChartMerge = strings.TrimSpace(string(sha))
-		if !sha40.MatchString(out.ChartMerge) {
-			return nil, fmt.Errorf("the chart tag %s peeled to %q, not a commit", cfg.ChartRev, out.ChartMerge)
-		}
+		out.ChartMerge, out.ChartFetch = commit, how
 		chart = dest
 	}
 	chart = filepath.Join(chart, filepath.FromSlash(cfg.ChartPath))

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -66,20 +67,49 @@ func gateAPIConfig() Config {
 
 // fakeExec answers git and helm the way the real tools would for the recorded render, and records every call.
 type fakeExec struct {
+	mu     sync.Mutex
 	calls  [][]string
 	render []byte
 	fail   map[string]error
+	head   string            // the commit the chart's tag is at ("" is chartSHA)
+	tree   map[string]string // files a `git clone` writes (the chart cache tests); nil writes nothing
+	links  map[string]string // symlinks it also writes: path -> target
 }
 
 func (f *fakeExec) run(_ context.Context, dir, name string, args ...string) ([]byte, error) {
+	f.mu.Lock()
 	f.calls = append(f.calls, append([]string{name}, args...))
+	head := f.head
+	f.mu.Unlock()
+	if head == "" {
+		head = chartSHA
+	}
 	if err := f.fail[name]; err != nil {
 		return nil, err
 	}
 	switch name {
 	case "git":
-		if args[0] == "rev-parse" {
-			return []byte(chartSHA + "\n"), nil
+		switch args[0] {
+		case "rev-parse":
+			return []byte(head + "\n"), nil
+		case "ls-remote":
+			return []byte(head + "\trefs/tags/v0.3.168\n"), nil
+		case "clone":
+			if f.tree != nil {
+				dest := args[len(args)-1]
+				for name, body := range f.tree {
+					p := filepath.Join(dest, name)
+					if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil || os.WriteFile(p, []byte(body), 0o644) != nil {
+						return nil, errors.New("fake clone")
+					}
+				}
+				for name, target := range f.links {
+					os.MkdirAll(filepath.Dir(filepath.Join(dest, name)), 0o755)
+					os.Symlink(target, filepath.Join(dest, name))
+				}
+				os.MkdirAll(filepath.Join(dest, ".git"), 0o755)
+				os.WriteFile(filepath.Join(dest, ".git", "HEAD"), []byte(head), 0o644)
+			}
 		}
 		return nil, nil
 	case "helm":

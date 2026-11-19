@@ -1690,8 +1690,8 @@ plugin replaces the Helm source.
 `providers/argocd/cmp` is the `clearance-cmp` binary, run by Argo CD's CMP server in a sidecar of argocd-apps'
 repo-server (`plugin.yaml`; an Application opts in with `spec.source.plugin.name: clearance`). For one Application:
 
-1. **Render.** The chart is fetched at its pinned tag (`git clone --depth 1 --branch <tag>`) and the peeled commit is
-   recorded, not the tag. Then `helm template <Application name> <chart> --namespace <destination>` with the
+1. **Render.** The chart is fetched at its pinned tag (`git clone --depth 1 --branch <tag>`, or the chart cache,
+   [below](#caches)) and the peeled commit is recorded, not the tag. Then `helm template <Application name> <chart> --namespace <destination>` with the
    gitops repository's value files (a missing one is skipped) and the platform-injected values last (`valuesJson`,
    what the Helm source's `valuesObject` was). A kustomize directory (`kustomizeDir`, the tenant's `configmap/`) is
    rendered with `kustomize build` beside it. The release name is the Application and the namespace is the destination.
@@ -1701,7 +1701,8 @@ repo-server (`plugin.yaml`; an Application opts in with `spec.source.plugin.name
    stamp). Cluster-scoped kinds are a fixed list plus any kind named `Cluster*` plus the Application's
    `clusterScopedKinds` parameter (a plugin cannot ask the cluster's discovery).
 3. **Cache.** A cleared tree is remembered for two minutes (per app, environment, cluster and tree) so a refresh of an
-   unchanged render does not call the core.
+   unchanged render does not call the core. Two more caches sit before the render, [below](#caches): the fetched chart
+   and the whole cleared render.
 4. **Register.** `POST /v1/clearances` as a verifier, the object shape the `clearance-gate` Tekton task posts, for a
    pushed commit: `pr: 0`, `head` the commit Argo CD syncs (`ARGOCD_APP_REVISION`), `repo` the gitops repository,
    `proposer: system:argocd-cmp`, every object `added` (there is no base render to diff), checks `ci`, `provenance`
@@ -1765,7 +1766,68 @@ The tenant-onboarding ApplicationSet sets the plugin's parameters (all strings; 
 paths in the gitops repo), `valuesJson`, `kustomizeDir`, and optionally `clusterScopedKinds`. The sidecar's
 environment: `CLEARANCE_URL`, `CLEARANCE_TOKEN_FILE` (default `/var/run/secrets/tokens/clearance`, read on every call),
 `CLEARANCE_WAIT_IMAGE`, `CLEARANCE_WAIT_HOST_ALIAS` (`ip=host`, for the Job's pod when the core is on another cluster),
-`CLEARANCE_WAIT_TIMEOUT`, `CLEARANCE_CMP_CACHE_DIR`, `CLEARANCE_CMP_CACHE_TTL` and `CLEARANCE_CHART_REPOS`.
+`CLEARANCE_WAIT_TIMEOUT`, `CLEARANCE_CMP_CACHE_DIR`, `CLEARANCE_CMP_CACHE_TTL`, `CLEARANCE_CHART_REPOS` and the cache
+settings [below](#caches).
+
+#### Caches
+
+Three caches live under `CLEARANCE_CMP_CACHE_DIR` (default `/tmp/clearance-cmp-cache`; the sidecar's root is read-only
+and `/tmp` is writable). Each is a speed-up that can only lose a hit, never change what is emitted: a damaged or
+doubtful entry is discarded and the work is done again.
+
+| Cache | Skips | Keyed by | Lives |
+| --- | --- | --- | --- |
+| **Chart fetch** (`charts/`) | the `git clone` (about nine tenths of a render) | the allow list's spelling of the repository and the **commit the tag resolves to now** | until evicted (bounds below) |
+| **Pre-render** (`renders/`) | the fetch, `helm` and `kustomize` (never the decision) | a hash of every input of the output (below) | the rendered bytes are reused until the clearance's `expiresAt`, and at most `CLEARANCE_CMP_RENDER_CACHE_TTL` |
+| **Cleared tree** (`*.json`) | the core call, after a render | app, environment, cluster and tree digest | `CLEARANCE_CMP_CACHE_TTL` (2 min), and the outage policy above |
+
+**Chart fetch cache.** Every render asks the remote what the pinned revision is (`git ls-remote`, one round trip), so a tag
+that moved is a different key and is fetched; the tag's name is never a key. An entry is the checked-out tree (no `.git`)
+plus `meta.json` (repository, commit, a digest of every file with its executable bit, every link target, and the tree's
+size). It is written once into a temporary directory beside the cache and renamed to its key; two renders of one commit
+take a file lock, so it is fetched once. The clone goes into the render's own scratch directory and is then copied into the cache (a cache that cannot be written never fails a render); publishing, discarding and eviction happen under one directory lock, and a rename onto an entry that exists loses to it. It is never edited. On use
+the render copies the tree into its own scratch directory and hashes the bytes in the same pass: a digest that is not
+`meta.json`'s, a `meta.json` that is not the key's repository and commit, or any read error discards the entry and
+fetches again. Helm therefore reads a private copy of exactly the verified bytes, which neither an eviction nor Helm can
+alter in the cache. The checks that Helm and kustomize only read inside the repository (symlinks, value files) still run
+on every render, on the copy. Bounds: `CLEARANCE_CMP_CHART_CACHE_MAX_BYTES` (default 512 MiB, the trees' total) and
+`CLEARANCE_CMP_CHART_CACHE_MAX_ENTRIES` (default 32); past either the entry used longest ago goes first. Either set to 0
+turns the chart cache off. If the lookup fails or says nothing, the render clones as before and stores what it got under
+the commit it really has. A checkout larger than the byte bound is used for that render and not kept; a cache that cannot
+be written (read-only, full) never fails a render, which then clones for itself as before. The 256 lock files
+(`lock-xx`) are stable and never removed.
+
+**Pre-render cache.** The key is a hash of the Application (name, destination namespace, project, app, environment,
+cluster), `ARGOCD_APP_REVISION`, the resolved chart commit (the same lookup), every plugin parameter, the destination's
+Kubernetes version and API versions, the core's URL and the plugin's version. The value is the emitted stream, already
+stamped, the change id, and **the registration request** a fresh render of these inputs sends. The cache skips the
+clone, Helm and kustomize; **it never decides**. A hit is handled like this:
+
+| On a hit | The plugin | Core call |
+| --- | --- | --- |
+| the tree cache says cleared, same change, within `CLEARANCE_CMP_CACHE_TTL` (2 min) | serves the stored stream | none (as before the cache) |
+| otherwise, the core answers `cleared` with the change the stream is stamped with | refreshes the tree cache, serves the stored stream | one, with the stored request |
+| `cleared` as another change, `holding`, `denied`, or any other state | drops every render of the tree and renders in full: a hold emits the wait Job, a denial refuses | one, then the full render's own |
+| the core is unreachable | the outage policy above: served only for a tree whose cached tier is `allow-and-record`, otherwise an outage hold | one (failed) |
+
+Net effect: an unchanged, cleared app skips the clone, Helm and kustomize. **The core is asked exactly as often as before
+this change for an app whose clearance holds** (not at all inside `CLEARANCE_CMP_CACHE_TTL`, once after it), and **no
+decision is cached longer than before** (`CLEARANCE_CMP_CACHE_TTL` still bounds it). When the core does not confirm the
+entry (another change, a hold, a denial) the confirmation is followed by the full render's own registration: two calls
+that render, as without the cache, would have made one. The sandbox mode (`CLEARANCE_CMP_NETNS`) is part of the key.
+`CLEARANCE_CMP_RENDER_CACHE_TTL` (default 15 minutes; 0 turns it off) bounds only how long rendered bytes are reused, and
+never past the clearance's `expiresAt`. A hold or a denial is never stored; one also drops every entry of the same app,
+environment, cluster and tree (whatever its key) and refuses a cleared answer that was already in flight when the
+decision was recorded. The stream is checked against its recorded SHA-256 on every read. At most 256 entries are kept
+(least recently used first) and one stream may be at most 8 MiB. **Not cached:** the generic mode (`PARAM_SOURCES`),
+whose sources have no resolved commit without fetching them, and any run whose `ARGOCD_APP_REVISION` is not a full
+commit or whose chart tag did not resolve.
+
+**What a warm render still costs.** Every render asks the remote what the tag is (`git ls-remote`), because that is how a
+moved tag is seen. Measured from a laptop against GitHub (airframe v0.3.176): an uncached render 1.4 s, a warm one 0.8 to
+1.0 s, `ls-remote` alone about 0.85 s, so the lookup is now most of a warm render. Caching the tag-to-commit answer is a
+separate decision (it trades the moved-tag guarantee for time) and is not done here. The summary line on stderr reports
+`chart-cache=hit|miss|off` for the render.
 
 **Where a chart may come from.** Behind the gate Argo CD does not fetch the chart, the plugin does, so the AppProject's
 `sourceRepos` no longer apply to it. `CLEARANCE_CHART_REPOS` (repository URLs, comma or white-space separated) is the
@@ -2148,8 +2210,10 @@ server-side apply, `ignoreDifferences`, pruning), and not the live objects, whos
   host, the chart repositories and the registry.
 * **Tool versions.** They must follow Argo CD's (finding 1): move them together and re-run the parity suite, ideally as
   a drift check against the live Argo CD.
-* **No fetch cache.** Every render clones and pulls again (8 s at the slowest); the 80 s budget is shared with a core
-  call. A per-revision cache in the sidecar is not built.
+* **The generic mode fetches every time.** The chart fetch cache and the pre-render cache serve the chart mode
+  (`chartRepo`). The generic mode's git and Helm fetches (8 s at the slowest; the 80 s budget is shared with a core call)
+  are not cached yet: they need the same by-commit keying in `internal/argosrc`, and a chart version has no commit, so a
+  Helm or OCI source would be keyed by its package digest after the pull.
 * **The hash and the agent disagree on `annotations: null` and on mis-scoped kinds** (findings 2 and 5): settle them
   before an Application that has either is enforced. The mis-scoped kinds are filled by the 10c agent; `annotations: null` is not.
 * **Not built:** a private chart repository's credential, `helm.passCredentials`, a version range as a revision,

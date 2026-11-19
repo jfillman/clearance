@@ -25,7 +25,7 @@ COPY internal/ internal/
 COPY schemas/ schemas/
 COPY providers/ providers/
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -buildvcs=false -ldflags "-s -w -buildid=" \
+    GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -buildvcs=false -ldflags "-s -w -buildid= -X main.pluginVersion=${VERSION}" \
       -o /out/clearance-cmp ./providers/argocd/cmp
 
 FROM ${TOOLS_IMAGE} AS tools
