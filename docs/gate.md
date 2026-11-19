@@ -2708,15 +2708,15 @@ Only when `optIn.enabled`; the default render has none of it.
 | `applications.argoproj.io`, the Argo CD namespace | `patch` (added to get, list, watch) | the one JSON patch above | Kubernetes cannot restrict a patch to fields; the agent writes `spec.source`, `spec.sources` and its annotation only. No `update`, `create` or `delete` |
 | `applicationsets.argoproj.io`, the Argo CD namespace | `get` | the parent check | |
 | `customresourcedefinitions.apiextensions.k8s.io` | `get` | the schema check | `resourceNames`: the ClearanceGrant CRD only |
-| `namespaces` | `get`, `patch` | the protected label | `resourceNames`: the chart's `protectedNamespaces`, so it cannot label `kube-system` or a tenant it was not told. `patch` can still change any label of those namespaces; the agent changes only its two |
+| `namespaces` | `get`, `patch` | the protected label | `resourceNames`: the chart's `protectedNamespaces` (with `scope: namespaces`, the default), so it cannot label `kube-system` or a tenant it was not told. With `scope: cluster` there is no `resourceNames`: [every namespace](#cluster-wide-scope-scope-cluster). `patch` can still change any label of those namespaces; the agent changes only its two |
 
 **Blast radius, plainly.** Kubernetes cannot restrict a `patch` to a field, so a compromised agent can change **any field of any Application in
 the Argo CD namespace** (including pointing it at another repository) and **any label or annotation of the named namespaces** (including
-removing `clearance.hangar.io/protected` from them). It cannot touch a namespace not in `protectedNamespaces`, read a Secret, or write a
+removing `clearance.hangar.io/protected` from them). With `scope: namespaces` it cannot touch a namespace not in `protectedNamespaces`; with `scope: cluster` it can reach every namespace ([Cluster-wide scope](#cluster-wide-scope-scope-cluster)). It cannot read a Secret, or write a
 ClearanceGrant except through the grant rules the agent already had. The grant-writer admission policy still names only the agent's service
 account as the writer of grants.
 
-No Secret, no wildcard, no new delete. Discovery needs no rule. Observe-k8s attributes writes by `rules.grantAgentSubject` to grants only:
+No Secret, no wildcard in a rule's resources or verbs (`scope: cluster` drops the namespace `resourceNames` and nothing else), no new delete. Discovery needs no rule. Observe-k8s attributes writes by `rules.grantAgentSubject` to grants only:
 the agent's Application and Namespace writes are not yet a named rule there and will show as unattributed writes until one is added.
 
 #### Left for 10d to 10h, and not done here
