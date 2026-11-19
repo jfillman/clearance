@@ -189,6 +189,9 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "parity" { // the parity suite (parity.go), not the plugin
 		os.Exit(parityMain(os.Args[2:], os.Stdout, os.Stderr))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "doctor" { // the install preflight (doctor.go), not the plugin
+		os.Exit(doctorMain(os.Args[2:], os.Stdout, os.Stderr))
+	}
 	cfg, err := ParseConfig(os.Getenv)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "clearance-cmp:", err)

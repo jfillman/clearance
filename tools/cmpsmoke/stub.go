@@ -55,6 +55,22 @@ func main() {
 			"outage": "allow-and-record", "expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano),
 		})
 	})
+	// What `clearance-cmp doctor` reads: /healthz, and an authenticated read of a change that does not exist (the core
+	// answers 401 without a bearer token and 404 with one).
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":true}`))
+	})
+	mux.HandleFunc("GET /v1/clearances/{id}", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Header.Get("Authorization") != "Bearer smoke-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"error":"a bearer token is required"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"error":"no such change"}`))
+	})
 	port := l.Addr().(*net.TCPAddr).Port
 	if err := os.WriteFile(*portFile, []byte(fmt.Sprint(port)), 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, "cmpsmoke-stub:", err)
