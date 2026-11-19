@@ -9,6 +9,23 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.53.0] - 2026-11-19
+
+**Upgrading from 0.52.x.** No setting is newly required and nothing a 0.52.2 install renders is refused. Three things change
+for an operator:
+- The plugin now keeps a chart cache under `CLEARANCE_CMP_CACHE_DIR` (default bound 512 MiB and 32 entries). If the
+  sidecar's `/tmp` volume has a `sizeLimit`, keep it above `CLEARANCE_CMP_CHART_CACHE_MAX_BYTES` plus room for the
+  renders that run at once (each works in its own directory under `/tmp`), or lower that bound; `0` turns the cache off.
+- Render subprocesses try a private network namespace (`CLEARANCE_CMP_NETNS=try`, the default). Under a container
+  runtime's default seccomp profile this is usually refused and the plugin renders as before, logging one warning per
+  process and `netns=unavailable` on each render. Where the namespace is allowed, a render step can no longer reach
+  anything on the pod's loopback either: a chart or kustomization that fetched from a loopback address now fails, so
+  set `CLEARANCE_CMP_NETNS=off` if you depend on that. Otherwise nothing to do unless you want `require`.
+- After rolling the new image, hard-refresh every gated Application: Argo CD caches a plugin's output by source and
+  parameters, not by the sidecar image.
+
+Run `clearance-cmp doctor` in the new sidecar first (docs/install-argocd-plugin.md).
+
 ### Added
 
 - **`clearance-cmp doctor`: a preflight for the Argo CD plugin's sidecar, and an install guide any Argo CD can follow**
