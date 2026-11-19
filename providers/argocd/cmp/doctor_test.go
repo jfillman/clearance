@@ -475,6 +475,11 @@ func TestDoctorMainFlags(t *testing.T) {
 	if code := doctorMain([]string{"extra"}, &out, &errb); code != 2 {
 		t.Errorf("a stray argument exits %d, want 2", code)
 	}
+	for _, v := range []string{"0", "0s", "-5s"} {
+		if code := doctorMain([]string{"--timeout", v}, &out, &errb); code != 2 {
+			t.Errorf("--timeout %s exits %d, want 2", v, code)
+		}
+	}
 	if code := doctorMain([]string{"--no-such-flag"}, &out, &errb); code != 2 {
 		t.Errorf("a bad flag exits %d, want 2", code)
 	}

@@ -400,8 +400,9 @@ plugin), never an un-gated sync.
    `clearance.hangar.io/grant` annotations: `argocd app manifests shop-prod | grep clearance.hangar.io`.
 4. On the core, the change is registered (`proposer: system:argocd-cmp`, `pr: 0`). A tree nobody cleared **holds** for people:
    the sync waits at `PreSync: clearance awaiting approval`; clear it and the next render carries the grant.
-5. Change the chart revision to a tag that is not on the allow list's repository: the Application must show a
-   `ComparisonError` naming `CLEARANCE_CHART_REPOS`. That is the gate refusing, working.
+5. Point a test Application's `chartRepo` at a repository that is **not** on `CLEARANCE_CHART_REPOS`: it must show a
+   `ComparisonError` naming `CLEARANCE_CHART_REPOS`. That is the allow list refusing, working. (A tag that does not exist
+   in a listed repository is a different failure, `fetch the chart at <tag>`, and does not test the allow list.)
 
 ## Troubleshooting
 

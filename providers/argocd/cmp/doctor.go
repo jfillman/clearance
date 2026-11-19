@@ -88,6 +88,10 @@ func doctorMain(args []string, stdout, stderr io.Writer) int {
 		fs.Usage()
 		return 2
 	}
+	if env.Timeout <= 0 {
+		fmt.Fprintln(stderr, "clearance-cmp doctor: --timeout must be a positive duration")
+		return 2
+	}
 	return RunDoctor(context.Background(), env, stdout)
 }
 
@@ -254,9 +258,12 @@ func errReason(err error) string {
 }
 
 // doctorCore checks that the core answers and accepts the token. The only authenticated call that cannot change
-// anything is a read of a change that does not exist (GET /v1/clearances/{id}): the core authenticates first, so 401
-// is a rejected token and 404 is an accepted one. That read does not show the token's principal is a registered
-// verifier (that is checked when the plugin registers), and the report says so.
+// anything is a read of a change that does not exist (GET /v1/clearances/{id}). The core authenticates every route
+// that is not on its short unauthenticated list in middleware (authn.Middleware, internal/server/server.go) before
+// the handler runs, so a rejected token is a 401 there and a 404 from the handler means the token was accepted. That
+// read cannot show the principal may act on a real change (the handler looks the change up before it checks who is
+// asking), nor that it is a registered verifier: that is checked when the plugin registers a change, and the report
+// says so.
 func doctorCore(ctx context.Context, env DoctorEnv, cfg Config, add func(level, name, msg, fix string)) {
 	const name = "core"
 	if !validCoreURL(cfg.CoreURL) {
@@ -308,7 +315,7 @@ func doctorCore(ctx context.Context, env DoctorEnv, cfg Config, add func(level, 
 			"the token's audience must be the core's CLEARANCE_AUDIENCE (default clearance) and its service account must be one the core can authenticate (TokenReview for the same cluster, or CLEARANCE_FOREIGN_* for another)")
 	case errors.As(err, &ae) && ae.Status == 403:
 		add(levelFail, "core-auth", "the core authenticated the token and refused it (HTTP 403: "+ae.Message+")",
-			"add this pod's service account (<namespace>/<serviceaccount>) to the core's verifiers (CLEARANCE_VERIFIERS)")
+			"the core reads a change only for a registered provider or the verifier that registered it; the plugin needs the verifier path: list this pod's service account (<namespace>/<serviceaccount>) in the core's verifiers (CLEARANCE_VERIFIERS)")
 	case err != nil:
 		add(levelFail, "core-auth", "the authenticated read failed: "+err.Error(), "see the core's log; the core must answer GET /v1/clearances/{id}")
 	default:
