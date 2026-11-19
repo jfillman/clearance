@@ -1802,17 +1802,19 @@ file is refused. Not covered: a
 fetch the plugin makes itself is as wide as the repository the platform listed (a Helm index may name a package URL on
 another host), and a tool that ignores the proxy variables (the namespace below closes that for
 the render steps). The first gap also exists on the plain Argo CD path (the repo-server) for apps not behind the gate;
-the plugin closes it only for gated apps.
+the plugin does not close it for gated apps either: the namespace restricts render traffic only, and `git` and `helm pull` stay outside it.
 
 **Private network namespace.** The proxy settings do not stop a render from reaching loopback: Go clients (Helm,
 Kustomize) never proxy `localhost` or `127.0.0.1`, so a chart or kustomization could still reach Argo CD repo-server
-ports or the cmp-server socket in the same pod. So each `helm template`, `helm dependency build` and `kustomize` command
+ports and any other service on the pod's loopback. So each `helm template`, `helm dependency build` and `kustomize` command
 (every command `argosrc.NetworkOffFor` selects) can be started with `CLONE_NEWUSER|CLONE_NEWNET`, the current uid and
 gid mapped to themselves: the process sees one interface, a loopback that is down, and nothing else, so no address is
 reachable, the pod's own 127.0.0.1 included. The plugin itself keeps the network (it reaches the core and clones the
 allow-listed chart outside the namespace; `git` and `helm pull` are not sandboxed). It needs no capability, which is
 why it is a user namespace and not `CAP_SYS_ADMIN`. The loopback is left down on purpose: Helm and Kustomize need no
-local service.
+local service. A network namespace isolates IP networking and abstract UNIX sockets, not pathname UNIX sockets: the
+cmp-server socket (under `/home/argocd/cmp-server/plugins`) stays reachable by a render running as the same uid, and
+needs its own access control.
 
 `CLEARANCE_CMP_NETNS` sets the policy; the values are exact and anything else stops the plugin at start:
 

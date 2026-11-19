@@ -14,7 +14,8 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 - **The `clearance-cmp` plugin renders in a private network namespace when the kernel allows it, so loopback is
   unreachable** (W-31). Since 0.52.0 the render steps had the proxy settings pointing at a dead port, but Go clients
   never proxy `127.0.0.1`, so a tenant chart or kustomization could still reach services on the repo-server pod's
-  loopback (Argo CD repo-server ports, the cmp-server socket). `helm template`, `helm dependency build` and
+  loopback (Argo CD repo-server ports and the like; a pathname UNIX socket such as the cmp-server's is not covered by a
+  network namespace). `helm template`, `helm dependency build` and
   `kustomize` now start in their own user and network namespace (`CLONE_NEWUSER|CLONE_NEWNET`, the current uid mapped
   to itself; no capability) with a down loopback; chart fetches stay outside it. The new setting
   `CLEARANCE_CMP_NETNS` is `try` (the default), `require` or `off`: `try` isolates when the kernel allows it and

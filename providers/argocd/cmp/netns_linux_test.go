@@ -104,7 +104,7 @@ func TestStartTimeNamespaceRefusal(t *testing.T) {
 		if os.Getuid() == 0 {
 			t.Skip("root may map any id")
 		}
-		real := isolate
+		real := isolateNetwork
 		first := true
 		isolate = func(cmd *exec.Cmd) (bool, error) {
 			if first { // the probe
@@ -131,6 +131,9 @@ func TestStartTimeNamespaceRefusal(t *testing.T) {
 	}
 
 	w := setup(NetnsTry)
+	if NetnsState() != "on" { // the probe (real function) must succeed, so the render's own start is what is refused
+		t.Skip("this machine cannot create a user+network namespace")
+	}
 	if err := run(); err != nil {
 		t.Fatalf("try: %v", err)
 	}
