@@ -9,6 +9,15 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Fixed
+
+- **Slow coverage reads on a busy scope (I-26).** A coverage statement pages each kind (`ORDER BY seq DESC`, 200 at a time) through the
+  `(scope, ts)` index, which holds observations and assessments together, so every page read the whole window's rows, discarded the other
+  kind and sorted: about 3.5 s per read on a scope with 7,660 of each in 24 hours, growing with the square of the window. New partial index
+  `clearance_evidence_obs_page` on `(scope, tool, seq, ts)` (built after start with `CREATE INDEX CONCURRENTLY`, like the Map's) makes each
+  page a backward range scan of its own rows with no Sort. The tool condition of those reads is now a literal (`tool = 'observation'`, not
+  `tool = ANY($n)`, which the planner cannot match to the index), and a coverage read pages 1000 at a time instead of 200.
+
 ### Added
 
 - **Optional TLS for the core and the API (I-43).** `tls.enabled` serves https on a second port (`CLEARANCE_TLS_LISTEN`, `_CERT_FILE`,
