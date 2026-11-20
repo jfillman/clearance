@@ -11,6 +11,12 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ### Added
 
+- **Optional TLS for the core and the API (I-43).** `tls.enabled` serves https on a second port (`CLEARANCE_TLS_LISTEN`, `_CERT_FILE`,
+  `_KEY_FILE`) beside plain http, from cert-manager Certificates the chart creates (its own CA, or an existing issuer); the certificate is
+  re-read when its files change. `CLEARANCE_LISTEN=off` (`tls.plainHttp: false`) drops plain http. Every client (the Go client, the
+  plugin, the wait Job, the agent, observe-aws) takes an optional CA file (`CLEARANCE_CA_FILE`) and verifies the server. Default off; with it
+  off the chart renders as before. docs/tls.md has the rollout order.
+
 - **Argo CD agent chart: `scope: cluster` (W-41).** An install no longer has to list `protectedNamespaces`: `scope: cluster` renders one
   ClusterRole and ClusterRoleBinding (`<name>-scan`, the per-namespace scan Role's rules) instead of a Role per namespace, and with the
   opt-in `get`/`patch` on any Namespace instead of on the named ones. The default (`scope: namespaces`) renders as before. The agent

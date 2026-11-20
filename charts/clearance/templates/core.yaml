@@ -2,6 +2,7 @@
 {{- range .Values.gate.trustedRegistries }}{{ if not (hasSuffix "/" .) }}{{ fail (printf "gate.trustedRegistries: %q must end in \"/\"" .) }}{{ end }}{{ end -}}
 {{- range .Values.gate.protectedEnvironments }}{{ if ne (len (splitList "/" .)) 2 }}{{ fail (printf "gate.protectedEnvironments: %q is not <cluster>/<env>" .) }}{{ end }}{{ end -}}
 {{- if .Values.ledger.enabled }}{{ if not .Values.ledger.existingSecret }}{{ fail "ledger.enabled needs ledger.existingSecret (the log's signing key: make it with `clearance ledger keygen`)" }}{{ end }}{{ if not .Values.ledger.witnessPolicy }}{{ fail "ledger.enabled needs ledger.witnessPolicy (at least one witness: a log nobody countersigns is not a ledger)" }}{{ end }}{{ end -}}
+{{- include "clearance.tlsGuards" . -}}
 {{- if not (has (toString .Values.githubApp.comments) (list "off" "agent-failures")) }}{{ fail "githubApp.comments is off or agent-failures" }}{{ end -}}
 apiVersion: apps/v1
 kind: Deployment
@@ -60,6 +61,9 @@ spec:
           args: ["core"]
           ports:
             - {name: http, containerPort: 8080, protocol: TCP}
+            {{- if include "clearance.tlsOn" . }}
+            - {name: https, containerPort: {{ .Values.tls.port }}, protocol: TCP}
+            {{- end }}
             {{- if .Values.verifyPage.enabled }}
             - {name: verify, containerPort: {{ .Values.verifyPage.port }}, protocol: TCP}
             {{- end }}
@@ -201,16 +205,22 @@ spec:
             {{- end }}
             {{- end }}
             {{- include "clearance.sharedEnv" . | nindent 12 }}
+            {{- if include "clearance.tlsOn" . }}
+            {{- include "clearance.tlsEnv" (dict "ctx" . "component" "core") | trim | nindent 12 }}
+            {{- end }}
             {{- with .Values.core.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- include "clearance.probes" (dict "startupSeconds" (int .Values.core.startupSeconds)) | nindent 10 }}
+          {{- include "clearance.probes" (dict "startupSeconds" (int .Values.core.startupSeconds) "tlsOnly" (eq (include "clearance.plainOff" .) "true")) | nindent 10 }}
           resources:
             {{- toYaml .Values.core.resources | nindent 12 }}
           securityContext:
             {{- include "clearance.securityContext" . | nindent 12 }}
           volumeMounts:
             {{- include "clearance.sharedMounts" . | nindent 12 }}
+            {{- if include "clearance.tlsOn" . }}
+            {{- include "clearance.tlsMount" (dict "ctx" . "component" "core") | trim | nindent 12 }}
+            {{- end }}
             {{- if .Values.githubApp.enabled }}
             - name: github-app
               mountPath: /etc/clearance/github-app
@@ -259,6 +269,9 @@ spec:
             {{- end }}
       volumes:
         {{- include "clearance.sharedVolumes" . | nindent 8 }}
+        {{- if include "clearance.tlsOn" . }}
+        {{- include "clearance.tlsVolume" (dict "ctx" . "component" "core") | trim | nindent 8 }}
+        {{- end }}
         {{- if .Values.githubApp.enabled }}
         - name: github-app
           secret:
@@ -350,4 +363,9 @@ spec:
   selector:
     {{- include "clearance.selector" (dict "ctx" . "component" "core") | nindent 4 }}
   ports:
+    {{- if not (include "clearance.plainOff" .) }}
     - {name: http, port: {{ .Values.service.port }}, targetPort: http, protocol: TCP}
+    {{- end }}
+    {{- if include "clearance.tlsOn" . }}
+    - {name: https, port: {{ .Values.tls.port }}, targetPort: https, protocol: TCP}
+    {{- end }}

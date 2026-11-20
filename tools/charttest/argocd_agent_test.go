@@ -320,3 +320,27 @@ func TestClusterScopeIsRefusedWithAListOrABadValue(t *testing.T) {
 		t.Fatalf("a bad scope rendered: %v\n%s", err, text)
 	}
 }
+
+// I-43: the CA is opt-in. With no tls.caConfigMap and no waitJob.caConfigMap the render has no CA mount, setting or flag;
+// with them the agent reads CLEARANCE_CA_FILE and tells the wait Job's validator which ConfigMap to expect.
+func TestTheAgentChartCAIsOptIn(t *testing.T) {
+	off, err := helmAgent(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{"CLEARANCE_CA_FILE", "clearance-ca", "wait-ca-configmap"} {
+		if strings.Contains(off, s) {
+			t.Errorf("CA off but the render has %q", s)
+		}
+	}
+	on, err := helmAgent(t, "--set", "tls.caConfigMap=clearance-ca", "--set", "waitJob.caConfigMap=clearance-ca")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{"name: CLEARANCE_CA_FILE, value: /etc/clearance-ca/ca.crt", "--wait-ca-configmap=clearance-ca",
+		"mountPath: /etc/clearance-ca, readOnly: true", "items: [{key: ca.crt, path: ca.crt}]"} {
+		if !strings.Contains(on, s) {
+			t.Errorf("CA on but the render lacks %q", s)
+		}
+	}
+}

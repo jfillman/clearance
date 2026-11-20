@@ -130,3 +130,36 @@ func TestIsWaitJobNeedsAPinAndASpec(t *testing.T) {
 		t.Fatal("a host alias where none is pinned is no exemption")
 	}
 }
+
+func TestIsWaitJobWithTheOptionalCAMount(t *testing.T) {
+	pin := testPin
+	pin.CAConfigMap = "clearance-ca"
+	withCA := func(spec map[string]any, _ *ObjectDetail) {
+		pod := podOf(spec)
+		pod["volumes"] = append(items(pod, "volumes"), map[string]any{"name": "clearance-ca",
+			"configMap": map[string]any{"name": "clearance-ca", "defaultMode": float64(420), "items": []any{map[string]any{"key": "ca.crt", "path": "ca.crt"}}}})
+		c := ctrOf(spec)
+		c["volumeMounts"] = append(items(c, "volumeMounts"), map[string]any{"name": "clearance-ca", "mountPath": "/etc/clearance-ca", "readOnly": true})
+	}
+	if !isWaitJob(waitObject(t, withCA), pin) {
+		t.Fatal("the Job with the pinned CA mount must be recognised")
+	}
+	if isWaitJob(waitObject(t, withCA), testPin) {
+		t.Fatal("a CA mount the pin does not name must not be exempt")
+	}
+	if isWaitJob(waitObject(t, nil), pin) {
+		t.Fatal("a pinned CA mount that is missing must not be exempt")
+	}
+	for name, mut := range map[string]func(map[string]any){
+		"another ConfigMap": func(s map[string]any) {
+			items(podOf(s), "volumes")[1].(map[string]any)["configMap"].(map[string]any)["name"] = "other"
+		},
+		"a writable mount": func(s map[string]any) { items(ctrOf(s), "volumeMounts")[1].(map[string]any)["readOnly"] = false },
+		"another path":     func(s map[string]any) { items(ctrOf(s), "volumeMounts")[1].(map[string]any)["mountPath"] = "/etc/ssl" },
+	} {
+		o := waitObject(t, func(spec map[string]any, d *ObjectDetail) { withCA(spec, d); mut(spec) })
+		if isWaitJob(o, pin) {
+			t.Errorf("%s must not be exempt", name)
+		}
+	}
+}

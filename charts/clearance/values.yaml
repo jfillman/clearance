@@ -669,6 +669,35 @@ service:
   type: ClusterIP
   port: 8080
 
+# -- TLS for the core and the api (I-43) ---------------------------------------------------------------------------
+# Callers send a projected service-account token (audience clearance) as a bearer token; over plain http anything that can
+# watch pod traffic can replay it. With tls.enabled the core and the api ALSO serve https on tls.port, from a
+# cert-manager Certificate (renewed files are re-read, no restart), beside plain http on 8080, so callers can move one at
+# a time. Off by default: nothing below renders. Callers verify the server: give each one the CA (CLEARANCE_CA_FILE on the
+# plugin, the wait Job, the agent; see charts/clearance-argocd-agent and docs/tls.md). This chart needs cert-manager only
+# when tls.enabled and tls.certManager.enabled.
+tls:
+  enabled: false
+  port: 8443
+  # true: serve plain http on 8080 too (rollout). false: no plain listener, the Service and the probes use https only.
+  # Refused while web, slack, grc or an HTTPRoute is on (they call over plain http).
+  plainHttp: true
+  certManager:
+    # Create the Certificates. false: use tls.existingSecrets (kubernetes.io/tls Secrets you manage another way).
+    enabled: true
+    # Empty: the chart builds its own namespaced CA (a self-signed Issuer, a CA Certificate and a CA Issuer) and signs with it.
+    # Set: an existing Issuer or ClusterIssuer (kind) signs the two certificates, e.g. a shared cluster CA.
+    issuerRef: {name: "", kind: Issuer}
+    duration: 2160h      # a certificate's life: 90 days
+    renewBefore: 720h
+    caDuration: 87600h   # the chart's own CA: 10 years
+  # Extra DNS names for each certificate (a route's host), besides the Service's four.
+  dnsNames:
+    core: []
+    api: []
+  # With certManager.enabled false: the Secret (tls.crt, tls.key) each server mounts.
+  existingSecrets: {core: "", api: ""}
+
 # The core and the api authenticate in-cluster callers by TokenReview, which needs the system:auth-delegator
 # ClusterRole. Turn off only if you bind it yourself.
 rbac:

@@ -1,0 +1,8 @@
+# Plain http dropped (the last rollout step), signed by an existing cluster issuer.
+database:
+  existingSecret: clearance-db
+tls:
+  enabled: true
+  plainHttp: false
+  certManager:
+    issuerRef: {name: cluster-ca, kind: ClusterIssuer}

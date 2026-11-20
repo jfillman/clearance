@@ -81,6 +81,7 @@ func run() error {
 		apiURL    = fs.String("api-url", env("CLEARANCE_API_URL", ""), "clearance-api (outcomes for the lookups and the detectors)")
 		coreURL   = fs.String("core-url", env("CLEARANCE_CORE_URL", ""), "the core (records)")
 		tokenFile = fs.String("token-file", env("CLEARANCE_TOKEN_FILE", ""), "a bearer token Clearance accepts")
+		caFile    = fs.String("ca-file", env("CLEARANCE_CA_FILE", ""), "a PEM file of extra root certificates for an https core or api (a private in-cluster CA); empty: the system roots")
 		rulesFile = fs.String("rules", env("OBSERVE_RULES", ""), "a rule set bundle (clearance.observe-rules/v1); empty: the built-in default")
 		stage     = fs.String("stage", "", "run one detector stage once and exit: drift (needs the terraform binary and the module checkout) or untraced")
 		showVer   = fs.Bool("version", false, "print the version")
@@ -127,11 +128,15 @@ func run() error {
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	tok := client.FileToken(*tokenFile)
 	cc, err := client.New(client.Options{BaseURL: *coreURL, Token: tok, Provider: collector.ProviderName, Timeout: 10 * time.Second,
-		UserAgent: collector.ProviderName + "/" + version})
+		UserAgent: collector.ProviderName + "/" + version, CAFile: *caFile})
 	if err != nil {
 		return err
 	}
-	ev := &detect.HTTPEvidence{Base: *apiURL, Token: tok}
+	hc, err := client.NewHTTPClient(*caFile, 20*time.Second)
+	if err != nil {
+		return err
+	}
+	ev := &detect.HTTPEvidence{Base: *apiURL, Token: tok, HTTP: hc}
 	// Observed account: the queue, Config, EventBridge, the state bucket. Logging account: the trail bucket and
 	// the CloudTrail describe calls. Both roles are assumed from the pod's projected token.
 	labAWS := &detect.AWS{Region: fc.Region, Creds: detect.EnvCreds}

@@ -1,0 +1,7 @@
+# https to the core and the api, verified against a CA ConfigMap; the wait Job gets the same CA.
+cluster: test-cluster
+apiURL: https://t-clearance-api.clearance.svc:8443
+coreURL: https://t-clearance-core.clearance.svc:8443
+argocd: {projects: ["*"]}
+tls: {caConfigMap: clearance-ca}
+waitJob: {image: "registry.test/wait@sha256:0000000000000000000000000000000000000000000000000000000000000000", caConfigMap: clearance-ca}

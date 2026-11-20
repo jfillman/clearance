@@ -75,7 +75,7 @@ spec:
               {{- include "clearance.selector" (dict "ctx" $ "component" "slack") | nindent 14 }}
         {{- end }}
       ports:
-        - {protocol: TCP, port: 8080}
+        {{- include "clearance.tlsPorts" $ | trim | nindent 8 }}
     {{- end }}
     {{- if and (eq $component "api") $.Values.api.metricsListen $np.api.metricsFrom }}
     # Prometheus scrapes /metrics: the named peers, that port only (api.metricsListen, networkPolicy.api.metricsFrom).
@@ -91,7 +91,7 @@ spec:
             matchLabels:
               {{- include "clearance.selector" (dict "ctx" $ "component" "web") | nindent 14 }}
       ports:
-        - {protocol: TCP, port: 8080}
+        {{- include "clearance.tlsPorts" $ | trim | nindent 8 }}
     {{- end }}
   egress:
     {{- include "clearance.npEgress" $ | nindent 4 }}

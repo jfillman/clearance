@@ -6,6 +6,9 @@ import (
 )
 
 // WaitJobName is what Argo CD's UI and history show for the hook: "clearance-awaiting-approval".
+// WaitCAVolume is the name of the wait Job's optional CA volume and mount.
+const WaitCAVolume = "clearance-ca"
+
 const WaitJobName = "clearance-awaiting-approval"
 
 // WaitJob is the PreSync hook injected while a change is held for people (providers/argocd/wait). It polls the
@@ -39,6 +42,14 @@ func WaitJob(cfg Config, changeID string) (map[string]any, error) {
 		}},
 		"volumes": []any{map[string]any{"name": "clearance-token", "projected": map[string]any{"sources": []any{
 			map[string]any{"serviceAccountToken": map[string]any{"audience": "clearance", "expirationSeconds": 3600, "path": "clearance"}}}}}},
+	}
+	if cfg.WaitCAConfigMap != "" {
+		// The CA the core's certificate chains to (a private in-cluster CA), from a ConfigMap in the destination namespace.
+		// The wait binary reads /etc/clearance-ca/ca.crt when it is there, so no environment variable changes.
+		ctr := pod["containers"].([]any)[0].(map[string]any)
+		ctr["volumeMounts"] = append(ctr["volumeMounts"].([]any), map[string]any{"name": WaitCAVolume, "mountPath": "/etc/clearance-ca", "readOnly": true})
+		pod["volumes"] = append(pod["volumes"].([]any), map[string]any{"name": WaitCAVolume,
+			"configMap": map[string]any{"name": cfg.WaitCAConfigMap, "items": []any{map[string]any{"key": "ca.crt", "path": "ca.crt"}}}})
 	}
 	if ip, hosts, ok := strings.Cut(cfg.WaitHost, "="); ok {
 		var hs []any

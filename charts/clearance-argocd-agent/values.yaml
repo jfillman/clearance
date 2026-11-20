@@ -54,6 +54,17 @@ waitJob:
   image: ""
   url: ""
   hostAlias: ""
+  # The ConfigMap (key ca.crt) the wait Job mounts as its CA for an https core with a private CA; it must exist in every
+  # destination namespace (trust-manager's Bundle target, say). Empty: no mount, the wait Job trusts the system roots. The
+  # admission policy's exemption must carry the same optional volume (apron renders it): set both together.
+  caConfigMap: ""
+
+# TLS to the core and the api (I-43). coreURL and apiURL become https URLs; the agent verifies the server. A private CA
+# (cert-manager's own, or a cluster CA) is a ConfigMap in this namespace with the CA certificate under key ca.crt; name it
+# here and it is mounted and read as CLEARANCE_CA_FILE. Empty: the system roots only (a publicly trusted certificate).
+tls:
+  caConfigMap: ""
+  caKey: ca.crt
 
 grantInterval: 30s
 scanInterval: 1m
