@@ -494,6 +494,7 @@ readinessProbe:
 {{- if .Values.tls.enabled }}
 {{- if and (not .Values.tls.certManager.enabled) (not (and .Values.tls.existingSecrets.core (or .Values.tls.existingSecrets.api (not .Values.api.enabled)))) }}{{ fail "tls.enabled needs tls.certManager.enabled (cert-manager makes the certificates) or tls.existingSecrets.core and .api (kubernetes.io/tls Secrets you manage)" }}{{ end }}
 {{- if eq (int .Values.tls.port) 8080 }}{{ fail "tls.port must differ from the plain port 8080" }}{{ end }}
+{{- if and (not (include "clearance.plainOff" .)) (eq (int .Values.tls.port) (int .Values.service.port)) }}{{ fail "tls.port must differ from service.port while plain http is on (two Service ports cannot share a number)" }}{{ end }}
 {{- if not .Values.tls.plainHttp }}
 {{- range $c := list "web" "slack" "grc" }}{{ if index $.Values $c "enabled" }}{{ fail (printf "tls.plainHttp false is not supported with %s.enabled: that component calls the core and the api over plain http and has no CA setting yet" $c) }}{{ end }}{{ end }}
 {{- range $c := list "core" "api" "web" "slack" }}{{ if (index $.Values.httpRoutes $c).enabled }}{{ fail (printf "tls.plainHttp false is not supported with httpRoutes.%s.enabled: the route's backend is the plain port (a BackendTLSPolicy is not rendered)" $c) }}{{ end }}{{ end }}

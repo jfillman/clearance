@@ -106,12 +106,31 @@ func TestTLSOnlyUsesAnExistingIssuerAndHTTPSProbes(t *testing.T) {
 }
 
 func TestTLSIsOpenOnTheNetworkPolicyToo(t *testing.T) {
-	text, err := helm(t, "-f", valuesFile("full-values.yaml"), "--set", "tls.enabled=true")
-	if err != nil {
-		t.Fatal(err, text)
-	}
-	if !strings.Contains(text, "port: 8443") {
-		t.Error("the core's and the api's ingress must allow the https port")
+	objs := render(t, "-f", valuesFile("full-values.yaml"), "--set", "tls.enabled=true")
+	for _, comp := range []string{"core", "api"} {
+		np := find(objs, "NetworkPolicy", "t-clearance-"+comp)
+		if np == nil {
+			t.Fatalf("no NetworkPolicy for %s", comp)
+		}
+		ingress, _ := get(np, "spec", "ingress").([]any)
+		var plain, https bool
+		for _, rule := range ingress {
+			ports, _ := get(rule, "ports").([]any)
+			for _, p := range ports {
+				switch get(p, "port") {
+				case 8080:
+					plain = true
+				case 8443:
+					https = true
+				}
+			}
+		}
+		if !https {
+			t.Errorf("the %s NetworkPolicy's ingress does not allow the https port 8443: %v", comp, ingress)
+		}
+		if !plain {
+			t.Errorf("the %s NetworkPolicy's ingress dropped the plain port 8080 while plain http is still on", comp)
+		}
 	}
 }
 
@@ -123,6 +142,7 @@ func TestTLSRefusals(t *testing.T) {
 	}{
 		"no certificate source":     {[]string{"--set", "tls.certManager.enabled=false"}, "tls.existingSecrets"},
 		"port clash":                {[]string{"--set", "tls.port=8080"}, "must differ"},
+		"service port clash":        {[]string{"--set", "service.port=8443"}, "must differ from service.port"},
 		"plain off with the web UI": {[]string{"--set", "tls.plainHttp=false", "--set", "web.enabled=true", "--set", "web.publicURL=https://c", "--set", "web.issuer=https://i", "--set", "web.clientSecret.existingSecret=s"}, "tls.plainHttp false is not supported with web"},
 		"plain off with a route":    {[]string{"--set", "tls.plainHttp=false", "--set", "httpRoutes.core.enabled=true", "--set", "httpRoutes.core.parentRefs[0].name=gw"}, "tls.plainHttp false is not supported with httpRoutes.core"},
 	} {
@@ -132,5 +152,18 @@ func TestTLSRefusals(t *testing.T) {
 				t.Fatalf("want a refusal mentioning %q; got err=%v %q", tc.want, err, out)
 			}
 		})
+	}
+}
+
+// A wildcard (or any other) extra DNS name is quoted in the Certificate, so the manifest parses.
+func TestTLSExtraDNSNamesAreQuoted(t *testing.T) {
+	objs := render(t, "-f", valuesFile("full-values.yaml"), "--set", "tls.enabled=true", "--set", "tls.dnsNames.core[0]=*.example.com")
+	cert := find(objs, "Certificate", "t-clearance-core-tls")
+	if cert == nil {
+		t.Fatal("no core Certificate")
+	}
+	names, _ := get(cert, "spec", "dnsNames").([]any)
+	if len(names) == 0 || names[len(names)-1] != "*.example.com" {
+		t.Fatalf("dnsNames = %v", names)
 	}
 }

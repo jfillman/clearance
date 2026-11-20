@@ -815,6 +815,12 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 			stopLoops()
 			<-loopsDone
 			_ = hs.Close()
+			if ts != nil {
+				_ = ts.Close()
+			}
+			if tlsLn != nil {
+				_ = tlsLn.Close()
+			}
 			return fmt.Errorf("core: verify listen %s: %w", cfg.VerifyListen, err)
 		}
 		// The statement index is read in the background, after the core serves, page by page; the page answers 503 until it is warm.

@@ -341,6 +341,14 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 	if first == nil {
 		first = tlsLn
 	}
+	closeMain := func() { // a side listener failed: release every main listener that is open (either may be absent)
+		if ln != nil {
+			_ = ln.Close()
+		}
+		if tlsLn != nil {
+			_ = tlsLn.Close()
+		}
+	}
 	for _, side := range []struct {
 		name string
 		srv  func() (*http.Server, error)
@@ -352,12 +360,12 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 		}
 		ss, err := side.srv()
 		if err != nil {
-			ln.Close()
+			closeMain()
 			return fmt.Errorf("api: %s listener: %w", side.name, err)
 		}
 		sl, err := net.Listen("tcp", side.addr)
 		if err != nil {
-			ln.Close()
+			closeMain()
 			return fmt.Errorf("api: %s listener %s: %w", side.name, side.addr, err)
 		}
 		log.Info("clearance api: opt-in listener", "kind", side.name, "addr", sl.Addr().String())

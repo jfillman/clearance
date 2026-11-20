@@ -134,14 +134,14 @@ func New(opt Options) (*Client, error) {
 }
 
 // NewHTTPClient is a plain http.Client for callers that speak to Clearance without the Client (a feed reader): the system roots
-// plus caFile, no proxy, no redirects (a bearer token never follows one). caFile "": the system roots only.
+// plus caFile, the environment's proxy settings (HTTP_PROXY, HTTPS_PROXY, NO_PROXY, as these readers always had), no redirects (a bearer
+// token never follows one). caFile "": the system roots only.
 func NewHTTPClient(caFile string, timeout time.Duration) (*http.Client, error) {
 	tc, err := tlsutil.ClientConfig(caFile)
 	if err != nil {
 		return nil, fmt.Errorf("clearance client: CA file: %w", err)
 	}
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	tr.Proxy = nil
+	tr := http.DefaultTransport.(*http.Transport).Clone() // keeps ProxyFromEnvironment
 	tr.TLSClientConfig = tc
 	return &http.Client{Transport: tr, Timeout: timeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, nil

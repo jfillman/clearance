@@ -61,7 +61,7 @@ spec:
     - {{ $svc }}.{{ $.Release.Namespace }}.svc
     - {{ $svc }}.{{ $.Release.Namespace }}.svc.cluster.local
     {{- range (index $.Values.tls.dnsNames $component) }}
-    - {{ . }}
+    - {{ . | quote }}
     {{- end }}
   issuerRef:
     name: {{ include "clearance.tlsIssuerName" $ }}

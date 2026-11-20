@@ -61,3 +61,18 @@ func TestClientVerifiesAnHTTPSCoreAgainstTheCAFile(t *testing.T) {
 func pemOf(der []byte) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
+
+// The feed readers keep the environment's proxy policy (HTTP_PROXY, HTTPS_PROXY, NO_PROXY) and still refuse redirects.
+func TestNewHTTPClientKeepsTheProxyPolicyAndRefusesRedirects(t *testing.T) {
+	hc, err := NewHTTPClient("", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr, ok := hc.Transport.(*http.Transport)
+	if !ok || tr.Proxy == nil {
+		t.Fatalf("the transport dropped the proxy policy: %#v", hc.Transport)
+	}
+	if hc.CheckRedirect == nil || hc.CheckRedirect(nil, nil) != http.ErrUseLastResponse {
+		t.Fatal("a redirect would be followed")
+	}
+}

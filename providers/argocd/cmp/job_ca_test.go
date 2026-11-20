@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -33,7 +34,22 @@ func TestParseConfigCASettings(t *testing.T) {
 		t.Fatalf("%+v", c)
 	}
 	_ = err // other required settings are absent: only the two fields are under test
-	if _, err := ParseConfig(get(map[string]string{"CLEARANCE_WAIT_CA_CONFIGMAP": "Bad Name"})); err == nil {
-		t.Fatal("a bad ConfigMap name must be refused")
+	// otherwise valid settings: only the ConfigMap name decides
+	valid := func(name string) map[string]string {
+		return map[string]string{"ARGOCD_APP_NAME": "gate-api-prod", "ARGOCD_APP_NAMESPACE": "app-gate-api-prod", "ARGOCD_APP_REVISION": strings.Repeat("a", 40),
+			"ARGOCD_APP_SOURCE_REPO_URL": "git@github.com:Jfillman/gitops-gate-api.git", "PARAM_APP": "gate-api", "PARAM_ENV": "prod", "PARAM_CLUSTER": "hangar-prod",
+			"PARAM_CHARTREPO": "https://github.com/jfillman/airframe.git", "PARAM_CHARTREVISION": "v0.3.168", "PARAM_CHARTPATH": "charts/airframe-application",
+			"CLEARANCE_CHART_REPOS": "https://github.com/jfillman/airframe.git", "CLEARANCE_URL": "http://clearance.test", "CLEARANCE_WAIT_CA_CONFIGMAP": name}
+	}
+	for _, ok := range []string{"clearance-ca", "clearance.ca", "a.b-c.d"} {
+		if _, err := ParseConfig(get(valid(ok))); err != nil {
+			t.Fatalf("%q must be accepted: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"Bad Name", "-x", "x.", "a..b", strings.Repeat("a", 254)} {
+		_, err := ParseConfig(get(valid(bad)))
+		if err == nil || !strings.Contains(err.Error(), "CLEARANCE_WAIT_CA_CONFIGMAP") {
+			t.Fatalf("%q: want the ConfigMap-name error, got %v", bad, err)
+		}
 	}
 }

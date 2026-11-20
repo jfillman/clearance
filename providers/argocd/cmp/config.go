@@ -65,11 +65,13 @@ type Config struct {
 }
 
 var (
-	sha40   = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	nameRx  = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
-	revRx   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/+-]{0,200}$`)
-	hostRx  = regexp.MustCompile(`^[0-9a-fA-F:.]+=[A-Za-z0-9.,-]+$`)
-	imageRx = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,300}$`)
+	sha40 = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	// subdomainRx is a Kubernetes DNS subdomain (a ConfigMap name: dots allowed, up to 253 characters).
+	subdomainRx = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
+	nameRx      = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+	revRx       = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/+-]{0,200}$`)
+	hostRx      = regexp.MustCompile(`^[0-9a-fA-F:.]+=[A-Za-z0-9.,-]+$`)
+	imageRx     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,300}$`)
 )
 
 // ParseConfig reads the environment (get returns "" for unset).
@@ -202,7 +204,7 @@ func (c Config) validate() error {
 	if c.WaitHost != "" && !hostRx.MatchString(c.WaitHost) {
 		errs = append(errs, fmt.Errorf("CLEARANCE_WAIT_HOST_ALIAS %q is ip=host[,host]", c.WaitHost))
 	}
-	if c.WaitCAConfigMap != "" && !nameRx.MatchString(c.WaitCAConfigMap) {
+	if c.WaitCAConfigMap != "" && (len(c.WaitCAConfigMap) > 253 || !subdomainRx.MatchString(c.WaitCAConfigMap)) {
 		errs = append(errs, fmt.Errorf("CLEARANCE_WAIT_CA_CONFIGMAP %q is not a ConfigMap name", c.WaitCAConfigMap))
 	}
 	if c.WaitImage != "" && !imageRx.MatchString(c.WaitImage) {
