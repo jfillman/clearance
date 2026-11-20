@@ -1,0 +1,73 @@
+{{- if .Values.tls.enabled }}
+{{- if .Values.tls.certManager.enabled }}
+{{- /* I-43: the core's and the api's serving certificates, from cert-manager; no Secret is made by hand. With
+       tls.certManager.issuerRef.name empty the chart builds its own namespaced CA (self-signed Issuer -> CA Certificate -> CA Issuer),
+       so the install needs nothing but cert-manager. With it set, the named (Cluster)Issuer signs both certificates. */}}
+{{- $cm := .Values.tls.certManager }}
+{{- if not $cm.issuerRef.name }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "clearance.fullname" . }}-selfsigned
+  labels:
+    {{- include "clearance.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "clearance.fullname" . }}-ca
+  labels:
+    {{- include "clearance.labels" . | nindent 4 }}
+spec:
+  isCA: true
+  commonName: {{ include "clearance.fullname" . }}-ca
+  secretName: {{ include "clearance.fullname" . }}-ca
+  duration: {{ $cm.caDuration }}
+  privateKey: {algorithm: ECDSA, size: 256, rotationPolicy: Always}
+  issuerRef: {name: {{ include "clearance.fullname" . }}-selfsigned, kind: Issuer, group: cert-manager.io}
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "clearance.fullname" . }}-ca
+  labels:
+    {{- include "clearance.labels" . | nindent 4 }}
+spec:
+  ca:
+    secretName: {{ include "clearance.fullname" . }}-ca
+{{- end }}
+{{- range $component := list "core" "api" }}
+{{- if or (eq $component "core") $.Values.api.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "clearance.tlsSecret" (dict "ctx" $ "component" $component) }}
+  labels:
+    {{- include "clearance.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+spec:
+  secretName: {{ include "clearance.tlsSecret" (dict "ctx" $ "component" $component) }}
+  duration: {{ $cm.duration }}
+  renewBefore: {{ $cm.renewBefore }}
+  usages: [digital signature, key encipherment, server auth]
+  privateKey: {algorithm: ECDSA, size: 256, rotationPolicy: Always}
+  {{- $svc := include "clearance.apiName" $ }}{{ if eq $component "core" }}{{ $svc = include "clearance.coreName" $ }}{{ end }}
+  dnsNames:
+    - {{ $svc }}
+    - {{ $svc }}.{{ $.Release.Namespace }}
+    - {{ $svc }}.{{ $.Release.Namespace }}.svc
+    - {{ $svc }}.{{ $.Release.Namespace }}.svc.cluster.local
+    {{- range (index $.Values.tls.dnsNames $component) }}
+    - {{ . }}
+    {{- end }}
+  issuerRef:
+    name: {{ include "clearance.tlsIssuerName" $ }}
+    kind: {{ if $cm.issuerRef.name }}{{ $cm.issuerRef.kind | default "Issuer" }}{{ else }}Issuer{{ end }}
+    group: cert-manager.io
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

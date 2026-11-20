@@ -174,6 +174,7 @@ All configuration comes from the environment. An empty variable counts as unset.
 |---|---|
 | `CLEARANCE_DSN` | The Postgres DSN. Required unless `--memory`. |
 | `CLEARANCE_LISTEN` | Listen address (default `:8080`). |
+| `CLEARANCE_TLS_LISTEN`, `CLEARANCE_TLS_CERT_FILE`, `CLEARANCE_TLS_KEY_FILE` | An optional https listener beside the plain one (all three or none); the certificate is re-read when its files change. `CLEARANCE_LISTEN=off` drops plain http and needs it. [tls.md](tls.md). |
 | `CLEARANCE_PROVIDERS` | The registered providers (above). |
 | `CLEARANCE_BUNDLES` | Comma-separated [policy bundle](#policy-bundles) files. Default none: the core rules only. (`CLEARANCE_PACKS` is gone; setting it is an error.) |
 | `CLEARANCE_BUNDLE_SOURCES` | JSON object, source name to `{"url": "http(s)://...", "tokenFile": "..."}` or `{"file": "..."}`: where each source a bundle names is read at start. |

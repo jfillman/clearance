@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/jfillman/clearance/internal/tlsutil"
 	"io"
 	"net"
 	"net/http"
@@ -52,6 +53,10 @@ type Options struct {
 	// otherwise ErrBadResponse). Off by default: a core newer than its client fails closed until the client is
 	// bumped; turn it on only for a rolling upgrade.
 	AllowUnknownFields bool
+	// CAFile is a PEM file of extra root certificates (a private in-cluster CA) trusted besides the system roots, for
+	// an https BaseURL. "": the system roots only. The server is always verified; there is no skip. Ignored when
+	// HTTPClient is set (that client carries its own trust).
+	CAFile string
 	// HTTPClient is the transport. Default: a client of its own with keep-alives, no proxy from the environment
 	// and no redirects (a bearer token never follows one).
 	HTTPClient *http.Client
@@ -116,11 +121,30 @@ func New(opt Options) (*Client, error) {
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.Proxy = nil
 		tr.MaxIdleConnsPerHost = 32
+		tc, err := tlsutil.ClientConfig(opt.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("clearance client: CAFile: %w", err)
+		}
+		tr.TLSClientConfig = tc
 		hc = &http.Client{Transport: tr,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	return &Client{base: strings.TrimRight(u.String(), "/"), opt: opt, http: hc,
 		breaker: &breaker{threshold: opt.BreakerThreshold, cooldown: opt.BreakerCooldown, now: opt.Clock}}, nil
+}
+
+// NewHTTPClient is a plain http.Client for callers that speak to Clearance without the Client (a feed reader): the system roots
+// plus caFile, no proxy, no redirects (a bearer token never follows one). caFile "": the system roots only.
+func NewHTTPClient(caFile string, timeout time.Duration) (*http.Client, error) {
+	tc, err := tlsutil.ClientConfig(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("clearance client: CA file: %w", err)
+	}
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.Proxy = nil
+	tr.TLSClientConfig = tc
+	return &http.Client{Transport: tr, Timeout: timeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, nil
 }
 
 // BreakerState is the breaker's state now.

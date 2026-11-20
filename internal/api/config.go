@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/jfillman/clearance/internal/tlsutil"
 	"io"
 	"log/slog"
 	"net"
@@ -80,10 +81,12 @@ type Config struct {
 	Policy                         bundles.Config
 	Vocabulary                     *vocab.Vocabulary // nil: the vocabulary already in force (vocab.Get; tests)
 	GatewayURL, CoreURL            string
-	BackstageURL                   string
-	BackstageTokenFile             string
-	Auth                           authn.Authenticator
-	Attest                         *AttestTrust // nil: nothing configured, so nothing is verified here
+	// TLS is the optional https listener beside Listen (CLEARANCE_TLS_LISTEN, _CERT_FILE, _KEY_FILE); Listen "off" drops plain http.
+	TLS                tlsutil.Listener
+	BackstageURL       string
+	BackstageTokenFile string
+	Auth               authn.Authenticator
+	Attest             *AttestTrust // nil: nothing configured, so nothing is verified here
 }
 
 func list(v string) []string {
@@ -123,6 +126,9 @@ func FromEnv(getenv func(string) string) (Config, error) {
 			return cfg, errors.New("PORT is a port number")
 		}
 		cfg.Listen = ":" + strconv.Itoa(port)
+	}
+	if cfg.TLS, err = tlsutil.ListenerFromEnv(getenv, cfg.Listen); err != nil {
+		return cfg, err
 	}
 	secs, err := strconv.ParseFloat(get("CLEARANCE_API_DEFINITIONS_INTERVAL", "30"), 64)
 	if err != nil || secs < 1 || secs > 3600 {
@@ -318,9 +324,22 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 	if err != nil {
 		return err
 	}
-	ln, err := net.Listen("tcp", cfg.Listen)
+	tlsLn, err := cfg.TLS.Listen()
 	if err != nil {
-		return fmt.Errorf("api: listen %s: %w", cfg.Listen, err)
+		return fmt.Errorf("api: %w", err)
+	}
+	var ln net.Listener
+	if cfg.Listen != tlsutil.Off {
+		if ln, err = net.Listen("tcp", cfg.Listen); err != nil {
+			if tlsLn != nil {
+				_ = tlsLn.Close()
+			}
+			return fmt.Errorf("api: listen %s: %w", cfg.Listen, err)
+		}
+	}
+	first := ln
+	if first == nil {
+		first = tlsLn
 	}
 	for _, side := range []struct {
 		name string
@@ -356,13 +375,21 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 	watched := make(chan struct{})
 	go func() { bundles.Watch(bg, cfg.Policy, eng, log); close(watched) }()
 	defer func() { <-watched }()
-	serveErr := make(chan error, 1)
-	go func() { serveErr <- hs.Serve(ln) }()
-	log.Info("clearance api serving", "addr", ln.Addr().String(), "agents", len(defs.Names()),
+	serveErr := make(chan error, 2)
+	if ln != nil {
+		go func() { serveErr <- hs.Serve(ln) }()
+	}
+	var ts *http.Server
+	if tlsLn != nil {
+		ts = srv.HTTPServer(cfg.TLS.Addr)
+		go func() { serveErr <- ts.Serve(tlsLn) }()
+		log.Info("clearance api serving https", "addr", tlsLn.Addr().String())
+	}
+	log.Info("clearance api serving", "addr", first.Addr().String(), "agents", len(defs.Names()),
 		"auditors", cfg.Auditors, "notifiers", cfg.Notifiers, "observation_readers", cfg.ObservationReaders, "delegates", cfg.Delegates, "feed_readers", len(cfg.FeedReaders),
 		"catalog", cfg.BackstageURL != "", "policy", eng.Policy().Bundle)
 	if ready != nil {
-		ready(ln.Addr().String())
+		ready(first.Addr().String())
 	}
 	var runErr error
 	select {
@@ -374,6 +401,9 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 	defer cancel()
 	if err := hs.Shutdown(sctx); err != nil && runErr == nil {
 		runErr = err
+	}
+	if ts != nil {
+		_ = ts.Shutdown(sctx)
 	}
 	stop()
 	<-done

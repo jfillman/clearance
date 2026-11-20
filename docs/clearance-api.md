@@ -499,6 +499,7 @@ A change's reads carry `source` (`{authors, mergers, promoter}`) when the verifi
 | `CLEARANCE_GATEWAY_URL` | none | where the runtime's writes go, named in `/v1/contract` as `gateway` |
 | `BACKSTAGE_URL`, `BACKSTAGE_TOKEN_FILE` | none, `/var/run/clearance/backstage-token` | a person's groups (memberOf) and the apps they own (Components by `spec.owner`, `backstage.Ownership`) |
 | `CLEARANCE_LISTEN` | `:$PORT` | listen address; `PORT` defaults to 8080 |
+| `CLEARANCE_TLS_LISTEN`, `CLEARANCE_TLS_CERT_FILE`, `CLEARANCE_TLS_KEY_FILE` | unset | an optional https listener beside the plain one (all three or none); `CLEARANCE_LISTEN=off` drops plain http. [tls.md](tls.md) |
 
 plus the authenticator's (`authn.EnvVars`: `CLEARANCE_AUDIENCE`, `CLEARANCE_OIDC_*`, `CLEARANCE_FOREIGN_*`,
 `CLEARANCE_GITHUB_OIDC_*`). The chart sets each (`api.*` values; `tools/charttest` fails when one is missing).

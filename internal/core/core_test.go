@@ -199,3 +199,39 @@ func TestFreshAuthConfig(t *testing.T) {
 		}
 	}
 }
+
+func TestTheTLSListenerSettings(t *testing.T) {
+	base := map[string]string{"CLEARANCE_DSN": "postgres://x", "CLEARANCE_BUNDLES": "/b/hangar.json", "AGENT_LOGINS": vocabtest.AgentLogin}
+	with := func(kv map[string]string) map[string]string {
+		m := map[string]string{}
+		for k, v := range base {
+			m[k] = v
+		}
+		for k, v := range kv {
+			m[k] = v
+		}
+		return m
+	}
+	cfg, err := FromEnv(env(base))
+	if err != nil || cfg.TLS.Addr != "" || cfg.Listen != ":8080" {
+		t.Fatalf("off by default: %+v %v", cfg.TLS, err)
+	}
+	tls := map[string]string{"CLEARANCE_TLS_LISTEN": ":8443", "CLEARANCE_TLS_CERT_FILE": "/etc/tls/tls.crt", "CLEARANCE_TLS_KEY_FILE": "/etc/tls/tls.key"}
+	cfg, err = FromEnv(env(with(tls)))
+	if err != nil || cfg.TLS.Addr != ":8443" || cfg.TLS.CertFile != "/etc/tls/tls.crt" || cfg.Listen != ":8080" {
+		t.Fatalf("on: %+v %v", cfg.TLS, err)
+	}
+	// plain http dropped, the last step of the rollout
+	if cfg, err = FromEnv(env(with(map[string]string{"CLEARANCE_TLS_LISTEN": ":8443", "CLEARANCE_TLS_CERT_FILE": "/c", "CLEARANCE_TLS_KEY_FILE": "/k", "CLEARANCE_LISTEN": "off"}))); err != nil || cfg.Listen != "off" {
+		t.Fatalf("plain off: %v", err)
+	}
+	for _, bad := range []map[string]string{
+		{"CLEARANCE_TLS_LISTEN": ":8443"},
+		{"CLEARANCE_TLS_CERT_FILE": "/c", "CLEARANCE_TLS_KEY_FILE": "/k"},
+		{"CLEARANCE_LISTEN": "off"},
+	} {
+		if _, err := FromEnv(env(with(bad))); err == nil {
+			t.Errorf("accepted %v", bad)
+		}
+	}
+}

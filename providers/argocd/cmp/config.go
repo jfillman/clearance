@@ -51,15 +51,17 @@ type Config struct {
 	CacheTTL     time.Duration
 	// The caches of the hardening track (docs/gate.md, "Caches"): the chart fetch cache (fetchcache.go; a zero
 	// ChartCache is off) and the pre-render cache (renderCache.go; a zero RenderCacheTTL is off).
-	ChartCache     ChartCache
-	RenderCacheTTL time.Duration
-	chartLooked    bool   // Generate already asked the remote for chartCommit (it may have got no answer)
-	chartCommit    string // what the chart's tag resolved to this run, when Generate asked (unexported: never a parameter)
-	WaitImage      string
-	WaitHost       string // "ip=host1,host2": a hostAlias for the wait Job's pod
-	WaitTimeout    time.Duration
-	RegisterWait   time.Duration // how long one call to the core may take
-	Netns          string        // CLEARANCE_CMP_NETNS: try (default), require or off (netns.go)
+	ChartCache      ChartCache
+	RenderCacheTTL  time.Duration
+	chartLooked     bool   // Generate already asked the remote for chartCommit (it may have got no answer)
+	chartCommit     string // what the chart's tag resolved to this run, when Generate asked (unexported: never a parameter)
+	WaitImage       string
+	WaitHost        string // "ip=host1,host2": a hostAlias for the wait Job's pod
+	CAFile          string // CLEARANCE_CA_FILE: extra root certificates (PEM) for an https CLEARANCE_URL
+	WaitCAConfigMap string // CLEARANCE_WAIT_CA_CONFIGMAP: a ConfigMap (key ca.crt) in each destination namespace the wait Job mounts as its CA; "" none
+	WaitTimeout     time.Duration
+	RegisterWait    time.Duration // how long one call to the core may take
+	Netns           string        // CLEARANCE_CMP_NETNS: try (default), require or off (netns.go)
 }
 
 var (
@@ -84,6 +86,7 @@ func ParseConfig(get func(string) string) (Config, error) {
 		CacheDir:     orDefault(get("CLEARANCE_CMP_CACHE_DIR"), "/tmp/clearance-cmp-cache"),
 		AllowedRepos: ParseRepoList(get("CLEARANCE_CHART_REPOS")),
 		WaitImage:    get("CLEARANCE_WAIT_IMAGE"), WaitHost: get("CLEARANCE_WAIT_HOST_ALIAS"),
+		CAFile: get("CLEARANCE_CA_FILE"), WaitCAConfigMap: get("CLEARANCE_WAIT_CA_CONFIGMAP"),
 	}
 	for _, f := range strings.Split(p("valueFiles"), ",") {
 		if f = strings.TrimSpace(f); f != "" {
@@ -198,6 +201,9 @@ func (c Config) validate() error {
 	}
 	if c.WaitHost != "" && !hostRx.MatchString(c.WaitHost) {
 		errs = append(errs, fmt.Errorf("CLEARANCE_WAIT_HOST_ALIAS %q is ip=host[,host]", c.WaitHost))
+	}
+	if c.WaitCAConfigMap != "" && !nameRx.MatchString(c.WaitCAConfigMap) {
+		errs = append(errs, fmt.Errorf("CLEARANCE_WAIT_CA_CONFIGMAP %q is not a ConfigMap name", c.WaitCAConfigMap))
 	}
 	if c.WaitImage != "" && !imageRx.MatchString(c.WaitImage) {
 		errs = append(errs, fmt.Errorf("CLEARANCE_WAIT_IMAGE %q is not an image reference", c.WaitImage))
