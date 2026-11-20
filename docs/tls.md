@@ -1,0 +1,57 @@
+# TLS between Clearance and its callers
+
+Callers of the core and clearance-api send a projected service-account token (audience `clearance`, one hour) as a bearer
+token. Over plain http anything that can watch pod traffic can replay it for up to an hour. The core and the API can serve
+https beside plain http, from cert-manager certificates, and the callers can verify them. All of it is **off by default**:
+with `tls.enabled` false the chart renders exactly what it did before.
+
+## Server side
+
+| Setting | Environment | Meaning |
+|---|---|---|
+| `tls.enabled` | `CLEARANCE_TLS_LISTEN` (`:8443`), `CLEARANCE_TLS_CERT_FILE`, `CLEARANCE_TLS_KEY_FILE` | a second, https listener beside the plain one. All three or none. |
+| `tls.plainHttp: false` | `CLEARANCE_LISTEN=off` | no plain listener (needs the https one). The Service and the probes use https only. |
+
+The certificate and key are read from the files again when they change (checked at most every 10 seconds, on a handshake), so a
+cert-manager renewal needs no restart. A bad or half-written pair keeps the last good certificate; an unreadable pair at start stops
+the start. TLS 1.2 or later.
+
+The chart creates the certificates (`tls.certManager.enabled`, default on when TLS is on): either its own namespaced CA (a
+self-signed Issuer, a CA Certificate and a CA Issuer; the install needs nothing but cert-manager) or, with
+`tls.certManager.issuerRef`, an existing Issuer or ClusterIssuer such as a shared cluster CA. No Secret is made by hand. With
+`tls.certManager.enabled: false`, name your own `kubernetes.io/tls` Secrets in `tls.existingSecrets`.
+
+## Client side
+
+Every client takes an optional CA file (`CLEARANCE_CA_FILE`, or `--ca-file`): extra roots trusted **besides** the system roots,
+for a private CA. The server is always verified; there is no skip setting. A missing or empty CA file stops the client at start.
+
+| Client | Setting |
+|---|---|
+| Argo CD plugin (CMP) sidecar | `CLEARANCE_URL=https://...`, `CLEARANCE_CA_FILE` |
+| wait Job (PreSync) | the plugin injects it; `CLEARANCE_WAIT_CA_CONFIGMAP` on the plugin names the ConfigMap it mounts at `/etc/clearance-ca/ca.crt` |
+| agent (`charts/clearance-argocd-agent`) | `apiURL`, `coreURL` as https, `tls.caConfigMap`, `waitJob.caConfigMap` |
+| observe-aws, Go `client` package | `CLEARANCE_CA_FILE`, `client.Options.CAFile` |
+
+The CA must reach each client's namespace as a ConfigMap (a public certificate, never the key). With the chart's own CA that is the
+`ca.crt` key of the `<release>-<core|api>-tls` Secret in the release namespace: copy the certificate (not the key) to a ConfigMap,
+or let trust-manager publish it. With a shared cluster CA, trust-manager's `Bundle` is the cleaner way (one source, a ConfigMap in
+every namespace that asks for it); a Bundle can read its source only from the trust namespace.
+
+## Rollout order (no gate is interrupted)
+
+1. Turn TLS on beside plain http (`tls.enabled: true`). The core restarts once (Recreate). Plain callers are untouched.
+2. Distribute the CA ConfigMap to the clients' namespaces.
+3. Move clients one at a time: the agent, the plugin sidecar, then the wait Job's pin and the admission policy's matching optional
+   volume. Each moves its URL to `https://...:8443` and gains its CA.
+4. When no client is on plain http, set `tls.plainHttp: false`. Not supported yet while the web UI, clearance-slack, clearance-grc or
+   an HTTPRoute is enabled (they call over plain http and have no CA setting): the chart refuses it.
+
+Rollback: set `tls.plainHttp: true` (and the clients' URLs back to http); then `tls.enabled: false`.
+
+## Known limits
+
+- The admission policy's wait-Job exemption (rendered from `providers/argocd/crd/admission.yaml`) must be extended to allow the
+  optional CA volume and mount before `CLEARANCE_WAIT_CA_CONFIGMAP` is used; the agent's validator already knows it
+  (`WaitPin.CAConfigMap`).
+- The web UI, clearance-slack and clearance-grc still call the core and the API over plain http.

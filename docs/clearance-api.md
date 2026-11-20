@@ -263,13 +263,14 @@ in the window), `ScopeCoverage` over the declared scopes' observations and asses
 (`MaxConcurrentMapReads`): another waits for its turn within its own request's deadline, and the other endpoints keep a connection.
 A record is TOASTed (about 2 KB compressed), so what a statement costs is how many records it has to fetch and decompress. Each therefore reads
 only its own records from a partial index: `clearance_evidence_gate` (the gate records by `ts`), `clearance_evidence_obs_ts` (observations and
-assessments by scope and `ts`), `clearance_evidence_health` (health records by scope and `seq`) and, for the core's flips, `clearance_evidence_health_core`
+assessments by scope and `ts`), `clearance_evidence_obs_page` (the coverage statement's pages: observations, assessments, resolutions, verifications and audit gaps by scope, kind and `seq`,
+with `ts` in the index tuple, so each page of `GET /v1/coverage?scope=` is a backward range scan with no sort), `clearance_evidence_health` (health records by scope and `seq`) and, for the core's flips, `clearance_evidence_health_core`
 and `clearance_evidence_health_ok`, each predicate repeated word for word in `mapstore.go`. The window's reads cost the records in the window
 (gate records and observations), never the chain's length.
 
 **The indexes are built by the core after it starts, not by the migration.** On a chain of millions of records an index takes minutes, and the
 core, the deploy gate's only writer, must neither be down for that nor have its writes blocked. So the core starts and serves at once, then builds
-the five in the background (only in the process that holds the writer lock), one at a time, with `CREATE INDEX CONCURRENTLY IF NOT EXISTS` on its own
+the six in the background (only in the process that holds the writer lock), one at a time, with `CREATE INDEX CONCURRENTLY IF NOT EXISTS` on its own
 connection with no statement timeout (`pg.Store.BuildIndexes`; it logs each index's start, finish and duration). **Until an index exists the Map is
 slower:** the gate read is bounded to the records written since the window began (as it was before these indexes; a window with no record written in it is answered empty without a scan, which would miss only a gate record whose `ts` is later than its write, as a provider-reported one could be), but the observation and health
 reads walk the scope's records (seconds on a chain of tens of thousands, and a 503 `read failed` once a statement passes the 5 s `statement_timeout`).
@@ -499,6 +500,7 @@ A change's reads carry `source` (`{authors, mergers, promoter}`) when the verifi
 | `CLEARANCE_GATEWAY_URL` | none | where the runtime's writes go, named in `/v1/contract` as `gateway` |
 | `BACKSTAGE_URL`, `BACKSTAGE_TOKEN_FILE` | none, `/var/run/clearance/backstage-token` | a person's groups (memberOf) and the apps they own (Components by `spec.owner`, `backstage.Ownership`) |
 | `CLEARANCE_LISTEN` | `:$PORT` | listen address; `PORT` defaults to 8080 |
+| `CLEARANCE_TLS_LISTEN`, `CLEARANCE_TLS_CERT_FILE`, `CLEARANCE_TLS_KEY_FILE` | unset | an optional https listener beside the plain one (all three or none); `CLEARANCE_LISTEN=off` drops plain http. [tls.md](tls.md) |
 
 plus the authenticator's (`authn.EnvVars`: `CLEARANCE_AUDIENCE`, `CLEARANCE_OIDC_*`, `CLEARANCE_FOREIGN_*`,
 `CLEARANCE_GITHUB_OIDC_*`). The chart sets each (`api.*` values; `tools/charttest` fails when one is missing).

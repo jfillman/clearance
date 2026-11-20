@@ -297,7 +297,7 @@ func doctorCore(ctx context.Context, env DoctorEnv, cfg Config, tokenOK bool, ad
 		}
 	}
 	// /healthz needs no token, so reachability is judged without sending one.
-	opt := client.Options{BaseURL: cfg.CoreURL, Timeout: env.Timeout, Retries: -1, BreakerThreshold: -1, UserAgent: "clearance-argocd-cmp-doctor"}
+	opt := client.Options{CAFile: cfg.CAFile, BaseURL: cfg.CoreURL, Timeout: env.Timeout, Retries: -1, BreakerThreshold: -1, UserAgent: "clearance-argocd-cmp-doctor"}
 	anon, err := client.New(opt)
 	if err != nil {
 		add(levelFail, name, err.Error(), "fix CLEARANCE_URL")

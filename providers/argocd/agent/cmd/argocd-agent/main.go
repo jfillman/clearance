@@ -70,6 +70,8 @@ func run() error {
 		repost    = fs.Bool("repost-on-start", false, "post each Application's last operation again on start (the core de-duplicates only on source.event_id, which the agent does not send yet)")
 		waitImage = fs.String("wait-image", env("CLEARANCE_WAIT_IMAGE", ""), "the pinned image of the gate's PreSync wait Job, as the admission policy's exemption has it (empty: the Job is reported as out-of-band)")
 		waitURL   = fs.String("wait-url", env("CLEARANCE_WAIT_URL", ""), "the core URL the wait Job polls (default --core-url)")
+		caFile    = fs.String("ca-file", env("CLEARANCE_CA_FILE", ""), "a PEM file of extra root certificates for an https core or api (a private in-cluster CA); empty: the system roots")
+		waitCA    = fs.String("wait-ca-configmap", env("CLEARANCE_WAIT_CA_CONFIGMAP", ""), "the ConfigMap (key ca.crt) the wait Job mounts as its CA, as the admission policy's exemption has it (empty: none)")
 		waitAlias = fs.String("wait-host-alias", env("CLEARANCE_WAIT_HOST_ALIAS", ""), "the wait Job's host alias, ip=host[,host] (empty: none)")
 		optIn     = fs.Bool("optin", envBool("CLEARANCE_OPTIN"), "the annotation opt-in (G-ARGO-10c): switch Applications carrying clearance.hangar.io/protect: \"true\" to the plugin, merge their grants per namespace, label the namespaces and report the protected pairs. Off: the agent does what it did before")
 		optPlugin = fs.String("optin-plugin-name", env("CLEARANCE_OPTIN_PLUGIN_NAME", "clearance"), "the plugin name a switched Application gets (the CMP's)")
@@ -107,7 +109,11 @@ func run() error {
 	}
 	tok := client.FileToken(*tokenFile)
 	cc, err := client.New(client.Options{BaseURL: *coreURL, Token: tok, Provider: agent.ProviderName, Timeout: 10 * time.Second,
-		UserAgent: agent.ProviderName + "/" + version})
+		UserAgent: agent.ProviderName + "/" + version, CAFile: *caFile})
+	if err != nil {
+		return err
+	}
+	hc, err := client.NewHTTPClient(*caFile, 20*time.Second)
 	if err != nil {
 		return err
 	}
@@ -116,9 +122,9 @@ func run() error {
 		StateNS: *stateNS, RepostOnStart: *repost,
 		OptIn: agent.OptIn{Enabled: *optIn, PluginName: *optPlugin, DenyApps: list(*optDeny), Namespaces: list(*optNS), Interval: *optEvery,
 			ReportEvery: *optReport, MaxGrantBytes: *optBytes},
-		Wait: agent.WaitPin{Image: *waitImage, URL: *waitURL, HostAlias: *waitAlias}},
-		kube, &agent.HTTPFeeds{Base: *apiURL, Token: tok},
-		&agent.HTTPCore{Client: cc, Feeds: agent.HTTPFeeds{Base: *coreURL, Token: tok}}, nil,
+		Wait: agent.WaitPin{Image: *waitImage, URL: *waitURL, HostAlias: *waitAlias, CAConfigMap: *waitCA}},
+		kube, &agent.HTTPFeeds{Base: *apiURL, Token: tok, HTTP: hc},
+		&agent.HTTPCore{Client: cc, Feeds: agent.HTTPFeeds{Base: *coreURL, Token: tok, HTTP: hc}}, nil,
 		slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	if err != nil {
 		return err

@@ -34,6 +34,18 @@ func (r *Reader) LedgerCheckpoint(ctx context.Context) (store.LedgerCheckpoint, 
 	return scanLedger(r.pool.QueryRow(ctx, ledgerCols+" ORDER BY size DESC LIMIT 1"))
 }
 
+// checkpointedRange is the seq range [lo, hi) whose records cp newly covers. Everything below the held checkpoint was
+// marked checkpointed in the transaction that recorded it (and the chain only appends), so only [held.Size, cp.Size)
+// can still be recorded-not-checkpointed. Bounding the UPDATE to it makes it a primary-key range scan over the new
+// records, not a scan of every record below cp.Size filtering on the unindexed assurance column: that scan grew with
+// the chain until it overran statement_timeout, and the checkpoint was retried forever.
+func checkpointedRange(held *store.LedgerCheckpoint, cp store.LedgerCheckpoint) (lo, hi int64) {
+	if held != nil {
+		lo = held.Size
+	}
+	return lo, cp.Size
+}
+
 // PutLedgerCheckpoint records cp and marks the records under it checkpointed, in one transaction. It writes
 // through the pool, not the writer connection: it touches the assurance column and the checkpoint table, never the
 // chain's rows, so it does not need the chain lock the writer connection holds (the writer holds it for the life of
@@ -63,8 +75,9 @@ func (s *Store) PutLedgerCheckpoint(ctx context.Context, cp store.LedgerCheckpoi
 		VALUES ($1, $2, $3, $4, $5) ON CONFLICT (size) DO NOTHING`, cp.Size, cp.Origin, cp.Root, cp.Note, cp.At); err != nil {
 		return fmt.Errorf("pg: %w", err)
 	}
+	lo, hi := checkpointedRange(held, cp)
 	if _, err := tx.Exec(ctx, `UPDATE clearance_evidence SET assurance = 'checkpointed'
-		WHERE seq < $1 AND assurance = 'recorded-not-checkpointed'`, cp.Size); err != nil {
+		WHERE seq >= $1 AND seq < $2 AND assurance = 'recorded-not-checkpointed'`, lo, hi); err != nil {
 		return fmt.Errorf("pg: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {

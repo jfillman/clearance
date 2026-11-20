@@ -297,3 +297,29 @@ func TestNamesOnlyCoverageCapsAtMaxScopeNames(t *testing.T) {
 		})
 	}
 }
+
+// collect never returns more than max, also when max is not a multiple of the page size.
+func TestCollectNeverReturnsMoreThanMax(t *testing.T) {
+	for _, b := range backends {
+		t.Run(b.name, func(t *testing.T) {
+			h := newHarness(t, b, world{raw: history().rows})
+			s := h.srv
+			f := EvidenceFilter{Scope: "aws:111", Tools: []string{evidence.KindHealth}, Until: evidence.ISO(t0.Add(1000 * time.Hour)), Outcomes: OutcomesInclude}
+			all, cut, err := s.collect(bg, f, &Viewer{Role: RoleAuditor}, MaxCoverageRecords)
+			if err != nil || cut {
+				t.Fatal(err, cut)
+			}
+			max := collectPage + 50
+			if len(all) <= max {
+				t.Skipf("only %d records; the old overshoot needs more than %d", len(all), max)
+			}
+			rs, cut, err := s.collect(bg, f, &Viewer{Role: RoleAuditor}, max)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rs) != max || !cut {
+				t.Fatalf("got %d records (truncated %v), want exactly %d and truncated", len(rs), cut, max)
+			}
+		})
+	}
+}

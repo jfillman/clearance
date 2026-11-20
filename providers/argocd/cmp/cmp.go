@@ -210,7 +210,7 @@ func registration(cfg Config, tree *Tree) (*client.ChangeRequest, error) {
 
 func newCore(cfg Config) (Core, error) {
 	return client.New(client.Options{BaseURL: cfg.CoreURL, Token: client.FileToken(cfg.TokenFile),
-		Timeout: cfg.RegisterWait, Retries: 1, UserAgent: "clearance-argocd-cmp"})
+		Timeout: cfg.RegisterWait, Retries: 1, UserAgent: "clearance-argocd-cmp", CAFile: cfg.CAFile})
 }
 
 func main() {

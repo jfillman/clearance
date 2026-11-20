@@ -1,0 +1,5 @@
+# TLS on beside plain http (the first rollout step): the chart's own CA signs the core's and the api's certificates.
+database:
+  existingSecret: clearance-db
+tls:
+  enabled: true

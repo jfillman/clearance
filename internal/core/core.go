@@ -111,6 +111,7 @@ import (
 	"github.com/jfillman/clearance/internal/store"
 	"github.com/jfillman/clearance/internal/store/memory"
 	"github.com/jfillman/clearance/internal/store/pg"
+	"github.com/jfillman/clearance/internal/tlsutil"
 	"github.com/jfillman/clearance/internal/token"
 	"github.com/jfillman/clearance/internal/vocab"
 )
@@ -164,6 +165,9 @@ type Config struct {
 	// trust inputs.
 	VerifyListen string
 	Statements   server.StatementOptions
+	// TLS is the optional https listener (CLEARANCE_TLS_LISTEN, _CERT_FILE, _KEY_FILE): the same handler beside Listen, the
+	// certificate re-read when the files change. Listen "off" (CLEARANCE_LISTEN=off) drops the plain listener and needs it.
+	TLS tlsutil.Listener
 }
 
 // FromEnv reads Config from getenv, the authenticator included (authn.FromEnv).
@@ -177,6 +181,9 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	cfg := Config{DSN: get("CLEARANCE_DSN", ""), Listen: get("CLEARANCE_LISTEN", ":8080"),
 		AgentsDir: get("CLEARANCE_AGENTS_DIR", "")}
 	var err error
+	if cfg.TLS, err = tlsutil.ListenerFromEnv(getenv, cfg.Listen); err != nil {
+		return cfg, err
+	}
 	if cfg.Providers, err = server.ParseProviders(get("CLEARANCE_PROVIDERS", "")); err != nil {
 		return cfg, err
 	}
@@ -768,16 +775,37 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 	if log == nil {
 		log = slog.Default()
 	}
-	ln, err := net.Listen("tcp", cfg.Listen)
+	tlsLn, err := cfg.TLS.Listen()
 	if err != nil {
-		return fmt.Errorf("core: listen %s: %w", cfg.Listen, err)
+		return fmt.Errorf("core: %w", err)
+	}
+	var ln net.Listener
+	if cfg.Listen != tlsutil.Off {
+		if ln, err = net.Listen("tcp", cfg.Listen); err != nil {
+			if tlsLn != nil {
+				_ = tlsLn.Close()
+			}
+			return fmt.Errorf("core: listen %s: %w", cfg.Listen, err)
+		}
 	}
 	hs := c.Server.HTTPServer(cfg.Listen)
 	loopCtx, stopLoops := context.WithCancel(context.Background())
 	loopsDone := make(chan struct{})
 	go func() { c.Loops(loopCtx); close(loopsDone) }()
-	serveErr := make(chan error, 2)
-	go func() { serveErr <- hs.Serve(ln) }()
+	serveErr := make(chan error, 3)
+	if ln != nil {
+		go func() { serveErr <- hs.Serve(ln) }()
+	}
+	var ts *http.Server
+	if tlsLn != nil {
+		ts = c.Server.HTTPServer(cfg.TLS.Addr)
+		go func() { serveErr <- ts.Serve(tlsLn) }()
+		log.Info("clearance core serving https", "addr", tlsLn.Addr().String())
+	}
+	first := ln
+	if first == nil {
+		first = tlsLn
+	}
 	// The verify page (P-3) is a second listener, started only when CLEARANCE_VERIFY_LISTEN is set. With it unset nothing
 	// below runs: there is no socket for the public page.
 	var vs *http.Server
@@ -787,6 +815,12 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 			stopLoops()
 			<-loopsDone
 			_ = hs.Close()
+			if ts != nil {
+				_ = ts.Close()
+			}
+			if tlsLn != nil {
+				_ = tlsLn.Close()
+			}
 			return fmt.Errorf("core: verify listen %s: %w", cfg.VerifyListen, err)
 		}
 		// The statement index is read in the background, after the core serves, page by page; the page answers 503 until it is warm.
@@ -796,11 +830,11 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 		log.Info("clearance verify page serving (public, read-only)", "addr", vln.Addr().String())
 	}
 	pol := c.Engine.Policy()
-	log.Info("clearance core serving", "addr", ln.Addr().String(), "memory", cfg.Memory, "policy", pol.Bundle,
+	log.Info("clearance core serving", "addr", first.Addr().String(), "memory", cfg.Memory, "policy", pol.Bundle,
 		"policy_version", pol.Version, "bundles", c.Engine.BundleNames(), "providers", len(cfg.Providers), "github_app", c.App != nil,
 		"backstage", cfg.BackstageURL != "")
 	if ready != nil {
-		ready(ln.Addr().String())
+		ready(first.Addr().String())
 	}
 	var runErr error
 	select {
@@ -812,6 +846,9 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, ready func(addr stri
 	defer cancel()
 	if err := hs.Shutdown(sctx); err != nil && runErr == nil {
 		runErr = err
+	}
+	if ts != nil {
+		_ = ts.Shutdown(sctx)
 	}
 	if vs != nil {
 		_ = vs.Shutdown(sctx)

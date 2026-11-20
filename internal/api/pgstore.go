@@ -103,7 +103,7 @@ func (b *q) evidenceFilter(f EvidenceFilter) {
 		b.add("e.record->'source'->>'name' = " + b.arg(f.Source))
 	}
 	if len(f.Tools) > 0 {
-		b.add("e.record->>'tool' = ANY(" + b.arg(f.Tools) + ")")
+		b.add(toolPredicate(f.Tools, b))
 	}
 	switch f.Outcomes {
 	case OutcomesExclude:
@@ -111,6 +111,28 @@ func (b *q) evidenceFilter(f EvidenceFilter) {
 	case OutcomesOnly:
 		b.add("e.record ? 'outcome_of'")
 	}
+}
+
+// pagedTools are the kinds of the clearance_evidence_obs_page partial index (store/pg MapIndexes spells its predicate
+// from this list's literals): the kinds a coverage statement pages through.
+var pagedTools = []string{evidence.KindObservation, evidence.KindAssessment, evidence.KindResolution, evidence.KindVerification, evidence.KindAuditGap}
+
+// toolPredicate is the tool condition of a read. When every tool is one of pagedTools it is spelled with literals
+// (tool = 'x', or tool IN ('x', 'y')): the planner proves a partial index from a literal predicate and matches an equality on
+// the index's tool column only from a literal; tool = ANY($n) does neither, so the read fell back to the (scope, ts)
+// index and sorted. The literals come from pagedTools, never from the request. Any other tool is an ANY($n) bind.
+func toolPredicate(tools []string, b *q) string {
+	lits := make([]string, 0, len(tools))
+	for _, t := range tools {
+		if !in(pagedTools, t) {
+			return "e.record->>'tool' = ANY(" + b.arg(tools) + ")"
+		}
+		lits = append(lits, "'"+t+"'")
+	}
+	if len(lits) == 1 {
+		return "e.record->>'tool' = " + lits[0]
+	}
+	return "e.record->>'tool' IN (" + strings.Join(lits, ", ") + ")"
 }
 
 func (s *PG) records(ctx context.Context, sql string, args []any) ([]Record, error) {
@@ -149,6 +171,12 @@ func parseStored(text, assurance string) (Record, error) {
 }
 
 func (s *PG) Evidence(ctx context.Context, f EvidenceFilter, v *Viewer, limit int, after *int64) ([]Record, error) {
+	sql, args := evidenceSQL(f, v, limit, after)
+	return s.records(ctx, sql, args)
+}
+
+// evidenceSQL is the statement of one page of Evidence: newest seq first, seq < after.
+func evidenceSQL(f EvidenceFilter, v *Viewer, limit int, after *int64) (string, []any) {
 	b := &q{}
 	with := b.evidenceScope(v)
 	b.evidenceFilter(f)
@@ -163,8 +191,8 @@ func (s *PG) Evidence(ctx context.Context, f EvidenceFilter, v *Viewer, limit in
 		}
 		col += ")::text"
 	}
-	return s.records(ctx, with+"SELECT "+col+", e.assurance FROM clearance_evidence e WHERE "+b.sql()+
-		" ORDER BY e.seq DESC LIMIT "+b.arg(limit), b.args)
+	return with + "SELECT " + col + ", e.assurance FROM clearance_evidence e WHERE " + b.sql() +
+		" ORDER BY e.seq DESC LIMIT " + b.arg(limit), b.args
 }
 
 // observedTools is the predicate of the clearance_evidence_observed partial index, spelled as the index spells it: the

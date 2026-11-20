@@ -67,9 +67,15 @@ spec:
             {{- with .Values.waitJob.hostAlias }}
             - --wait-host-alias={{ . }}
             {{- end }}
+            {{- with .Values.waitJob.caConfigMap }}
+            - --wait-ca-configmap={{ . }}
+            {{- end }}
           env:
             - name: POD_NAMESPACE
               valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            {{- if .Values.tls.caConfigMap }}
+            - {name: CLEARANCE_CA_FILE, value: /etc/clearance-ca/{{ .Values.tls.caKey }}}
+            {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -77,6 +83,9 @@ spec:
           resources: {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
             - {name: clearance-token, mountPath: /var/run/secrets/tokens, readOnly: true}
+            {{- if .Values.tls.caConfigMap }}
+            - {name: clearance-ca, mountPath: /etc/clearance-ca, readOnly: true}
+            {{- end }}
       volumes:
         # The agent's whole credential: a short-lived token bound to the audience the core checks, rotated by the
         # kubelet and read fresh for each request. Nothing is stored.
@@ -84,6 +93,12 @@ spec:
           projected:
             sources:
               - serviceAccountToken: {path: clearance, audience: {{ .Values.tokenAudience }}, expirationSeconds: 3600}
+        {{- if .Values.tls.caConfigMap }}
+        - name: clearance-ca
+          configMap:
+            name: {{ .Values.tls.caConfigMap }}
+            items: [{key: {{ .Values.tls.caKey }}, path: {{ .Values.tls.caKey }}}]
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector: {{ toYaml . | nindent 8 }}
       {{- end }}

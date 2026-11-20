@@ -15,6 +15,9 @@ type WaitPin struct {
 	Image     string // the pinned wait image, a digest reference
 	URL       string // the core URL the waiter polls
 	HostAlias string // "ip=host[,host]", empty when the waiter has no host alias
+	// CAConfigMap is the ConfigMap (key ca.crt) the waiter mounts at /etc/clearance-ca as its CA for an https core; "" is
+	// no such mount. The admission policy's exemption must carry the same optional volume and mount (apron renders it).
+	CAConfigMap string
 }
 
 var (
@@ -42,7 +45,7 @@ func isWaitJob(o ObjectDetail, pin WaitPin) bool {
 		return false
 	}
 	ctr, _ := ctrs[0].(map[string]any)
-	return waitJobFields(job) && waitPodFields(pod) && waitContainer(ctr, pin) && waitHostAlias(pod, pin.HostAlias) && waitVolume(pod)
+	return waitJobFields(job) && waitPodFields(pod) && waitContainer(ctr, pin) && waitHostAlias(pod, pin.HostAlias) && waitVolume(pod, pin.CAConfigMap)
 }
 
 func waitJobFields(job map[string]any) bool {
@@ -88,12 +91,24 @@ func waitContainer(ctr map[string]any, pin WaitPin) bool {
 		return true
 	}
 	mounts := items(ctr, "volumeMounts")
-	if len(mounts) != 1 {
+	want := 1
+	if pin.CAConfigMap != "" {
+		want = 2
+	}
+	if len(mounts) != want {
 		return false
 	}
 	m, _ := mounts[0].(map[string]any)
-	return only(m, "name", "mountPath", "readOnly") && m["name"] == "clearance-token" &&
-		m["mountPath"] == "/var/run/secrets/tokens" && m["readOnly"] == true
+	if !(only(m, "name", "mountPath", "readOnly") && m["name"] == "clearance-token" &&
+		m["mountPath"] == "/var/run/secrets/tokens" && m["readOnly"] == true) {
+		return false
+	}
+	if want == 1 {
+		return true
+	}
+	c, _ := mounts[1].(map[string]any)
+	return only(c, "name", "mountPath", "readOnly") && c["name"] == "clearance-ca" &&
+		c["mountPath"] == "/etc/clearance-ca" && c["readOnly"] == true
 }
 
 func waitEnv(env []any, i int, name, value string) bool {
@@ -118,13 +133,30 @@ func waitHostAlias(pod map[string]any, pin string) bool {
 	return only(a, "ip", "hostnames") && ip+"="+strings.Join(strs(items(a, "hostnames")), ",") == pin
 }
 
-func waitVolume(pod map[string]any) bool {
+func waitVolume(pod map[string]any, caConfigMap string) bool {
 	if _, ok := pod["volumes"]; !ok {
 		return true
 	}
 	vols := items(pod, "volumes")
-	if len(vols) != 1 {
+	want := 1
+	if caConfigMap != "" {
+		want = 2
+	}
+	if len(vols) != want {
 		return false
+	}
+	if want == 2 {
+		cv, _ := vols[1].(map[string]any)
+		cmv := child(cv, "configMap")
+		its := items(cmv, "items")
+		if !only(cv, "name", "configMap") || cv["name"] != "clearance-ca" || cmv == nil || !only(cmv, "name", "items", "defaultMode") ||
+			cmv["name"] != caConfigMap || !absentOr(cmv, "defaultMode", float64(420)) || len(its) != 1 {
+			return false
+		}
+		it, _ := its[0].(map[string]any)
+		if !only(it, "key", "path") || it["key"] != "ca.crt" || it["path"] != "ca.crt" {
+			return false
+		}
 	}
 	v, _ := vols[0].(map[string]any)
 	proj := child(v, "projected")

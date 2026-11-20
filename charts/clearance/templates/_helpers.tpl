@@ -132,7 +132,7 @@ app.kubernetes.io/component: {{ .component }}
 {{/* env entries shared by the core and the api: identity, Backstage, definitions. Empty values are omitted. */}}
 {{- define "clearance.sharedEnv" -}}
 - name: CLEARANCE_LISTEN
-  value: ":8080"
+  value: {{ if include "clearance.plainOff" . }}"off"{{ else }}":8080"{{ end }}
 - name: CLEARANCE_AUDIENCE
   value: {{ .Values.audience | quote }}
 {{- $delegates := include "clearance.withSlack" (dict "ctx" $ "list" .Values.delegates) }}
@@ -408,17 +408,19 @@ seccompProfile:
 {{- end -}}
 
 {{- define "clearance.probes" -}}
+{{- /* (dict "startupSeconds" n "tlsOnly" bool): with the plain listener gone the kubelet probes the https port (it does not verify the certificate) */}}
+{{- $port := "http" }}{{ if .tlsOnly }}{{ $port = "https, scheme: HTTPS" }}{{ end -}}
 startupProbe:
-  httpGet: {path: /healthz, port: http}
+  httpGet: {path: /healthz, port: {{ $port }}}
   periodSeconds: 5
   failureThreshold: {{ max 1 (div .startupSeconds 5) }}
 livenessProbe:
-  httpGet: {path: /healthz, port: http}
+  httpGet: {path: /healthz, port: {{ $port }}}
   periodSeconds: 10
   timeoutSeconds: 3
   failureThreshold: 3
 readinessProbe:
-  httpGet: {path: /readyz, port: http}
+  httpGet: {path: /readyz, port: {{ $port }}}
   periodSeconds: 5
   timeoutSeconds: 3
   failureThreshold: 3
@@ -477,4 +479,58 @@ A GOMEMLIMIT in the component's extraEnv comes later in the env list and wins.
 - name: GOMEMLIMIT
   value: {{ $val | quote }}
 {{- end -}}
+{{- end -}}
+{{/* TLS (I-43): the core and the api serve https on tls.port beside plain http, from a cert-manager Certificate. All of it is
+     off unless tls.enabled. tls.plainHttp false drops the plain listener, the last step of a rollout. */}}
+{{- define "clearance.tlsOn" -}}{{ if .Values.tls.enabled }}true{{ end }}{{- end -}}
+{{- define "clearance.plainOff" -}}{{ if and .Values.tls.enabled (not .Values.tls.plainHttp) }}true{{ end }}{{- end -}}
+{{- define "clearance.tlsSecret" -}}{{ include "clearance.fullname" .ctx }}-{{ .component }}-tls{{- end -}}
+{{- define "clearance.tlsIssuerName" -}}
+{{- if .Values.tls.certManager.issuerRef.name -}}{{ .Values.tls.certManager.issuerRef.name }}{{- else -}}{{ include "clearance.fullname" . }}-ca{{- end -}}
+{{- end -}}
+{{/* the CA file a client trusts: the ca.crt of the serving Secret, mounted with the certificate */}}
+{{- define "clearance.tlsEnv" -}}
+{{- if include "clearance.tlsOn" .ctx }}
+- {name: CLEARANCE_TLS_LISTEN, value: {{ printf ":%v" .ctx.Values.tls.port | quote }}}
+- {name: CLEARANCE_TLS_CERT_FILE, value: /etc/clearance/tls/tls.crt}
+- {name: CLEARANCE_TLS_KEY_FILE, value: /etc/clearance/tls/tls.key}
+{{- end }}
+{{- end -}}
+{{- define "clearance.tlsMount" -}}
+{{- if include "clearance.tlsOn" .ctx }}
+- name: tls
+  mountPath: /etc/clearance/tls
+  readOnly: true
+{{- end }}
+{{- end -}}
+{{- define "clearance.tlsVolume" -}}
+{{- if include "clearance.tlsOn" .ctx }}
+- name: tls
+  secret:
+    secretName: {{ if .ctx.Values.tls.certManager.enabled }}{{ include "clearance.tlsSecret" . }}{{ else }}{{ required "tls.existingSecrets.<component> is required with tls.enabled and tls.certManager.enabled false" (index .ctx.Values.tls.existingSecrets .component) }}{{ end }}
+    defaultMode: 0440
+    items:
+      - {key: tls.crt, path: tls.crt}
+      - {key: tls.key, path: tls.key}
+{{- end }}
+{{- end -}}
+{{- define "clearance.tlsPorts" -}}
+{{- if not (include "clearance.plainOff" .) }}
+- {protocol: TCP, port: 8080}
+{{- end }}
+{{- if include "clearance.tlsOn" . }}
+- {protocol: TCP, port: {{ .Values.tls.port }}}
+{{- end }}
+{{- end -}}
+{{/* What tls refuses. Dropping plain http is only for an install whose every caller is a verifying https client. */}}
+{{- define "clearance.tlsGuards" -}}
+{{- if .Values.tls.enabled }}
+{{- if and (not .Values.tls.certManager.enabled) (not (and .Values.tls.existingSecrets.core (or .Values.tls.existingSecrets.api (not .Values.api.enabled)))) }}{{ fail "tls.enabled needs tls.certManager.enabled (cert-manager makes the certificates) or tls.existingSecrets.core and .api (kubernetes.io/tls Secrets you manage)" }}{{ end }}
+{{- if eq (int .Values.tls.port) 8080 }}{{ fail "tls.port must differ from the plain port 8080" }}{{ end }}
+{{- if and (not (include "clearance.plainOff" .)) (eq (int .Values.tls.port) (int .Values.service.port)) }}{{ fail "tls.port must differ from service.port while plain http is on (two Service ports cannot share a number)" }}{{ end }}
+{{- if not .Values.tls.plainHttp }}
+{{- range $c := list "web" "slack" "grc" }}{{ if index $.Values $c "enabled" }}{{ fail (printf "tls.plainHttp false is not supported with %s.enabled: that component calls the core and the api over plain http and has no CA setting yet" $c) }}{{ end }}{{ end }}
+{{- range $c := list "core" "api" "web" "slack" }}{{ if (index $.Values.httpRoutes $c).enabled }}{{ fail (printf "tls.plainHttp false is not supported with httpRoutes.%s.enabled: the route's backend is the plain port (a BackendTLSPolicy is not rendered)" $c) }}{{ end }}{{ end }}
+{{- end }}
+{{- end }}
 {{- end -}}

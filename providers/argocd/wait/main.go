@@ -138,6 +138,7 @@ func main() {
 	poll := fs.Duration("poll", 30*time.Second, "one long poll, 1s to 60s")
 	url := fs.String("url", os.Getenv("CLEARANCE_URL"), "the core (CLEARANCE_URL)")
 	tokenFile := fs.String("token-file", orDefault(os.Getenv("CLEARANCE_TOKEN_FILE"), "/var/run/secrets/tokens/clearance"), "the projected service-account token, audience clearance")
+	caFile := fs.String("ca-file", orDefault(os.Getenv("CLEARANCE_CA_FILE"), defaultCA()), "extra root certificates (PEM) for an https core: a private in-cluster CA (CLEARANCE_CA_FILE; default /etc/clearance-ca/ca.crt when that file is mounted)")
 	termLog := fs.String("termination-log", "/dev/termination-log", "where the last line is written for Kubernetes")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		os.Exit(ExitUsage)
@@ -147,7 +148,7 @@ func main() {
 		os.Exit(ExitUsage)
 	}
 	c, err := client.New(client.Options{BaseURL: *url, Token: client.FileToken(*tokenFile), Timeout: 10 * time.Second, Retries: 1,
-		UserAgent: "clearance-argocd-wait"})
+		UserAgent: "clearance-argocd-wait", CAFile: *caFile})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "clearance-wait:", err)
 		os.Exit(ExitUsage)
@@ -158,6 +159,15 @@ func main() {
 		_ = os.WriteFile(*termLog, []byte(msg), 0o644)
 	}
 	os.Exit(code)
+}
+
+// defaultCA is where the CMP's wait Job mounts the CA (cmp/job.go) when a CA ConfigMap is configured; "" when nothing is there.
+func defaultCA() string {
+	const p = "/etc/clearance-ca/ca.crt"
+	if _, err := os.Stat(p); err == nil {
+		return p
+	}
+	return ""
 }
 
 func orDefault(v, d string) string {
