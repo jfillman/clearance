@@ -121,11 +121,11 @@ const collectPage = 1000
 // collect reads every record matching f, newest first, up to max; truncated says there were more.
 func (s *Server) collect(ctx context.Context, f EvidenceFilter, v *Viewer, max int) (out []Record, truncated bool, err error) {
 	var after *int64
-	page := min(collectPage, max)
 	for len(out) < max {
 		if err := ctx.Err(); err != nil {
 			return nil, false, err
 		}
+		page := min(collectPage, max-len(out)) // never read past the cap
 		rs, err := s.opt.Store.Evidence(ctx, f, readerOf(v), page, after)
 		if err != nil {
 			return nil, false, err
