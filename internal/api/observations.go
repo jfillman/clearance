@@ -113,22 +113,28 @@ func (s *Server) observationPage(w http.ResponseWriter, r *http.Request, v *View
 	s.evidencePageAs(w, r, readerOf(v), q, f, !v.All())
 }
 
+// collectPage is how many records one read of collect asks for. Each page is an index range scan
+// (clearance_evidence_obs_page), so a page costs its own rows; a larger one is fewer round trips (200 made a
+// 10000-record kind 50 of them). It divides MaxCoverageRecords, so the cap is met exactly.
+const collectPage = 1000
+
 // collect reads every record matching f, newest first, up to max; truncated says there were more.
 func (s *Server) collect(ctx context.Context, f EvidenceFilter, v *Viewer, max int) (out []Record, truncated bool, err error) {
 	var after *int64
+	page := min(collectPage, max)
 	for len(out) < max {
 		if err := ctx.Err(); err != nil {
 			return nil, false, err
 		}
-		page, err := s.opt.Store.Evidence(ctx, f, readerOf(v), MaxLimit, after)
+		rs, err := s.opt.Store.Evidence(ctx, f, readerOf(v), page, after)
 		if err != nil {
 			return nil, false, err
 		}
-		out = append(out, page...)
-		if len(page) < MaxLimit {
+		out = append(out, rs...)
+		if len(rs) < page {
 			return out, false, nil
 		}
-		n, ok := seqOf(page[len(page)-1])
+		n, ok := seqOf(rs[len(rs)-1])
 		if !ok {
 			return out, true, nil
 		}

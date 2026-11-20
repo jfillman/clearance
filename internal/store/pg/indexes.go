@@ -32,6 +32,12 @@ var MapIndexes = []struct{ Name, DDL string }{
   WHERE record->>'tool' = 'observation.health' AND COALESCE(record->'provider'->>'name', '') <> 'clearance' AND record->'health'->>'state' = 'healthy'`},
 	{"clearance_evidence_obs_ts", `CREATE INDEX CONCURRENTLY IF NOT EXISTS clearance_evidence_obs_ts ON clearance_evidence ((record->>'scope'), (record->>'ts'))
   WHERE record->>'tool' IN ('observation', 'assessment')`},
+	// The coverage statement's pages (api.PG.Evidence with Slim: scope, one tool, ts window, ORDER BY seq DESC, seq < cursor).
+	// (scope, tool, seq, ts): the equalities lead, seq is the order and the cursor (unique, so no tie-break is needed), and
+	// ts is a filter on the index tuple, so a page is a backward range scan of its own rows with no Sort and no record fetched
+	// that the page does not return. obs_ts holds both kinds together by ts, so a page read every row of the window and sorted.
+	{"clearance_evidence_obs_page", `CREATE INDEX CONCURRENTLY IF NOT EXISTS clearance_evidence_obs_page ON clearance_evidence ((record->>'scope'), (record->>'tool'), seq, (record->>'ts'))
+  WHERE record->>'tool' IN ('observation', 'assessment', 'resolution', 'observation.verification', 'observation.audit-gap')`},
 }
 
 // indexBuildTimeout bounds one index build (its own bound, not the statement timeout).
