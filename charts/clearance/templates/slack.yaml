@@ -56,6 +56,9 @@ spec:
           ports:
             - {name: http, containerPort: 8080, protocol: TCP}
           env:
+            {{- with include "clearance.goMemLimitEnv" (dict "ctx" $ "resources" $s.resources "override" $s.goMemLimit) }}
+            {{- . | nindent 12 }}
+            {{- end }}
             - {name: CLEARANCE_SLACK_LISTEN, value: ":8080"}
             - {name: CLEARANCE_SLACK_TRANSPORT, value: {{ $s.transport | quote }}}
             - {name: CLEARANCE_SLACK_PUBLIC_URL, value: {{ $s.publicUrl | quote }}}

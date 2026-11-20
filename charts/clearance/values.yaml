@@ -15,6 +15,17 @@ nameOverride: ""
 fullnameOverride: ""
 commonLabels: {}
 
+# -- GOMEMLIMIT ---------------------------------------------------------------------------------------------------
+# Every Go container (core, api, web, slack, grc) gets GOMEMLIMIT set to `percent` of its own resources.limits.memory,
+# computed here (a whole number with a Ki/Mi/Gi/Ti or K/M/G/T suffix, or bytes), so the garbage collector works
+# harder as the heap nears the limit instead of letting it grow to twice the live heap and meeting the OOM-killer.
+# Nothing is set for a component with no memory limit. Override one component with its own `goMemLimit` ("200MiB",
+# or "off" for none), or put GOMEMLIMIT in its extraEnv (that wins). Leave headroom: the limit also covers stacks,
+# cgo and the runtime's own overhead, which GOMEMLIMIT does not count toward the heap goal.
+goMemLimit:
+  enabled: true
+  percent: 85
+
 # -- Who may call the core ----------------------------------------------------------------------------------------
 
 # CLEARANCE_PROVIDERS: the registered providers. Without one, nobody may evaluate or record. Each entry is
@@ -339,6 +350,8 @@ core:
   # CLEARANCE_PACKET_READS_PER_HOUR: how many allowed reads of one packet delivery the core serves and records an hour
   # ("": 60; 1 to 100000). Past it a read is 429 and writes no record.
   packetReadsPerHour: ""
+  # GOMEMLIMIT: "" = goMemLimit.percent of the limit below; "off" = none; or a Go size such as "200MiB".
+  goMemLimit: ""
   resources:
     requests: {cpu: 50m, memory: 64Mi}
     limits: {memory: 256Mi}
@@ -419,6 +432,8 @@ api:
     rekorUrl: ""
   # CLEARANCE_API_DEFINITIONS_INTERVAL: seconds between re-reads of the stored agent definitions.
   definitionsInterval: 30
+  # GOMEMLIMIT: "" = goMemLimit.percent of the limit below; "off" = none; or a Go size such as "200MiB".
+  goMemLimit: ""
   resources:
     requests: {cpu: 25m, memory: 64Mi}
     limits: {memory: 256Mi}
@@ -475,6 +490,8 @@ web:
   maxSessions: ""     # CLEARANCE_WEB_MAX_SESSIONS
   maxBodyBytes: ""    # CLEARANCE_WEB_MAX_BODY_BYTES
   maxResponseBytes: ""  # CLEARANCE_WEB_MAX_RESPONSE_BYTES
+  # GOMEMLIMIT: "" = goMemLimit.percent of the limit below; "off" = none; or a Go size such as "200MiB".
+  goMemLimit: ""
   resources:
     requests: {cpu: 25m, memory: 64Mi}
     limits: {memory: 256Mi}
@@ -541,6 +558,8 @@ slack:
     default: ""
     security: ""
     ops: ""
+  # GOMEMLIMIT: "" = goMemLimit.percent of the limit below; "off" = none; or a Go size such as "200MiB".
+  goMemLimit: ""
   resources:
     requests: {cpu: 25m, memory: 32Mi}
     limits: {memory: 128Mi}
@@ -607,6 +626,8 @@ grc:
   unreadyAfter: ""
   allowShrink: false
   useProxy: false
+  # GOMEMLIMIT: "" = goMemLimit.percent of the limit below; "off" = none; or a Go size such as "200MiB".
+  goMemLimit: ""
   resources:
     requests: {cpu: 25m, memory: 32Mi}
     limits: {memory: 128Mi}

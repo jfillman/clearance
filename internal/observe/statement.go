@@ -521,3 +521,70 @@ func words(st Statement) string {
 	}
 	return string(b)
 }
+
+// Project returns a copy of r holding only what Build reads of it: the few scalars and small objects a statement's
+// items, health timeline and gaps are made of. A coverage read parses each stored record into maps (about 6x its JSON)
+// and keeps up to 10000 of each kind until Build runs; projecting each page as it arrives lets the full parse be
+// freed and keeps the slim copy. Build(Project(r)) must equal Build(r): TestProjectKeepsWhatBuildReads walks every key
+// Build touches, so a key added to Build has to be added here.
+func Project(r Record) Record {
+	out := make(Record, 12)
+	for _, k := range []string{"seq", "ts", "tier", "completeness_supported", "coverage", "verified"} {
+		if v, ok := r[k]; ok {
+			out[k] = v
+		}
+	}
+	pick := func(k string, keys ...string) {
+		m, ok := r[k].(map[string]any)
+		if !ok {
+			if v, present := r[k]; present { // not an object: kept as is, so Build sees what it would have seen
+				out[k] = v
+			}
+			return
+		}
+		c := make(map[string]any, len(keys))
+		for _, kk := range keys {
+			if v, ok := m[kk]; ok {
+				c[kk] = v
+			}
+		}
+		out[k] = c
+	}
+	pick("about", "seq")
+	pick("source", "name")
+	pick("provider", "name")
+	pick("action", "api", "succeeded")
+	pick("resource", "kind", "name", "id")
+	pick("integrity", "sourceVerified")
+	pick("resolution", "state", "cause", "by")
+	pick("gap", "state", "reason")
+	if h, ok := r["health"].(map[string]any); ok {
+		c := make(map[string]any, 3)
+		for _, kk := range []string{"state", "interval_seconds"} {
+			if v, ok := h[kk]; ok {
+				c[kk] = v
+			}
+		}
+		if cs, ok := h["checks"].([]any); ok {
+			pc := make([]any, 0, len(cs))
+			for _, x := range cs {
+				if m, ok := x.(map[string]any); ok {
+					e := make(map[string]any, 2)
+					for _, kk := range []string{"name", "ok"} {
+						if v, ok := m[kk]; ok {
+							e[kk] = v
+						}
+					}
+					pc = append(pc, e)
+				} else {
+					pc = append(pc, x)
+				}
+			}
+			c["checks"] = pc
+		}
+		out["health"] = c
+	} else if v, present := r["health"]; present {
+		out["health"] = v
+	}
+	return out
+}

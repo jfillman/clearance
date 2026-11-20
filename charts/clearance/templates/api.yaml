@@ -53,6 +53,9 @@ spec:
             - {name: metrics, containerPort: {{ regexFind "[0-9]+$" . | int }}, protocol: TCP}
             {{- end }}
           env:
+            {{- with include "clearance.goMemLimitEnv" (dict "ctx" $ "resources" .Values.api.resources "override" .Values.api.goMemLimit) }}
+            {{- . | nindent 12 }}
+            {{- end }}
             - name: CLEARANCE_API_DSN
               valueFrom:
                 secretKeyRef:

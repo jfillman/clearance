@@ -679,3 +679,41 @@ func TestWeb(t *testing.T) {
 		t.Errorf("web egress %v", got)
 	}
 }
+
+// GOMEMLIMIT is a percentage of each Go container's own memory limit, overridable per container, and never guessed.
+func TestGoMemLimit(t *testing.T) {
+	limit := func(objs []obj, name string) (string, bool) {
+		v, ok := env(container(t, find(objs, "Deployment", name)))["GOMEMLIMIT"]
+		return v, ok
+	}
+	objs := render(t, "-f", valuesFile("minimal-values.yaml"))
+	// the defaults: both workloads have a 256Mi limit; 85% of 268435456 bytes
+	for _, n := range []string{"t-clearance-api", "t-clearance-core"} {
+		if v, ok := limit(objs, n); !ok || v != "228170137" {
+			t.Errorf("%s GOMEMLIMIT = %q (set %v), want 228170137", n, v, ok)
+		}
+	}
+	objs = render(t, "-f", valuesFile("minimal-values.yaml"), "--set", "goMemLimit.percent=50", "--set", "api.resources.limits.memory=1Gi",
+		"--set", "core.goMemLimit=200MiB")
+	if v, _ := limit(objs, "t-clearance-api"); v != "536870912" {
+		t.Errorf("api at 50%% of 1Gi: %q", v)
+	}
+	if v, _ := limit(objs, "t-clearance-core"); v != "200MiB" {
+		t.Errorf("core override: %q", v)
+	}
+	objs = render(t, "-f", valuesFile("minimal-values.yaml"), "--set", "core.goMemLimit=off", "--set", "api.resources.limits=null")
+	for _, n := range []string{"t-clearance-api", "t-clearance-core"} {
+		if v, ok := limit(objs, n); ok {
+			t.Errorf("%s: GOMEMLIMIT %q set, want none (off, or no memory limit)", n, v)
+		}
+	}
+	objs = render(t, "-f", valuesFile("minimal-values.yaml"), "--set", "goMemLimit.enabled=false")
+	if v, ok := limit(objs, "t-clearance-api"); ok {
+		t.Errorf("disabled: GOMEMLIMIT %q set", v)
+	}
+	// extraEnv comes later in the list, so Kubernetes takes its GOMEMLIMIT
+	objs = render(t, "-f", valuesFile("minimal-values.yaml"), "--set", "api.extraEnv[0].name=GOMEMLIMIT", "--set", "api.extraEnv[0].value=100MiB")
+	if v, _ := limit(objs, "t-clearance-api"); v != "100MiB" {
+		t.Errorf("extraEnv should win: %q", v)
+	}
+}

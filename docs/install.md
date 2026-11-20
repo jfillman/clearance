@@ -167,6 +167,8 @@ unset, so the core's default applies. Lists are joined with commas.
 | Value | Default | Meaning |
 |---|---|---|
 | `core.resources` | requests 50m / 64Mi, limit 256Mi | |
+| `goMemLimit.{enabled,percent}` | true, 85 | Sets `GOMEMLIMIT` on every Go container (core, api, web, slack, grc) to `percent` of that container's own `resources.limits.memory`, computed in the chart (a whole number with a `Ki/Mi/Gi/Ti` or `K/M/G/T` suffix, or bytes); nothing is set for a container with no memory limit. Without it the Go runtime lets the heap reach about twice the live heap and returns freed memory to the OS lazily, so a pod's memory swings well above what it holds and can meet the OOM-killer; with it the collector works harder as the heap nears the limit. The limit also has to cover goroutine stacks and runtime overhead that `GOMEMLIMIT` does not count toward the heap goal, hence under 100%. |
+| `{core,api,web,slack,grc}.goMemLimit` | `""` | Overrides one container: a Go size such as `200MiB`, or `off` for no soft limit. A `GOMEMLIMIT` in the container's `extraEnv` wins over both. |
 | `core.startupSeconds` | 300 | The core verifies the whole chain before it listens; a long chain needs time. |
 | `core.serviceAccount.{create,name,annotations}` | create | |
 | `core.{podAnnotations,podLabels,nodeSelector,tolerations,affinity,priorityClassName,hostAliases,extraEnv,extraVolumes,extraVolumeMounts}` | | |

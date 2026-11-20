@@ -9,6 +9,12 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Changed
+
+- The chart sets `GOMEMLIMIT` on every Go container to 85% of its own memory limit (`goMemLimit.percent`; per-container
+  `goMemLimit` overrides, `off` disables), and a coverage statement keeps only the fields `observe.Build` reads of each
+  record while it collects them (`observe.Project`), about 1.8x less held per statement. Memory work for I-27.
+
 ### Added
 
 - **Argo CD agent chart: `scope: cluster` (W-41).** An install no longer has to list `protectedNamespaces`: `scope: cluster` renders one

@@ -444,3 +444,34 @@ readinessProbe:
 {{- printf "%s:%s" $repo (default (printf "v%s" .Chart.AppVersion) .Values.grc.image.tag) -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+GOMEMLIMIT for a Go container: the soft limit the runtime holds its heap under, so the garbage collector works harder
+as the heap nears the container's memory limit instead of waiting for the kernel to OOM-kill the pod. Called with
+{ctx: $, resources: <the component's resources>, override: <the component's goMemLimit>}. Renders a list item, or nothing.
+- override "off": nothing (the runtime's default, no soft limit).
+- override any other text: that value, as given (a Go size: 200MiB, 1GiB, or bytes).
+- no override, goMemLimit.enabled: goMemLimit.percent of resources.limits.memory (a whole number with Ki/Mi/Gi/Ti,
+  K/M/G/T or no suffix), in bytes. With no memory limit, or one in another form, nothing: GOMEMLIMIT is never guessed.
+A GOMEMLIMIT in the component's extraEnv comes later in the env list and wins.
+*/}}
+{{- define "clearance.goMemLimitEnv" -}}
+{{- $val := "" -}}
+{{- if .override -}}
+{{- if ne (toString .override) "off" -}}{{- $val = toString .override -}}{{- end -}}
+{{- else if .ctx.Values.goMemLimit.enabled -}}
+{{- $lim := toString (dig "limits" "memory" "" (.resources | default dict)) -}}
+{{- if regexMatch "^[0-9]+(Ki|Mi|Gi|Ti|K|M|G|T)?$" $lim -}}
+{{- $n := int64 (regexFind "^[0-9]+" $lim) -}}
+{{- $unit := regexFind "[A-Za-z]+$" $lim -}}
+{{- $mult := dict "" 1 "K" 1000 "M" 1000000 "G" 1000000000 "T" 1000000000000 "Ki" 1024 "Mi" 1048576 "Gi" 1073741824 "Ti" 1099511627776 -}}
+{{- $pct := int64 .ctx.Values.goMemLimit.percent -}}
+{{- $bytes := div (mul (mul $n (int64 (get $mult $unit))) $pct) 100 -}}
+{{- if gt $bytes 0 -}}{{- $val = toString $bytes -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if $val -}}
+- name: GOMEMLIMIT
+  value: {{ $val | quote }}
+{{- end -}}
+{{- end -}}
