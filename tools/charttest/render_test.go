@@ -717,3 +717,25 @@ func TestGoMemLimit(t *testing.T) {
 		t.Errorf("extraEnv should win: %q", v)
 	}
 }
+
+// A bare number in a values file (not --set) decodes as a float64: it must still give the same GOMEMLIMIT as the quoted form.
+func TestGoMemLimitNumericValuesFile(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, mem string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("api:\n  resources:\n    limits:\n      memory: "+mem+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	for _, tc := range []struct{ name, mem, want string }{
+		{"num.yaml", "268435456", "228170137"},
+		{"quoted.yaml", `"268435456"`, "228170137"},
+		{"suffix.yaml", "1Gi", "912680550"},
+	} {
+		objs := render(t, "-f", valuesFile("minimal-values.yaml"), "-f", write(tc.name, tc.mem))
+		if v := env(container(t, find(objs, "Deployment", "t-clearance-api")))["GOMEMLIMIT"]; v != tc.want {
+			t.Errorf("%s: GOMEMLIMIT = %q, want %q", tc.mem, v, tc.want)
+		}
+	}
+}

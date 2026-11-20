@@ -460,7 +460,10 @@ A GOMEMLIMIT in the component's extraEnv comes later in the env list and wins.
 {{- if .override -}}
 {{- if ne (toString .override) "off" -}}{{- $val = toString .override -}}{{- end -}}
 {{- else if .ctx.Values.goMemLimit.enabled -}}
-{{- $lim := toString (dig "limits" "memory" "" (.resources | default dict)) -}}
+{{- $raw := dig "limits" "memory" "" (.resources | default dict) -}}
+{{- /* A bare number from a values file decodes as float64 (268435456 would print as 2.68435456e+08): an integral one is written out in full. */ -}}
+{{- $lim := toString $raw -}}
+{{- if and (kindIs "float64" $raw) (eq $raw (floor $raw)) -}}{{- $lim = printf "%.0f" $raw -}}{{- end -}}
 {{- if regexMatch "^[0-9]+(Ki|Mi|Gi|Ti|K|M|G|T)?$" $lim -}}
 {{- $n := int64 (regexFind "^[0-9]+" $lim) -}}
 {{- $unit := regexFind "[A-Za-z]+$" $lim -}}
