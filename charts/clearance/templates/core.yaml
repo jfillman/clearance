@@ -68,6 +68,9 @@ spec:
             - {name: verify, containerPort: {{ .Values.verifyPage.port }}, protocol: TCP}
             {{- end }}
           env:
+            {{- with include "clearance.goMemLimitEnv" (dict "ctx" $ "resources" .Values.core.resources "override" .Values.core.goMemLimit) }}
+            {{- . | nindent 12 }}
+            {{- end }}
             - name: CLEARANCE_DSN
               valueFrom:
                 secretKeyRef:

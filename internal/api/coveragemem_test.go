@@ -17,6 +17,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jfillman/clearance/internal/observe"
 )
 
 func covMemWorld(scopes, obs, health, assess, stateBytes int) world {
@@ -133,3 +135,86 @@ func TestCoverageParsedRecordCost(t *testing.T) {
 		float64(b.HeapAlloc-a.HeapAlloc)/(1<<20), (b.HeapAlloc-a.HeapAlloc)/uint64(len(keep)), float64((b.HeapAlloc-a.HeapAlloc)/uint64(len(keep)))/float64(len(text)))
 	runtime.KeepAlive(keep)
 }
+
+// coverageBuildRecords is what a coverage statement holds before observe.Build runs: n parsed records of each of the
+// six kinds, as collect keeps them (state_change and correlation are already gone: the store drops them). project says
+// whether collect slimmed each one (observe.Project) as it arrived.
+func coverageBuildRecords(n int, project bool) [][]Record {
+	pre := `{"seq":123456,"hash":"` + strings.Repeat("a", 64) + `","prev_hash":"` + strings.Repeat("b", 64) + `","ts":"2026-11-16T08:00:00.123456Z","scope":"aws:000",` +
+		`"provider":{"name":"observe-aws","version":"0.1.0"},"actor":{"subject":"arn:aws:sts::000000000000:assumed-role/deployer/run-1"},`
+	about := `"about":{"seq":1,"hash":"` + strings.Repeat("c", 64) + `"},"rule_set":{"name":"default","version":"2026-11-01"}`
+	texts := []string{
+		pre + `"tool":"observation","source":{"name":"cloudtrail","event_id":"` + strings.Repeat("e", 36) + `"},` +
+			`"resource":{"kind":"Instance","id":"i-0abc123"},"action":{"verb":"create","api":"RunInstances","succeeded":true},` +
+			`"integrity":{"sourceVerified":true,"completenessClaimed":true},"times":{"observed":"2026-11-16T08:00:00Z"},"tier":3}`,
+		pre + `"tool":"observation.assessment",` + about + `,"coverage":"authorized-and-verified","tier":1,"attribution":{"signal":"role-session","matched":"run-1"}}`,
+		pre + `"tool":"observation.resolution",` + about + `,"resolution":{"state":"accepted","cause":"known","by":"alice"}}`,
+		pre + `"tool":"observation.verification",` + about + `,"source":{"name":"cloudtrail"},"verification":{"method":"digest","ok":true}}`,
+		pre + `"tool":"observation.health","source":{"name":"cloudtrail"},"health":{"state":"healthy","interval_seconds":300,` +
+			`"checks":[{"name":"trail-enabled","ok":true,"detail":"ok"},{"name":"config-recorder","ok":true,"detail":"ok"}]}}`,
+		pre + `"tool":"observation.audit-gap","source":{"name":"cloudtrail"},"gap":{"state":"open","reason":"lost","detail":"digest missing"}}`,
+	}
+	kinds := make([][]Record, 0, len(texts))
+	for _, text := range texts {
+		rs := make([]Record, 0, n)
+		for i := 0; i < n; i++ {
+			r, err := parseStored(text, "recorded-not-checkpointed")
+			if err != nil {
+				panic(err)
+			}
+			if project {
+				r = observe.Project(r)
+			}
+			rs = append(rs, r)
+		}
+		kinds = append(kinds, rs)
+	}
+	return kinds
+}
+
+func heapAfterGC() uint64 {
+	runtime.GC()
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	return m.HeapAlloc
+}
+
+// The live heap a statement holds at its peak, before and after collect projects each record (the numbers in the PR for
+// I-27): 6 kinds of MaxCoverageRecords each.
+func TestCoverageBuildHeldHeap(t *testing.T) {
+	if testing.Short() {
+		t.Skip("allocates tens of MiB")
+	}
+	measure := func(project bool) uint64 {
+		base := heapAfterGC()
+		keep := coverageBuildRecords(MaxCoverageRecords, project)
+		held := heapAfterGC() - base
+		runtime.KeepAlive(keep)
+		return held
+	}
+	full, slim := measure(false), measure(true)
+	t.Logf("held by one statement (6 kinds x %d records): full parse %.1f MiB, projected %.1f MiB (%.1fx smaller)",
+		MaxCoverageRecords, float64(full)/(1<<20), float64(slim)/(1<<20), float64(full)/float64(slim))
+	if slim >= full {
+		t.Errorf("projection should shrink what a statement holds: full %d, projected %d", full, slim)
+	}
+}
+
+func benchBuild(b *testing.B, project bool) {
+	b.ReportAllocs()
+	var peak uint64
+	for i := 0; i < b.N; i++ {
+		base := heapAfterGC()
+		keep := coverageBuildRecords(MaxCoverageRecords, project)
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+		if m.HeapAlloc-base > peak {
+			peak = m.HeapAlloc - base
+		}
+		runtime.KeepAlive(keep)
+	}
+	b.ReportMetric(float64(peak)/(1<<20), "heap-before-gc-MiB")
+}
+
+func BenchmarkCoverageBuildFullParse(b *testing.B) { benchBuild(b, false) }
+func BenchmarkCoverageBuildProjected(b *testing.B) { benchBuild(b, true) }

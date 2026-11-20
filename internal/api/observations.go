@@ -130,7 +130,13 @@ func (s *Server) collect(ctx context.Context, f EvidenceFilter, v *Viewer, max i
 		if err != nil {
 			return nil, false, err
 		}
-		out = append(out, rs...)
+		if f.Slim { // a statement: keep only what observe.Build reads, so the page's full parse is freed
+			for _, r := range rs {
+				out = append(out, observe.Project(r))
+			}
+		} else {
+			out = append(out, rs...)
+		}
 		if len(rs) < page {
 			return out, false, nil
 		}

@@ -18,6 +18,12 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   page a backward range scan of its own rows with no Sort. The tool condition of those reads is now a literal (`tool = 'observation'`, not
   `tool = ANY($n)`, which the planner cannot match to the index), and a coverage read pages 1000 at a time instead of 200.
 
+### Changed
+
+- The chart sets `GOMEMLIMIT` on every Go container to 85% of its own memory limit (`goMemLimit.percent`; per-container
+  `goMemLimit` overrides, `off` disables), and a coverage statement keeps only the fields `observe.Build` reads of each
+  record while it collects them (`observe.Project`), about 1.8x less held per statement. Memory work for I-27.
+
 ### Added
 
 - **Optional TLS for the core and the API (I-43).** `tls.enabled` serves https on a second port (`CLEARANCE_TLS_LISTEN`, `_CERT_FILE`,

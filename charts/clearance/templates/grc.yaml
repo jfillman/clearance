@@ -51,6 +51,9 @@ spec:
           ports:
             - {name: http, containerPort: 8080, protocol: TCP}
           env:
+            {{- with include "clearance.goMemLimitEnv" (dict "ctx" $ "resources" $g.resources "override" $g.goMemLimit) }}
+            {{- . | nindent 12 }}
+            {{- end }}
             - {name: CLEARANCE_GRC_TARGET, value: vanta}
             - {name: CLEARANCE_GRC_LISTEN, value: ":8080"}
             - {name: CLEARANCE_GRC_PROVIDER, value: {{ $g.providerName | quote }}}
