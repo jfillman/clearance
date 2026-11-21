@@ -9,6 +9,13 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Fixed
+
+- **A `GOMEMLIMIT` in `extraEnv` no longer duplicates the chart's own (chart).** 0.54.0 rendered `GOMEMLIMIT` from the memory limit and then
+  `extraEnv` after it, so a values file that set it in `extraEnv` gave the container two entries of one name. A repeated env name fails
+  strategic-merge patching (Argo CD's dry run: "The order in patch list ... doesn't match $setElementOrder list"). The chart now adds none when
+  `extraEnv` sets it, and refuses any render where a container's env names a variable twice. Set it with `<component>.goMemLimit`.
+
 ## [0.54.0] - 2026-11-20
 
 **Upgrading from 0.53.x.** No setting is newly required. A new index builds after start and the core restarts once for the image;

@@ -55,54 +55,7 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - {name: http, containerPort: 8080, protocol: TCP}
-          env:
-            {{- with include "clearance.goMemLimitEnv" (dict "ctx" $ "resources" $s.resources "override" $s.goMemLimit) }}
-            {{- . | nindent 12 }}
-            {{- end }}
-            - {name: CLEARANCE_SLACK_LISTEN, value: ":8080"}
-            - {name: CLEARANCE_SLACK_TRANSPORT, value: {{ $s.transport | quote }}}
-            - {name: CLEARANCE_SLACK_PUBLIC_URL, value: {{ $s.publicUrl | quote }}}
-            - {name: CLEARANCE_SLACK_CLIENT_ID, value: {{ $s.slackClientId | quote }}}
-            - {name: CLEARANCE_SLACK_IDP_CLIENT_ID, value: {{ $s.idpClientId | quote }}}
-            - {name: CLEARANCE_SLACK_BOT_TOKEN_FILE, value: /etc/clearance-slack/secrets/bot-token}
-            {{- if eq $s.transport "socket" }}
-            - {name: CLEARANCE_SLACK_APP_TOKEN_FILE, value: /etc/clearance-slack/secrets/app-token}
-            {{- else }}
-            - {name: CLEARANCE_SLACK_SIGNING_SECRET_FILE, value: /etc/clearance-slack/secrets/signing-secret}
-            {{- end }}
-            - {name: CLEARANCE_SLACK_CLIENT_SECRET_FILE, value: /etc/clearance-slack/secrets/client-secret}
-            {{- if $s.idpClientSecret }}
-            - {name: CLEARANCE_SLACK_IDP_CLIENT_SECRET_FILE, value: /etc/clearance-slack/secrets/idp-client-secret}
-            {{- end }}
-            - {name: CLEARANCE_SLACK_DSN_FILE, value: /etc/clearance-slack/secrets/dsn}
-            - {name: CLEARANCE_API_URL, value: {{ printf "http://%s.%s.svc:%v" (include "clearance.apiName" .) .Release.Namespace .Values.service.port | quote }}}
-            - {name: CLEARANCE_URL, value: {{ printf "http://%s.%s.svc:%v" (include "clearance.coreName" .) .Release.Namespace .Values.service.port | quote }}}
-            - {name: CLEARANCE_SLACK_SA_TOKEN_FILE, value: /var/run/secrets/tokens/clearance}
-            - {name: CLEARANCE_OIDC_ISSUER, value: {{ .Values.oidc.issuer | quote }}}
-            - {name: CLEARANCE_OIDC_ALLOWED_USERS, value: {{ include "clearance.csv" .Values.oidc.allowedUsers | quote }}}
-            {{- with .Values.oidc.userClaim }}
-            - {name: CLEARANCE_OIDC_USER_CLAIM, value: {{ . | quote }}}
-            {{- end }}
-            {{- with .Values.oidc.jwksURL }}
-            - {name: CLEARANCE_OIDC_JWKS_URL, value: {{ . | quote }}}
-            {{- end }}
-            {{- with .Values.vocabulary.onBehalfOfHeader }}
-            - {name: CLEARANCE_ON_BEHALF_OF_HEADER, value: {{ . | quote }}}
-            {{- end }}
-            {{- with $s.webUrl }}
-            - {name: CLEARANCE_SLACK_WEB_URL, value: {{ . | quote }}}
-            {{- end }}
-            - {name: CLEARANCE_SLACK_CLEAR_MAX_TIER, value: {{ $s.clearMaxTier | quote }}}
-            - {name: CLEARANCE_SLACK_FORWARD_AUTH_TIME, value: {{ $s.forwardAuthTime | quote }}}
-            {{- range $k, $env := dict "relinkAfter" "CLEARANCE_SLACK_RELINK_AFTER" "alertInterval" "CLEARANCE_SLACK_ALERT_INTERVAL" "reconcileInterval" "CLEARANCE_SLACK_RECONCILE_INTERVAL" "stuckAttestationAfter" "CLEARANCE_SLACK_STUCK_ATTESTATION_AFTER" "tier3OutsideAfter" "CLEARANCE_SLACK_TIER3_OUTSIDE_AFTER" }}
-            {{- with index $s $k }}
-            - {name: {{ $env }}, value: {{ . | quote }}}
-            {{- end }}
-            {{- end }}
-            - {name: CLEARANCE_SLACK_ROUTES_FILE, value: /etc/clearance-slack/routes/routes.yaml}
-            {{- with $s.extraEnv }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
+          env:{{ include "clearance.slack.env" . }}
           startupProbe:
             httpGet: {path: /healthz, port: http}
             periodSeconds: 5
@@ -175,4 +128,56 @@ spec:
     {{- include "clearance.selector" (dict "ctx" . "component" "slack") | nindent 4 }}
   ports:
     - {name: http, port: {{ .Values.service.port }}, targetPort: http, protocol: TCP}
+{{- end }}
+{{- define "clearance.slack.env" }}
+{{- $out := include "clearance.slack.envList" . }}{{ include "clearance.uniqueEnv" (dict "component" "slack" "env" $out) }}{{- end }}
+{{- define "clearance.slack.envList" }}
+{{- $s := .Values.slack -}}
+            {{- with include "clearance.goMemLimitEnv" (dict "ctx" $ "resources" $s.resources "override" $s.goMemLimit "extraEnv" $s.extraEnv) }}
+            {{- . | nindent 12 }}
+            {{- end }}
+            - {name: CLEARANCE_SLACK_LISTEN, value: ":8080"}
+            - {name: CLEARANCE_SLACK_TRANSPORT, value: {{ $s.transport | quote }}}
+            - {name: CLEARANCE_SLACK_PUBLIC_URL, value: {{ $s.publicUrl | quote }}}
+            - {name: CLEARANCE_SLACK_CLIENT_ID, value: {{ $s.slackClientId | quote }}}
+            - {name: CLEARANCE_SLACK_IDP_CLIENT_ID, value: {{ $s.idpClientId | quote }}}
+            - {name: CLEARANCE_SLACK_BOT_TOKEN_FILE, value: /etc/clearance-slack/secrets/bot-token}
+            {{- if eq $s.transport "socket" }}
+            - {name: CLEARANCE_SLACK_APP_TOKEN_FILE, value: /etc/clearance-slack/secrets/app-token}
+            {{- else }}
+            - {name: CLEARANCE_SLACK_SIGNING_SECRET_FILE, value: /etc/clearance-slack/secrets/signing-secret}
+            {{- end }}
+            - {name: CLEARANCE_SLACK_CLIENT_SECRET_FILE, value: /etc/clearance-slack/secrets/client-secret}
+            {{- if $s.idpClientSecret }}
+            - {name: CLEARANCE_SLACK_IDP_CLIENT_SECRET_FILE, value: /etc/clearance-slack/secrets/idp-client-secret}
+            {{- end }}
+            - {name: CLEARANCE_SLACK_DSN_FILE, value: /etc/clearance-slack/secrets/dsn}
+            - {name: CLEARANCE_API_URL, value: {{ printf "http://%s.%s.svc:%v" (include "clearance.apiName" .) .Release.Namespace .Values.service.port | quote }}}
+            - {name: CLEARANCE_URL, value: {{ printf "http://%s.%s.svc:%v" (include "clearance.coreName" .) .Release.Namespace .Values.service.port | quote }}}
+            - {name: CLEARANCE_SLACK_SA_TOKEN_FILE, value: /var/run/secrets/tokens/clearance}
+            - {name: CLEARANCE_OIDC_ISSUER, value: {{ .Values.oidc.issuer | quote }}}
+            - {name: CLEARANCE_OIDC_ALLOWED_USERS, value: {{ include "clearance.csv" .Values.oidc.allowedUsers | quote }}}
+            {{- with .Values.oidc.userClaim }}
+            - {name: CLEARANCE_OIDC_USER_CLAIM, value: {{ . | quote }}}
+            {{- end }}
+            {{- with .Values.oidc.jwksURL }}
+            - {name: CLEARANCE_OIDC_JWKS_URL, value: {{ . | quote }}}
+            {{- end }}
+            {{- with .Values.vocabulary.onBehalfOfHeader }}
+            - {name: CLEARANCE_ON_BEHALF_OF_HEADER, value: {{ . | quote }}}
+            {{- end }}
+            {{- with $s.webUrl }}
+            - {name: CLEARANCE_SLACK_WEB_URL, value: {{ . | quote }}}
+            {{- end }}
+            - {name: CLEARANCE_SLACK_CLEAR_MAX_TIER, value: {{ $s.clearMaxTier | quote }}}
+            - {name: CLEARANCE_SLACK_FORWARD_AUTH_TIME, value: {{ $s.forwardAuthTime | quote }}}
+            {{- range $k, $env := dict "relinkAfter" "CLEARANCE_SLACK_RELINK_AFTER" "alertInterval" "CLEARANCE_SLACK_ALERT_INTERVAL" "reconcileInterval" "CLEARANCE_SLACK_RECONCILE_INTERVAL" "stuckAttestationAfter" "CLEARANCE_SLACK_STUCK_ATTESTATION_AFTER" "tier3OutsideAfter" "CLEARANCE_SLACK_TIER3_OUTSIDE_AFTER" }}
+            {{- with index $s $k }}
+            - {name: {{ $env }}, value: {{ . | quote }}}
+            {{- end }}
+            {{- end }}
+            - {name: CLEARANCE_SLACK_ROUTES_FILE, value: /etc/clearance-slack/routes/routes.yaml}
+            {{- with $s.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
 {{- end }}
