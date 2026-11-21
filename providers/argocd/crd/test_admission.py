@@ -110,13 +110,17 @@ def deploy(name, rendered, ns="prot"):
 
 WAIT_IMAGE = "registry.invalid/clearance-wait@sha256:" + "0" * 64
 CORE_URL = "http://clearance-core.invalid:8080"
+# The one-release previous core URL and the CA ConfigMap that admission.yaml pins (placeholders, like the two above).
+PREV_URL = "http://clearance-core-previous.invalid:8080"
+CA_CONFIGMAP = "ca-bundle.invalid"
 
 
 def wait_job(name, image=WAIT_IMAGE, label="wait", hook="PreSync", ns="prot", extra_volume=False, token="clearance",
              host=None, privileged=False, command=None, args=None, env=None, env_from=False, aliases=False, init=False,
-             pod=None, ctr=None, job=None, automount=False):
+             pod=None, ctr=None, job=None, automount=False, ca=None, mutate=None):
     ctr_extra = ctr
-    """The Job exactly as providers/argocd/cmp/job.go builds it, with one deviation per call."""
+    """The Job exactly as providers/argocd/cmp/job.go builds it, with one deviation per call. ca: the ConfigMap the CMP mounts as
+    its CA (CLEARANCE_WAIT_CA_CONFIGMAP; cmp/job.go WaitCAVolume), after the token's. mutate(spec): one change to the pod spec."""
     md = {"name": name, "namespace": ns, "annotations": {"argocd.argoproj.io/hook": hook}}
     if label:
         md["labels"] = {"clearance.hangar.io/injected": label}
@@ -152,6 +156,11 @@ def wait_job(name, image=WAIT_IMAGE, label="wait", hook="PreSync", ns="prot", ex
     if automount is not None:
         spec["automountServiceAccountToken"] = automount
     spec.update(pod or {})
+    if ca:
+        spec["containers"][0]["volumeMounts"].append({"name": "clearance-ca", "mountPath": "/etc/clearance-ca", "readOnly": True})
+        spec["volumes"].append({"name": "clearance-ca", "configMap": {"name": ca, "items": [{"key": "ca.crt", "path": "ca.crt"}]}})
+    if mutate:
+        mutate(spec)
     jspec = {"backoffLimit": 0, "activeDeadlineSeconds": 3900, "template": {"metadata": {"labels": md.get("labels", {})}, "spec": spec}}
     jspec.update(job or {})
     return {"apiVersion": "batch/v1", "kind": "Job", "metadata": md, "spec": jspec}
@@ -340,10 +349,43 @@ def run(deny):
             ("the label with another value", dict(label="x")),
             ("no label", dict(label=None)),
             ("no PreSync hook annotation", dict(hook="Sync")),
+            # Both the token mount and its volume are required: a Job with neither is not the CMP's.
+            ("neither the token mount nor its volume", dict(mutate=lambda s: (s["containers"][0].pop("volumeMounts"), s.pop("volumes")))),
+            ("the token volume but no mount", dict(mutate=lambda s: s["containers"][0].pop("volumeMounts"))),
+            # The previous core URL (one release): exactly that URL, nothing near it.
+            ("a third CLEARANCE_URL", dict(env=[{"name": "CLEARANCE_URL", "value": "http://clearance-core.invalid:9090"},
+                                                {"name": "CLEARANCE_TOKEN_FILE", "value": "/var/run/secrets/tokens/clearance"}])),
+            ("the previous URL with a path", dict(env=[{"name": "CLEARANCE_URL", "value": PREV_URL + "/x"},
+                                                       {"name": "CLEARANCE_TOKEN_FILE", "value": "/var/run/secrets/tokens/clearance"}])),
+            # The optional CA volume (I-43): exactly the pinned ConfigMap's ca.crt, read-only at /etc/clearance-ca, after the token's.
+            ("the CA from another ConfigMap", dict(ca="other-ca")),
+            ("the CA volume but no CA mount", dict(ca=CA_CONFIGMAP, mutate=lambda s: s["containers"][0]["volumeMounts"].pop())),
+            ("a writable CA mount", dict(ca=CA_CONFIGMAP, mutate=lambda s: s["containers"][0]["volumeMounts"][1].update(readOnly=False))),
+            ("the CA mounted elsewhere", dict(ca=CA_CONFIGMAP, mutate=lambda s: s["containers"][0]["volumeMounts"][1].update(mountPath="/etc/ssl/certs"))),
+            ("a subPath on the CA mount", dict(ca=CA_CONFIGMAP, mutate=lambda s: s["containers"][0]["volumeMounts"][1].update(subPath="ca.crt"))),
+            ("another CA item key", dict(ca=CA_CONFIGMAP, mutate=lambda s: s["volumes"][1]["configMap"].update(items=[{"key": "tls.key", "path": "ca.crt"}]))),
+            ("another CA item path", dict(ca=CA_CONFIGMAP, mutate=lambda s: s["volumes"][1]["configMap"].update(items=[{"key": "ca.crt", "path": "x"}]))),
+            ("a second CA item", dict(ca=CA_CONFIGMAP, mutate=lambda s: s["volumes"][1]["configMap"]["items"].append({"key": "b", "path": "b"}))),
+            ("the CA ConfigMap whole (no items)", dict(ca=CA_CONFIGMAP, mutate=lambda s: s["volumes"][1]["configMap"].pop("items"))),
+            ("a CA defaultMode 0777", dict(ca=CA_CONFIGMAP, mutate=lambda s: s["volumes"][1]["configMap"].update(defaultMode=511))),
+            ("an optional CA ConfigMap", dict(ca=CA_CONFIGMAP, mutate=lambda s: s["volumes"][1]["configMap"].update(optional=True))),
+            ("a Secret named clearance-ca", dict(ca=CA_CONFIGMAP, mutate=lambda s: s["volumes"].__setitem__(1, {"name": "clearance-ca", "secret": {"secretName": "x"}}))),
+            ("the volumes in the other order", dict(ca=CA_CONFIGMAP, mutate=lambda s: s["volumes"].reverse())),
+            ("a third volume after the CA", dict(ca=CA_CONFIGMAP, mutate=lambda s: (s["volumes"].append({"name": "v", "emptyDir": {}}),
+                                                                                    s["containers"][0]["volumeMounts"].append({"name": "v", "mountPath": "/v"})))),
         ]
         for i, (what, kw) in enumerate(cases):
             check("refuse: the labelled Job with " + what, False, sh(["create", "-f", "-"], wait_job(f"wait-bad{i}", **kw), ARGO),
                   "clearance-protected-writes" if deny else None)
+        check("admit: the Job with the CMP's CA volume and mount", True, sh(["create", "-f", "-"], wait_job("wait-ca", ca=CA_CONFIGMAP), ARGO))
+        check("admit: the CA volume with the API server's defaultMode 420", True, sh(["create", "-f", "-"], wait_job(
+            "wait-ca420", ca=CA_CONFIGMAP, mutate=lambda s: s["volumes"][1]["configMap"].update(defaultMode=420)), ARGO))
+        check("admit: the Job on the previous core URL (one release)", True, sh(["create", "-f", "-"], wait_job(
+            "wait-prev", env=[{"name": "CLEARANCE_URL", "value": PREV_URL},
+                              {"name": "CLEARANCE_TOKEN_FILE", "value": "/var/run/secrets/tokens/clearance"}]), ARGO))
+        check("admit: the previous URL with the CA", True, sh(["create", "-f", "-"], wait_job(
+            "wait-prev-ca", ca=CA_CONFIGMAP, env=[{"name": "CLEARANCE_URL", "value": PREV_URL},
+                                                   {"name": "CLEARANCE_TOKEN_FILE", "value": "/var/run/secrets/tokens/clearance"}]), ARGO))
         check("not matched: the same Job with another image by another writer", True,
               sh(["create", "-f", "-"], wait_job("wait-other", image="busybox"), OTHER))
 
