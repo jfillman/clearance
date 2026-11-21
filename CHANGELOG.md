@@ -9,7 +9,17 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.54.0] - 2026-11-20
+
+**Upgrading from 0.53.x.** No setting is newly required. A new index builds after start and the core restarts once for the image;
+TLS (`tls.enabled`) and `goMemLimit` (85% of each container's memory limit) change nothing you have not turned on or sized.
+
 ### Fixed
+
+- **Ledger checkpoint no longer hits `statement_timeout` on a long chain (I-49).** Recording a checkpoint marked every record below it
+  `checkpointed` with an UPDATE on the unindexed `assurance` column, which walked every row below the checkpoint size each poll and, on a
+  long-lived ledger, overran the 5 s statement timeout ("ledger: recording a checkpoint failed ... SQLSTATE 57014"), so the checkpoint was
+  never recorded. The UPDATE is bounded to `[held.Size, cp.Size)`, a primary-key range scan over only the new records. No schema change.
 
 - **Slow coverage reads on a busy scope (I-26).** A coverage statement pages each kind (`ORDER BY seq DESC`, 200 at a time) through the
   `(scope, ts)` index, which holds observations and assessments together, so every page read the whole window's rows, discarded the other
