@@ -51,7 +51,12 @@ Rollback: set `tls.plainHttp: true` (and the clients' URLs back to http); then `
 
 ## Known limits
 
-- The admission policy's wait-Job exemption (rendered from `providers/argocd/crd/admission.yaml`) must be extended to allow the
-  optional CA volume and mount before `CLEARANCE_WAIT_CA_CONFIGMAP` is used; the agent's validator already knows it
-  (`WaitPin.CAConfigMap`).
+- The admission policy's wait-Job exemption (`providers/argocd/crd/admission.yaml`) admits the optional CA volume and mount
+  exactly as the plugin builds it: a second volume `clearance-ca`, a ConfigMap volume of the pinned ConfigMap with the one item
+  `ca.crt`, mounted read-only at `/etc/clearance-ca`, after the token's. The installer renders the pinned name
+  (`ca-bundle.invalid` in the file) from the same value it gives the plugin's `CLEARANCE_WAIT_CA_CONFIGMAP`, and renders the policy
+  first: a Job with the CA volume is refused by a policy without it. The agent's validator knows the same shape (`WaitPin.CAConfigMap`).
+- Moving the wait Job's URL (`http://...:8080` to `https://...:8443`) changes the URL the policy pins. For one release the policy may
+  also admit the previous URL (`clearance-core-previous.invalid` in the file; Apron's `clearance.gate.previousURL`), so a wait Job or
+  cached manifest made before the change is not refused where the binding denies. The agent's exception scan pins one URL only.
 - The web UI, clearance-slack and clearance-grc still call the core and the API over plain http.

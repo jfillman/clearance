@@ -65,8 +65,20 @@ spec:
     # exactly CLEARANCE_URL=<the pinned core URL> and CLEARANCE_TOKEN_FILE=/var/run/secrets/tokens/clearance;
     # automountServiceAccountToken false and no serviceAccountName (the CMP sets automount false and no service account;
     # it never sets one); hostAliases exactly the pinned one (none when the pin is empty); the one mount and the one projected
-    # service-account token (audience 'clearance'). The waiter mounts a clearance token, so anything that could
+    # service-account token (audience 'clearance'), BOTH required: a Job with neither is not the CMP's and is not exempt. The waiter mounts a clearance token, so anything that could
     # redirect it is refused. Only the change id and the timeout vary.
+    # The CMP's optional CA for an https core (I-43, docs/tls.md; cmp/job.go WaitCAVolume, CLEARANCE_WAIT_CA_CONFIGMAP) is
+    # admitted too, and nothing else: a SECOND volume named clearance-ca that is exactly a ConfigMap volume of the pinned
+    # ConfigMap (ca-bundle.invalid here; the installer renders the name the plugin is given, e.g. a trust-manager Bundle's
+    # target; Apron's clearance.gate.waitCAConfigMap) with the one item ca.crt -> ca.crt (defaultMode, when present, the API
+    # server's 420), and a SECOND mount of it named clearance-ca at /etc/clearance-ca, readOnly (the wait binary's default
+    # CLEARANCE_CA_FILE). Both or neither, after the token's; a Job without them (the CMP before its CA is configured) is
+    # still exempt. Any other volume, Secret, hostPath, projected or emptyDir source, path, subPath or writable mount is refused.
+    # An installer that configures no CA renders this file without the second volume (Apron does, byte for byte).
+    # CLEARANCE_URL is the pinned core URL or, for ONE release after the URL changes, the previous one
+    # (http://clearance-core-previous.invalid:8080 here; Apron's clearance.gate.previousURL), so a wait Job or cached manifest
+    # made before the change keeps working where the binding denies. Exactly those two URLs; with no previous URL the test is
+    # the single == of the pinned one.
     - name: waitjob
       expression: "has(object.spec) ? dyn(object.spec) : dyn({})"
     - name: waitpod
@@ -117,7 +129,7 @@ spec:
         has(variables.waitctr.env) && variables.waitctr.env.size() == 2 &&
         variables.waitctr.env.all(e, e.all(k, k in ['name', 'value'])) &&
         variables.waitctr.env[0].name == 'CLEARANCE_URL' && has(variables.waitctr.env[0].value) &&
-        variables.waitctr.env[0].value == 'http://clearance-core.invalid:8080' &&
+        variables.waitctr.env[0].value in ['http://clearance-core.invalid:8080', 'http://clearance-core-previous.invalid:8080'] &&
         variables.waitctr.env[1].name == 'CLEARANCE_TOKEN_FILE' && has(variables.waitctr.env[1].value) &&
         variables.waitctr.env[1].value == '/var/run/secrets/tokens/clearance' &&
         has(variables.waitctr.securityContext) &&
@@ -131,19 +143,25 @@ spec:
         has(variables.waitctr.securityContext.capabilities.drop) &&
         variables.waitctr.securityContext.capabilities.drop == ['ALL'] &&
         (!has(variables.waitctr.imagePullPolicy) || variables.waitctr.imagePullPolicy == 'IfNotPresent') &&
-        (!has(variables.waitctr.volumeMounts) ||
-         (variables.waitctr.volumeMounts.size() == 1 &&
+        (has(variables.waitctr.volumeMounts) &&
+         (variables.waitctr.volumeMounts.size() in [1, 2] &&
           variables.waitctr.volumeMounts[0].all(k, k in ['name', 'mountPath', 'readOnly']) &&
           variables.waitctr.volumeMounts[0].name == 'clearance-token' &&
           variables.waitctr.volumeMounts[0].mountPath == '/var/run/secrets/tokens' &&
-          has(variables.waitctr.volumeMounts[0].readOnly) && variables.waitctr.volumeMounts[0].readOnly)) &&
+          has(variables.waitctr.volumeMounts[0].readOnly) && variables.waitctr.volumeMounts[0].readOnly &&
+          (variables.waitctr.volumeMounts.size() == 1 ||
+           (variables.waitctr.volumeMounts[1].all(k, k in ['name', 'mountPath', 'readOnly']) &&
+            has(variables.waitctr.volumeMounts[1].name) && variables.waitctr.volumeMounts[1].name == 'clearance-ca' &&
+            has(variables.waitctr.volumeMounts[1].mountPath) && variables.waitctr.volumeMounts[1].mountPath == '/etc/clearance-ca' &&
+            has(variables.waitctr.volumeMounts[1].readOnly) && variables.waitctr.volumeMounts[1].readOnly == true)))) &&
         ('' == '' ? !has(variables.waitpod.hostAliases) :
          (has(variables.waitpod.hostAliases) && variables.waitpod.hostAliases.size() == 1 &&
           variables.waitpod.hostAliases[0].all(k, k in ['ip', 'hostnames']) &&
           has(variables.waitpod.hostAliases[0].ip) && has(variables.waitpod.hostAliases[0].hostnames) &&
           variables.waitpod.hostAliases[0].ip + '=' + variables.waitpod.hostAliases[0].hostnames.join(',') == '')) &&
-        (!has(variables.waitpod.volumes) ||
-         (variables.waitpod.volumes.size() == 1 && variables.waitpod.volumes[0].all(k, k in ['name', 'projected']) &&
+        (has(variables.waitpod.volumes) &&
+         (has(variables.waitctr.volumeMounts) && variables.waitpod.volumes.size() == variables.waitctr.volumeMounts.size() &&
+          variables.waitpod.volumes.size() in [1, 2] && variables.waitpod.volumes[0].all(k, k in ['name', 'projected']) &&
           variables.waitpod.volumes[0].name == 'clearance-token' && has(variables.waitpod.volumes[0].projected) &&
           variables.waitpod.volumes[0].projected.all(k, k in ['sources', 'defaultMode']) &&
           (!has(variables.waitpod.volumes[0].projected.defaultMode) || variables.waitpod.volumes[0].projected.defaultMode == 420) &&
@@ -155,7 +173,17 @@ spec:
           has(variables.waitpod.volumes[0].projected.sources[0].serviceAccountToken.audience) &&
           variables.waitpod.volumes[0].projected.sources[0].serviceAccountToken.audience == 'clearance' &&
           (!has(variables.waitpod.volumes[0].projected.sources[0].serviceAccountToken.path) ||
-           variables.waitpod.volumes[0].projected.sources[0].serviceAccountToken.path == 'clearance')))
+           variables.waitpod.volumes[0].projected.sources[0].serviceAccountToken.path == 'clearance') &&
+          (variables.waitpod.volumes.size() == 1 ||
+           (variables.waitpod.volumes[1].all(k, k in ['name', 'configMap']) &&
+            has(variables.waitpod.volumes[1].name) && variables.waitpod.volumes[1].name == 'clearance-ca' &&
+            has(variables.waitpod.volumes[1].configMap) && variables.waitpod.volumes[1].configMap.all(k, k in ['name', 'items', 'defaultMode']) &&
+            has(variables.waitpod.volumes[1].configMap.name) && variables.waitpod.volumes[1].configMap.name == 'ca-bundle.invalid' &&
+            (!has(variables.waitpod.volumes[1].configMap.defaultMode) || variables.waitpod.volumes[1].configMap.defaultMode == 420) &&
+            has(variables.waitpod.volumes[1].configMap.items) && variables.waitpod.volumes[1].configMap.items.size() == 1 &&
+            variables.waitpod.volumes[1].configMap.items[0].all(k, k in ['key', 'path']) &&
+            has(variables.waitpod.volumes[1].configMap.items[0].key) && variables.waitpod.volumes[1].configMap.items[0].key == 'ca.crt' &&
+            has(variables.waitpod.volumes[1].configMap.items[0].path) && variables.waitpod.volumes[1].configMap.items[0].path == 'ca.crt'))))
     - name: key
       expression: >-
         (has(object.apiVersion) && object.apiVersion.contains('/') ? object.apiVersion.split('/')[0] : '') + '/' +

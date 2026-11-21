@@ -9,6 +9,15 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Changed
+
+- **The admission policy's wait-Job exemption admits the plugin's optional CA, and for one release a previous core URL
+  (`providers/argocd/crd/admission.yaml`; I-43, A-19).** It mirrors apron's rendered policy: a second volume `clearance-ca`, exactly a
+  ConfigMap volume of the pinned ConfigMap with the one item `ca.crt`, mounted read-only at `/etc/clearance-ca` after the token's, and a
+  `CLEARANCE_URL` that is the pinned URL or the previous one. Anything else is still refused. It is also stricter, as apron's is: the
+  token's mount and volume are both required, so a labelled Job with neither is no longer exempt (the plugin always sets both).
+  `test_admission.py` covers the new shape in both modes.
+
 ### Fixed
 
 - **A `GOMEMLIMIT` in `extraEnv` no longer duplicates the chart's own (chart).** 0.54.0 rendered `GOMEMLIMIT` from the memory limit and then
