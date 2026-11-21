@@ -711,10 +711,80 @@ func TestGoMemLimit(t *testing.T) {
 	if v, ok := limit(objs, "t-clearance-api"); ok {
 		t.Errorf("disabled: GOMEMLIMIT %q set", v)
 	}
-	// extraEnv comes later in the list, so Kubernetes takes its GOMEMLIMIT
-	objs = render(t, "-f", valuesFile("minimal-values.yaml"), "--set", "api.extraEnv[0].name=GOMEMLIMIT", "--set", "api.extraEnv[0].value=100MiB")
-	if v, _ := limit(objs, "t-clearance-api"); v != "100MiB" {
-		t.Errorf("extraEnv should win: %q", v)
+	// A GOMEMLIMIT in extraEnv wins, and the container's env list names it once (a repeated name breaks strategic-merge
+	// patching, which is how Argo CD's dry run refused the first form of this).
+	for _, c := range []struct{ name, key string }{{"t-clearance-api", "api"}, {"t-clearance-core", "core"}} {
+		objs = render(t, "-f", valuesFile("minimal-values.yaml"), "--set", c.key+".extraEnv[0].name=GOMEMLIMIT", "--set", c.key+".extraEnv[0].value=100MiB")
+		if v, _ := limit(objs, c.name); v != "100MiB" {
+			t.Errorf("%s extraEnv should win: %q", c.name, v)
+		}
+		if n := envNameCount(t, container(t, find(objs, "Deployment", c.name)), "GOMEMLIMIT"); n != 1 {
+			t.Errorf("%s names GOMEMLIMIT %d times, want 1", c.name, n)
+		}
+	}
+	// The same, with the component's own goMemLimit also set: extraEnv still wins, still once.
+	objs = render(t, "-f", valuesFile("minimal-values.yaml"), "--set", "api.goMemLimit=200MiB", "--set", "api.extraEnv[0].name=GOMEMLIMIT", "--set", "api.extraEnv[0].value=100MiB")
+	if n := envNameCount(t, container(t, find(objs, "Deployment", "t-clearance-api")), "GOMEMLIMIT"); n != 1 {
+		t.Errorf("goMemLimit and extraEnv: GOMEMLIMIT named %d times, want 1", n)
+	}
+}
+
+func envNameCount(t *testing.T, c obj, name string) int {
+	t.Helper()
+	n := 0
+	list, _ := c["env"].([]any)
+	for _, e := range list {
+		if e.(obj)["name"] == name {
+			n++
+		}
+	}
+	return n
+}
+
+// No container's env list names a variable twice, in any of the CI values files: Kubernetes and Argo CD patch env by name.
+func TestNoEnvNameRepeated(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join(chartDir, "ci", "*-values.yaml"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no ci values files: %v", err)
+	}
+	checked := 0
+	for _, f := range files {
+		for _, o := range render(t, "-f", f) {
+			if o["kind"] != "Deployment" {
+				continue
+			}
+			cs, _ := get(o, "spec", "template", "spec", "containers").([]any)
+			for _, c := range cs {
+				seen := map[string]bool{}
+				list, _ := c.(obj)["env"].([]any)
+				for _, e := range list {
+					name := e.(obj)["name"].(string)
+					if seen[name] {
+						t.Errorf("%s: %v names %s twice", filepath.Base(f), get(o, "metadata", "name"), name)
+					}
+					seen[name] = true
+					checked++
+				}
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no env entries checked")
+	}
+}
+
+// A variable set by the chart and again in extraEnv, or twice in extraEnv, is refused, whichever component.
+func TestRepeatedEnvRefused(t *testing.T) {
+	for name, args := range map[string][]string{
+		"api default":  {"--set", "api.extraEnv[0].name=CLEARANCE_AUDIENCE", "--set", "api.extraEnv[0].value=x"},
+		"core default": {"--set", "core.extraEnv[0].name=CLEARANCE_AUDIENCE", "--set", "core.extraEnv[0].value=x"},
+		"twice in extraEnv": {"--set", "api.extraEnv[0].name=FOO", "--set", "api.extraEnv[0].value=1",
+			"--set", "api.extraEnv[1].name=FOO", "--set", "api.extraEnv[1].value=2"},
+	} {
+		out, err := helm(t, append([]string{"-f", valuesFile("minimal-values.yaml")}, args...)...)
+		if err == nil || !strings.Contains(out, "is set twice") {
+			t.Errorf("%s: want a refusal naming the repeated variable, got err=%v\n%s", name, err, out)
+		}
 	}
 }
 

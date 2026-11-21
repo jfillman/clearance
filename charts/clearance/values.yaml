@@ -20,7 +20,9 @@ commonLabels: {}
 # computed here (a whole number with a Ki/Mi/Gi/Ti or K/M/G/T suffix, or bytes), so the garbage collector works
 # harder as the heap nears the limit instead of letting it grow to twice the live heap and meeting the OOM-killer.
 # Nothing is set for a component with no memory limit. Override one component with its own `goMemLimit` ("200MiB",
-# or "off" for none), or put GOMEMLIMIT in its extraEnv (that wins). Leave headroom: the limit also covers stacks,
+# or "off" for none), or put GOMEMLIMIT in its extraEnv, and the chart then adds none of its own (extraEnv wins and the
+# container names GOMEMLIMIT once; prefer the component's `goMemLimit`). No env name may appear twice in a container: the
+# chart refuses a render where an extraEnv entry repeats a name it already sets. Leave headroom: the limit also covers stacks,
 # cgo and the runtime's own overhead, which GOMEMLIMIT does not count toward the heap goal.
 goMemLimit:
   enabled: true

@@ -55,84 +55,7 @@ spec:
             {{- with .Values.api.metricsListen }}
             - {name: metrics, containerPort: {{ regexFind "[0-9]+$" . | int }}, protocol: TCP}
             {{- end }}
-          env:
-            {{- with include "clearance.goMemLimitEnv" (dict "ctx" $ "resources" .Values.api.resources "override" .Values.api.goMemLimit) }}
-            {{- . | nindent 12 }}
-            {{- end }}
-            - name: CLEARANCE_API_DSN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "clearance.readerSecretName" . }}
-                  key: {{ include "clearance.readerSecretKey" . }}
-            - name: CLEARANCE_CORE_URL
-              value: {{ if include "clearance.plainOff" . }}{{ printf "https://%s.%s.svc:%v" (include "clearance.coreName" .) .Release.Namespace .Values.tls.port | quote }}{{ else }}{{ printf "http://%s.%s.svc:%v" (include "clearance.coreName" .) .Release.Namespace .Values.service.port | quote }}{{ end }}
-            {{- with .Values.api.gatewayURL }}
-            - name: CLEARANCE_GATEWAY_URL
-              value: {{ . | quote }}
-            {{- end }}
-            {{- with .Values.api.auditors }}
-            - name: CLEARANCE_API_AUDITORS
-              value: {{ include "clearance.csv" . | quote }}
-            {{- end }}
-            {{- $notifiers := include "clearance.withGRC" (dict "ctx" $ "list" (splitList "," (include "clearance.withSlack" (dict "ctx" $ "list" .Values.api.notifiers)))) | trimAll "," }}
-            {{- if $notifiers }}
-            - name: CLEARANCE_API_NOTIFIERS
-              value: {{ $notifiers | quote }}
-            {{- end }}
-            {{- $readers := include "clearance.withSlack" (dict "ctx" $ "list" .Values.api.observationReaders) }}
-            {{- if $readers }}
-            - name: CLEARANCE_API_OBSERVATION_READERS
-              value: {{ $readers | quote }}
-            {{- end }}
-            {{- with .Values.api.feedReaders }}
-            - name: CLEARANCE_API_FEED_READERS
-              value: {{ include "clearance.feedReaders" . | quote }}
-            {{- end }}
-            {{- with .Values.api.attest.key }}
-            - name: CLEARANCE_API_ATTEST_KEY
-              value: /etc/clearance/attest-trust/{{ . }}
-            {{- end }}
-            {{- with .Values.api.attest.trustRoot }}
-            - name: CLEARANCE_API_ATTEST_TRUST_ROOT
-              value: /etc/clearance/attest-trust/{{ . }}
-            {{- end }}
-            {{- with .Values.api.attest.rekorKey }}
-            - name: CLEARANCE_API_ATTEST_REKOR_KEY
-              value: /etc/clearance/attest-trust/{{ . }}
-            {{- end }}
-            {{- with .Values.api.attest.identity }}
-            - name: CLEARANCE_API_ATTEST_IDENTITY
-              value: {{ . | quote }}
-            {{- end }}
-            {{- with .Values.api.attest.issuer }}
-            - name: CLEARANCE_API_ATTEST_ISSUER
-              value: {{ . | quote }}
-            {{- end }}
-            {{- with .Values.api.attest.rekorUrl }}
-            - name: CLEARANCE_API_ATTEST_REKOR_URL
-              value: {{ . | quote }}
-            {{- end }}
-            - name: CLEARANCE_API_POOL
-              value: {{ .Values.api.pool | quote }}
-            - name: CLEARANCE_API_COVERAGE_CONCURRENCY
-              value: {{ .Values.api.coverageConcurrency | quote }}
-            - name: CLEARANCE_API_METRICS_LISTEN
-              value: {{ .Values.api.metricsListen | quote }}
-            - name: CLEARANCE_API_PPROF_LISTEN
-              value: {{ .Values.api.pprofListen | quote }}
-            - name: CLEARANCE_API_COVERAGE_WAIT_SECONDS
-              value: {{ .Values.api.coverageWaitSeconds | quote }}
-            - name: CLEARANCE_API_COVERAGE_CACHE_SECONDS
-              value: {{ .Values.api.coverageCacheSeconds | quote }}
-            - name: CLEARANCE_API_DEFINITIONS_INTERVAL
-              value: {{ .Values.api.definitionsInterval | quote }}
-            {{- include "clearance.sharedEnv" . | nindent 12 }}
-            {{- if include "clearance.tlsOn" . }}
-            {{- include "clearance.tlsEnv" (dict "ctx" . "component" "api") | trim | nindent 12 }}
-            {{- end }}
-            {{- with .Values.api.extraEnv }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
+          env:{{ include "clearance.api.env" . }}
           {{- include "clearance.probes" (dict "startupSeconds" 60 "tlsOnly" (eq (include "clearance.plainOff" .) "true")) | nindent 10 }}
           resources:
             {{- toYaml .Values.api.resources | nindent 12 }}
@@ -210,4 +133,85 @@ spec:
     matchLabels:
       {{- include "clearance.selector" (dict "ctx" . "component" "api") | nindent 6 }}
 {{- end }}
+{{- end }}
+{{- define "clearance.api.env" }}
+{{- $out := include "clearance.api.envList" . }}{{ include "clearance.uniqueEnv" (dict "component" "api" "env" $out) }}{{- end }}
+{{- define "clearance.api.envList" }}
+            {{- with include "clearance.goMemLimitEnv" (dict "ctx" $ "resources" .Values.api.resources "override" .Values.api.goMemLimit "extraEnv" .Values.api.extraEnv) }}
+            {{- . | nindent 12 }}
+            {{- end }}
+            - name: CLEARANCE_API_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "clearance.readerSecretName" . }}
+                  key: {{ include "clearance.readerSecretKey" . }}
+            - name: CLEARANCE_CORE_URL
+              value: {{ if include "clearance.plainOff" . }}{{ printf "https://%s.%s.svc:%v" (include "clearance.coreName" .) .Release.Namespace .Values.tls.port | quote }}{{ else }}{{ printf "http://%s.%s.svc:%v" (include "clearance.coreName" .) .Release.Namespace .Values.service.port | quote }}{{ end }}
+            {{- with .Values.api.gatewayURL }}
+            - name: CLEARANCE_GATEWAY_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.api.auditors }}
+            - name: CLEARANCE_API_AUDITORS
+              value: {{ include "clearance.csv" . | quote }}
+            {{- end }}
+            {{- $notifiers := include "clearance.withGRC" (dict "ctx" $ "list" (splitList "," (include "clearance.withSlack" (dict "ctx" $ "list" .Values.api.notifiers)))) | trimAll "," }}
+            {{- if $notifiers }}
+            - name: CLEARANCE_API_NOTIFIERS
+              value: {{ $notifiers | quote }}
+            {{- end }}
+            {{- $readers := include "clearance.withSlack" (dict "ctx" $ "list" .Values.api.observationReaders) }}
+            {{- if $readers }}
+            - name: CLEARANCE_API_OBSERVATION_READERS
+              value: {{ $readers | quote }}
+            {{- end }}
+            {{- with .Values.api.feedReaders }}
+            - name: CLEARANCE_API_FEED_READERS
+              value: {{ include "clearance.feedReaders" . | quote }}
+            {{- end }}
+            {{- with .Values.api.attest.key }}
+            - name: CLEARANCE_API_ATTEST_KEY
+              value: /etc/clearance/attest-trust/{{ . }}
+            {{- end }}
+            {{- with .Values.api.attest.trustRoot }}
+            - name: CLEARANCE_API_ATTEST_TRUST_ROOT
+              value: /etc/clearance/attest-trust/{{ . }}
+            {{- end }}
+            {{- with .Values.api.attest.rekorKey }}
+            - name: CLEARANCE_API_ATTEST_REKOR_KEY
+              value: /etc/clearance/attest-trust/{{ . }}
+            {{- end }}
+            {{- with .Values.api.attest.identity }}
+            - name: CLEARANCE_API_ATTEST_IDENTITY
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.api.attest.issuer }}
+            - name: CLEARANCE_API_ATTEST_ISSUER
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.api.attest.rekorUrl }}
+            - name: CLEARANCE_API_ATTEST_REKOR_URL
+              value: {{ . | quote }}
+            {{- end }}
+            - name: CLEARANCE_API_POOL
+              value: {{ .Values.api.pool | quote }}
+            - name: CLEARANCE_API_COVERAGE_CONCURRENCY
+              value: {{ .Values.api.coverageConcurrency | quote }}
+            - name: CLEARANCE_API_METRICS_LISTEN
+              value: {{ .Values.api.metricsListen | quote }}
+            - name: CLEARANCE_API_PPROF_LISTEN
+              value: {{ .Values.api.pprofListen | quote }}
+            - name: CLEARANCE_API_COVERAGE_WAIT_SECONDS
+              value: {{ .Values.api.coverageWaitSeconds | quote }}
+            - name: CLEARANCE_API_COVERAGE_CACHE_SECONDS
+              value: {{ .Values.api.coverageCacheSeconds | quote }}
+            - name: CLEARANCE_API_DEFINITIONS_INTERVAL
+              value: {{ .Values.api.definitionsInterval | quote }}
+            {{- include "clearance.sharedEnv" . | nindent 12 }}
+            {{- if include "clearance.tlsOn" . }}
+            {{- include "clearance.tlsEnv" (dict "ctx" . "component" "api") | trim | nindent 12 }}
+            {{- end }}
+            {{- with .Values.api.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
 {{- end }}

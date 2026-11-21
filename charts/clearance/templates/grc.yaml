@@ -50,40 +50,7 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - {name: http, containerPort: 8080, protocol: TCP}
-          env:
-            {{- with include "clearance.goMemLimitEnv" (dict "ctx" $ "resources" $g.resources "override" $g.goMemLimit) }}
-            {{- . | nindent 12 }}
-            {{- end }}
-            - {name: CLEARANCE_GRC_TARGET, value: vanta}
-            - {name: CLEARANCE_GRC_LISTEN, value: ":8080"}
-            - {name: CLEARANCE_GRC_PROVIDER, value: {{ $g.providerName | quote }}}
-            - {name: CLEARANCE_GRC_LINK_BASE, value: {{ $g.linkBase | quote }}}
-            - {name: CLEARANCE_GRC_VANTA_BASE_URL, value: {{ $g.vanta.baseUrl | quote }}}
-            - {name: CLEARANCE_GRC_VANTA_CLIENT_ID, value: {{ $g.vanta.clientId | quote }}}
-            - {name: CLEARANCE_GRC_VANTA_CLIENT_SECRET_FILE, value: /etc/clearance-grc/secrets/client-secret}
-            - {name: CLEARANCE_GRC_VANTA_EVIDENCE_RESOURCE_ID, value: {{ $g.vanta.evidenceResourceId | quote }}}
-            {{- with $g.vanta.reportResourceId }}
-            - {name: CLEARANCE_GRC_VANTA_REPORT_RESOURCE_ID, value: {{ . | quote }}}
-            {{- end }}
-            - {name: CLEARANCE_API_URL, value: {{ printf "http://%s.%s.svc:%v" (include "clearance.apiName" .) .Release.Namespace .Values.service.port | quote }}}
-            - {name: CLEARANCE_URL, value: {{ printf "http://%s.%s.svc:%v" (include "clearance.coreName" .) .Release.Namespace .Values.service.port | quote }}}
-            - {name: CLEARANCE_GRC_SA_TOKEN_FILE, value: /var/run/secrets/tokens/clearance}
-            - {name: CLEARANCE_GRC_ENVS, value: {{ include "clearance.csv" $g.envs | quote }}}
-            - {name: CLEARANCE_GRC_MAPPINGS, value: {{ include "clearance.csv" $g.mappings | quote }}}
-            {{- range $k, $env := dict "interval" "CLEARANCE_GRC_INTERVAL" "reportInterval" "CLEARANCE_GRC_REPORT_INTERVAL" "window" "CLEARANCE_GRC_WINDOW" "maxItems" "CLEARANCE_GRC_MAX_ITEMS" "maxAttempts" "CLEARANCE_GRC_MAX_ATTEMPTS" "backoffBase" "CLEARANCE_GRC_BACKOFF_BASE" "backoffMax" "CLEARANCE_GRC_BACKOFF_MAX" "minSetRatio" "CLEARANCE_GRC_MIN_SET_RATIO" "resendEvery" "CLEARANCE_GRC_RESEND_EVERY" "unreadyAfter" "CLEARANCE_GRC_UNREADY_AFTER" }}
-            {{- with index $g $k }}
-            - {name: {{ $env }}, value: {{ . | quote }}}
-            {{- end }}
-            {{- end }}
-            {{- if $g.allowShrink }}
-            - {name: CLEARANCE_GRC_ALLOW_SHRINK, value: "true"}
-            {{- end }}
-            {{- if $g.useProxy }}
-            - {name: CLEARANCE_GRC_USE_PROXY, value: "true"}
-            {{- end }}
-            {{- with $g.extraEnv }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
+          env:{{ include "clearance.grc.env" . }}
           startupProbe:
             httpGet: {path: /healthz, port: http}
             periodSeconds: 5
@@ -128,4 +95,42 @@ spec:
       {{- with $g.affinity }}
       affinity: {{ toYaml . | nindent 8 }}
       {{- end }}
+{{- end }}
+{{- define "clearance.grc.env" }}
+{{- $out := include "clearance.grc.envList" . }}{{ include "clearance.uniqueEnv" (dict "component" "grc" "env" $out) }}{{- end }}
+{{- define "clearance.grc.envList" }}
+{{- $g := .Values.grc -}}
+            {{- with include "clearance.goMemLimitEnv" (dict "ctx" $ "resources" $g.resources "override" $g.goMemLimit "extraEnv" $g.extraEnv) }}
+            {{- . | nindent 12 }}
+            {{- end }}
+            - {name: CLEARANCE_GRC_TARGET, value: vanta}
+            - {name: CLEARANCE_GRC_LISTEN, value: ":8080"}
+            - {name: CLEARANCE_GRC_PROVIDER, value: {{ $g.providerName | quote }}}
+            - {name: CLEARANCE_GRC_LINK_BASE, value: {{ $g.linkBase | quote }}}
+            - {name: CLEARANCE_GRC_VANTA_BASE_URL, value: {{ $g.vanta.baseUrl | quote }}}
+            - {name: CLEARANCE_GRC_VANTA_CLIENT_ID, value: {{ $g.vanta.clientId | quote }}}
+            - {name: CLEARANCE_GRC_VANTA_CLIENT_SECRET_FILE, value: /etc/clearance-grc/secrets/client-secret}
+            - {name: CLEARANCE_GRC_VANTA_EVIDENCE_RESOURCE_ID, value: {{ $g.vanta.evidenceResourceId | quote }}}
+            {{- with $g.vanta.reportResourceId }}
+            - {name: CLEARANCE_GRC_VANTA_REPORT_RESOURCE_ID, value: {{ . | quote }}}
+            {{- end }}
+            - {name: CLEARANCE_API_URL, value: {{ printf "http://%s.%s.svc:%v" (include "clearance.apiName" .) .Release.Namespace .Values.service.port | quote }}}
+            - {name: CLEARANCE_URL, value: {{ printf "http://%s.%s.svc:%v" (include "clearance.coreName" .) .Release.Namespace .Values.service.port | quote }}}
+            - {name: CLEARANCE_GRC_SA_TOKEN_FILE, value: /var/run/secrets/tokens/clearance}
+            - {name: CLEARANCE_GRC_ENVS, value: {{ include "clearance.csv" $g.envs | quote }}}
+            - {name: CLEARANCE_GRC_MAPPINGS, value: {{ include "clearance.csv" $g.mappings | quote }}}
+            {{- range $k, $env := dict "interval" "CLEARANCE_GRC_INTERVAL" "reportInterval" "CLEARANCE_GRC_REPORT_INTERVAL" "window" "CLEARANCE_GRC_WINDOW" "maxItems" "CLEARANCE_GRC_MAX_ITEMS" "maxAttempts" "CLEARANCE_GRC_MAX_ATTEMPTS" "backoffBase" "CLEARANCE_GRC_BACKOFF_BASE" "backoffMax" "CLEARANCE_GRC_BACKOFF_MAX" "minSetRatio" "CLEARANCE_GRC_MIN_SET_RATIO" "resendEvery" "CLEARANCE_GRC_RESEND_EVERY" "unreadyAfter" "CLEARANCE_GRC_UNREADY_AFTER" }}
+            {{- with index $g $k }}
+            - {name: {{ $env }}, value: {{ . | quote }}}
+            {{- end }}
+            {{- end }}
+            {{- if $g.allowShrink }}
+            - {name: CLEARANCE_GRC_ALLOW_SHRINK, value: "true"}
+            {{- end }}
+            {{- if $g.useProxy }}
+            - {name: CLEARANCE_GRC_USE_PROXY, value: "true"}
+            {{- end }}
+            {{- with $g.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
 {{- end }}

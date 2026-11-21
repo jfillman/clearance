@@ -55,33 +55,7 @@ spec:
           args: ["web"]
           ports:
             - {name: http, containerPort: 8080, protocol: TCP}
-          env:
-            {{- with include "clearance.goMemLimitEnv" (dict "ctx" $ "resources" $w.resources "override" $w.goMemLimit) }}
-            {{- . | nindent 12 }}
-            {{- end }}
-            - name: CLEARANCE_WEB_LISTEN
-              value: ":8080"
-            - name: CLEARANCE_WEB_PUBLIC_URL
-              value: {{ $w.publicURL | quote }}
-            - name: CLEARANCE_WEB_ISSUER
-              value: {{ $w.issuer | quote }}
-            - name: CLEARANCE_WEB_CLIENT_ID
-              value: {{ $w.clientID | quote }}
-            - name: CLEARANCE_WEB_CLIENT_SECRET_FILE
-              value: /etc/clearance/web/client-secret
-            - name: CLEARANCE_WEB_API_URL
-              value: {{ default (printf "http://%s.%s.svc:%v" (include "clearance.apiName" .) .Release.Namespace .Values.service.port) $w.apiURL | quote }}
-            - name: CLEARANCE_WEB_CORE_URL
-              value: {{ default (printf "http://%s.%s.svc:%v" (include "clearance.coreName" .) .Release.Namespace .Values.service.port) $w.coreURL | quote }}
-            {{- range $k, $env := dict "gatewayURL" "CLEARANCE_WEB_GATEWAY_URL" "upstreamAudience" "CLEARANCE_WEB_UPSTREAM_AUDIENCE" "sessionTTL" "CLEARANCE_WEB_SESSION_TTL" "idleTimeout" "CLEARANCE_WEB_IDLE_TIMEOUT" "freshMaxAge" "CLEARANCE_WEB_FRESH_MAX_AGE" "requestTimeout" "CLEARANCE_WEB_REQUEST_TIMEOUT" "maxSessions" "CLEARANCE_WEB_MAX_SESSIONS" "maxBodyBytes" "CLEARANCE_WEB_MAX_BODY_BYTES" "maxResponseBytes" "CLEARANCE_WEB_MAX_RESPONSE_BYTES" }}
-            {{- with index $w $k }}
-            - name: {{ $env }}
-              value: {{ (kindIs "float64" . | ternary (int64 .) .) | toString | quote }}
-            {{- end }}
-            {{- end }}
-            {{- with $w.extraEnv }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
+          env:{{ include "clearance.web.env" . }}
           {{- include "clearance.probes" (dict "startupSeconds" 30) | nindent 10 }}
           resources:
             {{- toYaml $w.resources | nindent 12 }}
@@ -127,4 +101,35 @@ spec:
     {{- include "clearance.selector" (dict "ctx" . "component" "web") | nindent 4 }}
   ports:
     - {name: http, port: {{ .Values.service.port }}, targetPort: http, protocol: TCP}
+{{- end }}
+{{- define "clearance.web.env" }}
+{{- $out := include "clearance.web.envList" . }}{{ include "clearance.uniqueEnv" (dict "component" "web" "env" $out) }}{{- end }}
+{{- define "clearance.web.envList" }}
+{{- $w := .Values.web -}}
+            {{- with include "clearance.goMemLimitEnv" (dict "ctx" $ "resources" $w.resources "override" $w.goMemLimit "extraEnv" $w.extraEnv) }}
+            {{- . | nindent 12 }}
+            {{- end }}
+            - name: CLEARANCE_WEB_LISTEN
+              value: ":8080"
+            - name: CLEARANCE_WEB_PUBLIC_URL
+              value: {{ $w.publicURL | quote }}
+            - name: CLEARANCE_WEB_ISSUER
+              value: {{ $w.issuer | quote }}
+            - name: CLEARANCE_WEB_CLIENT_ID
+              value: {{ $w.clientID | quote }}
+            - name: CLEARANCE_WEB_CLIENT_SECRET_FILE
+              value: /etc/clearance/web/client-secret
+            - name: CLEARANCE_WEB_API_URL
+              value: {{ default (printf "http://%s.%s.svc:%v" (include "clearance.apiName" .) .Release.Namespace .Values.service.port) $w.apiURL | quote }}
+            - name: CLEARANCE_WEB_CORE_URL
+              value: {{ default (printf "http://%s.%s.svc:%v" (include "clearance.coreName" .) .Release.Namespace .Values.service.port) $w.coreURL | quote }}
+            {{- range $k, $env := dict "gatewayURL" "CLEARANCE_WEB_GATEWAY_URL" "upstreamAudience" "CLEARANCE_WEB_UPSTREAM_AUDIENCE" "sessionTTL" "CLEARANCE_WEB_SESSION_TTL" "idleTimeout" "CLEARANCE_WEB_IDLE_TIMEOUT" "freshMaxAge" "CLEARANCE_WEB_FRESH_MAX_AGE" "requestTimeout" "CLEARANCE_WEB_REQUEST_TIMEOUT" "maxSessions" "CLEARANCE_WEB_MAX_SESSIONS" "maxBodyBytes" "CLEARANCE_WEB_MAX_BODY_BYTES" "maxResponseBytes" "CLEARANCE_WEB_MAX_RESPONSE_BYTES" }}
+            {{- with index $w $k }}
+            - name: {{ $env }}
+              value: {{ (kindIs "float64" . | ternary (int64 .) .) | toString | quote }}
+            {{- end }}
+            {{- end }}
+            {{- with $w.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
 {{- end }}

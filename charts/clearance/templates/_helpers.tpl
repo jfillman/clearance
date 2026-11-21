@@ -455,11 +455,16 @@ as the heap nears the container's memory limit instead of waiting for the kernel
 - override any other text: that value, as given (a Go size: 200MiB, 1GiB, or bytes).
 - no override, goMemLimit.enabled: goMemLimit.percent of resources.limits.memory (a whole number with Ki/Mi/Gi/Ti,
   K/M/G/T or no suffix), in bytes. With no memory limit, or one in another form, nothing: GOMEMLIMIT is never guessed.
-A GOMEMLIMIT in the component's extraEnv comes later in the env list and wins.
+A GOMEMLIMIT in the component's extraEnv (passed as extraEnv) wins: nothing is rendered here, so the container's env list
+names it once. An env list that names a variable twice is refused (clearance.uniqueEnv): Kubernetes and Argo CD patch a
+container's env by name, and a repeated name breaks that patch.
 */}}
 {{- define "clearance.goMemLimitEnv" -}}
 {{- $val := "" -}}
-{{- if .override -}}
+{{- $own := false -}}
+{{- range (.extraEnv | default list) -}}{{- if eq (toString .name) "GOMEMLIMIT" -}}{{- $own = true -}}{{- end -}}{{- end -}}
+{{- if $own -}}
+{{- else if .override -}}
 {{- if ne (toString .override) "off" -}}{{- $val = toString .override -}}{{- end -}}
 {{- else if .ctx.Values.goMemLimit.enabled -}}
 {{- $raw := dig "limits" "memory" "" (.resources | default dict) -}}
@@ -479,6 +484,21 @@ A GOMEMLIMIT in the component's extraEnv comes later in the env list and wins.
 - name: GOMEMLIMIT
   value: {{ $val | quote }}
 {{- end -}}
+{{- end -}}
+{{/*
+A container's rendered env list, refused if it names one variable twice. Called with {component, env: <the YAML list>};
+renders the list unchanged. Env entries merge by name in a strategic-merge patch (kubectl apply, Argo CD's server-side
+dry run), so a repeated name fails there with "order in patch list ... doesn't match $setElementOrder list", and which of
+the two the container sees is not something to rely on. A value set twice is a values mistake: set it in one place.
+*/}}
+{{- define "clearance.uniqueEnv" -}}
+{{- $seen := dict -}}
+{{- range (fromYamlArray .env) -}}
+{{- if not (kindIs "map" .) -}}{{- fail (printf "%s env: the rendered env list is not a list of entries: %v" $.component .) -}}{{- end -}}
+{{- if hasKey $seen (toString .name) -}}{{- fail (printf "%s env: %s is set twice (a chart default and extraEnv, or two settings); set it in one place" $.component .name) -}}{{- end -}}
+{{- $_ := set $seen (toString .name) true -}}
+{{- end -}}
+{{- .env -}}
 {{- end -}}
 {{/* TLS (I-43): the core and the api serve https on tls.port beside plain http, from a cert-manager Certificate. All of it is
      off unless tls.enabled. tls.plainHttp false drops the plain listener, the last step of a rollout. */}}
