@@ -250,6 +250,12 @@ func (s *Server) reportProtection(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		for _, e := range exempted { // an exempted pair is one the report removes: it must be held
+			if !slices.Contains(was, e) {
+				status, why = http.StatusBadRequest, fmt.Sprintf("exempted: %s/%s is not in the held report: an exempted pair is one the report removes", e.App, e.Env)
+				return nil
+			}
+		}
 		now := s.opt.Clock()
 		next := store.ProtectionSet{Cluster: cluster, Digest: digest, Doc: doc, Seq: cur.Seq, WindowStart: cur.WindowStart, WindowCount: cur.WindowCount, AddCount: cur.AddCount}
 		if next.WindowStart.IsZero() || now.Sub(next.WindowStart) >= time.Hour || now.Before(next.WindowStart) {

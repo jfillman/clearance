@@ -1106,7 +1106,7 @@ provider's `source.event_id` is looked up, so an agent that asks again with the 
 list may have changed) and, when taken, gets the earlier record back (`duplicate: true`). A malformed record is 400.
 
 **Removal reports.** `PUT /v1/protection/{cluster}` takes an optional `exempted` list: the pairs the report removes
-because an exemption released their Application. A pair still in `pairs` is 400; a pair whose environment the list
+because an exemption released their Application. A pair still in `pairs`, or not in the held report, is 400; a pair whose environment the list
 protects is refused 409 (`refused: static`), exactly as its exemption would be. The `protection.report` record names
 the exempted pairs ("removed for a gate exemption ...").
 
