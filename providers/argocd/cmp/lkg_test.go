@@ -361,3 +361,31 @@ func TestParseLKG(t *testing.T) {
 		}
 	}
 }
+
+func TestAPreRenderHitMovesTheTagPointerBack(t *testing.T) {
+	e := cachedEnv(t)
+	e.cfg.LKG = true
+	e.gen(t) // cleared at chartSHA
+	e.exec.head = chartSHA2
+	e.gen(t) // the tag moved: cleared at chartSHA2, the pointer names it
+	e.exec.head = chartSHA
+	e.gen(t) // the tag is back: a pre-render hit at chartSHA
+	if _, commit := e.d.Cache.lkgByTag(e.cfg); commit != chartSHA {
+		t.Fatalf("the pointer names %s after the hit at %s", commit, chartSHA)
+	}
+}
+
+type failWriter struct{}
+
+func (failWriter) Write([]byte) (int, error) { return 0, errors.New("closed pipe") }
+
+func TestAWriteFailureWhileServingIsCoded(t *testing.T) {
+	e := lkgEnv(t)
+	e.gen(t)
+	e.exec.fail = map[string]error{"helm": toolMissing}
+	o, err := Generate(context.Background(), e.d, e.cfg, e.src, failWriter{})
+	if o != "" {
+		t.Fatalf("outcome %q", o)
+	}
+	wantCode(t, err, CodeFaultInternal)
+}

@@ -173,6 +173,18 @@ func TestGenerateErrorClasses(t *testing.T) {
 	}
 }
 
+func TestALongSummaryKeepsTheFirstLineShort(t *testing.T) {
+	id := strings.Repeat("a", 128) // the longest id changeIDRx accepts
+	e := newEnv(t)
+	e.core.answer = &client.Change{ID: id, State: "denied", Tier: 3}
+	_, _, err := e.generate(t)
+	ce := wantCode(t, err, CodeRefusedDenied)
+	first := strings.Split(err.Error(), "\n")[0]
+	if len(first) > maxFirstLine || !strings.HasSuffix(first, "...") || !strings.Contains(err.Error(), "detail: change "+id) || ce.Link == "" {
+		t.Fatalf("%q", err.Error())
+	}
+}
+
 func TestChangeLink(t *testing.T) {
 	cfg := Config{CoreURL: "https://core.example.test/"}
 	if got := ChangeLink(cfg, "ch-1"); got != "https://core.example.test/v1/clearances/ch-1" {

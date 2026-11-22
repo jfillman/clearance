@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/jfillman/clearance/client"
 )
@@ -120,7 +121,21 @@ func (e *CmpError) FallsBack() bool { return e.Class == ClassFault || e.Class ==
 // FirstLine is the error's first line, what a list of Applications shows.
 func (e *CmpError) FirstLine() string { return e.Code + ": " + e.Summary }
 
+// maxFirstLine bounds "<code>: <summary>" (U1): a longer summary is cut, the whole message stays in Err.
+const maxFirstLine = 120
+
 func newErr(code, summary string, err error) *CmpError {
+	summary = strings.ReplaceAll(summary, "\n", " ")
+	if room := maxFirstLine - len(code) - 2; len(summary) > room {
+		cut := room - 3
+		for cut > 0 && !utf8.RuneStart(summary[cut]) {
+			cut--
+		}
+		if err == nil {
+			err = errors.New(summary)
+		}
+		summary = summary[:cut] + "..."
+	}
 	return &CmpError{Class: Codes[code], Code: code, Summary: summary, Err: err}
 }
 

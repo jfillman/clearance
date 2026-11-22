@@ -72,8 +72,9 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 	rkey, lkey := renderKey(cfg), lkgKey(cfg)
 	if e, ok := d.Cache.GetRender(rkey, d.Now(), cfg.RenderCacheTTL); ok {
 		if o, handled, err := serveRender(ctx, d, cfg, e, out, nil); handled {
-			if err == nil {
+			if err == nil { // these inputs at this chart commit are the last cleared: keep the fallback pointing at them
 				d.Cache.touchLKG(lkey, d.Now())
+				d.Cache.putLKGTag(cfg, lkey)
 			}
 			return o, err
 		}
@@ -201,7 +202,7 @@ func emitted(o Outcome, err error) (Outcome, error) {
 // render still leaves time to confirm the remembered change.
 func renderTree(ctx context.Context, d Deps, cfg Config, srcDir string) (tree *Tree, r *Rendered, cerr *CmpError) {
 	rctx := ctx
-	if dl, ok := ctx.Deadline(); ok && cfg.LKG && cfg.RegisterWait > 0 && time.Until(dl) > 2*cfg.RegisterWait {
+	if dl, ok := ctx.Deadline(); ok && cfg.LKG && cfg.RegisterWait > 0 && time.Until(dl) > cfg.RegisterWait {
 		var cancel context.CancelFunc
 		rctx, cancel = context.WithDeadline(ctx, dl.Add(-cfg.RegisterWait))
 		defer cancel()

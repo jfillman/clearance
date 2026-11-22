@@ -324,8 +324,10 @@ func serveRender(ctx context.Context, d Deps, cfg Config, e renderEntry, out io.
 			fmt.Fprintf(d.Stderr, "clearance: %s/%s is unchanged (chart %s@%s, gitops %s): %s; serving the cleared render %s from the cache without a clone, helm or kustomize, tree %s\n",
 				cfg.App, cfg.Env, cfg.ChartRev, shortRes(cfg.chartCommit), shortRes(cfg.Revision), how, e.ID, shortRes(e.Tree))
 		}
-		_, werr := out.Write(e.Stream)
-		return Cleared, true, werr
+		if _, werr := out.Write(e.Stream); werr != nil {
+			return "", true, newErr(CodeFaultInternal, "the manifests could not be written to Argo CD", werr)
+		}
+		return Cleared, true, nil
 	}
 	te, tok := d.Cache.Get(cfg.App, cfg.Env, cfg.Cluster, e.Tree, now)
 	if tok && te.ID != e.ID || e.Request == nil {
