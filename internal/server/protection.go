@@ -258,12 +258,6 @@ func (s *Server) reportProtection(w http.ResponseWriter, r *http.Request) {
 		if replay {
 			reason = ""
 		}
-		for _, e := range exempted { // an exempted pair is one the report removes: it must be held
-			if !replay && !slices.Contains(was, e) {
-				status, why = http.StatusBadRequest, fmt.Sprintf("exempted: %s/%s is not in the held report: an exempted pair is one the report removes", e.App, e.Env)
-				return nil
-			}
-		}
 		now := s.opt.Clock()
 		next := store.ProtectionSet{Cluster: cluster, Digest: digest, Doc: doc, Seq: cur.Seq, WindowStart: cur.WindowStart, WindowCount: cur.WindowCount, AddCount: cur.AddCount}
 		if next.WindowStart.IsZero() || now.Sub(next.WindowStart) >= time.Hour || now.Before(next.WindowStart) {
@@ -304,6 +298,14 @@ func (s *Server) reportProtection(w http.ResponseWriter, r *http.Request) {
 				return tx.PutProtection(r.Context(), keep)
 			}
 			return nil
+		}
+		// After the number check (an old or replayed number with another set is a 409, which tells the agent to read the
+		// held report again): an exempted pair is one the report removes, so it must be held.
+		for _, e := range exempted {
+			if !replay && !slices.Contains(was, e) {
+				status, why = http.StatusBadRequest, fmt.Sprintf("exempted: %s/%s is not in the held report: an exempted pair is one the report removes", e.App, e.Env)
+				return nil
+			}
 		}
 		changed := cur.Digest != digest
 		// A report that only ADDS pairs is never refused by the hourly bound and is not counted against it: the bound is

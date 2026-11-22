@@ -289,13 +289,13 @@ type fakeCore struct {
 	loseReport bool
 }
 
-func (c *fakeCore) ProtectionSeq(context.Context, string) (int64, error) {
+func (c *fakeCore) ProtectionSeq(context.Context, string) (int64, []client.ProtectedPair, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.reportDown || c.down {
-		return 0, errors.New("core unreachable")
+		return 0, nil, errors.New("core unreachable")
 	}
-	return c.heldSeq, nil
+	return c.heldSeq, append([]client.ProtectedPair(nil), c.held...), nil
 }
 
 func (c *fakeCore) ReportProtection(_ context.Context, cluster string, req *client.ProtectionRequest) (*client.ProtectionResult, error) {
@@ -324,6 +324,13 @@ func (c *fakeCore) ReportProtection(_ context.Context, cluster string, req *clie
 	}
 	if req.Seq <= c.heldSeq && req.Seq != 0 && c.held != nil && !slices.Equal(c.held, req.Pairs) {
 		return nil, &client.APIError{Op: "reportProtection", Status: 409, Message: "not above the held report"}
+	}
+	if !(req.Seq == c.heldSeq && slices.Equal(c.held, req.Pairs)) {
+		for _, e := range req.Exempted {
+			if !slices.Contains(c.held, e) {
+				return nil, &client.APIError{Op: "reportProtection", Status: 400, Message: "exempted: " + e.App + "/" + e.Env + " is not in the held report"}
+			}
+		}
 	}
 	if req.Seq > c.heldSeq {
 		c.heldSeq = req.Seq

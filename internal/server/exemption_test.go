@@ -143,3 +143,16 @@ func TestAReplayedExemptionRemovalIsTakenAsItWas(t *testing.T) {
 	next["exempted"] = body["exempted"]
 	f.do("PUT", "/v1/protection/hangar-prod", agentProd, next).want(t, 400, "not in the held report")
 }
+
+// A report rebuilt on a stale set after a lost answer reuses the held number with another set: the number check answers
+// first (409: read the held report again), before the exempted pairs are checked against it.
+func TestAStaleRebuiltReportIsANumberConflictFirst(t *testing.T) {
+	f := protectionFixture(t, "")
+	f.do("PUT", "/v1/protection/hangar-prod", agentProd, pairs("web/prod", "web/staging", "api/staging")).want(t, 200, "")
+	body := pairs("web/prod", "api/staging")
+	body["exempted"] = []any{map[string]any{"app": "web", "env": "staging"}}
+	f.do("PUT", "/v1/protection/hangar-prod", agentProd, body).want(t, 200, "")
+	stale := map[string]any{"pairs": []any{map[string]any{"app": "web", "env": "prod"}}, "seq": body["seq"],
+		"exempted": []any{map[string]any{"app": "web", "env": "staging"}, map[string]any{"app": "api", "env": "staging"}}}
+	f.do("PUT", "/v1/protection/hangar-prod", agentProd, stale).want(t, 409, "not above the held report")
+}

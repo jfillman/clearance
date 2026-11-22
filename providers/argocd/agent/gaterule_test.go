@@ -750,3 +750,117 @@ func TestTheEndOfAnExemptionIsRecordedAfterItsEntryLeavesTheFile(t *testing.T) {
 		t.Fatalf("the withdrawn end names the entry it ended: %v", w.exemptions(""))
 	}
 }
+
+func twoExemptRule() string {
+	return tenantsRule + "exempt:\n  - application: argocd-apps/web-prod\n    reason: a migration to the new chart\n    expires: " +
+		t0.Add(30*24*time.Hour).Format(time.RFC3339) + "\n  - application: argocd-apps/api-prod\n    reason: a migration to the new chart\n    expires: " +
+		t0.Add(30*24*time.Hour).Format(time.RFC3339) + "\n"
+}
+
+// A lost answer, and then another exemption before the retry: the core refuses the rebuilt report (the number is taken
+// with another set), the agent reads the held number and set again, and both releases go through.
+func TestARemovalReportIsRebuiltFromTheCoreAfterALostAnswer(t *testing.T) {
+	w := newRuleWorld(t, tenantsRule)
+	w.addApp("web-prod", "app-web-prod", nil)
+	w.addApp("api-prod", "app-api-prod", nil)
+	w.mustReconcile()
+	w.writeRule(exemptRule(t0.Add(30 * 24 * time.Hour).Format(time.RFC3339)))
+	w.core.loseReport = true
+	w.clock.add(2 * time.Minute)
+	_ = w.reconcile()
+	w.writeRule(twoExemptRule())
+	for i := 0; i < 4; i++ {
+		w.clock.add(2 * time.Minute)
+		_ = w.reconcile()
+	}
+	if w.isSwitched("web-prod") || w.isSwitched("api-prod") || len(lastReport(w.optWorld)) != 0 {
+		t.Fatalf("both released, the core holding none: %v; reports %+v", lastReport(w.optWorld), w.core.reports)
+	}
+	if s := w.savedState(); s["reported"] != nil {
+		t.Fatalf("the state holds the committed (empty) set: %v", s["reported"])
+	}
+}
+
+// Ends of exemptions past the queue's bound are counted and reported once the core is back, never lost silently, and
+// the state stays small.
+func TestExemptionEndsPastTheQueueBoundAreReportedAsLost(t *testing.T) {
+	defer agent.SetMaxPendingBytes(agent.SetMaxPendingBytes(1))
+	w := newRuleWorld(t, tenantsRule)
+	w.addApp("web-prod", "app-web-prod", nil)
+	w.addApp("api-prod", "app-api-prod", nil)
+	w.mustReconcile()
+	w.writeRule(twoExemptRule())
+	w.clock.add(2 * time.Minute)
+	w.mustReconcile()
+	w.core.down = true
+	w.clock.add(11 * time.Minute) // the recheck fails: both dropped, both ends queued past the bound
+	_ = w.reconcile()
+	if !w.isSwitched("web-prod") || !w.isSwitched("api-prod") {
+		t.Fatal("dropped exemptions gate again at once")
+	}
+	if s := w.savedState(); fmt.Sprint(s["pendingLost"]) != "2" || s["pendingRecords"] != nil {
+		t.Fatalf("counted, not stored: %v %v", s["pendingLost"], s["pendingRecords"])
+	}
+	w.core.down = false
+	w.clock.add(time.Minute)
+	_ = w.reconcile()
+	lost := 0
+	for _, r := range w.core.records {
+		if r.Record.Result != nil && *r.Record.Result == "gate exemption records lost" {
+			lost++
+			if !strings.Contains(fmt.Sprint(r.Record.Exception["detail"]), "2 gate exemption") {
+				t.Fatalf("the count: %v", r.Record.Exception["detail"])
+			}
+		}
+	}
+	if lost != 1 || w.savedState()["pendingLost"] != nil {
+		t.Fatalf("one exception, then reset: %d %v", lost, w.savedState()["pendingLost"])
+	}
+}
+
+func TestAThrottledQueuedRecordIsKept(t *testing.T) {
+	w := newRuleWorld(t, tenantsRule)
+	w.addApp("web-prod", "app-web-prod", nil)
+	w.mustReconcile()
+	w.writeRule(exemptRule(t0.Add(30 * 24 * time.Hour).Format(time.RFC3339)))
+	w.clock.add(2 * time.Minute)
+	w.mustReconcile()
+	w.core.down = true
+	w.clock.add(11 * time.Minute)
+	_ = w.reconcile() // dropped; its end queued
+	w.core.down = false
+	w.core.exempt = func(state, env string) error {
+		if state == "expired" {
+			return &client.APIError{Op: "record", Status: 429, Message: "slow down"}
+		}
+		return nil
+	}
+	w.clock.add(time.Minute)
+	_ = w.reconcile()
+	if q, _ := w.savedState()["pendingRecords"].(map[string]any); len(q) != 1 {
+		t.Fatalf("a 429 keeps the record queued: %v", w.savedState()["pendingRecords"])
+	}
+	w.core.exempt = nil
+	w.clock.add(time.Minute)
+	_ = w.reconcile()
+	if len(w.exemptions("expired")) != 1 || w.savedState()["pendingRecords"] != nil {
+		t.Fatalf("delivered once the throttle lifts: %v", w.exemptions("expired"))
+	}
+}
+
+func TestAnExemptionsEndNamesTheRuleItWasAcceptedUnder(t *testing.T) {
+	w := newRuleWorld(t, tenantsRule)
+	w.addApp("web-prod", "app-web-prod", nil)
+	w.mustReconcile()
+	w.writeRule(exemptRule(t0.Add(30 * 24 * time.Hour).Format(time.RFC3339)))
+	w.clock.add(2 * time.Minute)
+	w.mustReconcile()
+	d1 := w.exemptions("active")[0]["rule_digest"]
+	w.writeRule(tenantsRule + "# another file\n")
+	w.clock.add(2 * time.Minute)
+	w.mustReconcile()
+	ex := w.exemptions("expired")
+	if len(ex) != 1 || ex[0]["rule_digest"] != d1 {
+		t.Fatalf("the end names the digest its acceptance was for (%v): %v", d1, ex)
+	}
+}

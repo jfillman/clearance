@@ -91,6 +91,7 @@ type acceptance struct {
 	// What was asked about, kept so that the exemption's end can be recorded after its entry left the file.
 	exempt RuleExempt
 	rule   string
+	digest string // the rule file the answer was for
 }
 
 // ruleState is the gate rule's memory (ruleMu).
@@ -231,7 +232,7 @@ func (a *Agent) setAnswer(key string, acc *acceptance) {
 // the file, or a pair since changed, still names what ended).
 func (acc acceptance) asked(c appClass) appClass {
 	e := acc.exempt
-	c.exempt, c.ruleName, c.gateApp, c.env = &e, acc.rule, acc.pair.App, acc.pair.Env
+	c.exempt, c.ruleName, c.gateApp, c.env, c.askedDigest = &e, acc.rule, acc.pair.App, acc.pair.Env, acc.digest
 	return c
 }
 
@@ -316,7 +317,7 @@ func (a *Agent) decideExemptions(ctx context.Context, classes []appClass, digest
 				a.postExemption(ctx, acc.asked(c), "expired", "dropped", "gate-exempt-end|"+acc.key+"|dropped")
 			}
 		case refused != "":
-			a.setAnswer(key, &acceptance{key: k, at: a.now(), refused: refused, pair: Pair{c.gateApp, c.env}, exempt: *e, rule: c.ruleName})
+			a.setAnswer(key, &acceptance{key: k, at: a.now(), refused: refused, pair: Pair{c.gateApp, c.env}, exempt: *e, rule: c.ruleName, digest: digest})
 			settle(false)
 			if wasHonoured {
 				a.postExemption(ctx, acc.asked(c), "expired", "revoked", "gate-exempt-end|"+acc.key+"|revoked")
@@ -325,7 +326,7 @@ func (a *Agent) decideExemptions(ctx context.Context, classes []appClass, digest
 				a.postExemption(ctx, c, "refused", refused, "gate-exempt-refused|"+k)
 			}
 		default:
-			a.setAnswer(key, &acceptance{key: k, at: a.now(), pair: Pair{c.gateApp, c.env}, exempt: *e, rule: c.ruleName})
+			a.setAnswer(key, &acceptance{key: k, at: a.now(), pair: Pair{c.gateApp, c.env}, exempt: *e, rule: c.ruleName, digest: digest})
 			settle(true)
 			if !wasHonoured || acc.key != k {
 				a.log.Info("gate exemption accepted by the core", "application", key, "entry", e.Application, "expires", e.Expires)
@@ -393,7 +394,7 @@ func (a *Agent) askExemption(ctx context.Context, c appClass, k string) (string,
 func (a *Agent) exemptionRecord(c appClass, state, why, eventID string) *client.RecordRequest {
 	e := c.exempt
 	x := map[string]any{"state": state, "application": c.key(), "entry": e.Application, "rule": c.ruleName,
-		"rule_digest": a.currentDigest(), "reason": e.Reason, "expires": e.At.Format(time.RFC3339)}
+		"rule_digest": digestOf(c, a.currentDigest()), "reason": e.Reason, "expires": e.At.Format(time.RFC3339)}
 	if e.Ref != "" {
 		x["ref"] = e.Ref
 	}
@@ -415,6 +416,14 @@ func (a *Agent) exemptionRecord(c appClass, state, why, eventID string) *client.
 			"exemption": x}}}
 }
 
+// digestOf is the rule digest a record about c names: the one its answer was for, else the rule in force.
+func digestOf(c appClass, current string) string {
+	if c.askedDigest != "" {
+		return c.askedDigest
+	}
+	return current
+}
+
 func (a *Agent) currentDigest() string {
 	if r := a.currentRule(); r != nil {
 		return r.Digest
@@ -433,8 +442,7 @@ func (a *Agent) postExemption(ctx context.Context, c appClass, state, why, once 
 	event := "gs-" + hex.EncodeToString(sum[:16])
 	req := a.exemptionRecord(c, state, why, event)
 	if _, err := a.core.Record(ctx, req); err != nil {
-		var ae *client.APIError
-		if !errors.As(err, &ae) { // unreachable: delivered when the core is back
+		if transient(err) { // delivered when the core takes it
 			a.queuePending(ctx, event, req)
 		}
 		a.log.Warn("a gate exemption's record could not be posted", "application", c.key(), "state", state, "err", err)
@@ -448,32 +456,86 @@ func (a *Agent) postExemption(ctx context.Context, c appClass, state, why, once 
 	a.mu.Unlock()
 }
 
-// MaxPendingRecords bounds the queue of exemption records waiting for the core.
+// transient says whether a failed post may succeed later: no answer, a throttle (429) or a server error. Any other 4xx
+// is the core's refusal, which a retry would only repeat.
+func transient(err error) bool {
+	var ae *client.APIError
+	return !errors.As(err, &ae) || ae.Status == 429 || ae.Status >= 500
+}
+
+// MaxPendingRecords and MaxPendingBytes bound the queue of exemption records waiting for the core: the queue is part of
+// the state ConfigMap, which cannot pass 1 MiB, and must leave room for the rest of the state.
 const MaxPendingRecords = 500
 
+// MaxPendingBytes is the queue's byte bound (a variable for tests only).
+var MaxPendingBytes = 256 << 10
+
+// queuePending keeps a record for the core. A repeating record (requested, active, expiring, a stale entry's daily
+// expired) past the bound is dropped and logged. An end or a refusal past the bound cannot be kept either, so it is
+// counted, with its Application, and the count is posted as one exception once the queue has drained: the loss is on
+// the record, never silent. Nothing about the gate waits on the queue (an exemption is dropped, and its Application gated
+// again, before its end is queued).
 func (a *Agent) queuePending(ctx context.Context, event string, req *client.RecordRequest) {
 	raw, err := json.Marshal(req)
 	if err != nil {
 		return
 	}
+	x, _ := req.Record.Exception["exemption"].(map[string]any)
+	terminal := x["state"] == "refused" || (x["state"] == "expired" && x["why"] != "stale")
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.st.Pending == nil {
 		a.st.Pending = map[string]string{}
 	}
-	// The bound applies to the records that repeat (requested, active, expiring, a stale entry's daily expired): the end of
-	// an acceptance (expired lapsed/revoked/dropped/withdrawn) and a refusal are never dropped. There is one of those per
-	// acceptance, so they are bounded by the Applications the rule exempts.
-	x, _ := req.Record.Exception["exemption"].(map[string]any)
-	terminal := x["state"] == "refused" || (x["state"] == "expired" && x["why"] != "stale")
-	if _, ok := a.st.Pending[event]; !ok && !terminal && len(a.st.Pending) >= MaxPendingRecords {
-		a.log.Warn("the queue of exemption records waiting for the core is full: a repeating record is dropped", "event", event)
+	if _, ok := a.st.Pending[event]; ok {
 		return
 	}
-	a.st.Pending[event] = string(raw)
+	size := len(raw)
+	for _, v := range a.st.Pending {
+		size += len(v)
+	}
+	if size > MaxPendingBytes || len(a.st.Pending) >= MaxPendingRecords {
+		if !terminal {
+			a.log.Warn("the queue of exemption records waiting for the core is full: a repeating record is dropped", "event", event)
+			return
+		}
+		if a.st.PendingLost == 0 {
+			a.st.PendingLostSince = a.now().UTC().Format(time.RFC3339Nano)
+		}
+		a.st.PendingLost++
+		if app, _ := x["application"].(string); app != "" && len(a.st.PendingLostApps) < 50 {
+			a.st.PendingLostApps = append(a.st.PendingLostApps, app)
+		}
+		a.log.Warn("the queue of exemption records is full: an exemption's end is counted and reported as lost", "event", event)
+	} else {
+		a.st.Pending[event] = string(raw)
+	}
 	if err := a.saveLocked(ctx); err != nil {
 		a.log.Warn("the state could not be saved", "err", err)
 	}
+}
+
+// reportLost posts, once the queue has drained, how many exemption ends could not be kept.
+func (a *Agent) reportLost(ctx context.Context) {
+	a.mu.Lock()
+	n, since, apps := a.st.PendingLost, a.st.PendingLostSince, append([]string(nil), a.st.PendingLostApps...)
+	a.mu.Unlock()
+	if n == 0 {
+		return
+	}
+	detail := fmt.Sprintf("%d gate exemption end or refusal records could not be kept for the core (the queue was full) since %s; Applications: %s",
+		n, since, strings.Join(apps, ", "))
+	if err := a.reportOnce(ctx, "gate-exempt-lost|"+since, "gate exemption records lost", detail,
+		[]map[string]any{{"apiVersion": "v1", "kind": "ConfigMap", "name": a.cfg.StateName}}); err != nil {
+		a.log.Warn("the lost exemption records could not be reported", "err", err)
+		return
+	}
+	a.mu.Lock()
+	a.st.PendingLost, a.st.PendingLostSince, a.st.PendingLostApps = 0, "", nil
+	if err := a.saveLocked(ctx); err != nil {
+		a.log.Warn("the state could not be saved", "err", err)
+	}
+	a.mu.Unlock()
 }
 
 // flushPending posts the queued exemption records. One the core takes (or refuses: it will not take it later) leaves the
@@ -493,9 +555,8 @@ func (a *Agent) flushPending(ctx context.Context) {
 		var req client.RecordRequest
 		if json.Unmarshal([]byte(raw), &req) == nil {
 			if _, err := a.core.Record(ctx, &req); err != nil {
-				var ae *client.APIError
-				if !errors.As(err, &ae) {
-					return // still unreachable: the rest wait too
+				if transient(err) {
+					return // still unreachable or throttled: it and the rest wait for the next pass
 				}
 				a.log.Warn("a queued gate exemption record was refused by the core and is dropped", "event", e, "err", err)
 			}
@@ -507,6 +568,7 @@ func (a *Agent) flushPending(ctx context.Context) {
 		}
 		a.mu.Unlock()
 	}
+	a.reportLost(ctx)
 }
 
 // dueEvery says whether the Once fingerprint was posted more than every ago (or never).

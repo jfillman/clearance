@@ -125,6 +125,7 @@ type appClass struct {
 	releaseHeld    bool
 	wasRuled       bool
 	pluginSwitched string // the plugin source's own switched parameter, when it is on the plugin
+	askedDigest    string // set on a copy made for an exemption's record: the rule digest its answer was for
 }
 
 // gated is whether the annotation or the rule asks for the gate.

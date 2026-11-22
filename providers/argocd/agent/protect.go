@@ -115,13 +115,40 @@ func (a *Agent) reportPairs(ctx context.Context, classes []appClass) bool {
 	if seq == 0 && len(cur) == 0 && len(prev) == 0 && len(unexplained) == 0 {
 		return true // nothing has ever been protected here: there is nothing to tell the core
 	}
-	if seq == 0 { // a state that was lost: start from the core's last number
-		held, err := a.core.ProtectionSeq(ctx, a.cfg.Cluster)
+	if seq == 0 { // a state that was lost, or out of step with the core: start from the core's last number and set
+		held, heldPairs, err := a.core.ProtectionSeq(ctx, a.cfg.Cluster)
 		if err != nil {
 			a.warnOnce("core/protection", "the core's last report number could not be read (removals wait): "+truncate(err.Error(), 200))
 			return false
 		}
 		seq = held
+		if held > 0 {
+			// What the core holds is what this report changes: removals (and their exempted pairs) are taken against it.
+			prev = make([]Pair, 0, len(heldPairs))
+			for _, p := range heldPairs {
+				prev = append(prev, Pair{p.App, p.Env})
+			}
+			sort.Slice(prev, func(i, j int) bool {
+				if prev[i].App != prev[j].App {
+					return prev[i].App < prev[j].App
+				}
+				return prev[i].Env < prev[j].Env
+			})
+			removed, added = nil, nil
+			for _, p := range prev {
+				if !slices.Contains(cur, p) {
+					removed = append(removed, p)
+				}
+			}
+			for _, p := range cur {
+				if !slices.Contains(prev, p) {
+					added = append(added, p)
+				}
+			}
+			a.mu.Lock()
+			a.st.Reported = prev
+			a.mu.Unlock()
+		}
 	}
 	toPairs := func(l []Pair) []client.ProtectedPair {
 		out := make([]client.ProtectedPair, len(l))
@@ -207,7 +234,9 @@ func (a *Agent) send(ctx context.Context, req *client.ProtectionRequest, cur []P
 				// The core refuses to drop a pair for an exemption (its CLEARANCE_PROTECTED_ENVIRONMENTS protects it): the
 				// exemptions behind it are refused, and the Applications stay gated.
 				a.refuseExempted(req.Exempted, strings.TrimPrefix(ae.Message, "refused: "))
-			} else if ae.Status == 409 { // the core holds a newer number than ours: read it again
+			} else if ae.Status == 409 || (ae.Status == 400 && strings.Contains(ae.Message, "not in the held report")) {
+				// The core holds a newer number than ours, or another set than the one this report was built on (a lost
+				// answer): read both again before the next report.
 				a.mu.Lock()
 				a.st.ReportSeq = 0
 				_ = a.saveLocked(ctx)

@@ -2732,12 +2732,18 @@ ignored on its own (the Application stays gated) and reported. There is no appro
   recorded as `refused`. The removal report that releases an exempt Application names its pair in `exempted`. A record the core cannot be reached
   for (the end of an exemption dropped because the core was down, say) is queued in the state and delivered when it is back,
   with its `source.event_id`, so a retry is the same record. The end of an exemption is kept even when its entry has left
-  the file or its Application was deleted. The queue holds at most 500 of the repeating records (`requested`, `active`,
-  `expiring`, a stale entry's daily `expired`); past that a repeating record is dropped and logged. The end of an
-  acceptance and a refusal are never dropped (there is one per acceptance). The queue lives in the state ConfigMap: if
-  the state cannot be written either, a record queued then is lost when the agent restarts, and the log says it was not
-  posted. A removal report whose answer was lost is sent again with the
-  same number and set; the core takes it as the report it already holds and records nothing more (unless
+  the file or its Application was deleted. A throttled post (429) or a server error is kept and retried
+  like an unreachable core; any other refusal is final. The queue lives in the state ConfigMap, so it is bounded: at most
+  500 records and 256 KiB. Past that, a repeating record (`requested`, `active`, `expiring`, a stale entry's daily
+  `expired`) is dropped and logged, and an end or a refusal is **counted**, with its Application (the first 50), and posted
+  as one exception, `gate exemption records lost`, once the queue has drained. The gate never waits on the queue: an
+  exemption is dropped, and its Application gated again, before its end is queued. If the state cannot be written either,
+  a record queued then is lost at a restart, and the log says it was not posted. An end names the rule digest its
+  acceptance was for, not the one in force when it ended. A removal report whose answer was lost is sent again with the
+  same number and set; the core takes it as the report it already holds and records nothing more. If
+  the set changed before the retry (another exemption, say), the rebuilt report reuses the held number with another set:
+  the core answers 409 (its number check runs before the exempted pairs are checked), and the agent reads the core's held
+  number **and set** again and builds the next report against them, so its state matches what the core committed (unless
   `CLEARANCE_PROTECTED_ENVIRONMENTS` changed meanwhile to protect an exempted pair: the retry is then refused 409, and the
   Application stays gated). Release reservations are taken and settled by the opt-in loop alone, the one that releases; the
   grant loop only reads them, so a classification made with an older rule cannot cancel one.

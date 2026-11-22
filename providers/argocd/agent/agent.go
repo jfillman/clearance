@@ -19,8 +19,8 @@ type Core interface {
 	// ReportProtection reports the cluster's protected app/environment pairs (PUT /v1/protection/{cluster}); only the
 	// opt-in (Config.OptIn) calls it.
 	ReportProtection(ctx context.Context, cluster string, req *client.ProtectionRequest) (*client.ProtectionResult, error)
-	// ProtectionSeq is the sequence number of the last report the core took for the cluster (0: none).
-	ProtectionSeq(ctx context.Context, cluster string) (int64, error)
+	// ProtectionSeq is the sequence number of the last report the core took for the cluster (0: none), and its pairs.
+	ProtectionSeq(ctx context.Context, cluster string) (int64, []client.ProtectedPair, error)
 }
 
 // Window is an open break-glass window (GET /v1/breakglass).
@@ -207,6 +207,11 @@ type State struct {
 	ExemptReleased map[string]string `json:"exemptReleased,omitempty"`
 	// Pending are gate exemption records the core could not be reached for (event id -> the request), retried every pass.
 	Pending map[string]string `json:"pendingRecords,omitempty"`
+	// PendingLost counts the exemption ends the queue had no room for (since PendingLostSince, the first 50 Applications),
+	// posted as one exception once the queue drains.
+	PendingLost      int      `json:"pendingLost,omitempty"`
+	PendingLostSince string   `json:"pendingLostSince,omitempty"`
+	PendingLostApps  []string `json:"pendingLostApps,omitempty"`
 }
 
 // Pair is an app and environment.
