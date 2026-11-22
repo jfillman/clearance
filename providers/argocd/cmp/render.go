@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -53,8 +55,9 @@ func OSRun(ctx context.Context, dir string, env []string, name string, args ...s
 	}
 	// The sidecar's environment carries no credential for these tools: git and helm get a bare one. GOMEMLIMIT makes
 	// the Go tools (helm, kustomize) collect before they reach the memory bound rather than fail at it.
+	token := newStepToken()
 	fullEnv := append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1",
-		"TMPDIR=" + scratch, "GOMEMLIMIT=" + strconv.FormatInt(lim.Memory/4*3, 10)}, env...)
+		"TMPDIR=" + scratch, "GOMEMLIMIT=" + strconv.FormatInt(lim.Memory/4*3, 10), stepEnv + "=" + token}, env...)
 	tool, err := exec.LookPath(name)
 	if err != nil {
 		return nil, fmt.Errorf("%s %s: %w", name, firstArg(args), err)
@@ -117,9 +120,6 @@ func OSRun(ctx context.Context, dir string, env []string, name string, args ...s
 		}
 		becomeSubreaper() // a descendant that detaches (setsid) still comes back here (proc_linux.go)
 		err := cmd.Start()
-		if err == nil {
-			trackStep(cmd.Process.Pid, true)
-		}
 		if len(cmd.ExtraFiles) > 0 {
 			cmd.ExtraFiles[0].Close() // the plugin's copy of the write end: EOF once the shim has exec'd or exited
 		}
@@ -128,9 +128,8 @@ func OSRun(ctx context.Context, dir string, env []string, name string, args ...s
 		}
 		if err == nil {
 			err = cmd.Wait()
-			trackStep(cmd.Process.Pid, false)
-			killGroup(cmd) // a descendant the step left behind (a backgrounded git, a stalled helper) goes with it
-			reapOrphans()  // and one that left the group too
+			killGroup(cmd)  // a descendant the step left behind (a backgrounded git, a stalled helper) goes with it
+			reapStep(token) // and one that left the group too (proc_linux.go)
 		}
 		ps = cmd.ProcessState
 		if setup != nil && err != nil {
@@ -175,7 +174,11 @@ func OSRun(ctx context.Context, dir string, env []string, name string, args ...s
 		return nil, fmt.Errorf("%s: %w: %s", step, err, msg)
 	}
 	if b != nil {
-		if n := dirSize(b.root); n > lim.Temp {
+		n, err := dirSize(b.root)
+		if err != nil {
+			return nil, fmt.Errorf("%s: the render's scratch could not be measured after it: %w", step, err)
+		}
+		if n > lim.Temp {
 			return nil, &LimitError{Limit: LimitTemp, Setting: EnvMaxTemp, Bound: FormatSize(lim.Temp), Step: step,
 				Detail: fmt.Sprintf("left the render's scratch directory at %s", FormatSize(n))}
 		}
@@ -206,6 +209,9 @@ func stepLimit(lim Limits, step string, out *capWriter, stderr string, ps *os.Pr
 				Detail: fmt.Sprintf("used %.1fs of CPU", cpu)}
 		}
 	}
+	if !ctxLive {
+		return nil // stopped by its deadline: whatever it printed, the deadline is the cause (renderBounded says so)
+	}
 	low := strings.ToLower(stderr)
 	switch {
 	// The Go runtime ("fatal error: runtime: cannot allocate memory", "out of memory allocating heap arena map"), git
@@ -222,6 +228,15 @@ func stepLimit(lim Limits, step string, out *capWriter, stderr string, ps *os.Pr
 			Detail: "tried to write a file larger than the bound"}
 	}
 	return nil
+}
+
+// newStepToken is a random id for one step: its descendants carry it (proc_linux.go).
+func newStepToken() string {
+	var b [12]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(b[:])
 }
 
 // shimPath is this binary, which the shim is. Off Linux there is none.

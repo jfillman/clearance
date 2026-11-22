@@ -52,7 +52,8 @@ jobs:
           for t in TestKustomize TestRealKustomizeDoesNotFetchAnHTTPBaseUnderTheSandbox TestRealHelmDoesNotReachAnHTTPDependencyUnderTheSandbox \
             TestRenderStepCannotReadTheToken TestRealKustomizeCannotReadTheToken TestRealHelmCannotReadTheTokenThroughASymlink \
             TestCPUBoundStopsAStep TestMemoryBoundStopsAStep TestAToolCannotRequestAnUnsandboxedRetry TestAStepsDescendantsDoNotOutliveIt \
-            TestADetachedDescendantDoesNotOutliveItsStep TestTheLandlockProbeNeedsNoToolOnPath; do
+            TestADetachedDescendantDoesNotOutliveItsStep TestTheLandlockProbeNeedsNoToolOnPath \
+            TestReapingAStepLeavesOtherProcessesAlone; do
             grep -E "^--- PASS: $t " "$RUNNER_TEMP/real-binary.log"
           done
           ! grep -E 'is not installed|is not on PATH' "$RUNNER_TEMP/real-binary.log"

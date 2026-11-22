@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 // The filesystem sandbox of the render steps (hardening W-34: X6). The sidecar mounts one secret, the clearance token
@@ -34,9 +36,11 @@ const FSSandboxEnv = "CLEARANCE_CMP_FS_SANDBOX"
 
 // shimArg is argv[1] of the shim; shimSpecEnv carries its instructions (removed before the tool runs).
 const (
-	shimArg     = "__clearance-sandbox-exec"
-	probeArg    = "__clearance-sandbox-probe" // the probe's target: this binary, exiting 0 once the rules are in place
-	shimSpecEnv = "CLEARANCE_CMP_SANDBOX_SPEC"
+	shimArg  = "__clearance-sandbox-exec"
+	probeArg = "__clearance-sandbox-probe" // the probe's target: this binary, exiting 0 once the rules are in place
+	// probeTimeout bounds the probe child: one that stalls is "unavailable", handled as try or require say.
+	probeTimeout = 10 * time.Second
+	shimSpecEnv  = "CLEARANCE_CMP_SANDBOX_SPEC"
 	// shimFailCode is the shim's exit code when it could not set up the sandbox (the tool never ran).
 	shimFailCode = 125
 	// shimLandlockPrefix starts the shim's setup-channel message when Landlock itself refused (try mode then runs the
@@ -111,9 +115,11 @@ func probeLandlock() (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	cmd := exec.Command(self, shimArg, self, probeArg)
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, self, shimArg, self, probeArg)
 	cmd.Env = []string{env}
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := cmd.CombinedOutput(); err != nil || ctx.Err() != nil {
 		return 0, fmt.Errorf("landlock: installing a ruleset failed in a probe (%v): %s", err, strings.TrimSpace(string(out)))
 	}
 	return abi, nil

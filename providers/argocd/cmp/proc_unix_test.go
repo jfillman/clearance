@@ -57,3 +57,17 @@ func TestAStepsDescendantsDoNotOutliveIt(t *testing.T) {
 		t.Fatal("a child outlived its step's deadline")
 	}
 }
+
+// A part of the scratch a step made unreadable is a failed measurement, never a smaller total.
+func TestAnUnreadableScratchIsNotUnderTheBound(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root reads every directory")
+	}
+	withFS(t, NetnsOff, "")
+	fakeTool(t, "helm", `mkdir -p "$TMPDIR/../hidden/d" && head -c 1000 /dev/zero > "$TMPDIR/../hidden/d/f" && chmod 000 "$TMPDIR/../hidden"`)
+	ctx, b := budgetCtx(t, DefaultLimits())
+	t.Cleanup(func() { os.Chmod(filepath.Join(b.root, "hidden"), 0o755) })
+	if _, err := OSRun(ctx, t.TempDir(), nil, "helm", "template", "x", "."); err == nil || !strings.Contains(err.Error(), "could not be measured") {
+		t.Fatalf("an unreadable scratch passed the bound: %v", err)
+	}
+}

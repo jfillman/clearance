@@ -127,7 +127,10 @@ func parseLimits(get func(string) string, callTimeout time.Duration) (Limits, []
 			l.Renders = n
 		}
 	}
-	if callTimeout > 0 {
+	if l.Timeout >= PluginDeadline || callTimeout >= PluginDeadline {
+		// Each term alone must fit before any is added: a huge duration would overflow the sum below.
+		errs = append(errs, fmt.Errorf("%s (%s) and CLEARANCE_CMP_CALL_TIMEOUT (%s) must each be under %s", EnvRenderTimeout, l.Timeout, callTimeout, PluginDeadline))
+	} else if callTimeout > 0 {
 		if need := ChartLookupTimeout + l.Timeout + coreBudget(callTimeout); need >= PluginDeadline {
 			errs = append(errs, fmt.Errorf("%s (%s) plus the chart lookup (%s) plus %d attempts of CLEARANCE_CMP_CALL_TIMEOUT (%s) and the wait between them is %s, which must be under %s: Argo CD kills a plugin at 90 s, and an unreachable core must be found out in time for the outage policy",
 				EnvRenderTimeout, l.Timeout, ChartLookupTimeout, CoreRetries+1, callTimeout, need, PluginDeadline))
@@ -239,6 +242,21 @@ func workDir(ctx context.Context) string {
 	return ""
 }
 
+// lookupBudget is the chart tag lookup's context: the configured step limits and a scratch root of its own (removed
+// by done), no source directory and no slot. Without it the lookup would run under the default limits with the
+// system temp directory, which holds every render's scratch and the caches, open to it.
+func lookupBudget(ctx context.Context, cfg Config) (context.Context, func()) {
+	lim := cfg.Limits
+	if lim == (Limits{}) {
+		lim = DefaultLimits()
+	}
+	root, err := os.MkdirTemp("", "clearance-lookup-")
+	if err != nil {
+		return ctx, func() {} // no scratch: the lookup is an optimisation, and OSRun still bounds it by default
+	}
+	return withBudget(ctx, &budget{lim: lim, root: root}), func() { os.RemoveAll(root) }
+}
+
 // renderBounded runs render under cfg.Limits: a slot among CLEARANCE_CMP_MAX_RENDERS, one wall-time deadline for all of
 // it, a scratch root of its own (removed after), and the size of what it rendered. A bound that stops it is a
 // *LimitError.
@@ -274,8 +292,15 @@ func renderBounded(ctx context.Context, cfg Config, srcDir string, stderr io.Wri
 	if err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(root)
+	defer func() {
+		if err := os.RemoveAll(root); err != nil {
+			fmt.Fprintf(stderr, "clearance: WARNING the render's scratch %s could not be removed (%v): it counts against the volume until the pod restarts\n", root, err)
+		}
+	}()
 	r, err := render(withBudget(rctx, &budget{lim: lim, root: root, src: srcDir}))
+	if err == nil && rctx.Err() != nil {
+		err = rctx.Err() // finished, but past the deadline (a slow scan or cleanup): not a result to register
+	}
 	if err != nil {
 		var le *LimitError
 		if errors.As(err, &le) {
@@ -318,6 +343,9 @@ func acquireSlot(ctx context.Context, dir string, n int) (func(), time.Duration,
 	}
 	delay := 10 * time.Millisecond
 	for {
+		if err := ctx.Err(); err != nil { // never a slot for a render whose time is over
+			return nil, time.Since(start), err
+		}
 		for i, f := range files {
 			ok, err := tryLock(f)
 			if err != nil {
@@ -347,18 +375,24 @@ func jitter(d time.Duration) time.Duration {
 	return d/2 + rand.N(d/2+1)
 }
 
-// dirSize is the total size of the regular files under dir (what a step left in the render's scratch).
-func dirSize(dir string) int64 {
+// dirSize is the total size of the regular files under dir (what a step left in the render's scratch). A part it cannot
+// read (a directory the step made unreadable) is an error, never a smaller total.
+func dirSize(dir string) (int64, error) {
 	var n int64
-	filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
-		if err == nil && d.Type().IsRegular() {
-			if fi, err := d.Info(); err == nil {
-				n += fi.Size()
+	err := filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.Type().IsRegular() {
+			fi, err := d.Info()
+			if err != nil {
+				return err
 			}
+			n += fi.Size()
 		}
 		return nil
 	})
-	return n
+	return n, err
 }
 
 // capWriter keeps at most max bytes. Past that it records the overflow, calls over once, and fails the write.

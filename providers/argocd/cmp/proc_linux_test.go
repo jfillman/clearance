@@ -53,3 +53,24 @@ func TestTheLandlockProbeNeedsNoToolOnPath(t *testing.T) {
 		t.Fatalf("with an empty PATH the probe says %s (%v)", FSSandboxState(), fsSandboxCause())
 	}
 }
+
+// Cleanup after one step never touches a process that is not that step's: another step's, or anything else the plugin
+// runs (the parity tool runs `argocd` beside its workers).
+func TestReapingAStepLeavesOtherProcessesAlone(t *testing.T) {
+	if _, err := exec.LookPath("setsid"); err != nil {
+		t.Skip("setsid is not installed")
+	}
+	withFS(t, NetnsOff, "")
+	other := exec.Command("sleep", "30")
+	if err := other.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { other.Process.Kill(); other.Wait() }()
+	fakeTool(t, "helm", `(setsid sleep 300 >/dev/null 2>&1 </dev/null &) ; exit 0`)
+	if _, err := OSRun(context.Background(), t.TempDir(), nil, "helm", "template", "x", "."); err != nil {
+		t.Fatal(err)
+	}
+	if err := other.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Fatalf("a process that was not the step's was killed: %v", err)
+	}
+}

@@ -65,8 +65,10 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 	// render fetches the chart itself.
 	if (cfg.RenderCacheTTL > 0 || cfg.LKG) && cfg.Sources == "" && cfg.ChartRepo != "" {
 		lctx, cancel := context.WithTimeout(ctx, lookupTimeout)
+		lctx, done := lookupBudget(lctx, cfg) // the configured step limits, and a private scratch: never the shared /tmp
 		cfg.chartCommit, cfg.chartLookupErr = lookupChart(lctx, d.Exec, cfg.ChartRepo, cfg.ChartRev)
 		cfg.chartLooked = true
+		done()
 		cancel()
 	}
 	rkey, lkey := renderKey(cfg), lkgKey(cfg)
@@ -330,7 +332,9 @@ func main() {
 	d := Deps{Exec: OSExec, Run: OSRun, Core: core, Cache: Cache{Dir: cfg.CacheDir}, Now: time.Now, Stderr: os.Stderr}
 	ctx, cancel := context.WithTimeout(context.Background(), PluginDeadline) // Argo CD kills a plugin at 90 s (ARGOCD_EXEC_TIMEOUT)
 	defer cancel()
-	if _, err := Generate(ctx, d, cfg, ".", os.Stdout); err != nil { // a *CmpError: its code and short line come first
+	_, err = Generate(ctx, d, cfg, ".", os.Stdout)
+	reapAll()       // nothing a render step started outlives the plugin (proc_linux.go)
+	if err != nil { // a *CmpError: its code and short line come first
 		fmt.Fprintln(os.Stderr, "clearance-cmp:", err)
 		os.Exit(1)
 	}

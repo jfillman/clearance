@@ -41,8 +41,11 @@ plugin runs is fenced in:
 - **Every render is bounded**: wall time, and per step CPU, memory and output, the render's scratch space, and how many
   renders run at once in the sidecar. Each has a default sized from measured renders; going over one stops that render
   with an error that names the bound and the setting to raise. [Render limits](#render-limits-and-the-filesystem-sandbox).
-- **No network for a render step**, no credential in its environment, no symlink out of its repository, and only
-  allow-listed chart repositories (below).
+- **Render steps are kept off the network**: `helm template`, `helm dependency build` and `kustomize` get proxy settings
+  that go nowhere and refuse every git transport, and a private network namespace as well where the kernel allows it
+  (`CLEARANCE_CMP_NETNS`; with the default `try` and no namespace they can still reach the pod's loopback). The plugin's
+  own fetches (`git`, `helm pull`) run outside the namespace and reach only the allow-listed chart repositories
+  (below). No step gets a credential in its environment or reads a symlink out of its repository.
 
 ## Outline
 
@@ -282,7 +285,7 @@ parameter would not do, because parameters come from values a tenant writes.
 | `CLEARANCE_CMP_RENDER_MAX_CPU` | no | `30s` | CPU time of one step (`RLIMIT_CPU`). At least `1s`. |
 | `CLEARANCE_CMP_RENDER_MAX_MEMORY` | no | `512Mi` | Memory of one step: its data segment (`RLIMIT_DATA`), and `GOMEMLIMIT` at three quarters of it for helm and kustomize. At least `128Mi` (helm's Go runtime needs about 96 MiB to start). Bytes, or with `Ki`, `Mi`, `Gi`. |
 | `CLEARANCE_CMP_RENDER_MAX_OUTPUT` | no | `32Mi` | Bytes one step may write to stdout, and the size of the rendered manifests. At least `1Mi`. |
-| `CLEARANCE_CMP_RENDER_MAX_TEMP` | no | `512Mi` | The render's scratch directory (the chart checkout, generic sources, helm's work), measured after every step; one file is bounded by it too (`RLIMIT_FSIZE`). At least `16Mi`. |
+| `CLEARANCE_CMP_RENDER_MAX_TEMP` | no | `512Mi` | The render's scratch directory (the chart checkout, generic sources, helm's work). During a step the kernel bounds each file at this size (`RLIMIT_FSIZE`); the directory's total is measured after every step, so a step writing many files can fill the volume before that check stops the render: size the `/tmp` volume for it. At least `16Mi`. |
 | `CLEARANCE_CMP_MAX_RENDERS` | no | `4` | Renders at once in this sidecar (1 to 64). Others wait for a slot, inside their wall time. A render answered by the pre-render cache takes no slot. The slots are lock files under `CLEARANCE_CMP_CACHE_DIR/slots`; if that cannot be written the bound is lost with a warning and the render goes on. |
 | `CLEARANCE_CA_FILE` | no | none | A PEM file of extra root certificates (besides the system roots) for an `https` `CLEARANCE_URL` signed by a private CA. A missing or empty file stops the plugin at start. See [tls.md](tls.md#client-side). |
 | `CLEARANCE_WAIT_CA_CONFIGMAP` | no | none | A ConfigMap (key `ca.crt`) in each destination namespace that the wait Job mounts at `/etc/clearance-ca/ca.crt` as its CA. Unset, the Job trusts the system roots only. |
@@ -364,9 +367,9 @@ v5.8.1:
 |---|---|---|---|
 | Wall time, whole render | 30 s | helm 0.06 s; a chart clone a few seconds | 500x the render. With the 5 s chart lookup and both 20 s attempts of the core call (75.25 s) it fits the plugin's 80 s, under Argo CD's 90 s, so a core that does not answer is an outage, not a deadline. The existing 80 s deadline is unchanged. |
 | CPU, per step | 30 s | helm 0.05 s | Only a runaway template or a tight loop reaches it; wall time alone would let a multi-threaded step burn many cores' worth. |
-| Memory, per step | 512 MiB | helm 45 MB peak RSS, but needs about 96 MiB of data segment to start; kustomize about 48 MiB | 5x helm's floor, and the container memory limit this guide recommends, so a step that would go over is stopped with a clear error before the kernel's OOM killer acts. |
+| Memory, per step | 512 MiB | helm 45 MB peak RSS, but needs about 96 MiB of data segment to start; kustomize about 48 MiB | 5x helm's floor. It bounds one step; with several steps at once the container's own limit can be reached first, and then the kernel's OOM killer acts instead of this bound (see below). |
 | Stdout per step, and the manifests | 32 MiB | 5.7 KB | Over 5000x the fixture; 4x the pre-render cache's 8 MiB stream cap. |
-| Scratch per render | 512 MiB | a shallow checkout of the chart repository, about 50 MB | 10x the checkout; the same order as the chart cache's own 512 MiB bound. |
+| Scratch per render | 512 MiB | a shallow checkout of the chart repository, about 50 MB | 10x the checkout; the same order as the chart cache's own 512 MiB bound. Measured after each step, and per file during it (above). |
 | Renders at once | 4 | | Above the `reposerver.parallelism.limit` many installs set (2), so it never queues them; on an unlimited repo-server it stops a refresh storm from running every render at once. |
 
 `doctor`'s `render-limits` line prints the bounds in force and warns when `CLEARANCE_CMP_MAX_RENDERS` times
@@ -388,7 +391,7 @@ for a slot (`CMP-FAULT-BUSY`) are faults: a slow network or a busy sidecar can c
 
 **What the filesystem sandbox is, and is not.** With `fs-sandbox=on` the isolation is enforced by the kernel: a step
 cannot open the token file or anything else outside the directories listed under `CLEARANCE_CMP_FS_SANDBOX`, cannot
-read the plugin's memory or environment, and cannot lift the rules (no capability, `no_new_privs`). The step and everything it starts are one process group, killed when the step returns or is stopped; the plugin is also a child subreaper (`PR_SET_CHILD_SUBREAPER`, unprivileged), so a descendant that detaches into a session of its own (`setsid`) is re-parented to the plugin and killed after the step too. Nothing a step started keeps running. Whether a step is retried without the sandbox (in `try`, when the kernel refuses the rules) is decided only by a setup channel the shim closes before the tool runs, never by what the tool prints or how it exits. On a kernel whose Landlock ABI is below 3 (before Linux 6.2) a step can still truncate a file its user may write outside its scratch, such as one in the source directory (reads are refused all the same); `doctor` warns with the ABI. `doctor` reports `on` only after a probe has installed a ruleset in a child process (the plugin binary itself, so nothing else need be on `PATH`), so a seccomp profile that allows creating rules but not applying them shows as `unavailable`. The tests show a fake
+read the plugin's memory or environment, and cannot lift the rules (no capability, `no_new_privs`). The step and everything it starts are one process group, killed when the step returns or is stopped; the plugin is also a child subreaper (`PR_SET_CHILD_SUBREAPER`, unprivileged), so a descendant that detaches into a session of its own (`setsid`) is re-parented to the plugin and killed after the step too. Each step's descendants carry a token of their own, so cleanup after one step never touches another's processes; and the plugin's run ends by killing any child left. Whether a step is retried without the sandbox (in `try`, when the kernel refuses the rules) is decided only by a setup channel the shim closes before the tool runs, never by what the tool prints or how it exits. On a kernel whose Landlock ABI is below 3 (before Linux 6.2) a step can still truncate a file its user may write outside its scratch, such as one in the source directory (reads are refused all the same); `doctor` warns with the ABI. `doctor` reports `on` only after a probe has installed a ruleset in a child process (the plugin binary itself, so nothing else need be on `PATH`), so a seccomp profile that allows creating rules but not applying them shows as `unavailable`. The tests show a fake
 step, the real `kustomize` and the real `helm` (through a symlinked template) each reading the token without the sandbox and
 failing to with it, and CI's image smoke test shows the same in the built image under Docker's default seccomp profile. It
 does not hide what every step may read (the system directories, `HOME`, the source directory: nothing secret is kept

@@ -363,3 +363,64 @@ func TestTheRenderLeavesTheCoreItsWholeBudget(t *testing.T) {
 		t.Fatalf("the render ends %s before the run, want the core's budget %s", left, coreBudget(cfg.RegisterWait))
 	}
 }
+
+// A duration too large to add is refused, not wrapped into a sum that fits.
+func TestAHugeDeadlineSettingIsRefused(t *testing.T) {
+	_, errs := parseLimits(func(k string) string {
+		return map[string]string{EnvRenderTimeout: "2562047h47m16.854775807s"}[k]
+	}, 20*time.Second)
+	if len(errs) == 0 {
+		t.Fatal("an overflowing render timeout was accepted")
+	}
+}
+
+// A render that finishes after its deadline (a slow scan or cleanup) is not a result: it is the wall-time error.
+func TestARenderPastItsDeadlineIsNotAResult(t *testing.T) {
+	cfg := Config{CacheDir: t.TempDir(), Limits: DefaultLimits()}
+	cfg.Limits.Timeout = time.Second
+	_, err := renderBounded(context.Background(), cfg, t.TempDir(), new(bytes.Buffer), func(ctx context.Context) (*Rendered, error) {
+		<-ctx.Done()
+		return &Rendered{Manifests: []byte("kind: ConfigMap\n")}, nil
+	})
+	asLimit(t, err, LimitWallTime)
+}
+
+// No slot is taken once the render's time is over, even if one is free.
+func TestNoSlotForAnExpiredRender(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if release, _, err := acquireSlot(ctx, filepath.Join(t.TempDir(), "slots"), 2); err == nil {
+		release()
+		t.Fatal("a slot was taken with an expired context")
+	}
+}
+
+// What a stopped step printed never names the cause: the deadline does.
+func TestStderrDoesNotMaskADeadline(t *testing.T) {
+	if le := stepLimit(DefaultLimits(), "helm template", &capWriter{max: 1}, "write: file too large\nout of memory", nil, false, true); le != nil {
+		t.Fatalf("a stopped step was classified %s", le.Limit)
+	}
+}
+
+// The chart tag lookup runs under the configured limits, in a private scratch, never the shared temp directory.
+func TestTheTagLookupHasAPrivateScratch(t *testing.T) {
+	cfg := Config{Limits: DefaultLimits()}
+	cfg.Limits.Output = 2 << 20
+	ctx, done := lookupBudget(context.Background(), cfg)
+	defer done()
+	var dir string
+	var lim Limits
+	lookupChart(ctx, func(ctx context.Context, d, _ string, _ ...string) ([]byte, error) {
+		dir = d
+		if b := budgetFrom(ctx); b != nil {
+			lim = b.lim
+		}
+		return nil, errors.New("no remote")
+	}, "https://git.example.test/o/r.git", "v1")
+	if dir == "" || dir == os.TempDir() || filepath.Dir(dir) != filepath.Clean(os.TempDir()) && !strings.Contains(dir, "clearance-lookup-") {
+		t.Fatalf("the lookup ran in %q", dir)
+	}
+	if lim.Output != 2<<20 {
+		t.Fatalf("the lookup's limits are %+v, not the configured ones", lim)
+	}
+}
