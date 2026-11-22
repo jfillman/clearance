@@ -51,6 +51,20 @@ func (b *builder) exceptionsSection(pk *Packet) {
 					}
 				}
 			}
+			if kind == gate.KindGateExemption {
+				// A platform exemption from the gate rule: a declared gap for one Application, until a date. It names no
+				// change and is not resolved like an out-of-band finding; its resolution is its state.
+				xm := obj(x, "exemption")
+				row.Class = ClassGateExemption
+				row.Diff = fmt.Sprintf("%s exempt from rule %s until %s", str(xm, "application"), str(xm, "rule"), str(xm, "expires"))
+				row.Detail = short(xm["reason"], 200)
+				row.Resolution = "exemption " + str(xm, "state")
+				if w := str(xm, "why"); w != "" {
+					row.Resolution += " (" + w + ")"
+				}
+				rows = append(rows, row)
+				continue
+			}
 			switch kind {
 			case gate.KindAttemptedRefused:
 				row.Class = ClassRefused
@@ -140,6 +154,11 @@ func (b *builder) exceptionsSection(pk *Packet) {
 	for _, c := range ExceptionClasses {
 		ex.ByClass = append(ex.ByClass, Count{c, counts[c]})
 	}
+	for _, c := range OptionalExceptionClasses {
+		if counts[c] > 0 {
+			ex.ByClass = append(ex.ByClass, Count{c, counts[c]})
+		}
+	}
 	switch {
 	case len(rows) > 0:
 		ex.Unverified = ""
@@ -167,12 +186,12 @@ func orDefault(s, d string) string {
 }
 
 func classIndex(c string) int {
-	for i, x := range ExceptionClasses {
+	for i, x := range append(slices.Clone(ExceptionClasses), OptionalExceptionClasses...) {
 		if x == c {
 			return i
 		}
 	}
-	return len(ExceptionClasses)
+	return len(ExceptionClasses) + len(OptionalExceptionClasses)
 }
 
 func exceptionDiff(x map[string]any) string {

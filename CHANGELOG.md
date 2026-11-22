@@ -9,6 +9,21 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Added
+
+- **A new exception kind, `gate-exemption`, decided by the core (W-42; `internal/gate`, `POST /v1/records`, `PUT /v1/protection`).**
+  The record an Argo CD agent posts when its platform gate rule exempts one Application until a date: `exception.exemption`
+  {state (`requested`, `active`, `expiring`, `expired`, `refused`), application, entry, rule, rule_digest, reason (10 to 500
+  characters), expires (at most 90 days), ref?, why?}, coverage `coverage-unavailable`, no `change.id` and no approver field (the
+  pull request that changed the rule is the record of who). **The core refuses (409, `refused: static`) a requested, active or
+  expiring exemption whose environment `CLEARANCE_PROTECTED_ENVIRONMENTS` protects**, and an empty list protects every environment;
+  it refuses `refused: too-long` past 90 days. The decision runs before the `source.event_id` de-duplication, so a repeated ask
+  is decided again. `PUT /v1/protection/{cluster}` takes an optional `exempted` list (pairs removed for an exemption) and refuses
+  a static one the same way. In the packet the kind is its own exception class, `gate-exemption`, listed in `by_class` only when the
+  window has one, so a packet or statement without one is exactly as before and older statements still verify. The evidence schema
+  is revision 8 (additive). No setting is added; nothing posts the kind until an agent with a gate rule does (docs/gate.md,
+  "Gate exemptions: the core's decision").
+
 ## [0.55.0] - 2026-11-22
 
 **Upgrading from 0.54.x.** No setting is newly required. The two new settings are off or unset by default:

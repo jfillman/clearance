@@ -1057,6 +1057,7 @@ A registered provider posts it through `POST /v1/records` (kind `deploy.exceptio
 | `digest-mismatch` | `expected`, `observed` and `change.id` | `out-of-band-detected` | G-TF-2's outcome route; the CMP's applied-tree check |
 | `attempted-refused` | `actor` and `detail` (the operation) | `attempted-refused` | O-1: an operation something tried and a control refused. Nothing landed, so a change it names (`change.id`) is **not** moved to exception |
 | `monitoring-protection` | `actor` and `detail` (the operation) | `out-of-band-detected` | O-1: an operation on the controls that watch the environment (a trail, an audit policy, a recorder), tier 3 whether or not it succeeded ([evidence.md](evidence.md#observations-clearanceevidencev11-o-1)); moves a change it names to exception like any other |
+| `gate-exemption` | `exemption` {state, application, entry, rule, rule_digest, reason, expires, ref?, why?}, `app`, and no `change.id` | `coverage-unavailable` | the Argo agent's gate rule (W-42): the platform has exempted one Application from the rule until a date. Decided by the core, see [Gate exemptions](#gate-exemptions-the-cores-decision); it never moves a change |
 
 Optional on every kind: `state` {backend, key, version}, `detected_at` (RFC 3339), `detail`. Unknown fields are
 refused. A provider's `coverage` must be absent or the kind's. The core adds `breakglass` (verified) when an open
@@ -1072,6 +1073,45 @@ transaction as the record.
   "exception": {"kind": "out-of-band", "objects": [{"apiVersion": "apps/v1", "kind": "Deployment",
     "namespace": "app-gate-api-prod", "name": "gate-api"}]}}}
 ```
+
+#### Gate exemptions: the core's decision
+
+A `gate-exemption` record is an Argo CD agent saying that its gate rule's `exempt` entry lets one Application out of
+the gate until a date (the agent's gate rule, `--gate-rule-file`). The core **decides** each one; the agent honours an
+exemption only after the core has taken its `requested` record, and asks again whenever anything it is keyed to
+changes and every few minutes.
+
+| `exemption` field | Meaning |
+| --- | --- |
+| `state` | `requested` (the agent asks), `active` (honoured, reposted at most once a day), `expiring` (seven days before `expires`), `expired` (lapsed, revoked or stale: `why` says which), `refused` (the agent records a refusal it was given) |
+| `application` | `<namespace>/<name>` of the Application |
+| `entry` | the exempt entry's `application` glob, as written in the rule file |
+| `rule` | the name of the rule entry that selects the Application |
+| `rule_digest` | sha256 of the rule file the agent read |
+| `reason` | the entry's reason, 10 to 500 characters |
+| `expires` | RFC 3339; at most 90 days after the record's time |
+| `ref`, `why` | optional, at most 200 characters |
+
+There is no approver field: who added the exemption is the pull request that changed the rule file.
+
+**Refusals (409, `refused: <reason>`).** A `requested`, `active` or `expiring` record is refused, and nothing is
+written, when:
+
+- `static`: `CLEARANCE_PROTECTED_ENVIRONMENTS` protects the record's cluster and environment. No exemption lifts the
+  list. An **empty** list protects every environment, so it refuses every exemption.
+- `too-long`: `expires` is more than 90 days away.
+
+`expired` and `refused` records are always taken: they close or explain one. The decision is made before the
+provider's `source.event_id` is looked up, so an agent that asks again with the same event id is decided again (the
+list may have changed) and, when taken, gets the earlier record back (`duplicate: true`). A malformed record is 400.
+
+**Removal reports.** `PUT /v1/protection/{cluster}` takes an optional `exempted` list: the pairs the report removes
+because an exemption released their Application. A pair still in `pairs` is 400; a pair whose environment the list
+protects is refused 409 (`refused: static`), exactly as its exemption would be. The `protection.report` record names
+the exempted pairs ("removed for a gate exemption ...").
+
+In the packet a `gate-exemption` record is a row of its own class, `gate-exemption`, listed in `by_class` only when the
+window has one (an older packet reads exactly as before); its resolution is the exemption's state.
 
 ### Degraded-mode reports: `deploy.degraded`
 

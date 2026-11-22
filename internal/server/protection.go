@@ -59,6 +59,10 @@ type ProtectionRequest struct {
 	Reason string               `json:"reason,omitempty"`
 	// Seq numbers the report; it only goes up per cluster. A lower or equal number carrying another set is refused 409.
 	Seq int64 `json:"seq,omitempty"`
+	// Exempted are the pairs this report removes because a gate exemption released their Application (docs/gate.md,
+	// "The gate rule and exemptions"). A pair whose environment CLEARANCE_PROTECTED_ENVIRONMENTS protects is refused
+	// 409 ("refused: static"): no exemption lifts the list. Absent: no pair leaves for an exemption.
+	Exempted []gate.ProtectedPair `json:"exempted,omitempty"`
 }
 
 // ProtectionResult is what a report did: the cluster, the digest of the set now held, how many pairs, whether it
@@ -207,6 +211,23 @@ func (s *Server) reportProtection(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	var exempted []gate.ProtectedPair
+	if body.Exempted != nil {
+		if exempted, err = gate.NormalizePairs(body.Exempted); err != nil {
+			writeError(w, http.StatusBadRequest, "exempted: "+err.Error())
+			return
+		}
+		for _, p := range exempted {
+			if slices.Contains(pairs, p) {
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("exempted: %s/%s is still in pairs: an exempted pair is one the report removes", p.App, p.Env))
+				return
+			}
+		}
+		if err := s.opt.Gate.RefuseExemptedStatic(cluster, exempted); err != nil {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+	}
 	doc, _ := json.Marshal(pairs)
 	sum := sha256.Sum256(doc)
 	digest := hex.EncodeToString(sum[:])
@@ -318,6 +339,7 @@ func (s *Server) reportProtection(w http.ResponseWriter, r *http.Request) {
 			result += " (unchanged)"
 		}
 		result += list("; added ", out.Added, nil) + list("; removed ", out.Removed, out.StaticRemoved)
+		result += list("; removed for a gate exemption ", exempted, nil)
 		if body.Reason != "" {
 			result += "; reason (claimed): " + body.Reason
 		}

@@ -42,6 +42,15 @@ func mappingFor(profile string) (string, []MappingEntry, error) {
 var ExceptionClasses = []string{"out-of-band", "break-glass", "attempted-refused", "monitoring-protection", "degraded-mode-auto-clear",
 	"invalidated-token", "provider-correlation-failure"}
 
+// OptionalExceptionClasses are classes listed only when the packet has a row of them (internal/packet's own list):
+// a statement built from a packet without one lists exactly ExceptionClasses, as before. Absent means zero.
+var OptionalExceptionClasses = []string{"gate-exemption"}
+
+// KnownExceptionClass says whether c is a class this statement reads.
+func KnownExceptionClass(c string) bool {
+	return slices.Contains(ExceptionClasses, c) || slices.Contains(OptionalExceptionClasses, c)
+}
+
 // critical is the tier a change needs two independent approvers at: tier 3 holds for one owner and one outside person
 // (docs/gate.md).
 const critical = 3
@@ -193,7 +202,7 @@ func Summarize(packetJSON, recordsJSONL []byte, profile string) (*Derived, error
 	// Exceptions: every class listed, tallied from the rows and checked against the packet's own by-class list.
 	tally := map[string]int{}
 	for _, r := range p.Exceptions.Rows {
-		if !slices.Contains(ExceptionClasses, r.Class) {
+		if !KnownExceptionClass(r.Class) {
 			return nil, errors.New("the packet has an exception class this statement does not know")
 		}
 		tally[r.Class]++
@@ -204,7 +213,7 @@ func Summarize(packetJSON, recordsJSONL []byte, profile string) (*Derived, error
 		stated[c.State] += c.Count
 	}
 	for c := range stated {
-		if !slices.Contains(ExceptionClasses, c) {
+		if !KnownExceptionClass(c) {
 			return nil, errors.New("the packet's exceptions by class name a class this statement does not know")
 		}
 	}
@@ -214,6 +223,14 @@ func Summarize(packetJSON, recordsJSONL []byte, profile string) (*Derived, error
 			return nil, errors.New("the packet's exceptions by class are not its exception rows")
 		}
 		s.Exceptions.ByClass = append(s.Exceptions.ByClass, Count{State: c, Count: tally[c]})
+	}
+	for _, c := range OptionalExceptionClasses {
+		if stated[c] != tally[c] {
+			return nil, errors.New("the packet's exceptions by class are not its exception rows")
+		}
+		if tally[c] > 0 {
+			s.Exceptions.ByClass = append(s.Exceptions.ByClass, Count{State: c, Count: tally[c]})
+		}
 	}
 	for _, r := range p.Exceptions.Rows {
 		if disp := dispositionOf(r.Resolution); disp != "" {

@@ -394,6 +394,14 @@ const (
 // ExceptionClasses are the classes, in print order. Every one is always listed in ByClass, even at zero.
 var ExceptionClasses = []string{ClassOutOfBand, ClassBreakGlass, ClassRefused, ClassMonitoring, ClassDegraded, ClassTokens, ClassCorrelation}
 
+// ClassGateExemption is a platform exemption from the gate rule (deploy.exception kind gate-exemption).
+const ClassGateExemption = "gate-exemption"
+
+// OptionalExceptionClasses are classes listed in ByClass only when a row has them, after ExceptionClasses: a class
+// added after the packet's shape was fixed, so that a packet with none of it reads exactly as before (and a statement
+// built from an older packet still verifies). Absent means zero.
+var OptionalExceptionClasses = []string{ClassGateExemption}
+
 // Exception is one exception row.
 type Exception struct {
 	Class   string `json:"class"`

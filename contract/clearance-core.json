@@ -2984,6 +2984,12 @@
       "ProtectionRequest": {
         "additionalProperties": false,
         "properties": {
+          "exempted": {
+            "items": {
+              "$ref": "#/components/schemas/GateProtectedPair"
+            },
+            "type": "array"
+          },
           "pairs": {
             "items": {
               "$ref": "#/components/schemas/GateProtectedPair"

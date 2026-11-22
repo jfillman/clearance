@@ -379,7 +379,7 @@ func (d *Document) checkSets() error {
 	}
 	if d.Insurer != nil {
 		for _, u := range d.Insurer.Unresolved {
-			if !slices.Contains(ExceptionClasses, u.Class) || !slices.Contains(dispositions, u.Disposition) {
+			if !KnownExceptionClass(u.Class) || !slices.Contains(dispositions, u.Disposition) {
 				return errors.New("an unresolved exception is not one this reads")
 			}
 		}

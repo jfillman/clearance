@@ -128,7 +128,7 @@ from the records".
 **AI identities.** Each agent that appears on a record in the window: principals, records, allowed and denied, the
 changes it proposed, the provenance levels, and the model versions (claimed by the runtime provider).
 
-**Exceptions.** One row per exception, in seven classes, each class always listed with its count:
+**Exceptions.** One row per exception, in seven classes, each class always listed with its count, and an eighth, `gate-exemption`, listed only when it has a row:
 
 | Class | Rows |
 | --- | --- |
@@ -139,6 +139,7 @@ changes it proposed, the provenance levels, and the model versions (claimed by t
 | `degraded-mode-auto-clear` | `deploy.degraded` (a provider that let a change land, or held it, while the core was unreachable, with the outage policy it was held to) and the runtime reads posted on recovery |
 | `invalidated-token` | `deploy.revoke`: a clearance token that stopped being good |
 | `provider-correlation-failure` | An observation whose provider named a grant, plan, task or run and was still left uncleared, and a federated decision that could not be tied to a task. This is a second row for an observation already listed under its own class |
+| `gate-exemption` | A platform exemption from the Argo CD agent's gate rule for one Application, until a date (`deploy.exception` kind `gate-exemption`, [gate.md](gate.md#gate-exemptions-the-cores-decision)). Listed only when the window has one: a packet without one lists the seven classes above, as before |
 
 When the list is empty the section prints "No exceptions detected" **only** if the coverage statement's
 `window_verified` is true, else it says the list is not a clean one and why.
