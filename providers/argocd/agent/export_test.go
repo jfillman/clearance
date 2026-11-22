@@ -10,3 +10,9 @@ var TestWaitPin = testPin
 
 // SetActiveGrantsPage sets the list page size for a test and returns the old one.
 func SetActiveGrantsPage(n int) int { old := activeGrantsPage; activeGrantsPage = n; return old }
+
+// SetMaxPendingBytes sets the exemption-record queue's byte bound for a test and returns the old one.
+func SetMaxPendingBytes(n int) int { old := MaxPendingBytes; MaxPendingBytes = n; return old }
+
+// SetMaxStateBytes sets the serialized-state bound a queued record may reach, for a test, and returns the old one.
+func SetMaxStateBytes(n int) int { old := MaxStateBytes; MaxStateBytes = n; return old }

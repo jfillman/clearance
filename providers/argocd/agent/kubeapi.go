@@ -621,7 +621,10 @@ func (a *API) GetApplicationSet(ctx context.Context, name string) (AppSet, error
 			Name      string `json:"name"`
 		} `json:"metadata"`
 		Spec struct {
-			Ignore []ignoreWire `json:"ignoreApplicationDifferences"`
+			Ignore    []ignoreWire `json:"ignoreApplicationDifferences"`
+			Preserved struct {
+				Annotations []string `json:"annotations"`
+			} `json:"preservedFields"`
 		} `json:"spec"`
 	}
 	err := a.call(ctx, "GET", "/apis/argoproj.io/v1alpha1/namespaces/"+url.PathEscape(a.ArgoNS)+"/applicationsets/"+url.PathEscape(name), "", nil, &w)
@@ -632,7 +635,8 @@ func (a *API) GetApplicationSet(ctx context.Context, name string) (AppSet, error
 	if err != nil {
 		return AppSet{}, err
 	}
-	return AppSet{Namespace: w.Metadata.Namespace, Name: w.Metadata.Name, IgnoreApplicationDifferences: ignores(w.Spec.Ignore)}, nil
+	return AppSet{Namespace: w.Metadata.Namespace, Name: w.Metadata.Name, IgnoreApplicationDifferences: ignores(w.Spec.Ignore),
+		PreservedAnnotations: w.Spec.Preserved.Annotations}, nil
 }
 
 // SetNamespaceProtected implements Kube: a read, then one merge patch guarded by the version read. Adding leaves a

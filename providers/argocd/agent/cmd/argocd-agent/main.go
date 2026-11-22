@@ -80,6 +80,11 @@ func run() error {
 		optEvery  = fs.Duration("optin-interval", 30*time.Second, "how often the opt-in reconciles the Applications")
 		optReport = fs.Duration("optin-report-every", 5*time.Minute, "how often the protected pairs are reported again unchanged")
 		optBytes  = fs.Int("optin-max-grant-bytes", 1_500_000, "a merged grant over this many bytes is refused and reported")
+		ruleFile  = fs.String("gate-rule-file", env("CLEARANCE_GATE_RULE_FILE", ""), "the platform's gate rule (W-42): a YAML file selecting Applications to gate as if annotated, and its exemptions; re-read every pass. Needs --optin. Empty: no rule, the agent behaves as before")
+		exemptMax = fs.Duration("gate-exempt-max", agent.DefaultExemptMax, "an exemption whose expiry is further away than this is ignored (at most 90 days, the core's bound)")
+		relMax    = fs.Int("gate-release-max", 3, "at most this many Applications released by the rule (narrowed, or exempted) per hour; the rest stay gated until the next hour")
+		recheck   = fs.Duration("gate-exemption-recheck", 5*time.Minute, "how often the core is asked again about an exemption it took; one it refuses, or cannot answer, is dropped and the Application gated again")
+		recheckTO = fs.Duration("gate-exemption-recheck-timeout", 30*time.Second, "the deadline of each such ask (below --gate-exemption-recheck): one that misses it counts as an unreachable core")
 		elect     = fs.Bool("leader-elect", envBool("CLEARANCE_LEADER_ELECT"), "run the loops only while holding the leader Lease (for more than one replica; I-44 option 0). Off: one replica runs them, as before")
 		leaseName = fs.String("leader-lease", env("CLEARANCE_LEADER_LEASE", "clearance-argocd-agent"), "the Lease's name, in --state-namespace")
 		leaseDur  = fs.Duration("leader-lease-duration", 15*time.Second, "how long the lease holds without a renewal")
@@ -141,7 +146,8 @@ func run() error {
 		GrantInterval: *grantEvry, ScanInterval: *scanEvry, ArgoNamespace: *argoNS, Projects: list(*projects),
 		StateNS: *stateNS, RepostOnStart: *repost, StatusHeartbeat: *heartbeat,
 		OptIn: agent.OptIn{Enabled: *optIn, PluginName: *optPlugin, DenyApps: list(*optDeny), Namespaces: list(*optNS), Interval: *optEvery,
-			ReportEvery: *optReport, MaxGrantBytes: *optBytes},
+			ReportEvery: *optReport, MaxGrantBytes: *optBytes,
+			Rule: agent.GateRule{File: *ruleFile, ExemptMax: *exemptMax, ReleaseMax: *relMax, Recheck: *recheck, RecheckTimeout: *recheckTO}},
 		Wait: agent.WaitPin{Image: *waitImage, URL: *waitURL, HostAlias: *waitAlias, CAConfigMap: *waitCA}},
 		writer, &agent.HTTPFeeds{Base: *apiURL, Token: tok, HTTP: hc},
 		&agent.HTTPCore{Client: cc, Feeds: agent.HTTPFeeds{Base: *coreURL, Token: tok, HTTP: hc}}, nil,

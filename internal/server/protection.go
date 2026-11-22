@@ -250,12 +250,12 @@ func (s *Server) reportProtection(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		for _, e := range exempted { // an exempted pair is one the report removes: it must be held
-			if !slices.Contains(was, e) {
-				status, why = http.StatusBadRequest, fmt.Sprintf("exempted: %s/%s is not in the held report: an exempted pair is one the report removes", e.App, e.Env)
-				return nil
-			}
-		}
+		// The same number and set again (its number and its set are the ones held): the agent's heartbeat, or a retry after
+		// a lost answer. Its exempted pairs are not checked against the held set (they were when it was first taken, and are
+		// no longer held). A reason it carries is recorded, as for any unchanged report with one: the core does not keep the
+		// last reason, so it cannot tell a retry's from a new explanation, and recording twice beats losing one.
+		replay := cur.Digest != "" && cur.Digest == digest && body.Seq == cur.Seq
+		reason := body.Reason
 		now := s.opt.Clock()
 		next := store.ProtectionSet{Cluster: cluster, Digest: digest, Doc: doc, Seq: cur.Seq, WindowStart: cur.WindowStart, WindowCount: cur.WindowCount, AddCount: cur.AddCount}
 		if next.WindowStart.IsZero() || now.Sub(next.WindowStart) >= time.Hour || now.Before(next.WindowStart) {
@@ -297,6 +297,14 @@ func (s *Server) reportProtection(w http.ResponseWriter, r *http.Request) {
 			}
 			return nil
 		}
+		// After the number check (an old or replayed number with another set is a 409, which tells the agent to read the
+		// held report again): an exempted pair is one the report removes, so it must be held.
+		for _, e := range exempted {
+			if !replay && !slices.Contains(was, e) {
+				status, why = http.StatusBadRequest, fmt.Sprintf("exempted: %s/%s is not in the held report: an exempted pair is one the report removes", e.App, e.Env)
+				return nil
+			}
+		}
 		changed := cur.Digest != digest
 		// A report that only ADDS pairs is never refused by the hourly bound and is not counted against it: the bound is
 		// there to stop a flood of removals and re-additions, and one tenant flipping its annotation must not keep another
@@ -307,7 +315,7 @@ func (s *Server) reportProtection(w http.ResponseWriter, r *http.Request) {
 				onlyAdds = false
 			}
 		}
-		if (changed && !onlyAdds) || (!changed && body.Reason != "") { // removals, mixed reports and reasons are bounded
+		if (changed && !onlyAdds) || (!changed && reason != "") { // removals, mixed reports and reasons are bounded
 			if next.WindowCount >= MaxProtectionRecordsPerHour {
 				status, why = http.StatusTooManyRequests, fmt.Sprintf("at most %d removals or explained reports are recorded per hour for a cluster", MaxProtectionRecordsPerHour)
 				return nil
@@ -322,7 +330,7 @@ func (s *Server) reportProtection(w http.ResponseWriter, r *http.Request) {
 			next.Seq = body.Seq
 		}
 		out.HeldSeq = next.Seq
-		if !changed && body.Reason == "" {
+		if !changed && reason == "" {
 			return tx.PutProtection(r.Context(), next)
 		}
 		for _, n := range pairs {
@@ -346,8 +354,8 @@ func (s *Server) reportProtection(w http.ResponseWriter, r *http.Request) {
 		}
 		result += list("; added ", out.Added, nil) + list("; removed ", out.Removed, out.StaticRemoved)
 		result += list("; removed for a gate exemption ", exempted, nil)
-		if body.Reason != "" {
-			result += "; reason (claimed): " + body.Reason
+		if reason != "" {
+			result += "; reason (claimed): " + reason
 		}
 		if len(result) > MaxFieldText {
 			result = result[:MaxFieldText-3] + "..."

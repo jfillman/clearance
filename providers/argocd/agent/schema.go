@@ -129,6 +129,21 @@ func suspectPruned(have []Grant) bool {
 // reportOnce posts a deploy.exception (out-of-band, the existing path) for a condition the opt-in found, once: the
 // fingerprint is kept in the state until forgetOnce says the condition has gone.
 func (a *Agent) reportOnce(ctx context.Context, fp, result, detail string, objs []map[string]any) error {
+	return a.reportKindOnce(ctx, fp, "out-of-band", result, detail, objs)
+}
+
+// reportKindEvery is reportEvery with the exception's kind (one that needs only objects: out-of-band, drift).
+func (a *Agent) reportKindEvery(ctx context.Context, fp string, every time.Duration, kind, result, detail string, objs []map[string]any) error {
+	if !a.dueEvery(fp, every) {
+		return nil
+	}
+	a.mu.Lock()
+	delete(a.st.Once, fp)
+	a.mu.Unlock()
+	return a.reportKindOnce(ctx, fp, kind, result, detail, objs)
+}
+
+func (a *Agent) reportKindOnce(ctx context.Context, fp, kind, result, detail string, objs []map[string]any) error {
 	a.mu.Lock()
 	_, done := a.st.Once[fp]
 	a.mu.Unlock()
@@ -145,7 +160,7 @@ func (a *Agent) reportOnce(ctx context.Context, fp, result, detail string, objs 
 		Result:      client.String(truncate(result, 200)),
 		Destination: map[string]any{"cluster": a.cfg.Cluster, "environment": a.cfg.Environment},
 		Source:      map[string]any{"provider": a.Provider()},
-		Exception: map[string]any{"kind": "out-of-band", "objects": objs, "detected_at": a.now().UTC().Format(time.RFC3339),
+		Exception: map[string]any{"kind": kind, "objects": objs, "detected_at": a.now().UTC().Format(time.RFC3339),
 			"detail": truncate(detail, 1000)}}}
 	if _, err := a.core.Record(ctx, req); err != nil {
 		return err

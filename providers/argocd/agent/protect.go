@@ -115,13 +115,40 @@ func (a *Agent) reportPairs(ctx context.Context, classes []appClass) bool {
 	if seq == 0 && len(cur) == 0 && len(prev) == 0 && len(unexplained) == 0 {
 		return true // nothing has ever been protected here: there is nothing to tell the core
 	}
-	if seq == 0 { // a state that was lost: start from the core's last number
-		held, err := a.core.ProtectionSeq(ctx, a.cfg.Cluster)
+	if seq == 0 { // a state that was lost, or out of step with the core: start from the core's last number and set
+		held, heldPairs, err := a.core.ProtectionSeq(ctx, a.cfg.Cluster)
 		if err != nil {
 			a.warnOnce("core/protection", "the core's last report number could not be read (removals wait): "+truncate(err.Error(), 200))
 			return false
 		}
 		seq = held
+		if held > 0 {
+			// What the core holds is what this report changes: removals (and their exempted pairs) are taken against it.
+			prev = make([]Pair, 0, len(heldPairs))
+			for _, p := range heldPairs {
+				prev = append(prev, Pair{p.App, p.Env})
+			}
+			sort.Slice(prev, func(i, j int) bool {
+				if prev[i].App != prev[j].App {
+					return prev[i].App < prev[j].App
+				}
+				return prev[i].Env < prev[j].Env
+			})
+			removed, added = nil, nil
+			for _, p := range prev {
+				if !slices.Contains(cur, p) {
+					removed = append(removed, p)
+				}
+			}
+			for _, p := range cur {
+				if !slices.Contains(prev, p) {
+					added = append(added, p)
+				}
+			}
+			a.mu.Lock()
+			a.st.Reported = prev
+			a.mu.Unlock()
+		}
 	}
 	toPairs := func(l []Pair) []client.ProtectedPair {
 		out := make([]client.ProtectedPair, len(l))
@@ -155,7 +182,8 @@ func (a *Agent) reportPairs(ctx context.Context, classes []appClass) bool {
 	if seq > 0 && reason == "" && slices.Equal(prev, cur) {
 		nextSeq = seq // the same set again (the heartbeat): the same number, so nothing changes at the core or in the state
 	}
-	if _, ok := a.sendReport(ctx, pairs, cur, reason, nextSeq, true); !ok {
+	req := &client.ProtectionRequest{Pairs: pairs, Reason: reason, Seq: nextSeq, Exempted: exemptedPairs(classes, removed)}
+	if _, ok := a.send(ctx, req, cur); !ok {
 		return false
 	}
 	a.repMu.Lock()
@@ -180,12 +208,35 @@ const refusedFor = 10 * time.Minute
 // number the core now holds. A report the core refuses (4xx) is remembered: after refusedFor the status says so and
 // one exception is posted.
 func (a *Agent) sendReport(ctx context.Context, pairs []client.ProtectedPair, cur []Pair, reason string, seq int64, final bool) (int64, bool) {
-	req := &client.ProtectionRequest{Pairs: pairs, Reason: reason, Seq: seq}
+	return a.send(ctx, &client.ProtectionRequest{Pairs: pairs, Reason: reason, Seq: seq}, cur)
+}
+
+// exemptedPairs are the removed pairs whose Application an exemption released, and that no other Application keeps.
+func exemptedPairs(classes []appClass, removed []Pair) []client.ProtectedPair {
+	var out []client.ProtectedPair
+	for _, p := range removed {
+		for _, c := range classes {
+			if c.exempted && !c.protectedIntent() && c.gateApp == p.App && c.env == p.Env {
+				out = append(out, client.ProtectedPair{App: p.App, Env: p.Env})
+				break
+			}
+		}
+	}
+	return out
+}
+
+func (a *Agent) send(ctx context.Context, req *client.ProtectionRequest, cur []Pair) (int64, bool) {
 	res, err := a.core.ReportProtection(ctx, a.cfg.Cluster, req)
 	if err != nil {
 		var ae *client.APIError
 		if errors.As(err, &ae) {
-			if ae.Status == 409 { // the core holds a newer number than ours: read it again
+			if ae.Status == 409 && strings.HasPrefix(ae.Message, "refused: ") && len(req.Exempted) > 0 {
+				// The core refuses to drop a pair for an exemption (its CLEARANCE_PROTECTED_ENVIRONMENTS protects it): the
+				// exemptions behind it are refused, and the Applications stay gated.
+				a.refuseExempted(req.Exempted, strings.TrimPrefix(ae.Message, "refused: "))
+			} else if ae.Status == 409 || (ae.Status == 400 && strings.Contains(ae.Message, "not in the held report")) {
+				// The core holds a newer number than ours, or another set than the one this report was built on (a lost
+				// answer): read both again before the next report.
 				a.mu.Lock()
 				a.st.ReportSeq = 0
 				_ = a.saveLocked(ctx)
@@ -202,7 +253,7 @@ func (a *Agent) sendReport(ctx context.Context, pairs []client.ProtectedPair, cu
 	a.lastSend = a.now()
 	a.repMu.Unlock()
 	a.forgetOnce(ctx, "report-refused")
-	delete(a.opt().warned, "core/protection")
+	a.unwarn("core/protection")
 	a.mu.Lock()
 	newSeq := max(req.Seq, res.HeldSeq)
 	if newSeq != a.st.ReportSeq || !slices.Equal(a.st.Reported, cur) {
@@ -218,7 +269,7 @@ func (a *Agent) sendReport(ctx context.Context, pairs []client.ProtectedPair, cu
 		if res.Seq != nil {
 			rseq = *res.Seq
 		}
-		a.log.Info("protected pairs reported", "pairs", len(pairs), "added", len(res.Added), "removed", len(res.Removed), "seq", rseq)
+		a.log.Info("protected pairs reported", "pairs", len(req.Pairs), "added", len(res.Added), "removed", len(res.Removed), "seq", rseq)
 	}
 	for _, p := range res.StaticRemoved {
 		a.log.Warn("a pair left the report and the core's CLEARANCE_PROTECTED_ENVIRONMENTS still protects it", "app", p.App, "env", p.Env)
@@ -255,11 +306,15 @@ func optOutReason(classes []appClass, removed, cur []Pair, unexplained []appClas
 		p := Pair{c.gateApp, c.env}
 		covered[p] = true
 		how := "opted out"
-		if c.denied {
+		switch {
+		case c.denied:
 			how = "denied"
-		}
-		if c.left {
+		case c.left:
 			how = "left the agent's projects"
+		case c.exempted && c.exempt != nil:
+			how = fmt.Sprintf("exempted from rule %s by %q until %s", c.ruleName, c.exempt.Application, c.exempt.At.Format("2006-01-02"))
+		case c.wasRuled && c.ruleName == "":
+			how = "the rule no longer matches"
 		}
 		note := ""
 		if slices.Contains(cur, p) {
@@ -434,6 +489,11 @@ func (a *Agent) labelProtected(ctx context.Context, v *optView, nss map[string]m
 //
 // Any failure before step 2 leaves the grants as they are.
 func (a *Agent) reconcileMerged(ctx context.Context, v *verified, want, have []Grant) error {
+	// With a rule configured and no good copy of it, a rule-gated Application would read as ungated, and its namespace's
+	// label and grant would be removed: nothing is changed until there is one.
+	if _, err := a.loadRule(ctx); err != nil {
+		return fmt.Errorf("%w (the grants stay as they are)", err)
+	}
 	view, err := a.optInView(ctx)
 	if err != nil {
 		return fmt.Errorf("listing the Applications (the grants stay as they are): %w", err)

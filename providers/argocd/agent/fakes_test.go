@@ -51,6 +51,7 @@ type fakeKube struct {
 	apps          []agent.Application
 	objs          map[string][]agent.ObjectDetail // by namespace
 	data          map[string]map[string]string
+	putErr        func(d map[string]string) error // a refusal of some ConfigMap writes
 	grantOps      int
 	workOps       int // anything that would touch a workload: must stay 0
 	failList      bool
@@ -252,6 +253,11 @@ func (k *fakeKube) PutData(_ context.Context, ns, name string, d map[string]stri
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.verbs["put"]++
+	if k.putErr != nil {
+		if err := k.putErr(d); err != nil {
+			return err
+		}
+	}
 	cur := map[string]string{}
 	for a, b := range k.data[ns+"/"+name] { // a merge patch of data: other keys stay
 		cur[a] = b
@@ -277,15 +283,19 @@ type fakeCore struct {
 	reportDown bool
 	heldSeq    int64                                     // the number of the last report the "core" took
 	refuse     func(req *client.ProtectionRequest) error // a refusal for some reports (a 4xx)
+	// exempt decides a gate-exemption record as the core would (W-42): nil takes it; an *client.APIError refuses it.
+	exempt func(state, env string) error
+	// loseReport commits the next protection report and then answers with an error, as a lost answer (W-42).
+	loseReport bool
 }
 
-func (c *fakeCore) ProtectionSeq(context.Context, string) (int64, error) {
+func (c *fakeCore) ProtectionSeq(context.Context, string) (int64, []client.ProtectedPair, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.reportDown || c.down {
-		return 0, errors.New("core unreachable")
+		return 0, nil, errors.New("core unreachable")
 	}
-	return c.heldSeq, nil
+	return c.heldSeq, append([]client.ProtectedPair(nil), c.held...), nil
 }
 
 func (c *fakeCore) ReportProtection(_ context.Context, cluster string, req *client.ProtectionRequest) (*client.ProtectionResult, error) {
@@ -315,6 +325,13 @@ func (c *fakeCore) ReportProtection(_ context.Context, cluster string, req *clie
 	if req.Seq <= c.heldSeq && req.Seq != 0 && c.held != nil && !slices.Equal(c.held, req.Pairs) {
 		return nil, &client.APIError{Op: "reportProtection", Status: 409, Message: "not above the held report"}
 	}
+	if !(req.Seq == c.heldSeq && slices.Equal(c.held, req.Pairs)) {
+		for _, e := range req.Exempted {
+			if !slices.Contains(c.held, e) {
+				return nil, &client.APIError{Op: "reportProtection", Status: 400, Message: "exempted: " + e.App + "/" + e.Env + " is not in the held report"}
+			}
+		}
+	}
 	if req.Seq > c.heldSeq {
 		c.heldSeq = req.Seq
 	}
@@ -334,6 +351,10 @@ func (c *fakeCore) ReportProtection(_ context.Context, cluster string, req *clie
 		}
 	}
 	c.held = append([]client.ProtectedPair(nil), req.Pairs...)
+	if c.loseReport {
+		c.loseReport = false
+		return nil, errors.New("the answer was lost")
+	}
 	return res, nil
 }
 
@@ -372,6 +393,13 @@ func (c *fakeCore) Record(_ context.Context, req *client.RecordRequest) (*client
 		rec["tool"] = req.Kind
 		if err := gate.CheckReport(store.Event(rec), t0); err != nil {
 			c.t.Errorf("the core's report check refuses it: %v\n%s", err, raw)
+		}
+		if x, _ := rec["exception"].(map[string]any); x["kind"] == gate.KindGateExemption && c.exempt != nil {
+			st, _ := x["exemption"].(map[string]any)["state"].(string)
+			env, _ := rec["destination"].(map[string]any)["environment"].(string)
+			if err := c.exempt(st, env); err != nil {
+				return nil, err
+			}
 		}
 	}
 	c.records = append(c.records, *req)

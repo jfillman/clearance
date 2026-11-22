@@ -53,7 +53,7 @@ func TestKubeAPIOptIn(t *testing.T) {
 			}
 			_, _ = w.Write([]byte(`{}`))
 		case r.Method == "GET" && strings.HasSuffix(p, "/applicationsets/tenants"):
-			_, _ = w.Write([]byte(`{"metadata":{"name":"tenants"},"spec":{"ignoreApplicationDifferences":[{"name":"web","jsonPointers":["/spec/source"]}]}}`))
+			_, _ = w.Write([]byte(`{"metadata":{"name":"tenants"},"spec":{"ignoreApplicationDifferences":[{"name":"web","jsonPointers":["/spec/source"]}],"preservedFields":{"annotations":["clearance.hangar.io/switched"]}}}`))
 		case r.Method == "GET" && strings.Contains(p, "/applicationsets/"):
 			w.WriteHeader(404)
 		case r.Method == "GET" && strings.HasPrefix(p, "/api/v1/namespaces/"):
@@ -154,7 +154,8 @@ func TestKubeAPIOptIn(t *testing.T) {
 	}
 
 	set, err := k.GetApplicationSet(bg, "tenants")
-	if err != nil || len(set.IgnoreApplicationDifferences) != 1 || set.IgnoreApplicationDifferences[0].Name != "web" {
+	if err != nil || len(set.IgnoreApplicationDifferences) != 1 || set.IgnoreApplicationDifferences[0].Name != "web" ||
+		len(set.PreservedAnnotations) != 1 || set.PreservedAnnotations[0] != agent.AnnSwitched {
 		t.Errorf("%+v %v", set, err)
 	}
 	if _, err := k.GetApplicationSet(bg, "absent"); !errors.Is(err, agent.ErrNotFound) {

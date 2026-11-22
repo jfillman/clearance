@@ -27,8 +27,14 @@ spec:
   template:
     metadata:
       labels: {{- include "agent.selector" . | nindent 8 }}
+      {{- if .Values.gateRule }}
+      annotations:
+        {{- with .Values.podAnnotations }}{{ toYaml . | nindent 8 }}{{ end }}
+        clearance.hangar.io/gate-rule-checksum: {{ include "agent.gateRuleFile" . | sha256sum }}
+      {{- else }}
       {{- with .Values.podAnnotations }}
       annotations: {{ toYaml . | nindent 8 }}
+      {{- end }}
       {{- end }}
     spec:
       serviceAccountName: {{ .Values.serviceAccount.name }}
@@ -65,6 +71,13 @@ spec:
             - --optin-interval={{ .Values.optIn.interval }}
             - --optin-report-every={{ .Values.optIn.reportEvery }}
             - --optin-max-grant-bytes={{ .Values.optIn.maxGrantBytes | int64 }}
+            {{- end }}
+            {{- if .Values.gateRule }}
+            - --gate-rule-file=/etc/clearance-gate-rule/rule.yaml
+            - --gate-exempt-max={{ .Values.gateRuleOptions.exemptMax }}
+            - --gate-release-max={{ .Values.gateRuleOptions.releaseMax | int }}
+            - --gate-exemption-recheck={{ .Values.gateRuleOptions.exemptionRecheck }}
+            - --gate-exemption-recheck-timeout={{ .Values.gateRuleOptions.exemptionRecheckTimeout }}
             {{- end }}
             {{- with .Values.waitJob.image }}
             - --wait-image={{ . }}
@@ -107,6 +120,9 @@ spec:
             {{- if .Values.tls.caConfigMap }}
             - {name: clearance-ca, mountPath: /etc/clearance-ca, readOnly: true}
             {{- end }}
+            {{- if .Values.gateRule }}
+            - {name: gate-rule, mountPath: /etc/clearance-gate-rule, readOnly: true}
+            {{- end }}
       volumes:
         # The agent's whole credential: a short-lived token bound to the audience the core checks, rotated by the
         # kubelet and read fresh for each request. Nothing is stored.
@@ -119,6 +135,12 @@ spec:
           configMap:
             name: {{ .Values.tls.caConfigMap }}
             items: [{key: {{ .Values.tls.caKey }}, path: {{ .Values.tls.caKey }}}]
+        {{- end }}
+        {{- if .Values.gateRule }}
+        - name: gate-rule
+          configMap:
+            name: {{ include "agent.fullname" . }}-gate-rule
+            items: [{key: rule.yaml, path: rule.yaml}]
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector: {{ toYaml . | nindent 8 }}
@@ -134,6 +156,17 @@ spec:
           labelSelector:
             matchLabels: {{- include "agent.selector" . | nindent 14 }}
       {{- end }}
+{{- if .Values.gateRule }}
+---
+# The platform's gate rule (W-42), read-only to the agent: it is changed by a values change, reviewed like any other.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "agent.fullname" . }}-gate-rule
+  labels: {{- include "agent.labels" . | nindent 4 }}
+data:
+  rule.yaml: {{ include "agent.gateRuleFile" . | quote }}
+{{- end }}
 {{- if .Values.ha.enabled }}
 ---
 apiVersion: policy/v1

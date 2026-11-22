@@ -123,3 +123,50 @@ func TestAReportCannotRemoveAStaticPairForAnExemption(t *testing.T) {
 		t.Fatalf("the record names the exemption: %s", res)
 	}
 }
+
+// A removal report taken by the core whose answer was lost is sent again with the same number and set: the core takes it
+// as it was (its exempted pairs are no longer held), records nothing more, and the agent's state can catch up.
+func TestAReplayedExemptionRemovalIsTakenAsItWas(t *testing.T) {
+	f := protectionFixture(t, "")
+	f.do("PUT", "/v1/protection/hangar-prod", agentProd, pairs("web/prod", "web/staging")).want(t, 200, "")
+	body := pairs("web/prod")
+	body["exempted"] = []any{map[string]any{"app": "web", "env": "staging"}}
+	body["reason"] = "argocd/web-staging exempted"
+	f.do("PUT", "/v1/protection/hangar-prod", agentProd, body).want(t, 200, "")
+	n := len(protectionRecords(f))
+	again := f.do("PUT", "/v1/protection/hangar-prod", agentProd, body).want(t, 200, "")
+	if again.body["changed"] != false || len(protectionRecords(f)) != n+1 {
+		t.Fatalf("a replay changes no set: %v", again.body)
+	}
+	// Its reason is recorded, so an explanation rebuilt on the same number (another opt-out of a shared pair) is not lost.
+	body["reason"] = "argocd/web-staging exempted; argocd/other-staging opted out"
+	f.do("PUT", "/v1/protection/hangar-prod", agentProd, body).want(t, 200, "")
+	recs := protectionRecords(f)
+	if res := fmt.Sprint(recs[len(recs)-1]["result"]); !strings.Contains(res, "other-staging opted out") || !strings.Contains(res, "(unchanged)") {
+		t.Fatalf("the new explanation is recorded: %s", res)
+	}
+	// Without a reason (the heartbeat) nothing is recorded.
+	delete(body, "reason")
+	m := len(f.records())
+	f.do("PUT", "/v1/protection/hangar-prod", agentProd, body).want(t, 200, "")
+	if len(f.records()) != m {
+		t.Fatal("a reasonless replay records nothing")
+	}
+	// Another number with the same exempted pair is a new report, and the pair is not held: refused.
+	next := pairs("web/prod")
+	next["exempted"] = body["exempted"]
+	f.do("PUT", "/v1/protection/hangar-prod", agentProd, next).want(t, 400, "not in the held report")
+}
+
+// A report rebuilt on a stale set after a lost answer reuses the held number with another set: the number check answers
+// first (409: read the held report again), before the exempted pairs are checked against it.
+func TestAStaleRebuiltReportIsANumberConflictFirst(t *testing.T) {
+	f := protectionFixture(t, "")
+	f.do("PUT", "/v1/protection/hangar-prod", agentProd, pairs("web/prod", "web/staging", "api/staging")).want(t, 200, "")
+	body := pairs("web/prod", "api/staging")
+	body["exempted"] = []any{map[string]any{"app": "web", "env": "staging"}}
+	f.do("PUT", "/v1/protection/hangar-prod", agentProd, body).want(t, 200, "")
+	stale := map[string]any{"pairs": []any{map[string]any{"app": "web", "env": "prod"}}, "seq": body["seq"],
+		"exempted": []any{map[string]any{"app": "web", "env": "staging"}, map[string]any{"app": "api", "env": "staging"}}}
+	f.do("PUT", "/v1/protection/hangar-prod", agentProd, stale).want(t, 409, "not above the held report")
+}
