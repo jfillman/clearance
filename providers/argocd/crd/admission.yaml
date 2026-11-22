@@ -13,6 +13,10 @@
 #                               trees (the other live cleared trees; see docs/gate.md).
 #   clearance-grant-writer      only the grant-sync agent's service account writes a ClearanceGrant or its status.
 #
+# The policy has no clock for an UPDATE (I-44): expiry reaches it only through the agent's status.valid. The grant-expiry
+# webhook (charts/clearance-argocd-agent grantExpiry, providers/argocd/grantexpiry) is the clock beside it, and an
+# optional CREATE-only clock is the createclock variable below (off as shipped).
+#
 # Every matchConditions expression is has()-guarded: a CEL error in a match condition is a cluster-wide refusal under
 # failurePolicy Fail (hangar's 2026-10-29 lesson). The usernames below are the Hangar defaults; Apron renders them
 # from clearance.gate.argocdServiceAccount / agentServiceAccount.
@@ -188,6 +192,16 @@ spec:
       expression: >-
         (has(object.apiVersion) && object.apiVersion.contains('/') ? object.apiVersion.split('/')[0] : '') + '/' +
         (has(object.kind) ? object.kind : '') + '/' + (has(object.metadata.name) ? object.metadata.name : '')
+    # Option 2' of I-44, a CREATE-only clock, OFF as shipped: the installer renders true here to turn it on (Apron's
+    # clearance.gate.createClock). The API server stamps metadata.creationTimestamp with its own clock before admission
+    # runs (always overwriting what the client sent), so on a CREATE it is "now", and the fourth validation refuses a
+    # CREATE after the active grant's spec.expiresAt. On an UPDATE it is the original creation time and says nothing, so
+    # an UPDATE is never checked here: the grant-expiry webhook is the clock for every operation (docs/gate.md). Stricter
+    # than the webhook on purpose: it reads only the grant's own expiresAt, so it also refuses a CREATE a live carried
+    # entry would admit once the grant itself has expired. Verify it live (a dry-run create under a grant with a past
+    # expiresAt) before turning it on.
+    - name: createclock
+      expression: "false"
   validations:
     - expression: "variables.exempt || variables.rendered != ''"
       messageExpression: "'no clearance.hangar.io/rendered annotation on ' + variables.key + ': it did not come from the Clearance plugin'"
@@ -205,6 +219,11 @@ spec:
                                     has(c.objects[variables.key].rendered) &&
                                     c.objects[variables.key].rendered == variables.rendered))
       messageExpression: "'grant ' + params.metadata.name + ' does not list ' + variables.key + ' at ' + variables.rendered"
+    - expression: >-
+        !variables.createclock || variables.exempt || request.operation != 'CREATE' ||
+        (has(object.metadata.creationTimestamp) && has(params.spec.expiresAt) &&
+         timestamp(object.metadata.creationTimestamp) < timestamp(params.spec.expiresAt))
+      messageExpression: "'grant ' + params.metadata.name + ' expired before this create (the CREATE-only clock)'"
   auditAnnotations:
     - key: grant
       valueExpression: "string(params.metadata.name)"

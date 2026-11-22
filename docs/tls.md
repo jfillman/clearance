@@ -21,6 +21,15 @@ self-signed Issuer, a CA Certificate and a CA Issuer; the install needs nothing 
 `tls.certManager.issuerRef`, an existing Issuer or ClusterIssuer such as a shared cluster CA. No Secret is made by hand. With
 `tls.certManager.enabled: false`, name your own `kubernetes.io/tls` Secrets in `tls.existingSecrets`.
 
+## The grant-expiry webhook's certificate
+
+The agent chart's grant-expiry webhook (`charts/clearance-argocd-agent`, `grantExpiry`; [gate.md](gate.md#the-grant-expiry-webhook-i-44-built))
+is called by the API server over https and uses the same scheme: a cert-manager Certificate for its Service, signed by the chart's own
+namespaced CA (a self-signed Issuer, a CA Certificate and a CA Issuer, so it needs nothing but cert-manager) or by
+`grantExpiry.tls.certManager.issuerRef` (a shared cluster CA). cert-manager's CA injector writes the ValidatingWebhookConfiguration's
+`caBundle`; no trust-manager Bundle is involved, since the API server is the only client. Without cert-manager, name a `kubernetes.io/tls`
+Secret (`grantExpiry.tls.existingSecret`) and its CA (`grantExpiry.tls.caBundle`). The certificate is re-read when it changes.
+
 ## Client side
 
 Every client takes an optional CA file (`CLEARANCE_CA_FILE`, or `--ca-file`): extra roots trusted **besides** the system roots,

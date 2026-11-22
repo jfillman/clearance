@@ -281,6 +281,18 @@ func expiryAfter(expiresAt string, now time.Time) bool {
 
 func gkey(g Grant) string { return g.Namespace + "/" + g.Name }
 
+// reasonVerified is status.reason of a grant the agent verified against the signed feed.
+const reasonVerified = "verified against the signed grant feed"
+
+// heartbeatDue: checkedAt is missing, unreadable, in the future by more than the heartbeat, or at least hb old.
+func heartbeatDue(checkedAt string, now time.Time, hb time.Duration) bool {
+	t, err := time.Parse(time.RFC3339, checkedAt)
+	if err != nil {
+		return true
+	}
+	return now.Sub(t) >= hb || t.Sub(now) > hb
+}
+
 // reconcile makes the cluster's grants the desired ones, in an order that protects the namespaces (the admission
 // policy refuses every matched write in a protected namespace that has no active, valid grant, and a second active
 // grant is refused):
@@ -352,7 +364,7 @@ func (a *Agent) reconcile(ctx context.Context, want, have []Grant) error {
 	}
 	for _, w := range want { // 2. valid
 		if h := haveBy[gkey(w)]; (h.Valid == nil || !*h.Valid) && expiryAfter(w.Spec.ExpiresAt, a.now()) {
-			if step("validating", w, a.kube.SetGrantValid(ctx, w.Namespace, w.Name, true, "verified against the signed grant feed", a.now())) {
+			if step("validating", w, a.kube.SetGrantValid(ctx, w.Namespace, w.Name, true, reasonVerified, a.now())) {
 				h.Valid = new(bool)
 				*h.Valid = true
 				haveBy[gkey(w)] = h
@@ -475,6 +487,13 @@ func (a *Agent) expireGrants(ctx context.Context) error {
 					continue
 				}
 				a.log.Info("expired objects and carried trees dropped", "grant", gkey(g))
+			}
+			// The status heartbeat (option 0 of I-44, off unless configured): a valid grant's status.checkedAt is
+			// rewritten once it is older than the heartbeat, so an alert on its age sees an expiry pass that stopped.
+			if hb := a.cfg.StatusHeartbeat; hb > 0 && g.Valid != nil && *g.Valid && heartbeatDue(g.CheckedAt, a.now(), hb) {
+				if err := a.kube.SetGrantValid(ctx, g.Namespace, g.Name, true, reasonVerified, a.now()); err != nil {
+					errs = append(errs, fmt.Errorf("refreshing status.checkedAt of grant %s: %w", gkey(g), err))
+				}
 			}
 			continue
 		}

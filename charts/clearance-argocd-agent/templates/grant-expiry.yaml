@@ -1,0 +1,306 @@
+{{- if .Values.grantExpiry.enabled }}
+{{- /* I-44: the grant-expiry webhook, the clock the admission policy lacks (providers/argocd/grantexpiry, docs/gate.md
+       "The grant-expiry webhook"). A separate Deployment on the agent's image (command /grant-expiry), never the agent's
+       process. It reads the active grants (list, watch) and nothing else, holds no Clearance credential and writes nothing.
+       Waves: the service account, its RBAC and the certificate, then the Deployment (Healthy only once every pod is Ready in the rendered mode), then the
+       configuration; the installer's policy binding belongs in a later wave still. */}}
+{{- $ge := .Values.grantExpiry }}
+{{- $name := include "agent.ge.name" . }}
+{{- $mode := include "agent.ge.mode" . }}
+{{- $cm := $ge.tls.certManager }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  labels: {{- include "agent.ge.labels" . | nindent 4 }}
+  annotations: {argocd.argoproj.io/sync-wave: {{ $ge.syncWaves.certificate | quote }}}
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  labels: {{- include "agent.ge.labels" . | nindent 4 }}
+  annotations: {argocd.argoproj.io/sync-wave: {{ $ge.syncWaves.certificate | quote }}}
+rules:
+  # The grants the admission policy reads (the active ones, every namespace): read only.
+  - apiGroups: [{{ (split "/" .Values.grantAPI)._0 | quote }}]
+    resources: [clearancegrants]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+  labels: {{- include "agent.ge.labels" . | nindent 4 }}
+  annotations: {argocd.argoproj.io/sync-wave: {{ $ge.syncWaves.certificate | quote }}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ $name }}}
+subjects:
+  - {kind: ServiceAccount, name: {{ $name }}, namespace: {{ .Release.Namespace }}}
+{{- if $cm.enabled }}
+{{- if not $cm.issuerRef.name }}
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ $name }}-selfsigned
+  labels: {{- include "agent.ge.labels" . | nindent 4 }}
+  annotations: {argocd.argoproj.io/sync-wave: {{ $ge.syncWaves.certificate | quote }}}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $name }}-ca
+  labels: {{- include "agent.ge.labels" . | nindent 4 }}
+  annotations: {argocd.argoproj.io/sync-wave: {{ $ge.syncWaves.certificate | quote }}}
+spec:
+  isCA: true
+  commonName: {{ $name }}-ca
+  secretName: {{ $name }}-ca
+  duration: {{ $cm.caDuration }}
+  privateKey: {algorithm: ECDSA, size: 256, rotationPolicy: Always}
+  issuerRef: {name: {{ $name }}-selfsigned, kind: Issuer, group: cert-manager.io}
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ $name }}-ca
+  labels: {{- include "agent.ge.labels" . | nindent 4 }}
+  annotations: {argocd.argoproj.io/sync-wave: {{ $ge.syncWaves.certificate | quote }}}
+spec:
+  ca:
+    secretName: {{ $name }}-ca
+{{- end }}
+---
+# The serving certificate. Its Secret's ca.crt is what cert-manager's CA injector writes into the configuration's caBundle.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $name }}-tls
+  labels: {{- include "agent.ge.labels" . | nindent 4 }}
+  annotations: {argocd.argoproj.io/sync-wave: {{ $ge.syncWaves.certificate | quote }}}
+spec:
+  secretName: {{ $name }}-tls
+  duration: {{ $cm.duration }}
+  renewBefore: {{ $cm.renewBefore }}
+  usages: [digital signature, key encipherment, server auth]
+  privateKey: {algorithm: ECDSA, size: 256, rotationPolicy: Always}
+  dnsNames:
+    - {{ $name }}
+    - {{ $name }}.{{ .Release.Namespace }}
+    - {{ $name }}.{{ .Release.Namespace }}.svc
+    - {{ $name }}.{{ .Release.Namespace }}.svc.cluster.local
+  issuerRef:
+    name: {{ include "agent.ge.issuerName" . }}
+    kind: {{ if $cm.issuerRef.name }}{{ $cm.issuerRef.kind | default "Issuer" }}{{ else }}Issuer{{ end }}
+    group: cert-manager.io
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels: {{- include "agent.ge.labels" . | nindent 4 }}
+  annotations: {argocd.argoproj.io/sync-wave: {{ $ge.syncWaves.deployment | quote }}}
+spec:
+  replicas: {{ $ge.replicas }}
+  # Never fewer Ready pods than replicas during a rollout: under failurePolicy Fail the webhook is a dependency of every
+  # protected Argo CD write.
+  strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
+  selector:
+    matchLabels: {{- include "agent.ge.selector" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "agent.ge.selector" . | nindent 8 }}
+      annotations:
+        clearance.hangar.io/grant-expiry-mode: {{ $mode }}
+        {{- with $ge.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ $name }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: grant-expiry
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag | default (printf "v%s" .Chart.AppVersion) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [/grant-expiry]
+          args:
+            - --mode={{ $mode }}
+            - --argocd-user={{ include "agent.ge.argocdUser" . }}
+            - --skew={{ $ge.skew }}
+            - --grant-api={{ .Values.grantAPI }}
+            - --max-cache-age={{ $ge.maxCacheAge }}
+            {{- with .Values.waitJob.image }}
+            - --wait-image={{ . }}
+            - --wait-url={{ $.Values.waitJob.url | default $.Values.coreURL }}
+            {{- with $.Values.waitJob.previousURL }}
+            - --wait-previous-url={{ . }}
+            {{- end }}
+            {{- with $.Values.waitJob.hostAlias }}
+            - --wait-host-alias={{ . }}
+            {{- end }}
+            {{- with $.Values.waitJob.caConfigMap }}
+            - --wait-ca-configmap={{ . }}
+            {{- end }}
+            {{- end }}
+          ports:
+            - {name: https, containerPort: 8443, protocol: TCP}
+            - {name: probe, containerPort: 8080, protocol: TCP}
+          # Ready only when the grant cache is synced AND the pod runs in the mode this render asks for: a pod still in
+          # audit is not Ready in an enforce rollout, so the configuration's later wave waits for pods that enforce.
+          readinessProbe:
+            httpGet: {path: "/readyz?mode={{ $mode }}", port: probe}
+            periodSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: {path: /healthz, port: probe}
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources: {{- toYaml $ge.resources | nindent 12 }}
+          volumeMounts:
+            - {name: tls, mountPath: /etc/clearance/tls, readOnly: true}
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ include "agent.ge.secret" . }}
+            items:
+              - {key: tls.crt, path: tls.crt}
+              - {key: tls.key, path: tls.key}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {{- include "agent.ge.selector" . | nindent 14 }}
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {{- include "agent.ge.selector" . | nindent 14 }}
+      {{- with $ge.nodeSelector }}
+      nodeSelector: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $ge.tolerations }}
+      tolerations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels: {{- include "agent.ge.labels" . | nindent 4 }}
+  annotations: {argocd.argoproj.io/sync-wave: {{ $ge.syncWaves.deployment | quote }}}
+spec:
+  selector: {{- include "agent.ge.selector" . | nindent 4 }}
+  ports:
+    - {name: https, port: 443, targetPort: https, protocol: TCP}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $name }}
+  labels: {{- include "agent.ge.labels" . | nindent 4 }}
+  annotations: {argocd.argoproj.io/sync-wave: {{ $ge.syncWaves.deployment | quote }}}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {{- include "agent.ge.selector" . | nindent 6 }}
+---
+# The narrowest scope the API allows: Argo CD's controller writing a main resource of a namespace labelled protected, on
+# CREATE or UPDATE. A ValidatingWebhookConfiguration has no excludeResourceRules, so the admission policy's exclusions
+# (what the agent needs to bootstrap and what the control plane writes) are matchConditions here. Every expression is
+# has()-guarded: a CEL error in a match condition refuses the request under failurePolicy Fail.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ $name }}
+  labels: {{- include "agent.ge.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $ge.syncWaves.webhook | quote }}
+    {{- if $cm.enabled }}
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ $name }}-tls
+    {{- end }}
+webhooks:
+  # The name prefixes the response's audit annotation: clearance.hangar.io/expired-grant.
+  - name: clearance.hangar.io
+    admissionReviewVersions: [v1]
+    sideEffects: None
+    # audit: Ignore (an unreachable webhook changes nothing). enforce: Fail (an unreachable webhook refuses; only after
+    # every pod enforces, by the waves above).
+    failurePolicy: {{ if $ge.enforce }}Fail{{ else }}Ignore{{ end }}
+    matchPolicy: Equivalent
+    timeoutSeconds: {{ $ge.timeoutSeconds }}
+    namespaceSelector:
+      matchLabels: {clearance.hangar.io/protected: "true"}
+    rules:
+      - apiGroups: ["*"]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: ["*"]
+        scope: Namespaced
+    clientConfig:
+      service: {namespace: {{ .Release.Namespace }}, name: {{ $name }}, path: /validate, port: 443}
+      {{- if not $cm.enabled }}
+      caBundle: {{ $ge.tls.caBundle }}
+      {{- end }}
+    matchConditions:
+      - name: argocd-application-controller-main-resource
+        expression: >-
+          has(request.userInfo) && has(request.userInfo.username) &&
+          request.userInfo.username == {{ include "agent.ge.argocdUser" . | squote }} &&
+          (!has(request.subResource) || request.subResource == '')
+      - name: not-clearancegrants
+        expression: >-
+          !(has(request.resource) && has(request.resource.group) && request.resource.group == {{ (split "/" .Values.grantAPI)._0 | squote }} &&
+            has(request.resource.resource) && request.resource.resource == 'clearancegrants')
+      - name: not-core-events-or-endpoints
+        expression: >-
+          !(has(request.resource) && (!has(request.resource.group) || request.resource.group == '') &&
+            has(request.resource.resource) && request.resource.resource in ['events', 'endpoints'])
+      - name: not-events-k8s-io-events
+        expression: >-
+          !(has(request.resource) && has(request.resource.group) && request.resource.group == 'events.k8s.io' &&
+            has(request.resource.resource) && request.resource.resource == 'events')
+      - name: not-endpointslices
+        expression: >-
+          !(has(request.resource) && has(request.resource.group) && request.resource.group == 'discovery.k8s.io' &&
+            has(request.resource.resource) && request.resource.resource == 'endpointslices')
+      - name: not-leases
+        expression: >-
+          !(has(request.resource) && has(request.resource.group) && request.resource.group == 'coordination.k8s.io' &&
+            has(request.resource.resource) && request.resource.resource == 'leases')
+{{- if .Values.networkPolicy.enabled }}
+---
+# Egress for the webhook: DNS and the kube-apiserver (its list and watch). Ingress is the API server's call on 8443 and the
+# kubelet's probes; neither is restricted here (the API server's source address is not portable).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}
+  labels: {{- include "agent.ge.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "agent.ge.selector" . | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    - to: [{namespaceSelector: {}}]
+      ports: [{port: 53, protocol: UDP}, {port: 53, protocol: TCP}]
+    - to:
+        {{- range .Values.networkPolicy.apiServerCIDRs }}
+        - ipBlock: {cidr: {{ . }}}
+        {{- end }}
+      ports: [{port: 443, protocol: TCP}, {port: 6443, protocol: TCP}]
+{{- end }}
+{{- end }}

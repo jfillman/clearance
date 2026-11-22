@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
-# The Argo CD gate's agent (providers/argocd/agent): one static binary on distroless static, nonroot (uid 65532), no
-# shell. Build from the repository root:
+# The Argo CD gate's agent (providers/argocd/agent) and its grant-expiry webhook (providers/argocd/grantexpiry): two static
+# binaries on distroless static, nonroot (uid 65532), no shell; the agent is the entrypoint. Build from the repository root:
 #
 #   docker buildx build -f providers/argocd/agent/Dockerfile --platform linux/amd64,linux/arm64 \
 #     --build-arg VERSION=v0.33.0 -t ghcr.io/jfillman/clearance-argocd-agent:v0.33.0 .
@@ -24,15 +24,20 @@ COPY internal/ internal/
 COPY providers/ providers/
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -buildvcs=false \
-      -ldflags "-s -w -buildid= -X main.version=${VERSION#v}" -o /out/argocd-agent ./providers/argocd/agent/cmd/argocd-agent
+      -ldflags "-s -w -buildid= -X main.version=${VERSION#v}" -o /out/argocd-agent ./providers/argocd/agent/cmd/argocd-agent && \
+    GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -buildvcs=false \
+      -ldflags "-s -w -buildid= -X main.version=${VERSION#v}" -o /out/grant-expiry ./providers/argocd/grantexpiry/cmd/grant-expiry
 
 FROM ${BASE_IMAGE}
 ARG VERSION=dev
 LABEL org.opencontainers.image.title="clearance-argocd-agent" \
-      org.opencontainers.image.description="Clearance's Argo CD gate agent: grant sync, outcomes, exceptions" \
+      org.opencontainers.image.description="Clearance's Argo CD gate agent: grant sync, outcomes, exceptions; and the grant-expiry webhook" \
       org.opencontainers.image.source="https://github.com/jfillman/clearance" \
       org.opencontainers.image.licenses="NOASSERTION" \
       org.opencontainers.image.version="${VERSION}"
 COPY --from=build /out/argocd-agent /argocd-agent
+# The grant-expiry webhook (providers/argocd/grantexpiry, I-44) ships in the same image and runs as its own Deployment
+# (the chart's grantExpiry, command /grant-expiry): never in the agent's process.
+COPY --from=build /out/grant-expiry /grant-expiry
 USER 65532:65532
 ENTRYPOINT ["/argocd-agent"]

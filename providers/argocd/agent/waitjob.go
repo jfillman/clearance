@@ -48,6 +48,13 @@ func isWaitJob(o ObjectDetail, pin WaitPin) bool {
 	return waitJobFields(job) && waitPodFields(pod) && waitContainer(ctr, pin) && waitHostAlias(pod, pin.HostAlias) && waitVolume(pod, pin.CAConfigMap)
 }
 
+// IsWaitJob is isWaitJob for a caller outside the package (the grant-expiry webhook, which exempts the same Job the
+// admission policy does): the object's apiVersion, kind, name, labels, annotations and spec as admitted.
+func IsWaitJob(apiVersion, kind, name string, labels, annotations map[string]string, spec json.RawMessage, pin WaitPin) bool {
+	return isWaitJob(ObjectDetail{Object: Object{APIVersion: apiVersion, Kind: kind, Name: name, Labels: labels,
+		Annotations: annotations}, Spec: spec}, pin)
+}
+
 func waitJobFields(job map[string]any) bool {
 	return only(job, "backoffLimit", "activeDeadlineSeconds", "template", "completions", "parallelism", "completionMode",
 		"suspend", "podReplacementPolicy", "selector", "manualSelector") &&

@@ -16,6 +16,24 @@ kept whole on the `detail:` line.
 
 ### Added
 
+- **The grant-expiry webhook: expiry holds even when the agent stops (I-44; `providers/argocd/grantexpiry`, `charts/clearance-argocd-agent`
+  `grantExpiry`; off by default).** The admission policy has no clock, so an expired grant kept admitting Argo CD's writes while the agent
+  that marks it invalid was stalled. A separate Deployment (`clearance-grant-expiry`, two replicas, a PDB, a spread; the agent's image with
+  command `/grant-expiry`) serves a ValidatingWebhookConfiguration that mirrors the policy's matching and compares each matching entry's expiry
+  with its own clock. It can only refuse. Audit (the default once enabled) allows, warns and records `clearance.hangar.io/expired-grant`
+  under `failurePolicy: Ignore`; enforce refuses under `Fail` with a 3 s timeout. `matchConditions` are `has()`-guarded and carry the
+  policy's exclusions. TLS is the core's cert-manager scheme with CA injection, own CA by default. **The chart refuses `gate.enforce: true`
+  unless the webhook is enabled and enforcing** (override: `grantExpiry.acceptResidualRisk`), which also orders the way back. Readiness
+  reports the mode, and sync waves put the Deployment before the configuration. With default values the chart renders byte for byte as before.
+- **Agent HA and a staleness alert (I-44 option 0; off by default).** `ha.enabled`: two agent replicas behind a `coordination.k8s.io` Lease
+  (only the holder runs the loops, and every cluster write is fenced by it), a PDB and a spread. `statusHeartbeat`: `status.checkedAt` of every valid grant is refreshed at that age.
+  `alerts.enabled`: a PrometheusRule (`ClearanceGrantStatusStale`, `ClearanceGrantExpiredButValid`, `ClearanceGrantExpiryNotSynced`) over the
+  webhook pods' `/metrics`, and a PodMonitor.
+- **An optional CREATE-only clock in the admission policy (option 2'; off as shipped).** The `createclock` variable of
+  `providers/argocd/crd/admission.yaml`: with it rendered `true`, a CREATE after the active grant's `spec.expiresAt` is refused (the API
+  server's own `creationTimestamp` is the clock). UPDATEs are not covered; the webhook is. Proven on envtest in both modes; verify live before
+  turning it on.
+
 - **Unvouched commits hold for two people instead of being denied (register API: `provenanceReason`,
   `unvouchedCommits`).** A change with `proposerKind: unknown` was always denied (`DG-PROVENANCE`). A verifier may now
   say why: `provenanceReason: unvouched-commits`, with the commits in `unvouchedCommits` (1 to 250 distinct 40-hex),

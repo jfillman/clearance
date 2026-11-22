@@ -64,6 +64,10 @@ type Config struct {
 	// RepostOnStart posts each Application's last operation again on start. The core de-duplicates only records that
 	// carry source.event_id (O-1), which the agent does not send yet (docs/gate.md), so it is off; the state ConfigMap already stops a restart posting what was posted.
 	RepostOnStart bool
+	// StatusHeartbeat, when above zero, refreshes status.checkedAt of every valid, unexpired grant once it is this old
+	// (one status patch per grant per heartbeat), so the age of checkedAt says whether the expiry pass still runs
+	// (I-44, option 0: the alert on it). Zero, the default, writes status only when valid changes, as before.
+	StatusHeartbeat time.Duration
 }
 
 // Defaults fills in what is unset.
