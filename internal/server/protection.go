@@ -250,14 +250,12 @@ func (s *Server) reportProtection(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		// The same report again (its number and its set are the ones held): the agent's heartbeat, or a retry after a lost
-		// answer. It renews the report's time as always, but records no reason a second time, and its exempted pairs are
-		// not checked again (they were when it was first taken, and are no longer held).
+		// The same number and set again (its number and its set are the ones held): the agent's heartbeat, or a retry after
+		// a lost answer. Its exempted pairs are not checked against the held set (they were when it was first taken, and are
+		// no longer held). A reason it carries is recorded, as for any unchanged report with one: the core does not keep the
+		// last reason, so it cannot tell a retry's from a new explanation, and recording twice beats losing one.
 		replay := cur.Digest != "" && cur.Digest == digest && body.Seq == cur.Seq
 		reason := body.Reason
-		if replay {
-			reason = ""
-		}
 		now := s.opt.Clock()
 		next := store.ProtectionSet{Cluster: cluster, Digest: digest, Doc: doc, Seq: cur.Seq, WindowStart: cur.WindowStart, WindowCount: cur.WindowCount, AddCount: cur.AddCount}
 		if next.WindowStart.IsZero() || now.Sub(next.WindowStart) >= time.Hour || now.Before(next.WindowStart) {

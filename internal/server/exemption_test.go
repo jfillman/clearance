@@ -133,10 +133,24 @@ func TestAReplayedExemptionRemovalIsTakenAsItWas(t *testing.T) {
 	body["exempted"] = []any{map[string]any{"app": "web", "env": "staging"}}
 	body["reason"] = "argocd/web-staging exempted"
 	f.do("PUT", "/v1/protection/hangar-prod", agentProd, body).want(t, 200, "")
-	n := len(f.records())
+	n := len(protectionRecords(f))
 	again := f.do("PUT", "/v1/protection/hangar-prod", agentProd, body).want(t, 200, "")
-	if again.body["changed"] != false || len(f.records()) != n {
-		t.Fatalf("a replay records nothing: %v (%d -> %d records)", again.body, n, len(f.records()))
+	if again.body["changed"] != false || len(protectionRecords(f)) != n+1 {
+		t.Fatalf("a replay changes no set: %v", again.body)
+	}
+	// Its reason is recorded, so an explanation rebuilt on the same number (another opt-out of a shared pair) is not lost.
+	body["reason"] = "argocd/web-staging exempted; argocd/other-staging opted out"
+	f.do("PUT", "/v1/protection/hangar-prod", agentProd, body).want(t, 200, "")
+	recs := protectionRecords(f)
+	if res := fmt.Sprint(recs[len(recs)-1]["result"]); !strings.Contains(res, "other-staging opted out") || !strings.Contains(res, "(unchanged)") {
+		t.Fatalf("the new explanation is recorded: %s", res)
+	}
+	// Without a reason (the heartbeat) nothing is recorded.
+	delete(body, "reason")
+	m := len(f.records())
+	f.do("PUT", "/v1/protection/hangar-prod", agentProd, body).want(t, 200, "")
+	if len(f.records()) != m {
+		t.Fatal("a reasonless replay records nothing")
 	}
 	// Another number with the same exempted pair is a new report, and the pair is not held: refused.
 	next := pairs("web/prod")

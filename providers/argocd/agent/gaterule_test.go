@@ -864,3 +864,54 @@ func TestAnExemptionsEndNamesTheRuleItWasAcceptedUnder(t *testing.T) {
 		t.Fatalf("the end names the digest its acceptance was for (%v): %v", d1, ex)
 	}
 }
+
+// A near-full state: a record that would take the serialized state past its bound is not stored (the end is counted),
+// whatever room the queue itself has.
+func TestAQueuedRecordIsHeldToTheWholeStatesBound(t *testing.T) {
+	w := newRuleWorld(t, tenantsRule)
+	w.addApp("web-prod", "app-web-prod", nil)
+	w.mustReconcile()
+	w.writeRule(exemptRule(t0.Add(30 * 24 * time.Hour).Format(time.RFC3339)))
+	w.clock.add(2 * time.Minute)
+	w.mustReconcile()
+	raw := w.kube.data["clearance-system/clearance-argocd-agent-state"]["state.json"]
+	defer agent.SetMaxStateBytes(agent.SetMaxStateBytes(len(raw) + 200)) // the queue has room; the state does not
+	w.core.down = true
+	w.clock.add(11 * time.Minute)
+	_ = w.reconcile()
+	if s := w.savedState(); fmt.Sprint(s["pendingLost"]) != "1" || s["pendingRecords"] != nil {
+		t.Fatalf("counted, not stored: %v %v", s["pendingLost"], s["pendingRecords"])
+	}
+}
+
+// The loss exception names as many Applications as its detail holds, and how many more.
+func TestTheLossExceptionFitsItsDetail(t *testing.T) {
+	defer agent.SetMaxPendingBytes(agent.SetMaxPendingBytes(1))
+	long := strings.Repeat("x", 40)
+	rule := tenantsRule + "exempt:\n  - application: \"argocd-apps/*\"\n    reason: a migration to the new chart\n    expires: " +
+		t0.Add(30*24*time.Hour).Format(time.RFC3339) + "\n"
+	w := newRuleWorld(t, tenantsRule)
+	for i := 0; i < 30; i++ {
+		w.addApp(fmt.Sprintf("a%02d-%s", i, long), fmt.Sprintf("app-a%02d", i), nil)
+	}
+	w.mustReconcile()
+	w.writeRule(rule)
+	w.clock.add(2 * time.Minute)
+	w.mustReconcile()
+	w.core.down = true
+	w.clock.add(11 * time.Minute)
+	_ = w.reconcile()
+	w.core.down = false
+	w.clock.add(time.Minute)
+	_ = w.reconcile()
+	for _, r := range w.core.records {
+		if r.Record.Result != nil && *r.Record.Result == "gate exemption records lost" {
+			d := fmt.Sprint(r.Record.Exception["detail"])
+			if len(d) > 1000 || !strings.HasPrefix(d, "30 gate exemption") || !strings.Contains(d, " more") || strings.HasSuffix(d, "...") {
+				t.Fatalf("the detail (%d bytes): %s", len(d), d)
+			}
+			return
+		}
+	}
+	t.Fatal("no loss exception")
+}

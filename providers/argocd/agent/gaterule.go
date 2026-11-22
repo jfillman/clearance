@@ -467,8 +467,12 @@ func transient(err error) bool {
 // the state ConfigMap, which cannot pass 1 MiB, and must leave room for the rest of the state.
 const MaxPendingRecords = 500
 
-// MaxPendingBytes is the queue's byte bound (a variable for tests only).
-var MaxPendingBytes = 256 << 10
+// MaxPendingBytes is the queue's byte bound, and MaxStateBytes the bound on the whole serialized state a queued record
+// may bring it to (the ConfigMap's 1 MiB, less room for the status key and for the state to grow): variables for tests.
+var (
+	MaxPendingBytes = 256 << 10
+	MaxStateBytes   = 768 << 10
+)
 
 // queuePending keeps a record for the core. A repeating record (requested, active, expiring, a stale entry's daily
 // expired) past the bound is dropped and logged. An end or a refusal past the bound cannot be kept either, so it is
@@ -494,7 +498,11 @@ func (a *Agent) queuePending(ctx context.Context, event string, req *client.Reco
 	for _, v := range a.st.Pending {
 		size += len(v)
 	}
-	if size > MaxPendingBytes || len(a.st.Pending) >= MaxPendingRecords {
+	// The record is stored inside the serialized state: what counts is the state it would make, escaping included.
+	a.st.Pending[event] = string(raw)
+	whole, _ := json.Marshal(a.st)
+	delete(a.st.Pending, event)
+	if size > MaxPendingBytes || len(whole) > MaxStateBytes || len(a.st.Pending) >= MaxPendingRecords {
 		if !terminal {
 			a.log.Warn("the queue of exemption records waiting for the core is full: a repeating record is dropped", "event", event)
 			return
@@ -523,8 +531,22 @@ func (a *Agent) reportLost(ctx context.Context) {
 	if n == 0 {
 		return
 	}
-	detail := fmt.Sprintf("%d gate exemption end or refusal records could not be kept for the core (the queue was full) since %s; Applications: %s",
-		n, since, strings.Join(apps, ", "))
+	// The detail is capped (1,000 bytes): as many Applications as fit, and how many more.
+	detail := fmt.Sprintf("%d gate exemption end or refusal records could not be kept for the core (the queue was full) since %s; Applications:", n, since)
+	for i, app := range apps {
+		more := fmt.Sprintf(" and %d more", n-i)
+		if len(detail)+len(app)+2+len(fmt.Sprintf(" and %d more", n-i-1)) > 1000 {
+			detail += more
+			break
+		}
+		if i > 0 {
+			detail += ","
+		}
+		detail += " " + app
+		if i == len(apps)-1 && n > len(apps) {
+			detail += fmt.Sprintf(" and %d more", n-len(apps))
+		}
+	}
 	if err := a.reportOnce(ctx, "gate-exempt-lost|"+since, "gate exemption records lost", detail,
 		[]map[string]any{{"apiVersion": "v1", "kind": "ConfigMap", "name": a.cfg.StateName}}); err != nil {
 		a.log.Warn("the lost exemption records could not be reported", "err", err)

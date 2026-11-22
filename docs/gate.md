@@ -1107,7 +1107,7 @@ list may have changed) and, when taken, gets the earlier record back (`duplicate
 
 **Removal reports.** `PUT /v1/protection/{cluster}` takes an optional `exempted` list: the pairs the report removes
 because an exemption released their Application. A pair still in `pairs` is 400, always. A pair not in the held report is 400, except in the held report sent again with
-its own number (a retry after a lost answer), which is taken as it was and records nothing. The static check below runs
+its own number (a retry after a lost answer), which is taken as it was (a reason it carries is recorded again). The static check below runs
 first even then: if the list changed after the report was taken, its retry is refused 409 too; a pair whose environment the list
 protects is refused 409 (`refused: static`), exactly as its exemption would be. The `protection.report` record names
 the exempted pairs ("removed for a gate exemption ...").
@@ -2734,13 +2734,16 @@ ignored on its own (the Application stays gated) and reported. There is no appro
   with its `source.event_id`, so a retry is the same record. The end of an exemption is kept even when its entry has left
   the file or its Application was deleted. A throttled post (429) or a server error is kept and retried
   like an unreachable core; any other refusal is final. The queue lives in the state ConfigMap, so it is bounded: at most
-  500 records and 256 KiB. Past that, a repeating record (`requested`, `active`, `expiring`, a stale entry's daily
+  500 records and 256 KiB, and no record is queued that would take the serialized state past 768 KiB. Past that, a repeating record (`requested`, `active`, `expiring`, a stale entry's daily
   `expired`) is dropped and logged, and an end or a refusal is **counted**, with its Application (the first 50), and posted
-  as one exception, `gate exemption records lost`, once the queue has drained. The gate never waits on the queue: an
+  as one exception, `gate exemption records lost`, once the queue has drained (it names as many of those
+  Applications as its 1,000-byte detail holds, and how many more). The gate never waits on the queue: an
   exemption is dropped, and its Application gated again, before its end is queued. If the state cannot be written either,
   a record queued then is lost at a restart, and the log says it was not posted. An end names the rule digest its
   acceptance was for, not the one in force when it ended. A removal report whose answer was lost is sent again with the
-  same number and set; the core takes it as the report it already holds and records nothing more. If
+  same number and set; the core takes it as the report it already holds: it records nothing more unless the report carries a
+  reason, which is recorded (the core does not keep the last reason, so it cannot tell a retry's from a new explanation,
+  and recording one twice beats losing one). If
   the set changed before the retry (another exemption, say), the rebuilt report reuses the held number with another set:
   the core answers 409 (its number check runs before the exempted pairs are checked), and the agent reads the core's held
   number **and set** again and builds the next report against them, so its state matches what the core committed (unless
