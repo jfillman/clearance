@@ -371,7 +371,7 @@ What follows for G-ARGO-2:
 - **Expiry is the agent's.** Kubernetes CEL in admission has no clock; the agent sets `status.valid` (status
   subresource, written only by the agent) and removes the active label on expiry, and the policy checks
   `status.valid`. (Built later, I-44: the [grant-expiry webhook](#the-grant-expiry-webhook-i-44-built) is the clock beside
-  the policy, so expiry no longer depends on the agent running.)
+  the policy. When it is enabled and enforcing, expiry no longer depends on the agent running; it is off by default.)
 - **The Warn to Deny toggle flips two fields**, `validationActions` and `parameterNotFoundAction` (Allow in Warn,
   Deny in Deny), and Warn has a gap the agent covers: with no grant, nothing warns.
 - `auditAnnotations` must be typed: `string(params.metadata.name)` (an untyped `params.metadata.name` is refused at
@@ -1372,10 +1372,11 @@ installer turns it on (values below). Code: [`providers/argocd/grantexpiry`](../
 
 **What you get.**
 
-- **Expiry holds even when the agent stops.** The admission policy has no clock: an expired grant stops admitting only once the agent marks
+- **Expiry holds even when the agent stops, once the webhook enforces** (`grantExpiry.enabled` and `grantExpiry.enforce`;
+  both off by default, and audit only warns). The admission policy has no clock: an expired grant stops admitting only once the agent marks
   it `status.valid: false`. If the agent crashes, is evicted, loses its RBAC or has its writes refused, an expired grant keeps admitting every
   write it lists. The webhook compares every matching entry's expiry with its own clock on every Argo CD write to a protected namespace,
-  CREATE and UPDATE, so expiry no longer depends on any process having written anything.
+  CREATE and UPDATE, so in enforce expiry no longer depends on any process having written anything.
 - **It can only refuse.** The webhook never admits what the policy refuses: both must pass. It mirrors the policy's matching exactly and adds
   the clock. It allows a write only if an entry lists the object's key (`<group>/<kind>/<name>`) at exactly its stamped hash and that entry
   is unexpired: the grant's own `objects[key]` (`spec.expiresAt`, and `objects[key].expiresAt` when the entry has one, as a merged grant's
@@ -1388,7 +1389,10 @@ installer turns it on (values below). Code: [`providers/argocd/grantexpiry`](../
   the clock is the reason, the audit annotation `clearance.hangar.io/expired-grant` (`<namespace>/<grant>: <reason>`), so the API server's
   audit log lists exactly the writes I-44 would have let through. The configuration is `failurePolicy: Ignore` in audit.
 - **Option 0, hardening for the agent** (off by default): `ha.enabled` runs two agent replicas behind one `coordination.k8s.io` Lease (only the
-  holder runs the loops; a holder that cannot renew within 10 s stops and exits), RollingUpdate, a PodDisruptionBudget (`minAvailable: 1`) and a
+  holder runs the loops; a holder that cannot renew within 10 s stops and exits; every grant, state, Application and namespace
+  write goes through the lease's fence, refused once the lease is no longer surely held and given a deadline one retry period
+  before the earliest takeover, so a replica that stalled past its lease and resumed cannot overwrite the new leader; the agent
+  refuses a lease duration shorter than the renew deadline plus two retry periods), RollingUpdate, a PodDisruptionBudget (`minAvailable: 1`) and a
   topology spread. `statusHeartbeat` (for example `5m`) refreshes `status.checkedAt` of every valid grant once it is that old, so its age shows
   a stalled expiry pass. `alerts.enabled` renders a PrometheusRule and a PodMonitor: `ClearanceGrantStatusStale` (an active grant's
   `checkedAt` older than `alerts.checkedAtStaleAfter`), `ClearanceGrantExpiredButValid` (an active grant past `expiresAt` still valid: the
@@ -1455,12 +1459,12 @@ webhook not enforcing. Sync waves are one fixed order and cannot reverse on the 
 | `grantExpiry.timeoutSeconds` | `3` | The API server's call timeout (1 to 30) |
 | `grantExpiry.skew` | `0s` | Clock-skew allowance |
 | `grantExpiry.argocdUser` | `system:serviceaccount:<argocd.namespace>:argocd-application-controller` | The writer it checks, as the policy names it |
-| `grantExpiry.maxCacheAge` | `10m` | Not Ready (and refusing in enforce) after this long without word from the API server |
+| `grantExpiry.maxCacheAge` | `10m` | Not Ready (and refusing in enforce) after this long without word from the API server; one unit, above 330 s (a quiet watch's length) |
 | `grantExpiry.syncWaves` | `{certificate: "0", deployment: "1", webhook: "2"}` | Must ascend |
 | `grantExpiry.tls.*` | cert-manager, own CA | As the core's `tls.certManager.*`; or `existingSecret` and `caBundle` |
 | `waitJob.previousURL` | empty | The previous core URL the policy's exemption admits for one release |
 | `ha.enabled` | `false` | Two agent replicas behind a leader Lease, a PDB, a spread |
-| `statusHeartbeat` | empty | Refresh `status.checkedAt` this often (e.g. `5m`) |
+| `statusHeartbeat` | empty | Refresh `status.checkedAt` this often (e.g. `5m`); with alerts, one unit, positive and below `alerts.checkedAtStaleAfter` |
 | `alerts.enabled` | `false` | PrometheusRule and PodMonitor; needs `grantExpiry.enabled` and `statusHeartbeat` |
 
 The webhook's flags (`/grant-expiry --help`): `--mode`, `--argocd-user`, `--skew`, `--grant-api`, `--listen` (`:8443`, POST `/validate`),

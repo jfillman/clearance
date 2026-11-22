@@ -51,6 +51,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if or (lt (int $ge.timeoutSeconds) 1) (gt (int $ge.timeoutSeconds) 30) -}}{{ fail "grantExpiry.timeoutSeconds must be 1 to 30" }}{{- end -}}
 {{- if hasPrefix "-" (toString $ge.skew) -}}{{ fail "grantExpiry.skew cannot be negative" }}{{- end -}}
 {{- if and (not $ge.tls.certManager.enabled) (or (not $ge.tls.existingSecret) (not $ge.tls.caBundle)) -}}{{ fail "grantExpiry.tls.certManager.enabled: false needs grantExpiry.tls.existingSecret and grantExpiry.tls.caBundle" }}{{- end -}}
+{{- if le (int (include "agent.seconds" $ge.maxCacheAge)) 330 -}}{{ fail "grantExpiry.maxCacheAge must be above 330s (5m30s): a healthy watch can stay silent for its whole length (the server's 300 s, the client's 330 s)" }}{{- end -}}
 {{- if not (and $ge.syncWaves.certificate $ge.syncWaves.deployment $ge.syncWaves.webhook) -}}{{ fail "grantExpiry.syncWaves needs certificate, deployment and webhook" }}{{- end -}}
 {{- if not (and (lt (int $ge.syncWaves.certificate) (int $ge.syncWaves.deployment)) (lt (int $ge.syncWaves.deployment) (int $ge.syncWaves.webhook))) -}}{{ fail "grantExpiry.syncWaves must order certificate < deployment < webhook" }}{{- end -}}
 {{- if and .Values.waitJob.image (not (or .Values.waitJob.url .Values.coreURL)) -}}{{ fail "grantExpiry with waitJob.image needs waitJob.url or coreURL" }}{{- end -}}
@@ -61,6 +62,9 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if .Values.alerts.enabled -}}
 {{- if not $ge.enabled -}}{{ fail "alerts.enabled needs grantExpiry.enabled: the grant-expiry pods export the grant times the alerts read (a stalled agent cannot report itself)" }}{{- end -}}
 {{- if not .Values.statusHeartbeat -}}{{ fail "alerts.enabled needs statusHeartbeat (e.g. 5m): without it status.checkedAt is written only when valid changes, and its age says nothing" }}{{- end -}}
+{{- /* agent.seconds refuses a zero or multi-unit duration: the agent refreshes checkedAt only with a positive heartbeat. */ -}}
+{{- $hb := int (include "agent.seconds" .Values.statusHeartbeat) -}}
+{{- if le (int (include "agent.seconds" .Values.alerts.checkedAtStaleAfter)) $hb -}}{{ fail "alerts.checkedAtStaleAfter must be greater than statusHeartbeat: a healthy grant's checkedAt ages up to statusHeartbeat before each refresh" }}{{- end -}}
 {{- end -}}
 {{- end -}}
 

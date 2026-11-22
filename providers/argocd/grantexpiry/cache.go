@@ -18,16 +18,17 @@ type Source interface {
 }
 
 // Cache is an informer over the active grants: one list, then a watch from its resourceVersion; a broken or expired
-// watch lists again. Synced says whether it has listed at least once and heard from the API server (a list, a watch
-// that opened, an event or a bookmark) within maxAge; a cache that is not synced answers every lookup with ok false, so
-// the webhook refuses (enforce) instead of deciding on old state.
+// watch lists again. Synced says whether it has listed at least once and heard from the API server within maxAge: a
+// list, an event, a bookmark, or a watch the server ended (a watch that is open and silent counts only when it ends,
+// at most WatchDeadline later, so maxAge must be longer than WatchDeadline; the command refuses a shorter one). A cache
+// that is not synced answers every lookup with ok false, so the webhook refuses (enforce) instead of deciding on old state.
 type Cache struct {
 	src    Source
 	maxAge time.Duration
 	now    func() time.Time
 	log    *slog.Logger
 
-	// watchDeadline bounds one watch from the client's side (the server's own timeout is 300 s).
+	// watchDeadline bounds one watch from the client's side (WatchDeadline; tests shorten it).
 	watchDeadline time.Duration
 
 	mu     sync.RWMutex
@@ -35,6 +36,10 @@ type Cache struct {
 	listed bool
 	heard  time.Time
 }
+
+// WatchDeadline bounds one watch from the client's side: the server ends it after 300 s (timeoutSeconds), and a
+// connection that died silently is given up on here. A healthy quiet watch can go this long without an event.
+const WatchDeadline = 330 * time.Second
 
 // NewCache builds a cache; maxAge <= 0 means 10 minutes.
 func NewCache(src Source, maxAge time.Duration, now func() time.Time, log *slog.Logger) *Cache {
@@ -47,7 +52,7 @@ func NewCache(src Source, maxAge time.Duration, now func() time.Time, log *slog.
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Cache{src: src, maxAge: maxAge, now: now, log: log, watchDeadline: 330 * time.Second, grants: map[string]map[string]agent.Grant{}}
+	return &Cache{src: src, maxAge: maxAge, now: now, log: log, watchDeadline: WatchDeadline, grants: map[string]map[string]agent.Grant{}}
 }
 
 // Synced reports whether lookups are answered.

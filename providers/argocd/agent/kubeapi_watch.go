@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 )
 
 // The active grants of every namespace, listed and watched: what the grant-expiry webhook (providers/argocd/grantexpiry)
@@ -26,23 +27,38 @@ func (a *API) activeGrantsPath() string {
 	return a.grantPath("", "") + "?labelSelector=" + url.QueryEscape(LabelActive+"=true")
 }
 
-// ListActiveGrants lists the grants labelled clearance.hangar.io/active=true in every namespace, with the list's
-// resourceVersion to watch from.
+// activeGrantsPage is how many grants one list page asks for: a merged grant can be 1.5 MB, so a page stays far below
+// the 64 MiB a single read is capped at however many protected namespaces there are.
+var activeGrantsPage = 20
+
+// ListActiveGrants lists the grants labelled clearance.hangar.io/active=true in every namespace, in pages (limit and
+// continue), with the list's resourceVersion (the last page's) to watch from.
 func (a *API) ListActiveGrants(ctx context.Context) ([]Grant, string, error) {
-	var l struct {
-		Metadata struct {
-			ResourceVersion string `json:"resourceVersion"`
-		} `json:"metadata"`
-		Items []grantWire `json:"items"`
+	var out []Grant
+	cont := ""
+	for {
+		var l struct {
+			Metadata struct {
+				ResourceVersion string `json:"resourceVersion"`
+				Continue        string `json:"continue"`
+			} `json:"metadata"`
+			Items []grantWire `json:"items"`
+		}
+		q := a.activeGrantsPath() + "&limit=" + strconv.Itoa(activeGrantsPage)
+		if cont != "" {
+			q += "&continue=" + url.QueryEscape(cont)
+		}
+		if err := a.call(ctx, "GET", q, "", nil, &l); err != nil {
+			return nil, "", err // a 410 (the continue token expired) fails the whole list: the caller lists again
+		}
+		for _, w := range l.Items {
+			out = append(out, w.grant())
+		}
+		if l.Metadata.Continue == "" {
+			return out, l.Metadata.ResourceVersion, nil
+		}
+		cont = l.Metadata.Continue
 	}
-	if err := a.call(ctx, "GET", a.activeGrantsPath(), "", nil, &l); err != nil {
-		return nil, "", err
-	}
-	out := make([]Grant, 0, len(l.Items))
-	for _, w := range l.Items {
-		out = append(out, w.grant())
-	}
-	return out, l.Metadata.ResourceVersion, nil
 }
 
 // WatchActiveGrants watches the same selection from rv and calls fn per event until ctx ends, the server ends the

@@ -88,6 +88,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if *maxAge <= grantexpiry.WatchDeadline {
+		return fmt.Errorf("--max-cache-age must be longer than %s: a healthy watch can be silent that long", grantexpiry.WatchDeadline)
+	}
 	if *waitImage != "" && *waitURL == "" {
 		return errors.New("--wait-url is required with --wait-image")
 	}

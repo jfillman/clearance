@@ -21,7 +21,7 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   unless the webhook is enabled and enforcing** (override: `grantExpiry.acceptResidualRisk`), which also orders the way back. Readiness
   reports the mode, and sync waves put the Deployment before the configuration. With default values the chart renders byte for byte as before.
 - **Agent HA and a staleness alert (I-44 option 0; off by default).** `ha.enabled`: two agent replicas behind a `coordination.k8s.io` Lease
-  (only the holder runs the loops), a PDB and a spread. `statusHeartbeat`: `status.checkedAt` of every valid grant is refreshed at that age.
+  (only the holder runs the loops, and every cluster write is fenced by it), a PDB and a spread. `statusHeartbeat`: `status.checkedAt` of every valid grant is refreshed at that age.
   `alerts.enabled`: a PrometheusRule (`ClearanceGrantStatusStale`, `ClearanceGrantExpiredButValid`, `ClearanceGrantExpiryNotSynced`) over the
   webhook pods' `/metrics`, and a PodMonitor.
 - **An optional CREATE-only clock in the admission policy (option 2'; off as shipped).** The `createclock` variable of

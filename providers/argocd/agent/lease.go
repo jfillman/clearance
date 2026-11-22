@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 )
 
@@ -52,6 +53,39 @@ type Elector struct {
 
 	observed   Lease
 	observedAt time.Time
+
+	mu        sync.Mutex
+	holding   bool
+	renewedAt time.Time // when the last successful take or renewal was STARTED (before its GET)
+}
+
+// fenceMargin is how long before the earliest takeover the fence closes: one retry period (the attempt timeout).
+func (e *Elector) fenceMargin() time.Duration { return e.RetryPeriod }
+
+// Fence is the write fence (CodeRabbit on clearance#210): a write may go out only while this replica holds the lease
+// with time to spare. Another replica can take the lease no earlier than Duration after it saw this replica's last
+// renewal, and it saw it no earlier than the renewal started, so every write is given a deadline of renewedAt +
+// Duration - margin and refused once that has passed (a process that stalled past its lease and resumed). The deadline
+// also cancels a write still in flight. It returns ErrLeaseLost when the lease is not (or no longer surely) held.
+func (e *Elector) Fence(ctx context.Context) (context.Context, context.CancelFunc, error) {
+	e.mu.Lock()
+	holding, renewed := e.holding, e.renewedAt
+	e.mu.Unlock()
+	until := renewed.Add(e.Duration - e.fenceMargin())
+	if !holding || !e.Now().Before(until) {
+		return nil, nil, ErrLeaseLost
+	}
+	fctx, cancel := context.WithDeadline(ctx, until)
+	return fctx, cancel, nil
+}
+
+func (e *Elector) setHeld(held bool, at time.Time) {
+	e.mu.Lock()
+	e.holding = held
+	if held {
+		e.renewedAt = at
+	}
+	e.mu.Unlock()
 }
 
 func (e *Elector) defaults() error {
@@ -77,6 +111,10 @@ func (e *Elector) defaults() error {
 		return errors.New("agent: the lease's renew deadline must be shorter than its duration")
 	case e.RetryPeriod >= e.RenewDeadline:
 		return errors.New("agent: the lease's retry period must be shorter than its renew deadline")
+	case e.Duration < e.RenewDeadline+2*e.RetryPeriod:
+		// The holder stops its work at most RenewDeadline plus one attempt (RetryPeriod) after its last renewal began,
+		// and the write fence closes RetryPeriod before the earliest takeover: both must fit inside Duration.
+		return errors.New("agent: the lease's duration must be at least its renew deadline plus two retry periods")
 	}
 	return nil
 }
@@ -140,8 +178,13 @@ func (e *Elector) Run(ctx context.Context, work func(context.Context) error) err
 	if err := e.defaults(); err != nil {
 		return err
 	}
+	defer e.setHeld(false, time.Time{})
 	for {
+		start := e.Now()
 		ok, err := e.tryAcquireOrRenew(ctx)
+		if ok {
+			e.setHeld(true, start)
+		}
 		if err != nil && ctx.Err() == nil {
 			e.Log.Info("leader lease not taken", "lease", e.Namespace+"/"+e.Name, "err", err)
 		}
@@ -159,12 +202,15 @@ func (e *Elector) Run(ctx context.Context, work func(context.Context) error) err
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- work(wctx) }()
-	lastRenew := e.Now()
+	e.mu.Lock()
+	lastRenew := e.renewedAt
+	e.mu.Unlock()
 	tick := time.NewTicker(e.RetryPeriod)
 	defer tick.Stop()
 	for {
 		select {
 		case err := <-done:
+			e.setHeld(false, time.Time{})
 			rctx, rc := context.WithTimeout(context.Background(), e.RetryPeriod)
 			e.release(rctx)
 			rc()
@@ -174,10 +220,12 @@ func (e *Elector) Run(ctx context.Context, work func(context.Context) error) err
 			return err
 		case <-tick.C:
 			rctx, rc := context.WithTimeout(ctx, e.RetryPeriod)
+			start := e.Now()
 			ok, err := e.tryAcquireOrRenew(rctx)
 			rc()
 			if ok {
-				lastRenew = e.Now()
+				lastRenew = start
+				e.setHeld(true, start)
 				continue
 			}
 			if e.Now().Sub(lastRenew) < e.RenewDeadline && ctx.Err() == nil {
@@ -188,6 +236,7 @@ func (e *Elector) Run(ctx context.Context, work func(context.Context) error) err
 				continue // shutting down: the done branch releases the lease
 			}
 			e.Log.Error("leader lease lost: stopping", "lease", e.Namespace+"/"+e.Name, "err", err)
+			e.setHeld(false, time.Time{})
 			cancel()
 			<-done
 			return ErrLeaseLost
@@ -285,4 +334,56 @@ func (a *API) CreateLease(ctx context.Context, l Lease) error {
 // UpdateLease implements LeaseStore: a PUT guarded by the resourceVersion it was read at.
 func (a *API) UpdateLease(ctx context.Context, l Lease) error {
 	return leaseErr(a.call(ctx, "PUT", a.leasePath(l.Namespace, l.Name), "application/json", leaseToWire(l), nil))
+}
+
+// Fencer is what Fenced asks before each write (an Elector).
+type Fencer interface {
+	Fence(ctx context.Context) (context.Context, context.CancelFunc, error)
+}
+
+// Fenced is k with every write the agent makes to the cluster behind f's fence: the grant writes (create, update,
+// status, delete), the state ConfigMap, the opt-in's Application and namespace writes. Reads pass through. A write
+// refused by the fence fails with ErrLeaseLost and the loop reports it; the elector stops the loops soon after.
+func Fenced(k Kube, f Fencer) Kube { return fencedKube{k, f} }
+
+type fencedKube struct {
+	Kube
+	f Fencer
+}
+
+func (k fencedKube) fenced(ctx context.Context, w func(context.Context) error) error {
+	fctx, cancel, err := k.f.Fence(ctx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	return w(fctx)
+}
+
+func (k fencedKube) CreateGrant(ctx context.Context, g Grant) error {
+	return k.fenced(ctx, func(c context.Context) error { return k.Kube.CreateGrant(c, g) })
+}
+
+func (k fencedKube) UpdateGrant(ctx context.Context, g, cur Grant) error {
+	return k.fenced(ctx, func(c context.Context) error { return k.Kube.UpdateGrant(c, g, cur) })
+}
+
+func (k fencedKube) SetGrantValid(ctx context.Context, ns, name string, valid bool, reason string, at time.Time) error {
+	return k.fenced(ctx, func(c context.Context) error { return k.Kube.SetGrantValid(c, ns, name, valid, reason, at) })
+}
+
+func (k fencedKube) DeleteGrant(ctx context.Context, ns, name string) error {
+	return k.fenced(ctx, func(c context.Context) error { return k.Kube.DeleteGrant(c, ns, name) })
+}
+
+func (k fencedKube) UpdateApplicationSource(ctx context.Context, app Application, e SourceEdit) error {
+	return k.fenced(ctx, func(c context.Context) error { return k.Kube.UpdateApplicationSource(c, app, e) })
+}
+
+func (k fencedKube) SetNamespaceProtected(ctx context.Context, ns string, protected bool) error {
+	return k.fenced(ctx, func(c context.Context) error { return k.Kube.SetNamespaceProtected(c, ns, protected) })
+}
+
+func (k fencedKube) PutData(ctx context.Context, ns, name string, data map[string]string) error {
+	return k.fenced(ctx, func(c context.Context) error { return k.Kube.PutData(c, ns, name, data) })
 }

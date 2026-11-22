@@ -2,7 +2,7 @@
 {{- /* I-44: the grant-expiry webhook, the clock the admission policy lacks (providers/argocd/grantexpiry, docs/gate.md
        "The grant-expiry webhook"). A separate Deployment on the agent's image (command /grant-expiry), never the agent's
        process. It reads the active grants (list, watch) and nothing else, holds no Clearance credential and writes nothing.
-       Waves: certificate, then the Deployment (Healthy only once every pod is Ready in the rendered mode), then the
+       Waves: the service account, its RBAC and the certificate, then the Deployment (Healthy only once every pod is Ready in the rendered mode), then the
        configuration; the installer's policy binding belongs in a later wave still. */}}
 {{- $ge := .Values.grantExpiry }}
 {{- $name := include "agent.ge.name" . }}
@@ -13,6 +13,7 @@ kind: ServiceAccount
 metadata:
   name: {{ $name }}
   labels: {{- include "agent.ge.labels" . | nindent 4 }}
+  annotations: {argocd.argoproj.io/sync-wave: {{ $ge.syncWaves.certificate | quote }}}
 automountServiceAccountToken: true
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -20,6 +21,7 @@ kind: ClusterRole
 metadata:
   name: {{ $name }}
   labels: {{- include "agent.ge.labels" . | nindent 4 }}
+  annotations: {argocd.argoproj.io/sync-wave: {{ $ge.syncWaves.certificate | quote }}}
 rules:
   # The grants the admission policy reads (the active ones, every namespace): read only.
   - apiGroups: [{{ (split "/" .Values.grantAPI)._0 | quote }}]
@@ -31,6 +33,7 @@ kind: ClusterRoleBinding
 metadata:
   name: {{ $name }}
   labels: {{- include "agent.ge.labels" . | nindent 4 }}
+  annotations: {argocd.argoproj.io/sync-wave: {{ $ge.syncWaves.certificate | quote }}}
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ $name }}}
 subjects:
   - {kind: ServiceAccount, name: {{ $name }}, namespace: {{ .Release.Namespace }}}

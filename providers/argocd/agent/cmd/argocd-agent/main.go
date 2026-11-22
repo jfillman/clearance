@@ -125,13 +125,25 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// With leader election every cluster write goes through the lease's fence: a replica that stalled past its lease
+	// and resumed cannot write over the new leader's grants or state.
+	var e *agent.Elector
+	var writer agent.Kube = kube
+	if *elect {
+		if *podName == "" {
+			return fmt.Errorf("--identity (POD_NAME) is required with --leader-elect")
+		}
+		e = &agent.Elector{Store: kube, Namespace: *stateNS, Name: *leaseName, Identity: *podName, Duration: *leaseDur,
+			RenewDeadline: *leaseRen, RetryPeriod: *leaseTry, Log: log}
+		writer = agent.Fenced(kube, e)
+	}
 	a, err := agent.New(agent.Config{GrantCRD: grants.Plural + "." + grants.Group, Cluster: *cluster, Environment: *environ, Issuer: *issuer, Version: version,
 		GrantInterval: *grantEvry, ScanInterval: *scanEvry, ArgoNamespace: *argoNS, Projects: list(*projects),
 		StateNS: *stateNS, RepostOnStart: *repost, StatusHeartbeat: *heartbeat,
 		OptIn: agent.OptIn{Enabled: *optIn, PluginName: *optPlugin, DenyApps: list(*optDeny), Namespaces: list(*optNS), Interval: *optEvery,
 			ReportEvery: *optReport, MaxGrantBytes: *optBytes},
 		Wait: agent.WaitPin{Image: *waitImage, URL: *waitURL, HostAlias: *waitAlias, CAConfigMap: *waitCA}},
-		kube, &agent.HTTPFeeds{Base: *apiURL, Token: tok, HTTP: hc},
+		writer, &agent.HTTPFeeds{Base: *apiURL, Token: tok, HTTP: hc},
 		&agent.HTTPCore{Client: cc, Feeds: agent.HTTPFeeds{Base: *coreURL, Token: tok, HTTP: hc}}, nil,
 		log)
 	if err != nil {
@@ -140,12 +152,7 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	runLoops := a.Run
-	if *elect {
-		if *podName == "" {
-			return fmt.Errorf("--identity (POD_NAME) is required with --leader-elect")
-		}
-		e := &agent.Elector{Store: kube, Namespace: *stateNS, Name: *leaseName, Identity: *podName, Duration: *leaseDur,
-			RenewDeadline: *leaseRen, RetryPeriod: *leaseTry, Log: log}
+	if e != nil {
 		runLoops = func(ctx context.Context) error { return e.Run(ctx, a.Run) }
 	}
 	if err := runLoops(ctx); err != nil && ctx.Err() == nil {

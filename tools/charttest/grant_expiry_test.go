@@ -171,6 +171,14 @@ func TestSyncWavesOrderTheDeploymentBeforeTheConfiguration(t *testing.T) {
 	if !(cert < dep && dep < cfg) || cert < 0 {
 		t.Fatalf("waves certificate %d, deployment %d, configuration %d", cert, dep, cfg)
 	}
+	// The service account and its RBAC come before the Deployment whatever the waves are (a pod cannot be created without them).
+	moved := agentDocs(t, append(geEnforce, "--set", "grantExpiry.syncWaves.certificate=-3", "--set", "grantExpiry.syncWaves.deployment=-2",
+		"--set", "grantExpiry.syncWaves.webhook=-1")...)
+	for _, k := range []string{"ServiceAccount/<nil>/clearance-grant-expiry", "ClusterRole/<nil>/clearance-grant-expiry", "ClusterRoleBinding/<nil>/clearance-grant-expiry"} {
+		if w := wave(moved[k]); w >= wave(moved["Deployment/<nil>/clearance-grant-expiry"]) {
+			t.Errorf("%s is in wave %d, not before the Deployment's %d", k, w, wave(moved["Deployment/<nil>/clearance-grant-expiry"]))
+		}
+	}
 	for _, k := range []string{"Service/<nil>/clearance-grant-expiry", "PodDisruptionBudget/<nil>/clearance-grant-expiry"} {
 		if wave(docs[k]) != dep {
 			t.Errorf("%s is in wave %d, the Deployment's is %d", k, wave(docs[k]), dep)
@@ -205,6 +213,11 @@ func TestTheGateModeRule(t *testing.T) {
 		{"alerts without the webhook", []string{"--set", "alerts.enabled=true", "--set", "statusHeartbeat=5m"}, false, "alerts.enabled needs grantExpiry.enabled"},
 		{"alerts without the heartbeat", append(geOn, "--set", "alerts.enabled=true"), false, "alerts.enabled needs statusHeartbeat"},
 		{"alerts with a bad duration", append(geOn, "--set", "alerts.enabled=true", "--set", "statusHeartbeat=5m", "--set", "alerts.checkedAtStaleAfter=1h30m"), false, "one unit"},
+		{"alerts with a zero heartbeat", append(geOn, "--set", "alerts.enabled=true", "--set", "statusHeartbeat=0s"), false, "must be above zero"},
+		{"alerts with a heartbeat at the stale threshold", append(geOn, "--set", "alerts.enabled=true", "--set", "statusHeartbeat=15m"), false, "greater than statusHeartbeat"},
+		{"alerts with a heartbeat above the default threshold", append(geOn, "--set", "alerts.enabled=true", "--set", "statusHeartbeat=20m"), false, "greater than statusHeartbeat"},
+		{"alerts with a 20m heartbeat and a 30m threshold", append(geOn, "--set", "alerts.enabled=true", "--set", "statusHeartbeat=20m", "--set", "alerts.checkedAtStaleAfter=30m"), true, ""},
+		{"a cache age a quiet watch can outlast", append(geOn, "--set", "grantExpiry.maxCacheAge=5m"), false, "maxCacheAge must be above 330s"},
 		{"HA with one replica", []string{"--set", "ha.enabled=true", "--set", "ha.replicas=1"}, false, "ha.replicas of 2 or more"},
 	}
 	for _, c := range cases {

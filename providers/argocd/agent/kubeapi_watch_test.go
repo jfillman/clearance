@@ -120,3 +120,32 @@ func TestLeaseREST(t *testing.T) {
 		t.Fatalf("update body: %s", b)
 	}
 }
+
+// The list is paged: limit on every page, continue followed until it is empty, the last page's resourceVersion kept.
+func TestActiveGrantsListIsPaged(t *testing.T) {
+	old := agent.SetActiveGrantsPage(1)
+	defer agent.SetActiveGrantsPage(old)
+	var queries []string
+	k := standIn(t, func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		queries = append(queries, q.Get("limit")+"|"+q.Get("continue"))
+		item := func(name string) string {
+			return `{"metadata":{"namespace":"app-a","name":"` + name + `","labels":{"clearance.hangar.io/active":"true"}},"spec":{}}`
+		}
+		switch q.Get("continue") {
+		case "":
+			_, _ = w.Write([]byte(`{"metadata":{"resourceVersion":"10","continue":"c1"},"items":[` + item("g1") + `]}`))
+		case "c1":
+			_, _ = w.Write([]byte(`{"metadata":{"resourceVersion":"11","continue":"c2"},"items":[` + item("g2") + `]}`))
+		case "c2":
+			_, _ = w.Write([]byte(`{"metadata":{"resourceVersion":"12"},"items":[` + item("g3") + `]}`))
+		}
+	})
+	gs, rv, err := k.ListActiveGrants(context.Background())
+	if err != nil || rv != "12" || len(gs) != 3 || gs[2].Name != "g3" {
+		t.Fatalf("paged list: %v %q %v", gs, rv, err)
+	}
+	if strings.Join(queries, ",") != "1|,1|c1,1|c2" {
+		t.Fatalf("pages asked for: %v", queries)
+	}
+}

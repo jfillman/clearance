@@ -127,6 +127,7 @@ grantExpiry:
   # The webhook's call timeout. 3 s; a lookup is an in-memory read.
   timeoutSeconds: 3
   # The cache is not synced (the pod is not Ready; enforce refuses) when the API server has not been heard from this long.
+  # One unit (10m, 1h), above 330s: a healthy watch can be silent for its whole length.
   maxCacheAge: 10m
   # Argo CD sync waves: the certificate, then the Deployment (Healthy only when every pod is Ready in the rendered mode),
   # then the configuration. The admission policy's binding belongs in a LATER wave than the configuration (or a later sync):
@@ -164,13 +165,15 @@ ha:
   renewDeadline: 10s
   retryPeriod: 2s
 # Refresh status.checkedAt of every valid grant once it is this old (one status patch per grant each time), so its age
-# shows a stalled expiry pass. Empty: off (status is written only when valid changes). The alerts need it.
+# shows a stalled expiry pass. Empty: off (status is written only when valid changes). The alerts need it, as a positive
+# duration of one unit (90s, 5m, 1h), below alerts.checkedAtStaleAfter.
 statusHeartbeat: ""
 # A PrometheusRule (and a PodMonitor for the grant-expiry pods, which export the grant times: a stalled agent cannot
 # report itself). Needs the Prometheus Operator's CRDs, grantExpiry.enabled and statusHeartbeat.
 alerts:
   enabled: false
-  # ClearanceGrantStatusStale: an active grant's status.checkedAt is older than this (set it above statusHeartbeat).
+  # ClearanceGrantStatusStale: an active grant's status.checkedAt is older than this. One unit, above statusHeartbeat
+  # (the chart refuses otherwise).
   checkedAtStaleAfter: 15m
   # ClearanceGrantExpiredButValid: an active grant past spec.expiresAt is still status.valid this long (the I-44 state).
   expiredButValidFor: 2m

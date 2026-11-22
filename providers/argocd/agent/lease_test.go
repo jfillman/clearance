@@ -140,6 +140,11 @@ func TestRunStopsTheWorkWhenTheLeaseCannotBeRenewed(t *testing.T) {
 	errc := make(chan error, 1)
 	go func() {
 		errc <- e.Run(context.Background(), func(ctx context.Context) error {
+			if _, cancel, err := e.Fence(ctx); err != nil {
+				t.Errorf("the holder's fence is open while it runs: %v", err)
+			} else {
+				cancel()
+			}
 			close(started)
 			<-ctx.Done()
 			close(stopped)
@@ -164,6 +169,9 @@ func TestRunStopsTheWorkWhenTheLeaseCannotBeRenewed(t *testing.T) {
 	case <-stopped:
 	default:
 		t.Fatal("the work's context was not cancelled before Run returned")
+	}
+	if _, _, err := e.Fence(context.Background()); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("after the lease is lost the fence is closed: %v", err)
 	}
 }
 
@@ -212,14 +220,93 @@ func TestRunWaitsAsACandidateAndReleasesOnShutdown(t *testing.T) {
 }
 
 func TestTheElectorRefusesAnUnsafeConfiguration(t *testing.T) {
-	for name, e := range map[string]Elector{
+	for name, e := range map[string]*Elector{
 		"no identity":                {Store: &memLeases{}, Namespace: "n", Name: "l"},
 		"renew deadline >= duration": {Store: &memLeases{}, Namespace: "n", Name: "l", Identity: "p", Duration: time.Second, RenewDeadline: time.Second},
 		"retry >= renew deadline":    {Store: &memLeases{}, Namespace: "n", Name: "l", Identity: "p", RenewDeadline: time.Second, RetryPeriod: time.Second},
+		"no margin (3 s, 2 s, 1 s)": {Store: &memLeases{}, Namespace: "n", Name: "l", Identity: "p", Duration: 3 * time.Second,
+			RenewDeadline: 2 * time.Second, RetryPeriod: time.Second},
 	} {
 		if err := e.defaults(); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+// The write fence: nothing before the lease is taken; after a renewal, writes until renewedAt + Duration - RetryPeriod
+// (with that deadline on the write's context); nothing after, as for a replica that stalled past its lease and resumed.
+func TestTheFenceClosesBeforeTheEarliestTakeover(t *testing.T) {
+	at := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	e := &Elector{Store: &memLeases{}, Namespace: "ns", Name: "agent", Identity: "pod-a", Now: func() time.Time { return at }, Log: quiet}
+	if err := e.defaults(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.Fence(context.Background()); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("before the lease is held: %v", err)
+	}
+	e.setHeld(true, at)
+	at = at.Add(12 * time.Second)
+	fctx, cancel, err := e.Fence(context.Background())
+	if err != nil {
+		t.Fatalf("12 s after a renewal (15 s lease, 2 s margin): %v", err)
+	}
+	if dl, ok := fctx.Deadline(); !ok || !dl.Equal(at.Add(time.Second)) {
+		t.Fatalf("the write's deadline is renewedAt + 13 s: %v %v", dl, ok)
+	}
+	cancel()
+	at = at.Add(time.Second) // 13 s: a takeover is possible from 15 s; the fence keeps the margin
+	if _, _, err := e.Fence(context.Background()); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("at renewedAt + Duration - margin the fence is closed: %v", err)
+	}
+	e.setHeld(true, at)
+	if _, _, err := e.Fence(context.Background()); err != nil {
+		t.Fatalf("a fresh renewal opens it again: %v", err)
+	}
+	e.setHeld(false, time.Time{})
+	if _, _, err := e.Fence(context.Background()); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("once released: %v", err)
+	}
+}
+
+type kubeWrites struct {
+	Kube
+	writes int
+}
+
+func (k *kubeWrites) PutData(context.Context, string, string, map[string]string) error {
+	k.writes++
+	return nil
+}
+func (k *kubeWrites) DeleteGrant(context.Context, string, string) error { k.writes++; return nil }
+func (k *kubeWrites) ListGrants(context.Context) ([]Grant, error)       { return nil, nil }
+
+type gate struct{ open bool }
+
+func (g *gate) Fence(ctx context.Context) (context.Context, context.CancelFunc, error) {
+	if !g.open {
+		return nil, nil, ErrLeaseLost
+	}
+	c, cancel := context.WithCancel(ctx)
+	return c, cancel, nil
+}
+
+func TestFencedRefusesWritesWithoutTheLeaseAndPassesReads(t *testing.T) {
+	inner := &kubeWrites{}
+	g := &gate{}
+	k := Fenced(inner, g)
+	ctx := context.Background()
+	if err := k.PutData(ctx, "ns", "state", nil); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("state write without the lease: %v", err)
+	}
+	if err := k.DeleteGrant(ctx, "ns", "g"); !errors.Is(err, ErrLeaseLost) || inner.writes != 0 {
+		t.Fatalf("grant write without the lease: %v (%d writes reached the cluster)", err, inner.writes)
+	}
+	if _, err := k.ListGrants(ctx); err != nil {
+		t.Fatalf("reads are not fenced: %v", err)
+	}
+	g.open = true
+	if err := k.PutData(ctx, "ns", "state", nil); err != nil || inner.writes != 1 {
+		t.Fatalf("with the lease the write goes through: %v %d", err, inner.writes)
 	}
 }
 
