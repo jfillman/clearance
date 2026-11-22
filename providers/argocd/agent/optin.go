@@ -54,6 +54,9 @@ type OptIn struct {
 	// MaxSwitchesPer10Min bounds how often one Application is written (default 3): a parent, an ApplicationSet or a
 	// person that keeps putting the original back is not fought in a loop.
 	MaxSwitchesPer10Min int
+	// Rule is the platform's gate rule (W-42): Applications it selects are gated as if annotated. The zero value is no
+	// rule.
+	Rule GateRule
 }
 
 // DefaultDenyApps are the names Clearance's own Applications are given by the charts that deploy it.
@@ -78,6 +81,7 @@ func (o *OptIn) defaults() {
 	if o.MaxSwitchesPer10Min <= 0 {
 		o.MaxSwitchesPer10Min = 3
 	}
+	o.Rule.defaults()
 }
 
 // Statuses of an opt-in Application, shown in the state ConfigMap (key optin.json) and the log.
@@ -110,19 +114,33 @@ type appClass struct {
 	// restoreBad: why the original sources in the plugin parameter cannot be put back (present and well formed is required
 	// BEFORE anything is unlabelled or reported removed). Such an Application stays protected.
 	restoreBad string
+	// The gate rule (W-42). ruleName: the select entry that matches ("" none). ruled: the rule gates it now (it matches,
+	// and no exemption the core took lifts it, or its release is held by the release bound). exempt: the exempt entry that
+	// names it (valid or not). exempted: an exemption the core took lifts the rule from it. releaseHeld: the rule no longer
+	// gates it, and the release waits for the bound. wasRuled: the rule gated it before (the state says so).
+	ruleName       string
+	ruled          bool
+	exempt         *RuleExempt
+	exempted       bool
+	releaseHeld    bool
+	wasRuled       bool
+	pluginSwitched string // the plugin source's own switched parameter, when it is on the plugin
 }
+
+// gated is whether the annotation or the rule asks for the gate.
+func (c appClass) gated() bool { return c.optedIn || c.ruled }
 
 func (c appClass) key() string { return c.app.Namespace + "/" + c.app.Name }
 
 // protectedIntent is whether the Application asks for protection and may have it.
-func (c appClass) protectedIntent() bool { return (c.optedIn && !c.denied) || c.restoreBad != "" }
+func (c appClass) protectedIntent() bool { return (c.gated() && !c.denied) || c.restoreBad != "" }
 
 // wantsSwitch is whether the Application asks to be on the plugin and may be.
-func (c appClass) wantsSwitch() bool { return c.optedIn && !c.denied }
+func (c appClass) wantsSwitch() bool { return c.gated() && !c.denied }
 
 // pendingRestore is an Application the agent switched (it carries the marker) that no longer asks to be, or may not be.
 func (c appClass) pendingRestore() bool {
-	return c.marker != "" && !c.foreign && (!c.optedIn || c.denied)
+	return c.marker != "" && !c.foreign && (!c.gated() || c.denied)
 }
 
 // configured says whether ns is one of the namespaces the agent is configured for.
@@ -196,6 +214,7 @@ func (a *Agent) denied(app Application) bool {
 func (a *Agent) classify(ctx context.Context, apps []Application) []appClass {
 	out := make([]appClass, 0, len(apps))
 	cache := map[string]nsInfo{}
+	rule := a.currentRule()
 	for _, app := range apps {
 		outside := !a.protectedProject(app.Project)
 		if outside && app.Annotations[AnnSwitched] == "" {
@@ -211,13 +230,17 @@ func (a *Agent) classify(ctx context.Context, apps []Application) []appClass {
 			c.isPlugin = true
 			// The marker is two halves: the annotation, which anyone who can annotate can write, and the plugin source's
 			// own `switched` parameter, which only an edit of the spec can write. Only both, agreeing, are the agent's.
+			c.pluginSwitched = params["switched"]
 			if (c.marker == "source" || c.marker == "sources") && params["switched"] == c.marker {
 				c.switched = true
 			} else {
 				c.foreign = true
 			}
 		}
-		if c.switched && !c.optedIn || c.switched && c.denied {
+		if !outside {
+			a.applyRule(ctx, rule, &c)
+		}
+		if c.switched && !c.gated() || c.switched && c.denied {
 			if err := a.restorable(c); err != nil {
 				c.restoreBad = err.Error()
 			}
@@ -226,6 +249,31 @@ func (a *Agent) classify(ctx context.Context, apps []Application) []appClass {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].key() < out[j].key() })
 	return out
+}
+
+// applyRule is the gate rule's part of the classification: whether the rule selects the Application, whether an
+// exemption the core took lifts it, and whether a release it causes must wait for the release bound. It reads the
+// Application's current project, destination and labels: the agent never writes the annotation for a ruled Application.
+func (a *Agent) applyRule(ctx context.Context, rule *Rule, c *appClass) {
+	key := c.key()
+	c.wasRuled = a.wasRuleGated(key)
+	if name, ok := rule.Match(c.app); ok {
+		c.ruleName, c.ruled = name, true
+		c.exempt = rule.ExemptFor(c.app) // the deny list beats an exemption, which beats the rule
+		if e := c.exempt; e != nil && e.Invalid == "" && !e.Expired(a.now()) && !c.denied && a.honoured(*c, rule.Digest) {
+			c.ruled, c.exempted = false, true
+		}
+	}
+	// A release the rule causes (it gated the Application, and now neither the rule nor the annotation does) is bounded:
+	// past the bound the Application stays gated, and says so.
+	if c.switched && c.wasRuled && !c.gated() && !c.denied && !c.left {
+		if !a.releaseSlot(ctx, key) {
+			c.ruled, c.releaseHeld, c.exempted = true, true, false
+			if c.ruleName == "" {
+				c.ruleName = "released-later"
+			}
+		}
+	}
 }
 
 // restorable checks that the original source in the plugin parameter is present and well formed, in the shape the marker
@@ -367,7 +415,7 @@ func sameJSON(a, b json.RawMessage) bool {
 // agent has changed them. The agent does not edit a parent: an app-of-apps is itself owned by git, and a live edit
 // would be reverted by the Application above it or would put the agent in a fight. It reads the parent and reports
 // what is missing.
-func (a *Agent) parentCheck(ctx context.Context, apps []Application, child Application) (ok bool, reason string) {
+func (a *Agent) parentCheck(ctx context.Context, apps []Application, child Application, ruled bool) (ok bool, reason string) {
 	for _, o := range child.Owners {
 		if o.Kind != "ApplicationSet" {
 			continue
@@ -381,6 +429,11 @@ func (a *Agent) parentCheck(ctx context.Context, apps []Application, child Appli
 		}
 		if !ignoresSources(set.IgnoreApplicationDifferences, child, false) {
 			return false, fmt.Sprintf("the ApplicationSet %s does not ignore /spec/source and /spec/sources (spec.ignoreApplicationDifferences): it would put the original back", o.Name)
+		}
+		// A ruled Application carries no annotation of its tenant's to keep, but the agent's switched marker is still an
+		// annotation the ApplicationSet would wipe: without it, the agent can no longer tell its own switch from a foreign one.
+		if ruled && !slices.Contains(set.PreservedAnnotations, AnnSwitched) {
+			return false, fmt.Sprintf("the ApplicationSet %s does not preserve the %s annotation (spec.preservedFields.annotations): it would wipe the agent's marker", o.Name, AnnSwitched)
 		}
 		return true, ""
 	}
@@ -512,11 +565,21 @@ func (a *Agent) ReconcileOptIn(ctx context.Context) error {
 	if !a.optInSchemaOK(ctx, false) {
 		return nil // the CRD lacks what the opt-in writes: nothing here runs, and the problem is reported once
 	}
+	// The gate rule first: with a rule configured and no good copy of it, nothing is switched and nothing is put back (a
+	// rule-gated Application would read as ungated).
+	rule, err := a.loadRule(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: nothing is switched or put back", err)
+	}
 	apps, _, err := a.kube.ListApplications(ctx)
 	if err != nil {
 		return fmt.Errorf("listing the Applications (nothing is changed): %w", err)
 	}
+	a.pruneRuleState(ctx, apps)
 	classes := a.classify(ctx, apps)
+	if rule != nil && a.decideExemptions(ctx, classes, rule.Digest) {
+		classes = a.classify(ctx, apps) // an answer changed what is honoured: this pass acts on it
+	}
 	var errs []error
 
 	// 1. Report the protected pairs. A pair is added before its Application is switched; a removal is reported before the
@@ -537,6 +600,15 @@ func (a *Agent) ReconcileOptIn(ctx context.Context) error {
 		if c.foreign && c.marker != "" {
 			a.opt().status[c.key()] = "left alone: it carries the switched annotation but is on the plugin without the agent's own parameter"
 			a.warnOnce(c.key(), "an Application carries the switched annotation and is on the plugin, but the plugin source has no matching switched parameter: it is not the agent's and is left alone")
+		}
+		if c.ruled && c.foreign && c.marker == "" && c.pluginSwitched != "" {
+			// The agent's marker was wiped (an ApplicationSet without preservedFields, say): the Application is left alone,
+			// as any foreign plugin Application is, and for one the rule gates that is a gap in protection.
+			if err := a.reportKindEvery(ctx, "gate-marker-wiped|"+c.key(), 24*time.Hour, "drift", "switched marker wiped from a rule-gated Application",
+				c.key()+" is on the plugin with the agent's switched parameter but no "+AnnSwitched+" annotation: the agent cannot tell its switch from a foreign one and leaves it alone; preserve the annotation in the parent (spec.preservedFields.annotations)",
+				appObject(c)); err != nil {
+				a.log.Warn("the wiped marker could not be reported", "err", err)
+			}
 		}
 		if !c.pendingRestore() {
 			continue
@@ -562,13 +634,22 @@ func (a *Agent) ReconcileOptIn(ctx context.Context) error {
 		if !c.wantsSwitch() {
 			continue
 		}
+		if c.ruled && !c.releaseHeld {
+			a.markRuleGated(ctx, c.key(), c.ruleName, true)
+		}
 		if c.envErr != nil {
 			a.opt().status[c.key()] = "skipped this pass: " + c.envErr.Error()
 			a.warnOnce(c.key(), "the Application is skipped this pass: "+c.envErr.Error())
 			continue
 		}
-		// A pair is added at the core before its Application is switched: not until the core has taken it.
-		if !c.switched && c.blockedWhy == "" && !a.pairAccepted(c) {
+		regate := c.ruled && a.exemptReleased(c.key())
+		if c.switched && regate && a.pairAccepted(c) {
+			a.setExemptReleased(ctx, c.key(), false) // gated again, and the core has its pair
+		}
+		// A pair is added at the core before its Application is switched: not until the core has taken it. The exception is
+		// an Application an exemption released that the rule gates again (it lapsed, or its acceptance was revoked or
+		// dropped, which is when the core may be down): it is switched at once, and its pair is in every report from now on.
+		if !c.switched && c.blockedWhy == "" && !regate && !a.pairAccepted(c) {
 			a.opt().status[c.key()] = "waiting for the core to take its pair"
 			a.warnOnce(c.key(), "the Application is not switched yet: the core has not taken its protected pair")
 			continue
@@ -700,7 +781,7 @@ func (a *Agent) switchApp(ctx context.Context, apps []Application, c appClass, s
 		delete(a.opt().warned, key)
 		return nil // nothing to write
 	}
-	if ok, why := a.parentCheck(ctx, apps, c.app); !ok {
+	if ok, why := a.parentCheck(ctx, apps, c.app, c.ruled && !c.optedIn); !ok {
 		return block(why)
 	}
 	if why, stop := a.throttled(key); stop {
@@ -780,7 +861,11 @@ func (a *Agent) restore(ctx context.Context, classes []appClass, c appClass) err
 	a.repMu.Lock()
 	delete(a.explained, key)
 	a.repMu.Unlock()
-	a.log.Info("Application put back to its original sources", "application", key, "denied", c.denied, "annotated", c.optedIn)
+	a.markRuleGated(ctx, key, "", false)
+	if c.exempted {
+		a.setExemptReleased(ctx, key, true)
+	}
+	a.log.Info("Application put back to its original sources", "application", key, "denied", c.denied, "annotated", c.optedIn, "exempted", c.exempted)
 	return nil
 }
 
@@ -810,6 +895,41 @@ func (a *Agent) writeStatus(ctx context.Context, classes []appClass) error {
 			}
 			cur[c.key()] = st
 		}
+	}
+	for _, c := range classes {
+		if c.ruleName == "" {
+			continue
+		}
+		st, listed := cur[c.key()]
+		switch {
+		case c.releaseHeld:
+			st = "held: the rule no longer gates it, and its release waits for the release bound (--gate-release-max an hour)"
+		case c.exempted && c.optedIn:
+			st += " (exemption accepted, ineffective: the annotation keeps it gated)"
+		case c.exempted:
+			if !listed {
+				st = "exempt"
+			}
+			st += fmt.Sprintf(" (exempt by %q until %s)", c.exempt.Application, c.exempt.At.Format(time.RFC3339))
+		case c.ruled:
+			why := "rule " + c.ruleName
+			if c.optedIn {
+				why += " and the annotation"
+			}
+			st += " (" + why + ")"
+			if n := s.status["exempt/"+c.key()]; n != "" {
+				st += " (" + n + ")"
+			}
+			if acc, ok := a.answer(c.key()); ok && acc.refused != "" {
+				st += " (exemption refused: " + acc.refused + ")"
+			}
+		default:
+			continue
+		}
+		cur[c.key()] = st
+	}
+	if st := a.ruleStatus(); st != "" {
+		cur["gate/rule"] = st
 	}
 	if st := s.status["core/protection"]; st != "" {
 		cur["core/protection"] = st

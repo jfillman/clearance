@@ -1077,7 +1077,7 @@ transaction as the record.
 #### Gate exemptions: the core's decision
 
 A `gate-exemption` record is an Argo CD agent saying that its gate rule's `exempt` entry lets one Application out of
-the gate until a date (the agent's gate rule, `--gate-rule-file`). The core **decides** each one; the agent honours an
+the gate until a date ([The gate rule](#the-gate-rule-w-42)). The core **decides** each one; the agent honours an
 exemption only after the core has taken its `requested` record, and asks again whenever anything it is keyed to
 changes and every few minutes.
 
@@ -2654,6 +2654,97 @@ a change to it is a reviewed pull request) and in Argo CD's project and RBAC rul
 
 An Application the deny list names is never switched, and one that was switched is put back, the same way an opt-out is (reported
 first). A denied Application that is annotated is not a protected pair.
+
+#### The gate rule (W-42)
+
+The annotation is the tenant's: anyone who can edit the Application can remove it. **The gate rule is the platform's.** It selects
+Applications by properties every Application already has, and an Application it selects is gated as if it carried the annotation.
+Removing the annotation does not release it. With no rule (the default) nothing here applies and the agent behaves exactly as before.
+
+**Where it lives.** One YAML file, `--gate-rule-file` (`CLEARANCE_GATE_RULE_FILE`; empty: no rule). The agent chart renders it from the
+`gateRule` value into the ConfigMap `<fullname>-gate-rule` (key `rule.yaml`), mounts it read-only, and adds a checksum annotation to the
+pod template so a change rolls the pod; the agent also re-reads the file every pass. A platform team changes it with a values change,
+reviewed as a pull request like any other. The rule needs the opt-in: the chart fails to render `gateRule` without `optIn.enabled`, and
+the agent refuses to start with `--gate-rule-file` and no `--optin`. With `gateRule` unset the chart renders byte for byte as before.
+
+```yaml
+gateRule:
+  version: 1
+  select:                         # empty or absent: the rule gates nothing
+    - name: tenants-prod          # required, a DNS label; it appears in records and in the status
+      projects: [tenants]         # globs on spec.project
+      namespaces: ["app-*-prod"]  # globs on spec.destination.namespace
+      labels: {tier: prod}        # exact key=value on the Application's labels
+    - name: platform
+      projects: [platform]        # a project-only entry gates the project in every environment
+  exempt:
+    - application: argocd/web-prod   # glob on <namespace>/<name>
+      reason: "a migration to the new chart"
+      expires: "2026-12-19"          # a date (00:00 UTC) or an RFC 3339 time
+      ref: PR-123                    # optional: a ticket or pull request
+```
+
+**Matching.** Inside one `select` entry the keys present are ANDed; inside one key the values are ORed (`*` and `?` globs, the deny
+list's matcher), except `labels`, where every listed label must match exactly; across entries, any entry is enough. An entry with none
+of the three keys is refused (it would match everything): to gate every Application the agent can see, write `projects: ["*"]` on
+purpose. The rule never widens what the agent may touch. An Application outside `argocd.projects` is not seen at all (the rule is not
+evaluated for it). A selected Application whose destination namespace is not in `protectedNamespaces` is `blocked` in the status,
+with the reason, and still reported to the core as a protected pair, exactly as a blocked annotated one.
+
+**Precedence**, first that applies wins: the deny list (never gated); an exemption the core has accepted (lifts the rule only); the
+rule; the annotation. So an exempt Application that carries the annotation stays gated, and a tenant can add to the rule but never
+subtract from it. The agent never writes the annotation for a ruled Application; it evaluates the rule every pass. No Application
+field, label or annotation creates an exemption (`clearance.hangar.io/exempt` is not read).
+
+**Releases are bounded.** Narrowing the rule can release many Applications at once, so rule-caused releases (narrowing, or an
+exemption) are limited to `--gate-release-max` (`gateRuleOptions.releaseMax`, default 3) per hour, counted in the agent's state so a
+restart does not reset it; the rest stay gated and their status says `held: ... release bound`. A release follows the normal removal
+order: report the removal (reason `<app> the rule no longer matches (<app>/<env>)`, or the exemption), unlabel, restore the source,
+remove the grant, and nothing is released while the core has not taken the report.
+
+**A bad or unreadable rule file** keeps the last good rule; nothing is released for it, and one exception is posted a day. The agent
+keeps a copy of the last good rule (and its digest) in its state ConfigMap, so a restart with a bad file uses that copy. With neither
+it is **not ready**: the opt-in loop and the merged-grant step change nothing (nothing new gated, nothing released, no label or grant
+removed) until a good file appears, which is picked up without a restart. The agent has no readiness endpoint; the state ConfigMap's
+`gate/rule` status and the exception say so.
+
+**Exemptions.** An `exempt` entry lifts the rule from the Applications its glob names until `expires`. `reason` is 10 to 500
+characters; `expires` is at most `--gate-exempt-max` (default 90 days, never more than the core's 90) away; an invalid entry is
+ignored on its own (the Application stays gated) and reported. There is no approver field: who added it is the pull request.
+
+- **The core decides every one.** The agent posts a `gate-exemption` record with state `requested` naming the Application's app and
+  environment, and honours the exemption only once the core has taken it ([Gate exemptions: the core's decision](#gate-exemptions-the-cores-decision)).
+  The core refuses one whose environment `CLEARANCE_PROTECTED_ENVIRONMENTS` protects (`refused: static`; an empty list protects
+  everything); the Application then stays gated and its status shows `exemption refused: static`. A core too old to know the kind
+  refuses the record (400): every exemption is ignored and one exception says so.
+- **The answer is keyed** to the Application, its app and environment pair, the entry as written and the rule file's digest; any change
+  asks again before anything is honoured. An honoured exemption is asked again every `--gate-exemption-recheck` (5 minutes), each ask
+  with a deadline (`--gate-exemption-recheck-timeout`, 30 s). A refusal revokes it; an unanswered or late ask drops it at once (no
+  retention). Either way the Application is gated again at once.
+- **Records.** `requested` at each ask (one record a day per key: the core de-duplicates on `source.event_id` after deciding), `active`
+  once a day while honoured, `expiring` once, seven days before `expires`, and `expired` when it lapses (`why: lapsed`), is revoked
+  (`revoked`) or withdrawn from the file (`withdrawn`); an expired entry left in the file is reported once a day as `stale`. A refusal is
+  recorded as `refused`. The removal report that releases an exempt Application names its pair in `exempted`.
+- **Gating again does not wait for the core.** A first gating waits for the core to take the pair (as for the annotation). An
+  Application an exemption released (the state remembers which) that the rule gates again, because the exemption lapsed or its acceptance
+  was revoked or dropped, is switched at once, without that wait: the core being down is exactly when an acceptance is dropped. Its pair
+  is in every report the agent sends from then on, so it reaches the core when the core is back. The switch is what gates it at once (the
+  plugin renders nothing the core has not cleared); its merged grant and the namespace label still follow the signed feed, as always.
+
+**ApplicationSet-made Applications.** The rule needs no annotation on the Application, so an ApplicationSet that resets annotations
+cannot remove the platform's requirement. The agent's own `clearance.hangar.io/switched` marker is still an annotation it would wipe:
+for a ruled Application owned by an ApplicationSet the parent check also asks for `spec.preservedFields.annotations` to include
+`clearance.hangar.io/switched`, and the Application is `blocked` until it does. A ruled Application whose marker was wiped anyway (on the
+plugin with the agent's parameter, no annotation) is left alone, as any foreign plugin Application, and reported as a `drift`
+exception once a day.
+
+**Who can change it.** Whoever can merge a values change to the agent chart. With `gateRule` set, the agent's state Role keeps `get` and
+`patch` on its own state ConfigMap only (`resourceNames`), so the agent cannot write the rule's ConfigMap. Tenants have no write path to
+the agent's namespace unless their Argo CD projects give them one.
+
+The agent's flags: `--gate-rule-file`, `--gate-exempt-max` (2160h), `--gate-release-max` (3), `--gate-exemption-recheck` (5m),
+`--gate-exemption-recheck-timeout` (30s). Every one has a safe default; the rule itself is off until a file is named. The chart's values:
+`gateRule` (empty) and `gateRuleOptions` {exemptMax, releaseMax, exemptionRecheck, exemptionRecheckTimeout}.
 
 #### What the agent writes to an Application
 

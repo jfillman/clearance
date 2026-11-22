@@ -277,6 +277,8 @@ type fakeCore struct {
 	reportDown bool
 	heldSeq    int64                                     // the number of the last report the "core" took
 	refuse     func(req *client.ProtectionRequest) error // a refusal for some reports (a 4xx)
+	// exempt decides a gate-exemption record as the core would (W-42): nil takes it; an *client.APIError refuses it.
+	exempt func(state, env string) error
 }
 
 func (c *fakeCore) ProtectionSeq(context.Context, string) (int64, error) {
@@ -372,6 +374,13 @@ func (c *fakeCore) Record(_ context.Context, req *client.RecordRequest) (*client
 		rec["tool"] = req.Kind
 		if err := gate.CheckReport(store.Event(rec), t0); err != nil {
 			c.t.Errorf("the core's report check refuses it: %v\n%s", err, raw)
+		}
+		if x, _ := rec["exception"].(map[string]any); x["kind"] == gate.KindGateExemption && c.exempt != nil {
+			st, _ := x["exemption"].(map[string]any)["state"].(string)
+			env, _ := rec["destination"].(map[string]any)["environment"].(string)
+			if err := c.exempt(st, env); err != nil {
+				return nil, err
+			}
 		}
 	}
 	c.records = append(c.records, *req)

@@ -1,0 +1,20 @@
+# The gate rule on (W-42). Example names only.
+cluster: cluster-a
+apiURL: https://clearance-api.example.test
+coreURL: https://clearance.example.test
+argocd:
+  namespace: argocd
+  projects: [tenants]
+protectedNamespaces: [app-web-prod, app-api-prod]
+optIn:
+  enabled: true
+gateRule:
+  version: 1
+  select:
+    - name: tenants-prod
+      projects: [tenants]
+      namespaces: ["app-*-prod"]
+  exempt:
+    - application: argocd/web-prod
+      reason: "a migration to the new chart"
+      expires: "2026-12-19"

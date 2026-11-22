@@ -11,6 +11,22 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ### Added
 
+- **The platform's gate rule for the Argo CD agent (W-42; `providers/argocd/agent`, `charts/clearance-argocd-agent` `gateRule`; off by
+  default).** A rule file (`--gate-rule-file`, rendered by the chart from `gateRule` into a read-only ConfigMap with a checksum that rolls
+  the pod, and re-read every pass) selects Applications by project, destination-namespace glob and labels (AND inside an entry, OR across
+  entries; a project-only entry is allowed, an empty one refused). A selected Application is gated as if annotated, and removing the
+  annotation does not release it. Precedence: deny list, an exemption the core accepted, the rule, the annotation. A selected Application
+  outside `protectedNamespaces` is `blocked` and still reported as a pair. Rule-caused releases are bounded (`--gate-release-max`, 3 an
+  hour, persisted). A bad file keeps the last good rule (also kept in the state ConfigMap for a restart); with no good copy the agent
+  changes nothing until one appears. `exempt` entries (reason, expiry at most 90 days) are honoured only after the core takes the
+  `gate-exemption` record, re-asked every 5 minutes under a 30 s deadline; a refusal or no answer re-gates at once, without waiting for the
+  core. A ruled ApplicationSet child needs `preservedFields.annotations: [clearance.hangar.io/switched]`; a wiped marker is a `drift`
+  exception. With `gateRule` set, the agent's state Role keeps `get`/`patch` on its own ConfigMap only. The chart fails render on a bad
+  rule or on `gateRule` without `optIn.enabled`. New flags, all with safe defaults (the rule is off until a file is named):
+  `--gate-rule-file`, `--gate-exempt-max`, `--gate-release-max`, `--gate-exemption-recheck`, `--gate-exemption-recheck-timeout`.
+  **With default values the chart renders byte for byte as before.** Needs a core with the `gate-exemption` kind for exemptions
+  (an older core refuses the record and every exemption is ignored). docs/gate.md, "The gate rule (W-42)".
+
 - **A new exception kind, `gate-exemption`, decided by the core (W-42; `internal/gate`, `POST /v1/records`, `PUT /v1/protection`).**
   The record an Argo CD agent posts when its platform gate rule exempts one Application until a date: `exception.exemption`
   {state (`requested`, `active`, `expiring`, `expired`, `refused`), application, entry, rule, rule_digest, reason (10 to 500

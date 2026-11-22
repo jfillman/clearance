@@ -92,6 +92,34 @@ optIn:
   # A merged grant over this many bytes is refused and reported; the namespace keeps its last good grant.
   maxGrantBytes: 1500000
 
+# The platform's gate rule (W-42; docs/gate.md, "The gate rule"). EMPTY (the default): no rule, nothing renders, and the
+# agent gates only what the annotation asks for. Set, the chart renders it into the ConfigMap <fullname>-gate-rule
+# (key rule.yaml), mounts it read-only and passes --gate-rule-file; a checksum annotation rolls the pod on a change, and
+# the agent also re-reads it every pass. An Application the rule selects is gated as if it carried the annotation, and
+# removing the annotation does not release it. Needs optIn.enabled. With it set, the state Role's get and patch are limited
+# to the agent's own state ConfigMap, so the agent cannot write the rule. The shape:
+#   gateRule:
+#     version: 1
+#     select:                          # OR across entries; inside one, AND across the keys present
+#       - name: tenants-prod           # required, a DNS label
+#         projects: [tenants]          # globs on spec.project (OR)
+#         namespaces: ["app-*-prod"]   # globs on spec.destination.namespace (OR)
+#         labels: {tier: prod}         # exact, every one
+#     exempt:                          # platform-only, time-limited; the core must accept each
+#       - application: argocd/web-prod # glob on <namespace>/<name>
+#         reason: "a migration to the new chart"   # 10 to 500 characters
+#         expires: "2026-12-19"        # a date (00:00 UTC) or an RFC 3339 time, at most exemptMax away
+#         ref: PR-123                  # optional
+gateRule: {}
+gateRuleOptions:
+  # An exemption further away than this is ignored (at most 2160h, the core's 90 days).
+  exemptMax: 2160h
+  # At most this many Applications released by the rule (narrowed, or exempted) per hour; the rest stay gated.
+  releaseMax: 3
+  # An exemption the core took is asked about again this often, each ask with this deadline (below recheck).
+  exemptionRecheck: 5m
+  exemptionRecheckTimeout: 30s
+
 # -- The gate's mode, and the grant-expiry webhook (I-44) -------------------------------------------------------------
 # The admission policy (providers/argocd/crd/admission.yaml) has no clock: an expired grant stops admitting only once the
 # agent marks it invalid, so a stalled agent leaves an expired grant admitting Argo CD's writes. The grant-expiry webhook

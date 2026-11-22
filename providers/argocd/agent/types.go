@@ -193,6 +193,8 @@ type IgnoreDifference struct {
 type AppSet struct {
 	Namespace, Name              string
 	IgnoreApplicationDifferences []IgnoreDifference
+	// PreservedAnnotations is spec.preservedFields.annotations: the annotations it leaves alone on its Applications.
+	PreservedAnnotations []string
 }
 
 // Operation is status.operationState.

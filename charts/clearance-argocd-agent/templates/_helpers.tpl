@@ -56,6 +56,21 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if not (and (lt (int $ge.syncWaves.certificate) (int $ge.syncWaves.deployment)) (lt (int $ge.syncWaves.deployment) (int $ge.syncWaves.webhook))) -}}{{ fail "grantExpiry.syncWaves must order certificate < deployment < webhook" }}{{- end -}}
 {{- if and .Values.waitJob.image (not (or .Values.waitJob.url .Values.coreURL)) -}}{{ fail "grantExpiry with waitJob.image needs waitJob.url or coreURL" }}{{- end -}}
 {{- end -}}
+{{- with .Values.gateRule -}}
+{{- if not $.Values.optIn.enabled -}}{{ fail "gateRule needs optIn.enabled: the rule switches Applications as the opt-in does (docs/gate.md, The gate rule)" }}{{- end -}}
+{{- if ne (int (default 0 .version)) 1 -}}{{ fail "gateRule.version must be 1" }}{{- end -}}
+{{- $names := list -}}
+{{- range $i, $e := (default list .select) -}}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" (toString (default "" $e.name))) -}}{{ fail (printf "gateRule.select[%d] needs a name, a DNS label" $i) }}{{- end -}}
+{{- if has $e.name $names -}}{{ fail (printf "gateRule.select %q is named twice" $e.name) }}{{- end -}}
+{{- $names = append $names $e.name -}}
+{{- if not (or $e.projects $e.namespaces $e.labels) -}}{{ fail (printf "gateRule.select %q names none of projects, namespaces and labels: it would match everything (write projects: [\"*\"] to mean that)" $e.name) }}{{- end -}}
+{{- end -}}
+{{- range $i, $e := (default list .exempt) -}}
+{{- if not (and $e.application $e.reason $e.expires) -}}{{ fail (printf "gateRule.exempt[%d] needs application, reason and expires" $i) }}{{- end -}}
+{{- if or (lt (len (toString $e.reason)) 10) (gt (len (toString $e.reason)) 500) -}}{{ fail (printf "gateRule.exempt[%d].reason is 10 to 500 characters" $i) }}{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if .Values.ha.enabled -}}
 {{- if lt (int .Values.ha.replicas) 2 -}}{{ fail "ha.enabled needs ha.replicas of 2 or more" }}{{- end -}}
 {{- end -}}
@@ -79,3 +94,6 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if le (int $n) 0 }}{{ fail (printf "%q must be above zero" $d) }}{{ end -}}
 {{- $n -}}
 {{- end -}}
+
+{{- /* The gate rule file (W-42): the gateRule value as YAML. */ -}}
+{{- define "agent.gateRuleFile" -}}{{ toYaml .Values.gateRule }}{{- end -}}

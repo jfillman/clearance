@@ -124,8 +124,10 @@ func (c *Config) Check() error {
 		return errors.New("agent: the state namespace is required")
 	case c.Version == "":
 		return errors.New("agent: the version is required")
+	case c.OptIn.Rule.File != "" && !c.OptIn.Enabled:
+		return errors.New("agent: a gate rule (--gate-rule-file) needs the opt-in (--optin): the rule switches Applications as the opt-in does")
 	}
-	return nil
+	return c.OptIn.Rule.check()
 }
 
 // Agent is the controller. Create it with New, run it with Run (the three loops), or call the loops' steps.
@@ -150,6 +152,9 @@ type Agent struct {
 	explained    map[string]bool
 	lastSend     time.Time // when the core last took a report
 	refusedSince time.Time // since when the core has been refusing the agent's reports
+
+	ruleMu sync.Mutex // rs
+	rs     ruleState  // the gate rule in force and the core's answers about its exemptions
 
 	protMu   sync.Mutex // the protected-namespace cache of handleApp
 	prot     map[string]map[string]string
@@ -190,6 +195,14 @@ type State struct {
 	ReportSeq int64                   `json:"reportSeq,omitempty"`
 	// Once: exceptions the opt-in reported once and will not report again until the condition has gone (fingerprint -> time).
 	Once map[string]string `json:"once,omitempty"`
+	// The gate rule's (W-42) memory: the last good rule file and its digest (used when the file cannot be read at a
+	// restart), the Applications the rule gates (Application key -> rule entry), the rule-caused releases in the window,
+	// and the Applications an exemption released (Application key -> when), which are gated again without waiting for the core.
+	RuleRaw        string            `json:"ruleRaw,omitempty"`
+	RuleDigest     string            `json:"ruleDigest,omitempty"`
+	RuleGated      map[string]string `json:"ruleGated,omitempty"`
+	Releases       []RuleSlot        `json:"ruleReleases,omitempty"`
+	ExemptReleased map[string]string `json:"exemptReleased,omitempty"`
 }
 
 // Pair is an app and environment.
