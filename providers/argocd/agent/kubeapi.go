@@ -181,8 +181,14 @@ type grantWire struct {
 	} `json:"metadata"`
 	Spec   GrantSpec `json:"spec"`
 	Status struct {
-		Valid *bool `json:"valid"`
+		Valid     *bool  `json:"valid"`
+		CheckedAt string `json:"checkedAt"`
 	} `json:"status"`
+}
+
+func (w grantWire) grant() Grant {
+	return Grant{Namespace: w.Metadata.Namespace, Name: w.Metadata.Name, Labels: w.Metadata.Labels, Spec: w.Spec,
+		Valid: w.Status.Valid, CheckedAt: w.Status.CheckedAt}
 }
 
 // ListGrants implements Kube.
@@ -195,8 +201,7 @@ func (a *API) ListGrants(ctx context.Context) ([]Grant, error) {
 	}
 	out := make([]Grant, 0, len(l.Items))
 	for _, w := range l.Items {
-		out = append(out, Grant{Namespace: w.Metadata.Namespace, Name: w.Metadata.Name, Labels: w.Metadata.Labels,
-			Spec: w.Spec, Valid: w.Status.Valid})
+		out = append(out, w.grant())
 	}
 	return out, nil
 }

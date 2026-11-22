@@ -36,6 +36,7 @@ jobs:
           kustomize version | grep -x "$(sed -n 's/^ARG KUSTOMIZE_VERSION=//p' providers/argocd/cmp/Dockerfile)"
       - run: go vet ./...
       - run: go build -o /dev/null ./providers/argocd/agent/cmd/argocd-agent
+      - run: go build -o /dev/null ./providers/argocd/grantexpiry/cmd/grant-expiry
       - run: go build -o /dev/null ./providers/observe-aws/cmd/observe-aws
       - run: go build -o /dev/null ./providers/observe-k8s/cmd/observe-k8s
       - run: test -z "$(gofmt -l .)"
@@ -79,6 +80,19 @@ jobs:
         env:
           DOCKER_BUILDKIT: "1"
       - run: tools/cmp-smoke.sh clearance-cmp:smoke
+  # The agent image (providers/argocd/agent/Dockerfile) carries two binaries since I-44: the agent (the entrypoint) and the
+  # grant-expiry webhook (/grant-expiry, the chart's grantExpiry Deployment). Built for the runner's architecture, never pushed.
+  agent-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f providers/argocd/agent/Dockerfile --build-arg VERSION=v0.0.0-ci -t clearance-argocd-agent:ci .
+        env:
+          DOCKER_BUILDKIT: "1"
+      - run: |
+          set -euo pipefail
+          test "$(docker run --rm clearance-argocd-agent:ci --version)" = "argocd-agent/0.0.0-ci"
+          test "$(docker run --rm --entrypoint /grant-expiry clearance-argocd-agent:ci --version)" = "grant-expiry/0.0.0-ci"
   # The Python client (clients/python): generated from the contract, tested against a real `clearance core --memory`.
   python-client:
     runs-on: ubuntu-latest
@@ -125,7 +139,8 @@ jobs:
           after: ${{ runner.temp }}/after
           args: --check ci=pass --dry-run
       - run: test -n "${{ steps.register.outputs.result }}" && command -v clearance
-  # G-ARGO-2: the ClearanceGrant CRD and the admission policies against a real kube-apiserver (envtest binaries).
+  # G-ARGO-2: the ClearanceGrant CRD and the admission policies against a real kube-apiserver (envtest binaries); I-44: the
+  # grant-expiry webhook against one too.
   admission-policy:
     runs-on: ubuntu-latest
     steps:
@@ -144,6 +159,15 @@ jobs:
           test -n "$assets"
           test -x "$assets/kube-apiserver"
           KUBEBUILDER_ASSETS="$assets" python3 providers/argocd/crd/test_admission.py
+      # I-44: the grant-expiry webhook binary, called by the same kind of real kube-apiserver through the chart's own
+      # ValidatingWebhookConfiguration (matchConditions, exclusions, the clock, failurePolicy Fail and Ignore, the audit annotation).
+      - uses: azure/setup-helm@v4.3.0
+        with:
+          version: v3.21.3
+      - run: |
+          set -euo pipefail
+          assets="$("$(go env GOPATH)/bin/setup-envtest" use 1.36.2 -p path)"
+          KUBEBUILDER_ASSETS="$assets" python3 providers/argocd/grantexpiry/test_webhook.py
   # The Terraform gate action (terraform/action.yml) is linted and run: its metadata parses, every composite step names
   # a shell, shellcheck passes on each embedded script, and a dry run of the hold step validates the request the
   # gate would get from a fixture plan, stopping before an OIDC token is fetched or Clearance is called.

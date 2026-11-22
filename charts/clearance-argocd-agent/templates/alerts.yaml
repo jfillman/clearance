@@ -1,0 +1,59 @@
+{{- if .Values.alerts.enabled }}
+{{- /* I-44, option 0: alerts on a stalled expiry pass. The grant-expiry pods export the grant times (the agent cannot
+       report its own stall), and the agent's status heartbeat (statusHeartbeat) keeps status.checkedAt moving while its
+       expiry pass runs. */}}
+{{- $name := include "agent.ge.name" . }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "agent.ge.labels" . | nindent 4 }}
+    {{- with .Values.alerts.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels: {{- include "agent.ge.selector" . | nindent 6 }}
+  podMetricsEndpoints:
+    - port: probe
+      path: /metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "agent.fullname" . }}
+  labels:
+    {{- include "agent.labels" . | nindent 4 }}
+    {{- with .Values.alerts.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: clearance-grant-expiry
+      rules:
+        - alert: ClearanceGrantStatusStale
+          # status.checkedAt is refreshed every statusHeartbeat while the agent's expiry pass runs.
+          expr: max by (grant_namespace, grant) (time() - clearance_grant_status_checked_timestamp_seconds) > {{ include "agent.seconds" .Values.alerts.checkedAtStaleAfter }}
+          for: 5m
+          labels: {severity: warning}
+          annotations:
+            summary: "ClearanceGrant {{ "{{" }} $labels.grant_namespace {{ "}}" }}/{{ "{{" }} $labels.grant {{ "}}" }}: status.checkedAt is older than {{ .Values.alerts.checkedAtStaleAfter }}"
+            description: "The Clearance Argo CD agent's expiry pass has not refreshed this grant's status: the agent may be stalled. Expiry still holds only if the grant-expiry webhook enforces (I-44)."
+        - alert: ClearanceGrantExpiredButValid
+          # The I-44 state: past spec.expiresAt, still status.valid. The admission policy alone would still admit it.
+          expr: max by (grant_namespace, grant) ((clearance_grant_expires_timestamp_seconds < time()) and on (grant_namespace, grant, pod) (clearance_grant_status_valid == 1))
+          for: {{ .Values.alerts.expiredButValidFor }}
+          labels: {severity: critical}
+          annotations:
+            summary: "ClearanceGrant {{ "{{" }} $labels.grant_namespace {{ "}}" }}/{{ "{{" }} $labels.grant {{ "}}" }} is expired but still status.valid"
+            description: "The agent has not marked an expired grant invalid. The grant-expiry webhook refuses its writes in enforce; in audit it only warns."
+        - alert: ClearanceGrantExpiryNotSynced
+          expr: max(clearance_grant_expiry_cache_synced) == 0 or absent(clearance_grant_expiry_cache_synced)
+          for: 5m
+          labels: {severity: critical}
+          annotations:
+            summary: "No grant-expiry pod has a synced grant cache"
+            description: "Every clearance-grant-expiry pod is out of sync with the API server (or none is scraped). In enforce, protected Argo CD writes are refused until one is."
+{{- end }}

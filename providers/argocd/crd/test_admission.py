@@ -175,9 +175,14 @@ def grant(name, objects, active=True, ns="prot"):
                      "objects": {k: {"rendered": v, "changed": True} for k, v in objects.items()}}}
 
 
-def load_policies(deny):
+def load_policies(deny, create_clock=False):
     docs = list(yaml.safe_load_all((HERE / "admission.yaml").read_text()))
     for d in docs:
+        if d["kind"] == "ValidatingAdmissionPolicy" and d["metadata"]["name"] == "clearance-protected-writes":
+            v = [x for x in d["spec"]["variables"] if x["name"] == "createclock"]
+            assert len(v) == 1 and v[0]["expression"] == "false", "the CREATE-only clock ships off"
+            if create_clock:
+                v[0]["expression"] = "true"
         if d["kind"] == "ValidatingAdmissionPolicyBinding":
             d["spec"]["validationActions"] = ["Deny", "Audit"] if deny else ["Warn", "Audit"]
             if "paramRef" in d["spec"]:
@@ -509,6 +514,44 @@ def run(deny):
         need(["label", "namespace", "shared", "clearance.hangar.io/protected-", "clearance.hangar.io/protected-by-"])
         check("after the label is off, Argo writes in the namespace freely again", True, sh(["create", "-f", "-"], mcm("free", H1), ARGO))
         sh(["delete", "configmap", "free", "-n", "shared", "--ignore-not-found"])
+
+        print(f"-- I-44: an expired grant still marked valid; the CREATE-only clock (option 2') ({mode})")
+        # The defect: the agent stopped, so a grant past spec.expiresAt is still valid and active. As shipped (the clock off)
+        # the policy admits; with the clock on it refuses a CREATE, and still admits an UPDATE (no clock there: the webhook's).
+        sh(["label", "clearancegrant", "g1", "-n", "prot", "clearance.hangar.io/active=true", "--overwrite"], who=AGENT)
+        sh(["patch", "clearancegrant", "g1", "-n", "prot", "--type=merge", "-p",
+            '{"spec":{"expiresAt":"2020-01-01T00:00:00Z","objects":{"/ConfigMap/fresh":{"rendered":"' + H1 + '","changed":true}}}}'], who=AGENT)
+        sh(["patch", "clearancegrant", "g1", "-n", "prot", "--subresource=status", "--type=merge", "-p", '{"status":{"valid":true}}'], who=AGENT)
+        check("the clock off (as shipped): a CREATE under an expired, still-valid grant is admitted (I-44)", True,
+              sh(["create", "--dry-run=server", "-f", "-"], cm("fresh", H1), ARGO))
+        need(["apply", "-f", "-"], {"apiVersion": "v1", "kind": "List", "items": load_policies(deny, create_clock=True)})
+        def clock_on():
+            for _ in range(60):
+                ok, out = k.kubectl(["create", "--dry-run=server", "-f", "-"], cm("fresh", H1), ARGO)
+                if "the CREATE-only clock" in out:
+                    return
+                time.sleep(1)
+            raise RuntimeError("the CREATE-only clock never took effect: " + out)
+        clock_on()
+        check("the clock on: a CREATE after the grant's expiresAt is refused", False,
+              sh(["create", "--dry-run=server", "-f", "-"], cm("fresh", H1), ARGO), "expired before this create")
+        check("the clock on: an UPDATE is not checked by it (creationTimestamp is the original)", True,
+              sh(["patch", "configmap", "app-cm", "-n", "prot", "--type=merge", "-p", '{"data":{"k":"v-clock"}}'], who=ARGO))
+        check("the clock on: the wait Job (exempt) is still admitted", True,
+              sh(["create", "--dry-run=server", "-f", "-"], wait_job("wait-clock"), ARGO))
+        sh(["patch", "clearancegrant", "g1", "-n", "prot", "--type=merge", "-p", '{"spec":{"expiresAt":"2099-01-01T00:00:00Z"}}'], who=AGENT)
+        check("the clock on: a CREATE before the grant's expiresAt is admitted", True,
+              sh(["create", "--dry-run=server", "-f", "-"], cm("fresh", H1), ARGO))
+        check("the clock on: a client-sent creationTimestamp in the past changes nothing (the API server overwrites it)", True,
+              sh(["create", "--dry-run=server", "-f", "-"], cm("fresh", H1, creationTimestamp="2019-01-01T00:00:00Z"), ARGO))
+        sh(["patch", "clearancegrant", "g1", "-n", "prot", "--type=merge", "-p", '{"spec":{"expiresAt":"2020-01-01T00:00:00Z"}}'], who=AGENT)
+        time.sleep(1)
+        check("the clock on: a client-sent creationTimestamp in the future does not rescue an expired grant", False,
+              sh(["create", "--dry-run=server", "-f", "-"], cm("fresh", H1, creationTimestamp="2099-06-01T00:00:00Z"), ARGO),
+              "expired before this create")
+        sh(["patch", "clearancegrant", "g1", "-n", "prot", "--type=merge", "-p", '{"spec":{"expiresAt":"2099-01-01T00:00:00Z"}}'], who=AGENT)
+        need(["apply", "-f", "-"], {"apiVersion": "v1", "kind": "List", "items": load_policies(deny)})
+        time.sleep(2)
 
         print(f"-- audit annotation names the grant checked ({mode})")
         sh(["label", "clearancegrant", "g1", "-n", "prot", "clearance.hangar.io/active=true"], who=AGENT)

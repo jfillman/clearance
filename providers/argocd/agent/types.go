@@ -111,6 +111,9 @@ type Grant struct {
 	Labels    map[string]string `json:"-"`
 	Spec      GrantSpec         `json:"spec"`
 	Valid     *bool             `json:"-"` // status.valid; nil: never set
+	// CheckedAt is status.checkedAt as stored (RFC 3339): when the agent last wrote status. With a status heartbeat
+	// (Config.StatusHeartbeat) it is refreshed on every valid grant, so its age says whether the expiry pass still runs.
+	CheckedAt string `json:"-"`
 }
 
 // Active reports whether g carries the active label.

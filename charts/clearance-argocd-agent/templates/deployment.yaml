@@ -5,15 +5,23 @@
 {{- if not (has .Values.scope (list "namespaces" "cluster")) }}{{ fail "scope must be namespaces or cluster" }}{{ end }}
 {{- if and (eq .Values.scope "cluster") .Values.protectedNamespaces }}{{ fail "scope: cluster takes no protectedNamespaces: empty the list, or use scope: namespaces" }}{{ end }}
 {{- if and .Values.optIn.enabled (eq .Values.scope "namespaces") (not .Values.protectedNamespaces) }}{{ fail "optIn.enabled needs protectedNamespaces (the namespaces the agent may label and read), or scope: cluster (docs/gate.md, Annotation opt-in)" }}{{ end }}
+{{- include "agent.guards" . }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "agent.fullname" . }}
   labels: {{- include "agent.labels" . | nindent 4 }}
 spec:
+  {{- if .Values.ha.enabled }}
+  # HA (I-44 option 0): every replica runs, only the holder of the leader Lease runs the loops; another takes over when
+  # the holder stops renewing. A rolling update keeps one replica up.
+  replicas: {{ .Values.ha.replicas }}
+  strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
+  {{- else }}
   # One agent: two would each post the same outcome and exception.
   replicas: 1
   strategy: {type: Recreate}
+  {{- end }}
   selector:
     matchLabels: {{- include "agent.selector" . | nindent 6 }}
   template:
@@ -70,9 +78,22 @@ spec:
             {{- with .Values.waitJob.caConfigMap }}
             - --wait-ca-configmap={{ . }}
             {{- end }}
+            {{- if .Values.ha.enabled }}
+            - --leader-elect
+            - --leader-lease-duration={{ .Values.ha.leaseDuration }}
+            - --leader-renew-deadline={{ .Values.ha.renewDeadline }}
+            - --leader-retry-period={{ .Values.ha.retryPeriod }}
+            {{- end }}
+            {{- with .Values.statusHeartbeat }}
+            - --status-heartbeat={{ . }}
+            {{- end }}
           env:
             - name: POD_NAMESPACE
               valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            {{- if .Values.ha.enabled }}
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            {{- end }}
             {{- if .Values.tls.caConfigMap }}
             - {name: CLEARANCE_CA_FILE, value: /etc/clearance-ca/{{ .Values.tls.caKey }}}
             {{- end }}
@@ -105,6 +126,26 @@ spec:
       {{- with .Values.tolerations }}
       tolerations: {{ toYaml . | nindent 8 }}
       {{- end }}
+      {{- if .Values.ha.enabled }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {{- include "agent.selector" . | nindent 14 }}
+      {{- end }}
+{{- if .Values.ha.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "agent.fullname" . }}
+  labels: {{- include "agent.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {{- include "agent.selector" . | nindent 6 }}
+{{- end }}
 {{- if .Values.networkPolicy.enabled }}
 ---
 apiVersion: networking.k8s.io/v1

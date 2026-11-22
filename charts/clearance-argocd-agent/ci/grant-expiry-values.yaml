@@ -1,0 +1,26 @@
+# The grant-expiry webhook enforcing, the admission policy in Deny, the agent HA with its status heartbeat and the
+# alerts (I-44). Example names only.
+cluster: cluster-a
+apiURL: https://clearance-api.example.test
+coreURL: https://clearance.example.test
+argocd:
+  namespace: argocd
+  projects: [tenants]
+protectedNamespaces: [app-web-prod]
+waitJob:
+  image: "registry.example.test/clearance-wait@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  previousURL: http://clearance.example.test
+gate:
+  enforce: true
+grantExpiry:
+  enabled: true
+  enforce: true
+ha:
+  enabled: true
+statusHeartbeat: 5m
+alerts:
+  enabled: true
+networkPolicy:
+  enabled: true
+  apiServerCIDRs: [10.0.0.1/32]
+  clearanceCIDRs: [203.0.113.10/32]

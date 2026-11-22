@@ -95,7 +95,7 @@ func cp(g agent.Grant) agent.Grant {
 	b, _ := json.Marshal(g)
 	var out agent.Grant
 	_ = json.Unmarshal(b, &out)
-	out.Namespace, out.Name, out.Valid = g.Namespace, g.Name, g.Valid
+	out.Namespace, out.Name, out.Valid, out.CheckedAt = g.Namespace, g.Name, g.Valid, g.CheckedAt
 	out.Labels = map[string]string{}
 	for a, b := range g.Labels {
 		out.Labels[a] = b
@@ -184,11 +184,12 @@ func (k *fakeKube) UpdateGrant(_ context.Context, g, _ agent.Grant) error {
 	k.log = append(k.log, fmt.Sprintf("update %s/%s active=%v", g.Namespace, g.Name, g.Active()))
 	n := k.prune(cp(g))
 	n.Valid = old.Valid // spec and labels are replaced; status is not touched
+	n.CheckedAt = old.CheckedAt
 	k.grants[key] = n
 	k.checkActive()
 	return nil
 }
-func (k *fakeKube) SetGrantValid(_ context.Context, ns, name string, v bool, _ string, _ time.Time) error {
+func (k *fakeKube) SetGrantValid(_ context.Context, ns, name string, v bool, _ string, at time.Time) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.grantOps++
@@ -199,6 +200,7 @@ func (k *fakeKube) SetGrantValid(_ context.Context, ns, name string, v bool, _ s
 		return errors.New("not found") // the API server has no such grant to patch the status of
 	}
 	g.Valid = &v
+	g.CheckedAt = at.UTC().Format(time.RFC3339)
 	k.grants[ns+"/"+name] = g
 	k.checkLabelled("a status write")
 	k.checkFeed("a status write")

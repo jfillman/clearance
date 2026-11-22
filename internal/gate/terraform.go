@@ -144,9 +144,7 @@ func classifyPlan(req ChangeRequest, pol Policy, reasons []Reason) Classificatio
 		tier = up
 	}
 	if req.ProposerKind == "unknown" {
-		reasons = append(reasons, Reason{"the PR", "provenance:unknown", 3})
-		return Classification{max(tier, 2), reasons, "deny", strp("DG-PROVENANCE"),
-			"the PR looks like an agent's but Clearance has no record of opening it", nil, pol}
+		return unknownProposer(req, pol, tier, reasons, "the PR looks like an agent's but Clearance has no record of opening it")
 	}
 	if tier == 1 {
 		var missing []string
