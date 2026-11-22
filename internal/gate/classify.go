@@ -180,9 +180,7 @@ func Classify(req ChangeRequest, baseline Policy, tools review.Registry, problem
 			reasons = append(reasons, Reason{fmt.Sprintf("agent %s: %s", name, ch.Field), ch.Change, ch.Tier})
 		}
 		if req.ProposerKind == "unknown" {
-			reasons = append(reasons, Reason{"the PR", "provenance:unknown", 3})
-			return Classification{max(tier, 2), reasons, "deny", strp("DG-PROVENANCE"),
-				"the PR looks like an agent's but Clearance has no record of opening it", nil, pol}, nil
+			return unknownProposer(req, pol, tier, reasons, "the PR looks like an agent's but Clearance has no record of opening it"), nil
 		}
 		if req.ProposerKind == "agent" && tier == 0 {
 			reasons = append(reasons, Reason{"the PR", "provenance:agent", 1})
@@ -222,9 +220,8 @@ func Classify(req ChangeRequest, baseline Policy, tools review.Registry, problem
 		tier = 2
 	}
 	if req.ProposerKind == "unknown" {
-		reasons = append(reasons, Reason{"the PR", "provenance:unknown", 3})
-		return Classification{max(tier, 2), reasons, "deny", strp("DG-PROVENANCE"),
-			"the PR looks like an agent's but Clearance has no record of opening it (the agent gates fail it too)", nil, pol}, nil
+		return unknownProposer(req, pol, tier, reasons,
+			"the PR looks like an agent's but Clearance has no record of opening it (the agent gates fail it too)"), nil
 	}
 	if req.ProposerKind == "agent" && tier == 0 {
 		reasons = append(reasons, Reason{"the PR", "provenance:agent", 1})
@@ -246,6 +243,50 @@ func Classify(req ChangeRequest, baseline Policy, tools review.Registry, problem
 		return Classification{tier, reasons, "clear", nil, fmt.Sprintf("tier %d: cleared by policy", tier), nil, pol}, nil
 	}
 	return hold(tier), nil
+}
+
+// unknownProposer is the decision for a change whose proposer is unknown (proposerKind unknown). Only a verifier's
+// provenanceReason unvouched-commits holds it: at tier 3 whatever its other reasons say, for at least one person
+// from the owner group and one from an outside group (never the people behind it, never one person twice; the
+// approval rules of every hold). Any other reason (unrecorded-agent: agent impersonation) and no reason at all deny
+// it (DG-PROVENANCE), as before provenanceReason existed: a verifier that does not say why fails closed.
+func unknownProposer(req ChangeRequest, pol Policy, tier int, reasons []Reason, denyWhy string) Classification {
+	if req.ProvenanceReason != ProvenanceUnvouchedCommits || len(req.UnvouchedCommits) == 0 {
+		reasons = append(reasons, Reason{"the PR", "provenance:unknown", 3})
+		return Classification{max(tier, 2), reasons, "deny", strp("DG-PROVENANCE"), denyWhy, nil, pol}
+	}
+	n := len(req.UnvouchedCommits)
+	reasons = append(reasons, Reason{unvouchedSubject(req.UnvouchedCommits), "provenance:" + ProvenanceUnvouchedCommits, 3})
+	cl := holdFor(req, pol, 3, reasons)
+	// Two people, whatever the tier-3 approver table says (the baseline is 1 and 1; clearance.yaml may only raise it).
+	cl.Requirement.Owner, cl.Requirement.Outside = max(cl.Requirement.Owner, 1), max(cl.Requirement.Outside, 1)
+	cl.Why = fmt.Sprintf("tier 3: holding for %s: %s no merged pull request contains (a direct push or a merge made outside a "+
+		"pull request), so no review vouches for %s", cl.Requirement.Words(), plural(n, "commit"), map[bool]string{true: "it", false: "them"}[n == 1])
+	return cl
+}
+
+// unvouchedSubject names the unvouched commits for the reason a reviewer reads: the count and the first few, short.
+func unvouchedSubject(commits []string) string {
+	const shown = 8
+	short := make([]string, 0, shown)
+	for i, c := range commits {
+		if i == shown {
+			break
+		}
+		short = append(short, pycompat.Truncate(c, 7))
+	}
+	s := plural(len(commits), "commit") + " in no merged pull request: " + strings.Join(short, ", ")
+	if len(commits) > shown {
+		s += fmt.Sprintf(" and %d more", len(commits)-shown)
+	}
+	return s
+}
+
+func plural(n int, what string) string {
+	if n == 1 {
+		return "1 " + what
+	}
+	return fmt.Sprintf("%d %ss", n, what)
 }
 
 // holdFor is a change held for people at tier: the approvers the policy asks for, from the owner and outside groups.

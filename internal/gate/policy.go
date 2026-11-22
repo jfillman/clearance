@@ -31,6 +31,18 @@ const (
 	MaxFields      = 400
 	MaxReason      = 500
 	MaxLinesTier1  = 400
+	// MaxUnvouchedCommits caps request unvouchedCommits.
+	MaxUnvouchedCommits = 250
+)
+
+// Provenance reasons (request provenanceReason, with proposerKind unknown; docs/gate.md, Unvouched commits).
+// ProvenanceUnvouchedCommits: every pull request the change carries is accounted for, but it also carries commits no
+// merged pull request contains (a direct push, a merge made outside a PR). Held at tier 3 for two people.
+// ProvenanceUnrecordedAgent: something looks like an agent's work but Clearance has no record of an agent opening it
+// (agent impersonation, a forged or modified agent PR). Denied (DG-PROVENANCE), as is an unknown proposer with no reason.
+const (
+	ProvenanceUnvouchedCommits = "unvouched-commits"
+	ProvenanceUnrecordedAgent  = "unrecorded-agent"
 )
 
 var (
@@ -48,8 +60,10 @@ var (
 var (
 	States        = []string{StateHolding, StateCleared, StateDenied, StateExpired, StateSuperseded, StateDegraded, StateException}
 	ProposerKinds = []string{"person", "agent", "unknown"}
-	ops           = []string{"added", "changed", "removed", "unchanged"} // unchanged: in the rendered tree, not in the diff
-	metadataOnly  = []string{"/metadata/labels", "/metadata/annotations"}
+	// ProvenanceReasons are why a proposer is unknown, as a verifier says it (request provenanceReason).
+	ProvenanceReasons = []string{ProvenanceUnvouchedCommits, ProvenanceUnrecordedAgent}
+	ops               = []string{"added", "changed", "removed", "unchanged"} // unchanged: in the rendered tree, not in the diff
+	metadataOnly      = []string{"/metadata/labels", "/metadata/annotations"}
 	// checksOK is what each check must say for policy to clear a tier-1 change, in gate.py's order. provenance
 	// "unattested" (agent work outside Clearance, provenance.Unattested) clears as not-agent does: the verdict is a
 	// warning and changes no tier (user decision 2026-11-04, docs/provenance-app.md).

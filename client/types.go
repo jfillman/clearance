@@ -589,6 +589,14 @@ type ChangeRequest struct {
 	Base         string `json:"base,omitempty"`
 	Proposer     string `json:"proposer"`
 	ProposerKind string `json:"proposerKind,omitempty"`
+	// ProvenanceReason says why ProposerKind is "unknown" (sent only with it; docs/gate.md, Unvouched commits):
+	// "unvouched-commits" (every pull request the change carries is accounted for, but it also carries commits no
+	// merged pull request contains: a direct push, a merge made outside a PR) holds the change at tier 3 for two
+	// people; "unrecorded-agent" (it looks like an agent's work and Clearance has no record of an agent opening it), or
+	// no reason at all, denies it (DG-PROVENANCE). UnvouchedCommits are those commits (40-hex, 1 to 250, distinct),
+	// required with "unvouched-commits" and refused without it.
+	ProvenanceReason string   `json:"provenanceReason,omitempty"`
+	UnvouchedCommits []string `json:"unvouchedCommits,omitempty"`
 	// Source is the people behind the change (docs/gate.md, The people behind a change): the source pull requests'
 	// authors and mergers and the promoter. The set only grows: a re-registration adds to it, and a shorter or absent set changes
 	// nothing (docs/gate.md).

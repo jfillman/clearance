@@ -34,6 +34,22 @@ kept whole on the `detail:` line.
   server's own `creationTimestamp` is the clock). UPDATEs are not covered; the webhook is. Proven on envtest in both modes; verify live before
   turning it on.
 
+- **Unvouched commits hold for two people instead of being denied (register API: `provenanceReason`,
+  `unvouchedCommits`).** A change with `proposerKind: unknown` was always denied (`DG-PROVENANCE`). A verifier may now
+  say why: `provenanceReason: unvouched-commits`, with the commits in `unvouchedCommits` (1 to 250 distinct 40-hex),
+  means every pull request the change carries is accounted for but it also carries commits no merged pull request
+  contains (a direct push, a merge made outside a PR). Such a change is **held at tier 3** (the maximum of its own tier
+  and 3) for one person from the owner group and one from an outside group, under every hold's rules: never the
+  proposer, a source author or merger, or the promoter; never one person in both seats; never automation. The hold's
+  reason (`provenance:unvouched-commits`, subject "N commits in no merged pull request: ...") and its `deploy.request`
+  result name the case and the commits, so a reviewer in Tower sees why. **Security:** this loosens an absolute deny
+  into a two-person hold. The pusher of an unvouched commit cannot be named (a commit's author is the pusher's claim),
+  so they are not excluded and may be one approver; they can never be both, so a second, distinct person who is shown
+  the commits must approve. **Still denied:** `provenanceReason: unrecorded-agent` (agent impersonation: it looks like
+  an agent's and Clearance has no record of an agent opening it) and **no reason at all** (a verifier that does not send
+  the field fails closed, as today). The field with any other `proposerKind`, an unknown reason, `unvouched-commits`
+  without commits, or commits without it are a 400. A change already denied stays denied; a new head registers anew.
+  docs/gate.md, "Unvouched commits"; schemas/change-request.schema.json.
 - **`clearance-cmp` errors have classes and stable codes (hardening F4, U1).** Each failure is a plugin fault
   (`CMP-FAULT-*`), an unavailable dependency (`CMP-DEP-*`: git or the chart host cannot be reached), a render error
   (`CMP-RENDER-*`) or a refusal (`CMP-REFUSED-*`). The `ComparisonError` starts with one short line `<code>: <summary>`,
