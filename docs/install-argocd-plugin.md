@@ -382,7 +382,7 @@ may meet the kernel's OOM killer (a `signal: killed` error) rather than the plug
 
 ```text
 CMP-RENDER-LIMIT-MEMORY: helm template went over its memory bound (CLEARANCE_CMP_RENDER_MAX_MEMORY=512Mi)
-detail: render limit exceeded: helm template ran out of memory (bound CLEARANCE_CMP_RENDER_MAX_MEMORY=512Mi); the render was stopped and nothing syncs. ...
+detail: render limit exceeded: helm template ran out of memory (bound CLEARANCE_CMP_RENDER_MAX_MEMORY=512Mi); the render was stopped; nothing it rendered syncs. ...
 ```
 
 The CPU, memory, output and scratch bounds are render errors (`CMP-RENDER-LIMIT-*`): the same inputs reach them again,
@@ -658,7 +658,7 @@ The `detail:` line is the message in the code; these are the common ones, with t
 | `change <id> is denied (tier N): <reason>; nothing syncs` (`expired`, `superseded`, `exception`, `degraded`) | The core's decision. | Not a fault: a person or a policy refused it; see the change on the core. |
 | `a change is held for people but CLEARANCE_WAIT_IMAGE is not set: the PreSync wait Job cannot be injected` | A tree is waiting for a person and the sidecar cannot add the wait Job. | Set `CLEARANCE_WAIT_IMAGE`. |
 | `refusing to run helm: cannot create a private network namespace (...). CLEARANCE_CMP_NETNS=require needs ...` | `require` is set and the kernel or seccomp profile refuses the namespace. | Allow `unshare`/`clone` with `CLONE_NEWUSER\|CLONE_NEWNET` in the container's seccomp profile, or set `CLEARANCE_CMP_NETNS=try`. |
-| `CMP-RENDER-LIMIT-*`, `CMP-FAULT-BUSY` or `CMP-FAULT-TIMEOUT`: `... went over its <bound> bound (<SETTING>=<value>)` | A render went over one of its bounds (wall time, CPU, memory, output, scratch space, or it waited too long for a slot). Nothing syncs. | If the render is legitimately that large or slow, raise the named setting on the sidecar; otherwise fix the chart (a runaway template, a huge generated object). For `concurrency`, raise `CLEARANCE_CMP_MAX_RENDERS` or the repo-server's resources. |
+| `CMP-RENDER-LIMIT-*`, `CMP-FAULT-BUSY` or `CMP-FAULT-TIMEOUT`: `... went over its <bound> bound (<SETTING>=<value>)` | A render went over one of its bounds (wall time, CPU, memory, output, scratch space, or it waited too long for a slot). Nothing it rendered syncs; for the two faults (`CMP-FAULT-BUSY`, `CMP-FAULT-TIMEOUT`) last-known-good, when on, may serve the same already cleared render after the core confirms it. | If the render is legitimately that large or slow, raise the named setting on the sidecar; otherwise fix the chart (a runaway template, a huge generated object). For `concurrency`, raise `CLEARANCE_CMP_MAX_RENDERS` or the repo-server's resources. |
 | `refusing to run helm: the filesystem sandbox is unavailable (...) and CLEARANCE_CMP_FS_SANDBOX=require` | `require` is set and the kernel has no Landlock, or the seccomp profile refuses it. | Run on a kernel with Landlock active, use a seccomp profile that allows its calls (`RuntimeDefault` does), or set `CLEARANCE_CMP_FS_SANDBOX=try`. |
 | `CLEARANCE_TOKEN_FILE <path> is under <dir>, which every render step may read` | The token is mounted where the sandbox cannot hide it. | Mount it under `/var/run/secrets` (the default path), or set `CLEARANCE_CMP_FS_SANDBOX=off` knowing it is unprotected. |
 | `context deadline exceeded` after about 80 s | A slow fetch plus a slow core call. | Check egress to the chart repository and the core; see `CLEARANCE_CMP_CALL_TIMEOUT`. |

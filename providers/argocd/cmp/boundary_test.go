@@ -174,3 +174,21 @@ func TestACallThatRunsIntoTheRunsEndIsAnOutage(t *testing.T) {
 		t.Fatal(ch, err)
 	}
 }
+
+// The outage policy reads the clock after the call: a cleared entry that expired while the core was being waited for
+// is not served (an entry is never served past its ExpiresAt).
+func TestAnEntryThatExpiredDuringTheCallIsNotServed(t *testing.T) {
+	e := newEnv(t)
+	e.core.answer = &client.Change{ID: "ch-c", State: "cleared", Tier: 1, Outage: "allow-and-record", ExpiresAt: e.now.Add(2 * time.Hour).Format(time.RFC3339Nano)}
+	if _, _, err := e.generate(t); err != nil {
+		t.Fatal(err)
+	}
+	e.now = e.now.Add(time.Hour) // past the tree cache's lifetime, inside the clearance's
+	e.d.Core = coreFunc(func(context.Context, *client.ChangeRequest) (*client.Change, error) {
+		e.now = e.now.Add(2 * time.Hour) // the wait outlasted the clearance
+		return nil, &client.UnavailableError{Op: "registerChange", Reason: client.ReasonTimeout}
+	})
+	if _, objs, err := e.generate(t); err == nil || len(objs) != 0 {
+		t.Fatalf("an entry that expired during the call was served: %v", err)
+	}
+}

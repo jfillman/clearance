@@ -2177,7 +2177,8 @@ first instruction:
   file-lock slots under the cache directory, waited for with a jittered backoff). Going over one stops the render with
   an error code that names the bound and the setting that raises it: `CMP-RENDER-LIMIT-CPU`, `-MEMORY`, `-OUTPUT` and
   `-TEMP` are render errors (the same inputs reach them again, so last-known-good never answers them);
-  `CMP-FAULT-TIMEOUT` (the wall time) and `CMP-FAULT-BUSY` (no slot in time) are faults. Nothing syncs.
+  `CMP-FAULT-TIMEOUT` (the wall time) and `CMP-FAULT-BUSY` (no slot in time) are faults: nothing syncs, unless
+  last-known-good is on and serves the same, already cleared render after the core confirms it.
 - **Calls to the core** are retried once after a failure that is safe to repeat, after a jittered wait (125 to 250 ms).
   The startup check reserves the lookup, the render's wall time and both attempts inside the plugin's 80 s, and the
   render's deadline always leaves the final call that whole budget (a render that starts late, after a slow

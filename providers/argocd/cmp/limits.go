@@ -250,7 +250,7 @@ func (e *LimitError) Error() string {
 	if e.Step != "" {
 		what = e.Step
 	}
-	return fmt.Sprintf("render limit exceeded: %s %s (bound %s=%s); the render was stopped and nothing syncs. "+
+	return fmt.Sprintf("render limit exceeded: %s %s (bound %s=%s); the render was stopped; nothing it rendered syncs. "+
 		"If this render is expected to be this large, raise %s on the clearance-cmp sidecar", what, e.Detail, e.Setting, e.Bound, e.Setting)
 }
 

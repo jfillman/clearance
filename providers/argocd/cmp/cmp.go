@@ -153,7 +153,8 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 		if errors.Is(err, client.ErrCoreUnavailable) {
 			// The outage policy (docs/gate.md, C-6): a tree already cleared whose tier lets through while the core is
 			// down is served from what was remembered; anything else holds, because an unknown tier is never allowed.
-			if e, ok := d.Cache.Get(cfg.App, cfg.Env, cfg.Cluster, tree.Root, now); ok && e.Outage == "allow-and-record" {
+			// A fresh clock: the call can have taken most of the run, and an entry is never served past its ExpiresAt.
+			if e, ok := d.Cache.Get(cfg.App, cfg.Env, cfg.Cluster, tree.Root, d.Now()); ok && e.Outage == "allow-and-record" {
 				fmt.Fprintf(d.Stderr, "clearance: the core is unreachable (%v); serving %s from the cache (tier %d, allow-and-record)\n", err, e.ID, e.Tier)
 				return emitted(emit(tree, out, Cleared, e.ID, cfg))
 			}

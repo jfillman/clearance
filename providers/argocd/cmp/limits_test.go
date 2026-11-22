@@ -59,7 +59,7 @@ func asLimit(t *testing.T, err error, class string) *LimitError {
 	if want := class == LimitWallTime || class == LimitConcurrency; ce.FallsBack() != want {
 		t.Fatalf("%s: falls back %v, want %v", class, ce.FallsBack(), want)
 	}
-	if !strings.Contains(le.Error(), le.Setting) || !strings.Contains(le.Error(), "nothing syncs") {
+	if !strings.Contains(le.Error(), le.Setting) || !strings.Contains(le.Error(), "nothing it rendered syncs") {
 		t.Fatalf("the message does not name its setting %s: %v", le.Setting, le)
 	}
 	return le
