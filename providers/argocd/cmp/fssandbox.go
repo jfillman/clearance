@@ -35,6 +35,7 @@ const FSSandboxEnv = "CLEARANCE_CMP_FS_SANDBOX"
 // shimArg is argv[1] of the shim; shimSpecEnv carries its instructions (removed before the tool runs).
 const (
 	shimArg     = "__clearance-sandbox-exec"
+	probeArg    = "__clearance-sandbox-probe" // the probe's target: this binary, exiting 0 once the rules are in place
 	shimSpecEnv = "CLEARANCE_CMP_SANDBOX_SPEC"
 	// shimFailCode is the shim's exit code when it could not set up the sandbox (the tool never ran).
 	shimFailCode = 125
@@ -103,16 +104,14 @@ func probeLandlock() (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("landlock: %w", err)
 	}
-	tru, err := exec.LookPath("true")
-	if err != nil {
-		return abi, nil // nothing to probe with: the ABI answer stands, and a step's own setup failure still reports
-	}
-	spec := sandboxSpec{Landlock: true, RX: append(append([]string{}, systemRX...), filepath.Dir(tru)), Dev: []string{"/dev"}}
+	// The child is this binary twice over: the shim installs the rules, then execs this binary again with probeArg,
+	// which exits 0 at once. Nothing outside the binary is needed (no `true` on PATH), so the probe always runs.
+	spec := sandboxSpec{Landlock: true, RX: append(append([]string{}, systemRX...), filepath.Dir(self)), Dev: []string{"/dev"}}
 	env, err := spec.env()
 	if err != nil {
 		return 0, err
 	}
-	cmd := exec.Command(self, shimArg, tru)
+	cmd := exec.Command(self, shimArg, self, probeArg)
 	cmd.Env = []string{env}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return 0, fmt.Errorf("landlock: installing a ruleset failed in a probe (%v): %s", err, strings.TrimSpace(string(out)))
@@ -307,6 +306,9 @@ func (s sandboxSpec) env() (string, error) {
 func maybeShim() {
 	if len(os.Args) > 1 && os.Args[1] == shimArg {
 		os.Exit(shimMain(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == probeArg {
+		os.Exit(0)
 	}
 }
 

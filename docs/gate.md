@@ -1752,6 +1752,18 @@ repo-server (`plugin.yaml`; an Application opts in with `spec.source.plugin.name
 | `holding` | emits the objects stamped `rendered` and `tree` (no `grant`) **plus a PreSync Job**, `clearance-awaiting-approval`, carrying the change id | the sync waits at "PreSync: clearance awaiting approval" until a person clears it; the next render, now cleared, adds the grant annotation |
 | `denied` (tier 3 policy, a person), `expired`, `superseded`, `exception`, `degraded`; or the core unreachable with no cleared allow-and-record entry (an outage hold); or a render that fails | exits 1 with the reason on stderr | `ComparisonError` on the Application; nothing syncs |
 
+**Error classes and codes (hardening F4, U1).** Every failure is one of four classes with a stable code, and its
+message starts with one short line `<code>: <summary>`, then `hold: <link to the change>` for a refused or held change,
+then the detail: a **fault** (`CMP-FAULT-*`, the plugin failed: a panic, a tool that cannot start or was killed, its own
+I/O, a timeout, a sidecar setting), an **unavailable dependency** (`CMP-DEP-*`, git or the chart host cannot be
+reached, or the fetch fails after the tag resolved), a **render error** (`CMP-RENDER-*`, the Application's inputs do not
+render) and a **refusal** (`CMP-REFUSED-*`, Clearance said no). The codes are listed in
+[install-argocd-plugin.md](install-argocd-plugin.md#error-codes) (a test keeps the list and the code equal). An error
+the plugin cannot place in the render phase is a fault: render errors are recognised by what they are (Helm's or
+kustomize's exit status, a refusal of a path or source, a tree that cannot be hashed), so an unknown one is the
+plugin's. The class matters for one thing beyond the message: only a fault or a dependency may fall back to the
+last-known-good render, below.
+
 The outage policy is C-6's: while the core is unreachable a tree that was cleared (within its own expiry) and whose
 tier's action is `allow-and-record` is served from the cache; anything else holds, because an unknown tier is never
 allowed. **Not built:** posting the `deploy.degraded` record for what was let through during an outage (the plugin
@@ -1806,7 +1818,7 @@ settings [below](#caches). The install guide has every setting in one table: [in
 
 #### Caches
 
-Three caches live under `CLEARANCE_CMP_CACHE_DIR` (default `/tmp/clearance-cmp-cache`; the sidecar's root is read-only
+Three caches, and the last-known-good store, live under `CLEARANCE_CMP_CACHE_DIR` (default `/tmp/clearance-cmp-cache`; the sidecar's root is read-only
 and `/tmp` is writable). Each is a speed-up that can only lose a hit, never change what is emitted: a damaged or
 doubtful entry is discarded and the work is done again.
 
@@ -1815,6 +1827,7 @@ doubtful entry is discarded and the work is done again.
 | **Chart fetch** (`charts/`) | the `git clone` (about nine tenths of a render) | the allow list's spelling of the repository and the **commit the tag resolves to now** | until evicted (bounds below) |
 | **Pre-render** (`renders/`) | the fetch, `helm` and `kustomize` (never the decision) | a hash of every input of the output (below) | the rendered bytes are reused until the clearance's `expiresAt`, and at most `CLEARANCE_CMP_RENDER_CACHE_TTL` |
 | **Cleared tree** (`*.json`) | the core call, after a render | app, environment, cluster and tree digest | `CLEARANCE_CMP_CACHE_TTL` (2 min), and the outage policy above |
+| **Last-known-good** (`lkg/`, off by default) | a failed render, after a plugin fault or an unavailable dependency only; never the decision | the pre-render key less the plugin's version and sandbox mode | until evicted (1024 entries, 256 MiB) or a hold or denial of the tree |
 
 **Chart fetch cache.** Every render asks the remote what the pinned revision is (`git ls-remote`, one round trip), so a tag
 that moved is a different key and is fetched; the tag's name is never a key. An entry is the checked-out tree (no `.git`)
@@ -1857,6 +1870,20 @@ decision was recorded. The stream is checked against its recorded SHA-256 on eve
 (least recently used first) and one stream may be at most 8 MiB. **Not cached:** the generic mode (`PARAM_SOURCES`),
 whose sources have no resolved commit without fetching them, and any run whose `ARGOCD_APP_REVISION` is not a full
 commit or whose chart tag did not resolve.
+
+**Last-known-good (hardening F5).** Off by default (`CLEARANCE_CMP_LAST_KNOWN_GOOD=on`). A plugin fault or an
+unavailable dependency before the decision, for an Application whose inputs are exactly those of a render already
+cleared, is answered with that render once the core confirms the same change (the pre-render cache's `serveRender`, so
+exactly the same decision path: the tree cache within its TTL, else one call with the stored request, the outage
+policy when the core is down); a render error or a refusal never falls back, and a run with no entry fails closed.
+The key leaves out the plugin's own version on purpose: a plugin upgrade that breaks rendering is the case it is for.
+When git or the chart host cannot be reached at all, the tag cannot be resolved; the entry used is then the one for
+the commit this tag last resolved to when these exact inputs were cleared (a pointer the cleared render writes,
+checked by rehashing), so a tag moved during the outage is seen when the host is back. Its store has its own bounds,
+separate from the pre-render cache's 256 entries and 15 minutes, and a pre-render hit marks the entry used. Every
+serve is logged (`LAST-KNOWN-GOOD served`, with the fault's code) and counted (`lkg/served`, reported by `doctor`). On
+the default `/tmp` emptyDir the store is lost when the pod restarts. Full rules:
+[install-argocd-plugin.md](install-argocd-plugin.md#last-known-good-optional-off-by-default).
 
 **What a warm render still costs.** Every render asks the remote what the tag is (`git ls-remote`), because that is how a
 moved tag is seen. Measured from a laptop against GitHub (airframe v0.3.176): an uncached render 1.4 s, a warm one 0.8 to
@@ -1955,14 +1982,17 @@ first instruction:
   stdout (32 MiB, also the bound on the rendered manifests), the render's scratch directory (512 MiB, measured after
   every step; one file is bounded by `RLIMIT_FSIZE`), and renders at once in the sidecar (`CLEARANCE_CMP_MAX_RENDERS`, 4,
   file-lock slots under the cache directory, waited for with a jittered backoff). Going over one stops the render with
-  `render limit exceeded [render.limit.<class>]`, naming the bound and the setting that raises it; nothing syncs. The
-  classes (`wall-time`, `cpu`, `memory`, `output`, `temp`, `concurrency`) are this plugin's own: F4's error catalogue had
-  not landed when they were added, and they are meant to join it.
+  an error code that names the bound and the setting that raises it: `CMP-RENDER-LIMIT-CPU`, `-MEMORY`, `-OUTPUT` and
+  `-TEMP` are render errors (the same inputs reach them again, so last-known-good never answers them);
+  `CMP-FAULT-TIMEOUT` (the wall time) and `CMP-FAULT-BUSY` (no slot in time) are faults. Nothing syncs.
 - **Calls to the core** are retried once after a failure that is safe to repeat, after a jittered wait (125 to 250 ms).
-  The startup check reserves the lookup, the render's wall time and both attempts inside the plugin's 80 s, so an
-  unreachable core is an outage (and the outage policy's cache applies), never a deadline.
+  The startup check reserves the lookup, the render's wall time and both attempts inside the plugin's 80 s, and the
+  render's deadline always leaves the final call that whole budget (a render that starts late, after a slow
+  pre-render confirmation, is cut short instead), so an unreachable core is an outage (and the outage policy's cache
+  applies), never a deadline.
 - **Containment of the step's processes**: each step is a process group of its own, killed when the step returns or
-  is stopped. Whether a step is retried without Landlock is decided only by the shim's setup channel (a pipe it closes
+  is stopped, and the plugin is a child subreaper, so a descendant that calls `setsid` is re-parented to it and
+  killed after the step as well. Whether a step is retried without Landlock is decided only by the shim's setup channel (a pipe it closes
   before exec), never by the tool's output or exit status. Landlock ABI 3+ (Linux 6.2+) also refuses truncation outside
   the scratch directory; `doctor` warns on an older ABI.
 

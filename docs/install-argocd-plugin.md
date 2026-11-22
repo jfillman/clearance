@@ -9,6 +9,21 @@ plain manifests. Nothing here depends on a particular platform.
 What the plugin is and how it decides is in [gate.md](gate.md#the-argo-cd-plugin-and-the-presync-wait-g-argo-4-and-g-argo-5-built);
 this page is the install, the settings, the checks and the failure modes.
 
+**What it gives you, and the guardrails on it.**
+
+- **Every failure says what kind it is.** The first line of a `ComparisonError` is one short line starting with a stable
+  code: `CMP-FAULT-*` (the plugin failed), `CMP-DEP-*` (git or the chart host is unavailable), `CMP-RENDER-*` (the
+  Application's inputs do not render) or `CMP-REFUSED-*` (Clearance said no). A refusal of a change links to it on the
+  next line (`hold: <url>`). The codes never change meaning: alert and search on them ([Error codes](#error-codes)).
+- **Last-known-good, off by default** (`CLEARANCE_CMP_LAST_KNOWN_GOOD=on`). A plugin fault or an unreachable chart host,
+  for an Application whose gitops revision, chart and parameters are exactly those of a render already cleared, serves
+  that render again instead of turning the app Unknown. It never answers a render error or a refusal, never a new
+  revision, a moved tag or a changed parameter, and never without the core confirming the same change (or the outage
+  policy allowing it). Every serve is logged and counted ([Last-known-good](#last-known-good-optional-off-by-default)).
+- **No setting is required without a safe default or a preflight that names it.** A test pins the three settings
+  with no default (`CLEARANCE_URL`, `CLEARANCE_CHART_REPOS`, `CLEARANCE_WAIT_IMAGE`); `doctor` names each one unset.
+  An upgrade that would add a fourth fails CI ([Every setting](#every-setting)).
+
 **The plugin alone does not stop a sync.** It renders, stamps and registers; a refusal shows as a `ComparisonError`
 and a held change as a PreSync wait, but `argocd app sync --strategy apply` skips hooks and a cleared render can be
 followed by a push. What refuses an object that no cleared grant lists is the admission policy and the Argo CD agent
@@ -34,11 +49,11 @@ plugin runs is fenced in:
 1. [Prerequisites](#prerequisites)
 2. [The sidecar](#the-sidecar): Helm chart values, or a patch of the plain manifests
 3. [Run `doctor` first](#run-doctor-first)
-4. [Every setting](#every-setting)
+4. [Every setting](#every-setting), and [last-known-good](#last-known-good-optional-off-by-default)
 5. [Gating one Application](#gating-one-application), by hand or from an ApplicationSet
 6. [Turning it off again](#turning-it-off-again)
 7. [Verifying it works](#verifying-it-works)
-8. [Troubleshooting](#troubleshooting)
+8. [Troubleshooting](#troubleshooting), by [error code](#error-codes) and by message
 9. [Upgrade and rollback](#upgrade-and-rollback)
 10. [What the plugin does not do](#what-the-plugin-does-not-do)
 
@@ -269,6 +284,10 @@ parameter would not do, because parameters come from values a tenant writes.
 | `CLEARANCE_CMP_RENDER_MAX_OUTPUT` | no | `32Mi` | Bytes one step may write to stdout, and the size of the rendered manifests. At least `1Mi`. |
 | `CLEARANCE_CMP_RENDER_MAX_TEMP` | no | `512Mi` | The render's scratch directory (the chart checkout, generic sources, helm's work), measured after every step; one file is bounded by it too (`RLIMIT_FSIZE`). At least `16Mi`. |
 | `CLEARANCE_CMP_MAX_RENDERS` | no | `4` | Renders at once in this sidecar (1 to 64). Others wait for a slot, inside their wall time. A render answered by the pre-render cache takes no slot. The slots are lock files under `CLEARANCE_CMP_CACHE_DIR/slots`; if that cannot be written the bound is lost with a warning and the render goes on. |
+| `CLEARANCE_CA_FILE` | no | none | A PEM file of extra root certificates (besides the system roots) for an `https` `CLEARANCE_URL` signed by a private CA. A missing or empty file stops the plugin at start. See [tls.md](tls.md#client-side). |
+| `CLEARANCE_WAIT_CA_CONFIGMAP` | no | none | A ConfigMap (key `ca.crt`) in each destination namespace that the wait Job mounts at `/etc/clearance-ca/ca.crt` as its CA. Unset, the Job trusts the system roots only. |
+| `CLEARANCE_CMP_LAST_KNOWN_GOOD` | no | `off` | `on` turns on the [last-known-good](#last-known-good-optional-off-by-default) fallback for a plugin fault or an unreachable chart host. Exactly `off` or `on`; anything else stops the plugin at start. |
+| `CLEARANCE_CMP_LINK_BASE` | no | none | The web UI's base URL: a refusal links `<base>/changes/<id>`. Unset, it links the core's record, `CLEARANCE_URL/v1/clearances/<id>`. An http(s) URL with no credentials, query or fragment. |
 | `CLEARANCE_CMP_NETNS` | no | `try` | `try`: isolate renders in a private network namespace when the kernel allows it, else render without it and warn once. `require`: refuse to render without it. `off`: never attempt it. Anything else stops the plugin at start. The render summary on stderr ends `netns=on\|unavailable\|off`. |
 
 **Sizing the cache.** The chart cache lives under `CLEARANCE_CMP_CACHE_DIR`, which by default is on the `/tmp` emptyDir, so
@@ -278,6 +297,57 @@ disk; with one, set it above `CLEARANCE_CMP_CHART_CACHE_MAX_BYTES` with room to 
 read-only cache never fails a render (it clones for itself, as without the cache) but it stops giving hits, and an
 emptyDir that goes over its `sizeLimit` evicts the pod. `doctor` warns when the volume's free space is below the byte
 bound. The cache is lost whenever the pod restarts (an emptyDir); nothing depends on it.
+
+**The rule for settings (F8).** No setting is required without a safe default, or a preflight refusal that names it:
+0.52.0 added `CLEARANCE_CHART_REPOS` with neither, and every chart behind a sidecar upgraded without it was refused.
+`providers/argocd/cmp/settings.go` lists every setting with what it does unset, and `settings_test.go` enforces it:
+every `CLEARANCE_*` name the plugin reads is listed and has a row above; a setting with a default parses exactly the
+same set to that default as unset (so this table cannot drift from the code); `doctor` names each setting with no
+default when it is unset; and the settings with no default are pinned to `CLEARANCE_URL`, `CLEARANCE_CHART_REPOS` and
+`CLEARANCE_WAIT_IMAGE`. The audit for this rule found two settings missing from this table (`CLEARANCE_CA_FILE`,
+`CLEARANCE_WAIT_CA_CONFIGMAP`, both optional); they are above now.
+
+### Last-known-good (optional, off by default)
+
+`CLEARANCE_CMP_LAST_KNOWN_GOOD=on`. Without it, any failure of the plugin turns every Application it renders from
+Synced to Unknown with a `ComparisonError`, even when nothing about the app changed. With it:
+
+| The run | What happens |
+|---|---|
+| A **plugin fault** (`CMP-FAULT-*`: a panic, a tool that cannot start or is killed, its own I/O, the render's deadline, the sandbox under `require`) or an **unavailable dependency** (`CMP-DEP-*`: git or the chart host cannot be reached, or the clone fails after the tag resolved), before the decision | looks up the render last **cleared** for exactly these inputs |
+| an entry exists, and the tree cache says cleared for the same change within `CLEARANCE_CMP_CACHE_TTL` | serves it, no core call |
+| an entry exists, and the core answers the stored registration `cleared` as the **same** change | serves it |
+| the core is unreachable | the outage policy: served only for an `allow-and-record` tier, otherwise `CMP-REFUSED-OUTAGE-HOLD` |
+| the core says anything else (another change, held, denied) | drops the entry; the fault stands |
+| a **render error** (`CMP-RENDER-*`) or a **refusal** (`CMP-REFUSED-*`) | never falls back |
+| no entry for these exact inputs | the fault stands (fail closed) |
+
+"These inputs" is everything the output depends on: the Application, the gitops revision (`ARGOCD_APP_REVISION`, a full
+commit), the commit the chart's tag resolves to on this run (looked up on the remote, never the tag's name), every
+plugin parameter, the destination's Kubernetes and API versions, and the core's URL. Not the plugin's own version: a
+plugin upgrade that breaks rendering still serves what the previous one rendered and was cleared, which is the case
+this is for. A new revision, a moved tag, a changed parameter, a tag the remote says it does not have, generic mode
+(`sources`), or a revision that is not a commit has no entry. When the chart's host **cannot be reached at all**, the
+commit is the one this tag last resolved to when these exact inputs were cleared: what is running now, so a tag moved
+during the outage is seen when the host is back, not before. A hold or denial of the tree drops its entries.
+
+Every serve prints `clearance: LAST-KNOWN-GOOD served: <app>/<env> hit <code> (...)` on stderr with the fault's code,
+the revision, chart commit, change and a running count `lkg-serves=N`, kept in `lkg/served` under the cache directory;
+`doctor` reports the count and warns when it is above zero. Every miss prints why (`last-known-good not served ...;
+failing closed`). The render's deadline is always the run's less the core call's whole budget (both attempts of
+`CLEARANCE_CMP_CALL_TIMEOUT` and the wait between them), and the tag lookup is bounded at 5 s, so a slow fault still
+leaves time to confirm.
+
+The store is `lkg/` under `CLEARANCE_CMP_CACHE_DIR`, separate from the pre-render cache and its bounds: at most 1024
+entries and 256 MiB, the entry used longest ago going first, and no lifetime of its own (the core's confirmation is the
+lifetime). A cleared full render rewrites its entry and a pre-render hit marks it used. **It is on the cache volume:**
+on the default `/tmp` emptyDir it is empty after the pod restarts, so it covers faults within a pod's life (a tool
+crash, a full disk, a flaky chart host) but not the first renders after an upgrade restarts the pod. To cover an
+upgrade, put `CLEARANCE_CMP_CACHE_DIR` on a volume that outlives the pod, writable only by the sidecar.
+
+**Why off by default.** It changes what a failure looks like: an Application stays Synced on bytes the running plugin did
+not produce, so a broken plugin is visible only in the log line, the counter and `doctor`. Turn it on where Unknown apps
+cost more than that, and alert on `LAST-KNOWN-GOOD served`.
 
 ### Render limits and the filesystem sandbox
 
@@ -305,17 +375,20 @@ segment counts address space the Go runtime reserves, well above what a step use
 fixture), so this is a worst case: raise the container's limit, lower one of the two, or accept that a pathological step
 may meet the kernel's OOM killer (a `signal: killed` error) rather than the plugin's bound.
 
-**A render that goes over** stops with, for example:
+**A render that goes over** stops with one of the [error codes](#error-codes), naming the bound and the setting, for example:
 
 ```text
-render limit exceeded [render.limit.memory]: helm template ran out of memory (bound CLEARANCE_CMP_RENDER_MAX_MEMORY=512Mi); the render was stopped and nothing syncs. If this render is expected to be this large, raise CLEARANCE_CMP_RENDER_MAX_MEMORY on the clearance-cmp sidecar
+CMP-RENDER-LIMIT-MEMORY: helm template went over its memory bound (CLEARANCE_CMP_RENDER_MAX_MEMORY=512Mi)
+detail: render limit exceeded: helm template ran out of memory (bound CLEARANCE_CMP_RENDER_MAX_MEMORY=512Mi); the render was stopped and nothing syncs. ...
 ```
 
-The classes are `wall-time`, `cpu`, `memory`, `output`, `temp` and `concurrency`.
+The CPU, memory, output and scratch bounds are render errors (`CMP-RENDER-LIMIT-*`): the same inputs reach them again,
+so last-known-good never answers them. The wall time (`CMP-FAULT-TIMEOUT`) and a render that waited its whole wall time
+for a slot (`CMP-FAULT-BUSY`) are faults: a slow network or a busy sidecar can cause them.
 
 **What the filesystem sandbox is, and is not.** With `fs-sandbox=on` the isolation is enforced by the kernel: a step
 cannot open the token file or anything else outside the directories listed under `CLEARANCE_CMP_FS_SANDBOX`, cannot
-read the plugin's memory or environment, and cannot lift the rules (no capability, `no_new_privs`). The step and everything it starts are one process group, killed when the step returns or is stopped, so nothing it left behind keeps running. Whether a step is retried without the sandbox (in `try`, when the kernel refuses the rules) is decided only by a setup channel the shim closes before the tool runs, never by what the tool prints or how it exits. On a kernel whose Landlock ABI is below 3 (before Linux 6.2) a step can still truncate a file its user may write outside its scratch, such as one in the source directory (reads are refused all the same); `doctor` warns with the ABI. `doctor` reports `on` only after a probe has installed a ruleset in a child process, so a seccomp profile that allows creating rules but not applying them shows as `unavailable`. The tests show a fake
+read the plugin's memory or environment, and cannot lift the rules (no capability, `no_new_privs`). The step and everything it starts are one process group, killed when the step returns or is stopped; the plugin is also a child subreaper (`PR_SET_CHILD_SUBREAPER`, unprivileged), so a descendant that detaches into a session of its own (`setsid`) is re-parented to the plugin and killed after the step too. Nothing a step started keeps running. Whether a step is retried without the sandbox (in `try`, when the kernel refuses the rules) is decided only by a setup channel the shim closes before the tool runs, never by what the tool prints or how it exits. On a kernel whose Landlock ABI is below 3 (before Linux 6.2) a step can still truncate a file its user may write outside its scratch, such as one in the source directory (reads are refused all the same); `doctor` warns with the ABI. `doctor` reports `on` only after a probe has installed a ruleset in a child process (the plugin binary itself, so nothing else need be on `PATH`), so a seccomp profile that allows creating rules but not applying them shows as `unavailable`. The tests show a fake
 step, the real `kustomize` and the real `helm` (through a symlinked template) each reading the token without the sandbox and
 failing to with it, and CI's image smoke test shows the same in the built image under Docker's default seccomp profile. It
 does not hide what every step may read (the system directories, `HOME`, the source directory: nothing secret is kept
@@ -503,7 +576,56 @@ plugin), never an un-gated sync.
 ## Troubleshooting
 
 Argo CD shows the plugin's stderr as the Application's `ComparisonError` (`CMP processing failed ... clearance-cmp: <message>`).
-These are the messages in the code, with their fixes. A configuration error exits 2, a refusal or a failed render exits 1.
+The message is `<code>: <one short line>`, then `hold: <url>` when a change was refused or held, then `detail: <the
+full message>`. A configuration error exits 2, anything else 1.
+
+### Error codes
+
+Each code is stable: it is never renamed or given another meaning. The class says whose problem it is and whether
+[last-known-good](#last-known-good-optional-off-by-default) may answer it (fault and dependency only, and only before
+the decision).
+
+| Code | Class | Means | Do |
+|---|---|---|---|
+| `CMP-FAULT-PANIC` | fault | The plugin panicked (a bug); it was recovered. | Report it with the detail line. |
+| `CMP-FAULT-INTERNAL` | fault | The plugin's own failure with no more specific code: its scratch files, writing the output, an unexpected error. | Check the pod's `/tmp` (full, read-only); report it if it persists. |
+| `CMP-FAULT-TOOL` | fault | `helm`, `kustomize` or `git` could not be started, or was killed by a signal (out of memory). | Check the image and the container's memory limit. |
+| `CMP-FAULT-TIMEOUT` | fault | The render ran out of time: its wall time (`CLEARANCE_CMP_RENDER_TIMEOUT`), or the time left before the core's reserved call. | Check egress to the chart repository; see `CLEARANCE_CMP_RENDER_TIMEOUT` and `CLEARANCE_CMP_CALL_TIMEOUT`. |
+| `CMP-FAULT-SANDBOX` | fault | `CLEARANCE_CMP_NETNS=require` and the private network namespace cannot be created, or `CLEARANCE_CMP_FS_SANDBOX=require` and Landlock is unavailable. | Fix the seccomp profile or the kernel, or set `try`. |
+| `CMP-FAULT-BUSY` | fault | Every render slot (`CLEARANCE_CMP_MAX_RENDERS`) stayed busy for the render's whole wall time. | Raise `CLEARANCE_CMP_MAX_RENDERS` or the repo-server's resources; check for slow renders. |
+| `CMP-FAULT-CONFIG` | fault | A sidecar setting is missing or malformed (including `CLEARANCE_CHART_REPOS` unset). | Run `doctor`; fix the named setting. |
+| `CMP-FAULT-TOKEN` | fault | The token file could not be read; nothing was sent. | Check the projected token volume; `doctor` `token`. |
+| `CMP-FAULT-CORE-RESPONSE` | fault | The core answered something the plugin cannot read. | Check `CLEARANCE_URL` points at the core, not a proxy page. |
+| `CMP-FAULT-WAIT-IMAGE` | fault | A change is held for people but `CLEARANCE_WAIT_IMAGE` is not set, so no wait Job. | Set `CLEARANCE_WAIT_IMAGE`; the `hold:` line links the change. |
+| `CMP-DEP-CHART-UNREACHABLE` | dependency | `git` or the chart's host could not be reached to resolve the tag, and the fetch failed. | Check the chart host and egress. |
+| `CMP-DEP-CHART-FETCH` | dependency | The chart's tag resolved on the remote but the fetch then failed. | Check the chart host; retry. |
+| `CMP-RENDER-PARAMS` | render | A plugin parameter (`PARAM_*`) or Argo CD variable is missing or malformed. | Fix the Application's `plugin.parameters`. |
+| `CMP-RENDER-REFUSED` | render | A source the platform does not allow, or a symlink or path that leaves its repository. | Fix the source or list it in `CLEARANCE_CHART_REPOS`. |
+| `CMP-RENDER-FETCH` | render | The chart's tag does not exist on its repository (or no lookup ran and the clone failed). | Check `chartRevision`; the sidecar has no git credential. |
+| `CMP-RENDER-HELM` | render | `helm template` failed on the chart and values. | Fix the chart or values; vendor dependencies under `charts/`. |
+| `CMP-RENDER-KUSTOMIZE` | render | `kustomize build` failed. | Fix the kustomization; keep bases in the repository. |
+| `CMP-RENDER-SOURCES` | render | Generic mode: the Application's sources do not render, or use a feature the plugin refuses. Generic mode does not tell an unreachable host from a bad source. | Fix the source, or leave the app ungated. |
+| `CMP-RENDER-TREE` | render | The render cannot be hashed: no objects, too many, a duplicate, an ambiguous YAML scalar. | Fix the render; quote the scalar. |
+| `CMP-RENDER-REVISION` | render | `ARGOCD_APP_REVISION` is not a full commit, or the source repository has no owner/name. | Refresh the Application. |
+| `CMP-RENDER-LIMIT-CPU` | render | A render step used more CPU time than `CLEARANCE_CMP_RENDER_MAX_CPU`. | Fix a runaway template, or raise the setting. |
+| `CMP-RENDER-LIMIT-MEMORY` | render | A render step needed more memory than `CLEARANCE_CMP_RENDER_MAX_MEMORY`. | Raise the setting (and the container's memory limit), or shrink the render. |
+| `CMP-RENDER-LIMIT-OUTPUT` | render | A step's output, or the rendered manifests, went over `CLEARANCE_CMP_RENDER_MAX_OUTPUT`. | Shrink the render, or raise the setting. |
+| `CMP-RENDER-LIMIT-TEMP` | render | The render's scratch space, or one file in it, went over `CLEARANCE_CMP_RENDER_MAX_TEMP`. | Shrink the chart repository's checkout, or raise the setting. |
+| `CMP-REFUSED-DENIED` | refusal | The change is denied. | Open the `hold:` link. |
+| `CMP-REFUSED-EXPIRED` | refusal | The change's clearance expired. | Open the `hold:` link; clear it again. |
+| `CMP-REFUSED-SUPERSEDED` | refusal | A newer change replaced it. | Sync the newer commit. |
+| `CMP-REFUSED-EXCEPTION` | refusal | The change is under a deploy exception, not cleared. | Open the `hold:` link. |
+| `CMP-REFUSED-DEGRADED` | refusal | The change is in degraded mode, not cleared. | Open the `hold:` link. |
+| `CMP-REFUSED-STATE` | refusal | The change is in another state that does not sync. | Open the `hold:` link. |
+| `CMP-REFUSED-OUTAGE-HOLD` | refusal | The core is unreachable and nothing cleared and `allow-and-record` is remembered for the tree. | Restore the core; `doctor` `core`. |
+| `CMP-REFUSED-BY-CORE` | refusal | The core refused the registration (4xx): the token's audience, not a verifier, a bad request. | See the messages below; `doctor` `core-auth`. |
+
+The links go to `CLEARANCE_CMP_LINK_BASE/changes/<id>` (the web UI) when that is set, else to the core's
+`CLEARANCE_URL/v1/clearances/<id>`.
+
+### By message
+
+The `detail:` line is the message in the code; these are the common ones, with their fixes.
 
 | ComparisonError says | Meaning | Fix |
 |---|---|---|
@@ -533,7 +655,7 @@ These are the messages in the code, with their fixes. A configuration error exit
 | `change <id> is denied (tier N): <reason>; nothing syncs` (`expired`, `superseded`, `exception`, `degraded`) | The core's decision. | Not a fault: a person or a policy refused it; see the change on the core. |
 | `a change is held for people but CLEARANCE_WAIT_IMAGE is not set: the PreSync wait Job cannot be injected` | A tree is waiting for a person and the sidecar cannot add the wait Job. | Set `CLEARANCE_WAIT_IMAGE`. |
 | `refusing to run helm: cannot create a private network namespace (...). CLEARANCE_CMP_NETNS=require needs ...` | `require` is set and the kernel or seccomp profile refuses the namespace. | Allow `unshare`/`clone` with `CLONE_NEWUSER\|CLONE_NEWNET` in the container's seccomp profile, or set `CLEARANCE_CMP_NETNS=try`. |
-| `render limit exceeded [render.limit.<class>]: <step> ... (bound <SETTING>=<value>)` | A render went over one of its bounds (wall time, CPU, memory, output, scratch space, or it waited too long for a slot). Nothing syncs. | If the render is legitimately that large or slow, raise the named setting on the sidecar; otherwise fix the chart (a runaway template, a huge generated object). For `concurrency`, raise `CLEARANCE_CMP_MAX_RENDERS` or the repo-server's resources. |
+| `CMP-RENDER-LIMIT-*`, `CMP-FAULT-BUSY` or `CMP-FAULT-TIMEOUT`: `... went over its <bound> bound (<SETTING>=<value>)` | A render went over one of its bounds (wall time, CPU, memory, output, scratch space, or it waited too long for a slot). Nothing syncs. | If the render is legitimately that large or slow, raise the named setting on the sidecar; otherwise fix the chart (a runaway template, a huge generated object). For `concurrency`, raise `CLEARANCE_CMP_MAX_RENDERS` or the repo-server's resources. |
 | `refusing to run helm: the filesystem sandbox is unavailable (...) and CLEARANCE_CMP_FS_SANDBOX=require` | `require` is set and the kernel has no Landlock, or the seccomp profile refuses it. | Run on a kernel with Landlock active, use a seccomp profile that allows its calls (`RuntimeDefault` does), or set `CLEARANCE_CMP_FS_SANDBOX=try`. |
 | `CLEARANCE_TOKEN_FILE <path> is under <dir>, which every render step may read` | The token is mounted where the sandbox cannot hide it. | Mount it under `/var/run/secrets` (the default path), or set `CLEARANCE_CMP_FS_SANDBOX=off` knowing it is unprotected. |
 | `context deadline exceeded` after about 80 s | A slow fetch plus a slow core call. | Check egress to the chart repository and the core; see `CLEARANCE_CMP_CALL_TIMEOUT`. |

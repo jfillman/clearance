@@ -51,10 +51,15 @@ type Config struct {
 	CacheTTL     time.Duration
 	// The caches of the hardening track (docs/gate.md, "Caches"): the chart fetch cache (fetchcache.go; a zero
 	// ChartCache is off) and the pre-render cache (renderCache.go; a zero RenderCacheTTL is off).
-	ChartCache      ChartCache
-	RenderCacheTTL  time.Duration
+	ChartCache     ChartCache
+	RenderCacheTTL time.Duration
+	// LKG is the last-known-good fallback (lkg.go; CLEARANCE_CMP_LAST_KNOWN_GOOD, off by default): a plugin fault before
+	// the decision, or an unreachable chart host, serves the render last cleared for exactly these inputs, once the core confirms it.
+	LKG             bool
+	LinkBase        string // CLEARANCE_CMP_LINK_BASE: the web UI's base; a refusal links LinkBase/changes/<id> ("" links the core's record)
 	chartLooked     bool   // Generate already asked the remote for chartCommit (it may have got no answer)
 	chartCommit     string // what the chart's tag resolved to this run, when Generate asked (unexported: never a parameter)
+	chartLookupErr  error  // the lookup itself failed (git or the chart host unreachable), when Generate asked
 	WaitImage       string
 	WaitHost        string // "ip=host1,host2": a hostAlias for the wait Job's pod
 	CAFile          string // CLEARANCE_CA_FILE: extra root certificates (PEM) for an https CLEARANCE_URL
@@ -91,6 +96,7 @@ func ParseConfig(get func(string) string) (Config, error) {
 		AllowedRepos: ParseRepoList(get("CLEARANCE_CHART_REPOS")),
 		WaitImage:    get("CLEARANCE_WAIT_IMAGE"), WaitHost: get("CLEARANCE_WAIT_HOST_ALIAS"),
 		CAFile: get("CLEARANCE_CA_FILE"), WaitCAConfigMap: get("CLEARANCE_WAIT_CA_CONFIGMAP"),
+		LinkBase: strings.TrimRight(strings.TrimSpace(get("CLEARANCE_CMP_LINK_BASE")), "/"),
 	}
 	for _, f := range strings.Split(p("valueFiles"), ",") {
 		if f = strings.TrimSpace(f); f != "" {
@@ -112,6 +118,9 @@ func ParseConfig(get func(string) string) (Config, error) {
 		return c, err
 	}
 	if c.FSSandbox, err = ParseFSSandbox(get(FSSandboxEnv)); err != nil {
+		return c, err
+	}
+	if c.LKG, err = ParseLKG(get(LKGEnv)); err != nil {
 		return c, err
 	}
 	dur := func(name string, def time.Duration) time.Duration {
@@ -222,6 +231,11 @@ func (c Config) validate() error {
 		if hit := systemRootsHolding(c.TokenFile); len(hit) > 0 {
 			errs = append(errs, fmt.Errorf("CLEARANCE_TOKEN_FILE %s is under %s, which every render step may read: mount the token under /var/run/secrets (the default, /var/run/secrets/tokens/clearance), or set %s=off to say it is unprotected",
 				c.TokenFile, hit[0], FSSandboxEnv))
+		}
+	}
+	if c.LinkBase != "" {
+		if u, err := url.Parse(c.LinkBase); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			errs = append(errs, fmt.Errorf("CLEARANCE_CMP_LINK_BASE %q is not an http(s) URL with no credentials, query or fragment", c.LinkBase))
 		}
 	}
 	if c.CoreURL != "" {

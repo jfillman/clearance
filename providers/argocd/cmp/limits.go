@@ -45,7 +45,9 @@ const ChartLookupTimeout = 5 * time.Second
 
 // The plugin's calls to the core: one retry after a jittered wait (newCore). coreBudget is the most one call can take,
 // every attempt timing out: (CoreRetries+1) attempts and the waits between them. The startup check reserves all of it,
-// so an unreachable core is ErrCoreUnavailable (and the outage policy's cache) before PluginDeadline, never a deadline.
+// so an unreachable core is ErrCoreUnavailable (and the outage policy's cache) before PluginDeadline, never a deadline;
+// and renderTree ends every render coreBudget before the run's deadline, so a render that starts late (after a pre-render
+// confirmation the core answered slowly) is the one cut short, never the call that decides.
 const (
 	CoreRetries    = 1
 	CoreBackoff    = 250 * time.Millisecond
@@ -163,8 +165,9 @@ func FormatSize(n int64) string {
 	return strconv.FormatInt(n, 10)
 }
 
-// The limit classes. F4's error codes had not landed when these were written; the codes below are this package's own
-// (render.limit.<class>) and are meant to be folded into F4's catalogue when it lands.
+// The limit classes. Each is one of F4's error codes (errors.go): the wall time and the slots are faults (a slow network
+// or a busy sidecar can cause them, and last-known-good may answer them), the rest are render errors (the same inputs
+// go over the same bound again).
 const (
 	LimitWallTime    = "wall-time"
 	LimitCPU         = "cpu"
@@ -174,7 +177,13 @@ const (
 	LimitConcurrency = "concurrency"
 )
 
-// LimitError is a render stopped by one of its bounds.
+// limitCodes is each class's error code.
+var limitCodes = map[string]string{
+	LimitWallTime: CodeFaultTimeout, LimitConcurrency: CodeFaultBusy,
+	LimitCPU: CodeRenderLimitCPU, LimitMemory: CodeRenderLimitMem, LimitOutput: CodeRenderLimitOut, LimitTemp: CodeRenderLimitTemp,
+}
+
+// LimitError is a render stopped by one of its bounds. classifyRender turns it into the *CmpError of its code.
 type LimitError struct {
 	Limit   string // one of the Limit* classes
 	Setting string // the environment variable that raises it
@@ -183,16 +192,25 @@ type LimitError struct {
 	Detail  string // what was seen
 }
 
-// Code is the error code of the limit: render.limit.<class>.
-func (e *LimitError) Code() string { return "render.limit." + e.Limit }
+// Code is the limit's error code (CMP-FAULT-TIMEOUT, CMP-FAULT-BUSY or CMP-RENDER-LIMIT-*).
+func (e *LimitError) Code() string { return limitCodes[e.Limit] }
+
+// Summary is the short first line: which bound, and the setting that raises it.
+func (e *LimitError) Summary() string {
+	what := "the render"
+	if e.Step != "" {
+		what = e.Step
+	}
+	return fmt.Sprintf("%s went over its %s bound (%s=%s)", what, e.Limit, e.Setting, e.Bound)
+}
 
 func (e *LimitError) Error() string {
 	what := "the render"
 	if e.Step != "" {
 		what = e.Step
 	}
-	return fmt.Sprintf("render limit exceeded [%s]: %s %s (bound %s=%s); the render was stopped and nothing syncs. "+
-		"If this render is expected to be this large, raise %s on the clearance-cmp sidecar", e.Code(), what, e.Detail, e.Setting, e.Bound, e.Setting)
+	return fmt.Sprintf("render limit exceeded: %s %s (bound %s=%s); the render was stopped and nothing syncs. "+
+		"If this render is expected to be this large, raise %s on the clearance-cmp sidecar", what, e.Detail, e.Setting, e.Bound, e.Setting)
 }
 
 // budget is one render's bounds and scratch root, carried to every step through the context.

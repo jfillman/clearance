@@ -115,7 +115,11 @@ func OSRun(ctx context.Context, dir string, env []string, name string, args ...s
 			}
 			isolated = ok
 		}
+		becomeSubreaper() // a descendant that detaches (setsid) still comes back here (proc_linux.go)
 		err := cmd.Start()
+		if err == nil {
+			trackStep(cmd.Process.Pid, true)
+		}
 		if len(cmd.ExtraFiles) > 0 {
 			cmd.ExtraFiles[0].Close() // the plugin's copy of the write end: EOF once the shim has exec'd or exited
 		}
@@ -124,7 +128,9 @@ func OSRun(ctx context.Context, dir string, env []string, name string, args ...s
 		}
 		if err == nil {
 			err = cmd.Wait()
+			trackStep(cmd.Process.Pid, false)
 			killGroup(cmd) // a descendant the step left behind (a backgrounded git, a stalled helper) goes with it
+			reapOrphans()  // and one that left the group too
 		}
 		ps = cmd.ProcessState
 		if setup != nil && err != nil {

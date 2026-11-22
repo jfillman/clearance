@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/jfillman/clearance/client"
@@ -40,56 +41,62 @@ const (
 
 // Generate is the plugin's `generate` step: render, canonicalise, hash, find or register the change, and write the
 // manifests to out. An error is a refusal: the caller exits non-zero, Argo CD shows ComparisonError and nothing
-// syncs (a tier-3 denial, a denied or expired change, an outage hold, a render that fails).
+// syncs (a tier-3 denial, a denied or expired change, an outage hold, a render that fails). Every error is a *CmpError
+// (errors.go): a fault, a render error or a refusal, with a stable code.
 func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Writer) (Outcome, error) {
-	var r *Rendered
 	var err error
 	// The plugin runs with srcDir "." (main below). Every containment check compares resolved paths, and a relative
 	// path resolves to a relative one, which never has the absolute root as its prefix: on 0.52.0 that refused every
 	// value file ("resolves outside the repository", hangar-prod 2026-11-18). Resolve it once, here.
 	if srcDir, err = filepath.Abs(srcDir); err != nil {
-		return "", err
+		return "", newErr(CodeFaultInternal, "the source directory cannot be resolved", err)
 	}
 	// Before anything is fetched: the chart comes only from where the platform says, by the platform's own spelling.
 	cfg, err = cfg.Canonical()
 	if err != nil {
-		return "", err
+		if strings.HasPrefix(err.Error(), "refused:") {
+			return "", classifyRender(ctx, err, lookupNotAsked, cfg.Sources != "")
+		}
+		return "", classifyConfig(err) // the sources parameter, or a list entry (a sidecar setting)
 	}
-	// The pre-render cache (rendercache.go): an unchanged Application is answered before anything is fetched or rendered.
-	// It needs the commit the chart's tag resolves to now, one lookup on the remote.
-	if cfg.RenderCacheTTL > 0 && cfg.Sources == "" && cfg.ChartRepo != "" {
-		lctx, cancel := context.WithTimeout(ctx, ChartLookupTimeout) // an optimisation: no answer in time is no answer
-		cfg.chartCommit, cfg.chartLooked = resolveChart(lctx, d.Exec, cfg.ChartRepo, cfg.ChartRev), true
+	// The pre-render cache (rendercache.go) and the last-known-good store (lkg.go) need the commit the chart's tag
+	// resolves to now, one lookup on the remote: an unchanged Application is answered before anything is rendered. The
+	// lookup is bounded (ChartLookupTimeout, reserved by the startup check): no answer in time is no answer, and the
+	// render fetches the chart itself.
+	if (cfg.RenderCacheTTL > 0 || cfg.LKG) && cfg.Sources == "" && cfg.ChartRepo != "" {
+		lctx, cancel := context.WithTimeout(ctx, lookupTimeout)
+		cfg.chartCommit, cfg.chartLookupErr = lookupChart(lctx, d.Exec, cfg.ChartRepo, cfg.ChartRev)
+		cfg.chartLooked = true
 		cancel()
 	}
-	rkey := renderKey(cfg)
+	rkey, lkey := renderKey(cfg), lkgKey(cfg)
 	if e, ok := d.Cache.GetRender(rkey, d.Now(), cfg.RenderCacheTTL); ok {
-		if o, handled, err := serveRender(ctx, d, cfg, e, out); handled {
+		if o, handled, err := serveRender(ctx, d, cfg, e, out, nil); handled {
+			if err == nil { // these inputs at this chart commit are the last cleared: keep the fallback pointing at them
+				d.Cache.touchLKG(lkey, d.Now())
+				d.Cache.putLKGTag(cfg, lkey)
+			}
 			return o, err
 		}
 	}
-	// The render runs under its limits and in a scratch root of its own (limits.go): a bound it goes over is a LimitError.
-	r, err = renderBounded(ctx, cfg, srcDir, d.Stderr, func(ctx context.Context) (*Rendered, error) {
-		if cfg.Sources != "" {
-			run := d.Run
-			if run == nil {
-				run = OSRun
+	tree, r, cerr := renderTree(ctx, d, cfg, srcDir)
+	if cerr != nil {
+		if cerr.FallsBack() && cfg.LKG {
+			// Only a fault or an unavailable dependency before the decision, only for the exact inputs, and only once
+			// the core confirms (lkg.go).
+			if lkey == "" && cfg.chartLookupErr != nil {
+				// The chart host is unreachable: the commit this tag was last cleared at, for these exact inputs.
+				var commit string
+				if lkey, commit = d.Cache.lkgByTag(cfg); lkey != "" {
+					fmt.Fprintf(d.Stderr, "clearance: the chart tag %s could not be resolved (%v); last-known-good uses the commit it was last cleared at, %s\n", cfg.ChartRev, cfg.chartLookupErr, shortRes(commit))
+					cfg.chartCommit = commit
+				}
 			}
-			return RenderSources(ctx, run, cfg)
+			if o, handled, err := serveLKG(ctx, d, cfg, lkey, cerr, out); handled {
+				return o, err
+			}
 		}
-		return Render(ctx, d.Exec, cfg, srcDir)
-	})
-	if err != nil {
-		return "", err
-	}
-	tree, err := Canonicalize(r.Manifests, cfg.Destination, cfg.ExtraCluster)
-	if err != nil {
-		return "", err
-	}
-	if r.Generic {
-		tree.SetRelease(r.Release)
-	} else {
-		tree.SetRelease(releaseFromValues(cfg, srcDir))
+		return "", cerr
 	}
 	fmt.Fprintf(d.Stderr, "clearance: %s/%s rendered %d objects, tree %s", cfg.App, cfg.Env, len(tree.Hashes), tree.Root[:12])
 	for _, s := range r.Sources {
@@ -106,24 +113,35 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 
 	now := d.Now()
 	started := time.Now() // wall clock, against the decisions DropRenders records
-	// cleared emits the stamped stream and remembers it (rendercache.go) when the render is what the key names.
+	// cleared emits the stamped stream and remembers it (rendercache.go, lkg.go) when the render is what the keys name.
 	cleared := func(e CacheEntry) (Outcome, error) {
 		var buf bytes.Buffer
 		if _, err := emit(tree, &buf, Cleared, e.ID, cfg); err != nil {
-			return "", err
+			return "", newErr(CodeFaultInternal, "the stamped manifests could not be written", err)
 		}
-		if req, rerr := registration(cfg, tree); rkey != "" && rerr == nil && (cfg.ChartRepo == "" || r.ChartMerge == cfg.chartCommit) {
-			d.Cache.PutRender(renderEntry{Key: rkey, Request: req, ID: e.ID, Tier: e.Tier, Outage: e.Outage, Tree: tree.Root, App: cfg.App, Env: cfg.Env, Cluster: cfg.Cluster, CachedAt: e.CachedAt, ExpiresAt: e.ExpiresAt, Stream: buf.Bytes()}, started)
+		if req, rerr := registration(cfg, tree); rerr == nil && (cfg.ChartRepo == "" || r.ChartMerge == cfg.chartCommit) {
+			ent := renderEntry{Request: req, ID: e.ID, Tier: e.Tier, Outage: e.Outage, Tree: tree.Root, App: cfg.App, Env: cfg.Env, Cluster: cfg.Cluster, CachedAt: e.CachedAt, ExpiresAt: e.ExpiresAt, Stream: buf.Bytes()}
+			if rkey != "" {
+				ent.Key = rkey
+				d.Cache.PutRender(ent, started)
+			}
+			if lkey != "" {
+				ent.Key = lkey
+				d.Cache.PutLKG(ent, started)
+				d.Cache.putLKGTag(cfg, lkey)
+			}
 		}
-		_, err := out.Write(buf.Bytes())
-		return Cleared, err
+		if _, err := out.Write(buf.Bytes()); err != nil {
+			return "", newErr(CodeFaultInternal, "the manifests could not be written to Argo CD", err)
+		}
+		return Cleared, nil
 	}
 	if e, ok := d.Cache.Get(cfg.App, cfg.Env, cfg.Cluster, tree.Root, now); ok && now.Sub(e.CachedAt) < cfg.CacheTTL {
 		return cleared(e)
 	}
 	req, err := registration(cfg, tree)
 	if err != nil {
-		return "", err
+		return "", newErr(CodeRenderRevision, "the change cannot be registered for this revision", err)
 	}
 	ch, err := d.Core.RegisterChange(ctx, req)
 	if err != nil {
@@ -132,11 +150,11 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 			// down is served from what was remembered; anything else holds, because an unknown tier is never allowed.
 			if e, ok := d.Cache.Get(cfg.App, cfg.Env, cfg.Cluster, tree.Root, now); ok && e.Outage == "allow-and-record" {
 				fmt.Fprintf(d.Stderr, "clearance: the core is unreachable (%v); serving %s from the cache (tier %d, allow-and-record)\n", err, e.ID, e.Tier)
-				return emit(tree, out, Cleared, e.ID, cfg)
+				return emitted(emit(tree, out, Cleared, e.ID, cfg))
 			}
-			return "", fmt.Errorf("clearance outage hold: the core is unreachable and tree %s has no cleared, allow-and-record entry: %w", tree.Root[:12], err)
+			return "", outageHold(tree.Root, err)
 		}
-		return "", fmt.Errorf("clearance refused the change: %w", err)
+		return "", classifyCore(err)
 	}
 	switch ch.State {
 	case "cleared":
@@ -150,7 +168,14 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 	case "holding":
 		d.Cache.DropRenders(cfg.App, cfg.Env, cfg.Cluster, tree.Root) // a hold is never served from the cache
 		d.Cache.Drop(cfg.App, cfg.Env, cfg.Cluster, tree.Root)
-		return emit(tree, out, Held, ch.ID, cfg)
+		o, err := emit(tree, out, Held, ch.ID, cfg)
+		if err != nil {
+			if strings.Contains(err.Error(), "CLEARANCE_WAIT_IMAGE") {
+				return "", refusal(cfg, CodeFaultWaitImage, fmt.Sprintf("change %s is held for people, but CLEARANCE_WAIT_IMAGE is not set", ch.ID), ch.ID, err)
+			}
+			return "", refusal(cfg, CodeFaultInternal, fmt.Sprintf("change %s is held, and its wait Job could not be written", ch.ID), ch.ID, err)
+		}
+		return o, nil
 	default:
 		d.Cache.DropRenders(cfg.App, cfg.Env, cfg.Cluster, tree.Root)
 		d.Cache.Drop(cfg.App, cfg.Env, cfg.Cluster, tree.Root)
@@ -158,8 +183,66 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 		if ch.DenyReason != nil {
 			why = ": " + *ch.DenyReason
 		}
-		return "", fmt.Errorf("change %s is %s (tier %d)%s; nothing syncs", ch.ID, ch.State, ch.Tier, why)
+		return "", refusal(cfg, stateCode(ch.State), fmt.Sprintf("change %s is %s (tier %d); nothing syncs", ch.ID, ch.State, ch.Tier), ch.ID,
+			fmt.Errorf("change %s is %s (tier %d)%s; nothing syncs", ch.ID, ch.State, ch.Tier, why))
 	}
+}
+
+// emitted classifies emit's error: the tree was already hashed, so a failure to write it is the plugin's.
+func emitted(o Outcome, err error) (Outcome, error) {
+	if err != nil {
+		return "", newErr(CodeFaultInternal, "the manifests could not be written to Argo CD", err)
+	}
+	return o, nil
+}
+
+// renderTree is the render phase: render the sources, canonicalise and hash. Its error is classified (errors.go), and
+// a panic in it is recovered as a fault, so the last-known-good fallback can tell the plugin's failure from the
+// Application's. With last-known-good on, the render gets the run's deadline less one call to the core, so a slow
+// render still leaves time to confirm the remembered change.
+func renderTree(ctx context.Context, d Deps, cfg Config, srcDir string) (tree *Tree, r *Rendered, cerr *CmpError) {
+	rctx := ctx
+	// The registration after the render (or last-known-good's confirmation) always keeps its whole budget, every
+	// attempt and the wait between them (coreBudget): a render that started late, after a pre-render confirmation the
+	// core answered slowly, is cut short, never the call that decides. An unreachable core is then an outage
+	// (ErrCoreUnavailable, the outage policy), not the run's deadline.
+	if reserve := coreBudget(cfg.RegisterWait); reserve > 0 {
+		if dl, ok := ctx.Deadline(); ok && time.Until(dl) > reserve {
+			var cancel context.CancelFunc
+			rctx, cancel = context.WithDeadline(ctx, dl.Add(-reserve))
+			defer cancel()
+		}
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			tree, r = nil, nil
+			cerr = newErr(CodeFaultPanic, "the plugin panicked while rendering", fmt.Errorf("panic: %v", p))
+		}
+	}()
+	// The render runs under its limits, in a slot and a scratch root of its own (limits.go).
+	r, err := renderBounded(rctx, cfg, srcDir, d.Stderr, func(ctx context.Context) (*Rendered, error) {
+		if cfg.Sources != "" {
+			run := d.Run
+			if run == nil {
+				run = OSRun
+			}
+			return RenderSources(ctx, run, cfg)
+		}
+		return Render(ctx, d.Exec, cfg, srcDir)
+	})
+	if err != nil {
+		return nil, nil, classifyRender(rctx, err, chartLookup(cfg), cfg.Sources != "")
+	}
+	tree, err = Canonicalize(r.Manifests, cfg.Destination, cfg.ExtraCluster)
+	if err != nil {
+		return nil, nil, newErr(CodeRenderTree, "the render cannot be hashed", err)
+	}
+	if r.Generic {
+		tree.SetRelease(r.Release)
+	} else {
+		tree.SetRelease(releaseFromValues(cfg, srcDir))
+	}
+	return tree, r, nil
 }
 
 func shortRes(r string) string {
@@ -231,7 +314,7 @@ func main() {
 	}
 	cfg, err := ParseConfig(os.Getenv)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "clearance-cmp:", err)
+		fmt.Fprintln(os.Stderr, "clearance-cmp:", classifyConfig(err))
 		os.Exit(2)
 	}
 	SetNetns(cfg.Netns)
@@ -241,13 +324,13 @@ func main() {
 	}
 	core, err := newCore(cfg)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "clearance-cmp:", err)
+		fmt.Fprintln(os.Stderr, "clearance-cmp:", newErr(CodeFaultConfig, "the core client cannot be set up from the sidecar's settings", err))
 		os.Exit(2)
 	}
 	d := Deps{Exec: OSExec, Run: OSRun, Core: core, Cache: Cache{Dir: cfg.CacheDir}, Now: time.Now, Stderr: os.Stderr}
 	ctx, cancel := context.WithTimeout(context.Background(), PluginDeadline) // Argo CD kills a plugin at 90 s (ARGOCD_EXEC_TIMEOUT)
 	defer cancel()
-	if _, err := Generate(ctx, d, cfg, ".", os.Stdout); err != nil {
+	if _, err := Generate(ctx, d, cfg, ".", os.Stdout); err != nil { // a *CmpError: its code and short line come first
 		fmt.Fprintln(os.Stderr, "clearance-cmp:", err)
 		os.Exit(1)
 	}

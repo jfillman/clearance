@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,8 +48,16 @@ func asLimit(t *testing.T, err error, class string) *LimitError {
 	if !errors.As(err, &le) {
 		t.Fatalf("want a %s LimitError, got %v", class, err)
 	}
-	if le.Limit != class || le.Code() != "render.limit."+class {
+	if le.Limit != class || le.Code() == "" || le.Code() != limitCodes[class] {
 		t.Fatalf("want class %s, got %s (%v)", class, le.Limit, le)
+	}
+	// and the plugin reports it as that code, in the right class, naming the setting on its first line
+	ce := classifyRender(context.Background(), fmt.Errorf("helm template: %w", err), lookupNotAsked, false)
+	if ce.Code != le.Code() || ce.Class != Codes[le.Code()] || !strings.Contains(ce.FirstLine(), le.Setting) {
+		t.Fatalf("classified as %s (%s): %q", ce.Code, ce.Class, ce.FirstLine())
+	}
+	if want := class == LimitWallTime || class == LimitConcurrency; ce.FallsBack() != want {
+		t.Fatalf("%s: falls back %v, want %v", class, ce.FallsBack(), want)
 	}
 	if !strings.Contains(le.Error(), le.Setting) || !strings.Contains(le.Error(), "nothing syncs") {
 		t.Fatalf("the message does not name its setting %s: %v", le.Setting, le)
@@ -330,5 +339,27 @@ func TestFSSandboxModes(t *testing.T) {
 	probes = 0
 	if _, err := OSRun(context.Background(), t.TempDir(), nil, "kustomize", "build", "."); err != nil || probes != 0 || FSSandboxState() != "off" {
 		t.Fatalf("off: %v, %d probes, state %s", err, probes, FSSandboxState())
+	}
+}
+
+// The registration after the render always keeps its whole budget: a render that starts late (after a pre-render
+// confirmation the core answered slowly) gets the run's deadline less every attempt of the core call and the wait
+// between them, so the call that decides is never the one cut short.
+func TestTheRenderLeavesTheCoreItsWholeBudget(t *testing.T) {
+	var got time.Time
+	d := Deps{Exec: func(ctx context.Context, _, _ string, _ ...string) ([]byte, error) {
+		got, _ = ctx.Deadline()
+		return nil, errors.New("stop here")
+	}, Stderr: new(bytes.Buffer)}
+	cfg := Config{AppName: "a", Destination: "n", RegisterWait: 20 * time.Second, CacheDir: t.TempDir(), Limits: DefaultLimits()}
+	cfg.Limits.Timeout = time.Minute                                         // longer than what is left: the reservation is what bounds the render
+	run, cancel := context.WithTimeout(context.Background(), 50*time.Second) // a run with 50 s left
+	defer cancel()
+	runEnd, _ := run.Deadline()
+	if _, _, cerr := renderTree(run, d, cfg, t.TempDir()); cerr == nil {
+		t.Fatal("the fake render succeeded")
+	}
+	if left := runEnd.Sub(got); left < coreBudget(cfg.RegisterWait)-time.Second || left > coreBudget(cfg.RegisterWait)+time.Second {
+		t.Fatalf("the render ends %s before the run, want the core's budget %s", left, coreBudget(cfg.RegisterWait))
 	}
 }

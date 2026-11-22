@@ -150,6 +150,10 @@ func doctorSettings(env DoctorEnv, add func(level, name, msg, fix string)) Confi
 		bad("setting", err.Error(), "set "+FSSandboxEnv+" to try, require or off, or remove it")
 		blank[FSSandboxEnv] = true
 	}
+	if _, err := ParseLKG(env.Get(LKGEnv)); err != nil {
+		bad("setting", err.Error(), "set "+LKGEnv+" to off or on, or remove it (off)")
+		blank[LKGEnv] = true
+	}
 	for _, d := range []string{"CLEARANCE_CMP_CACHE_TTL", "CLEARANCE_WAIT_TIMEOUT", "CLEARANCE_CMP_CALL_TIMEOUT"} {
 		if v := env.Get(d); v != "" {
 			if p, err := time.ParseDuration(v); err != nil || p <= 0 {
@@ -206,6 +210,8 @@ func settingFix(msg string) string {
 		return "CLEARANCE_CHART_REPOS lists repository URLs (git, https, ssh, or oci://registry/path), separated by commas or spaces"
 	case strings.Contains(msg, "CLEARANCE_WAIT_HOST_ALIAS"):
 		return "write it ip=host[,host], or remove it"
+	case strings.Contains(msg, "CLEARANCE_CMP_LINK_BASE"):
+		return "CLEARANCE_CMP_LINK_BASE is the web UI's base URL (https://clearance.example.test), or remove it to link the core's record"
 	case strings.Contains(msg, "CLEARANCE_WAIT_IMAGE"):
 		return "give an image reference such as registry.example.test/clearance-wait:v1"
 	}
@@ -525,9 +531,31 @@ func doctorCaches(env DoctorEnv, add func(level, name, msg, fix string)) {
 	}
 	if v == "0" || v == "0s" {
 		add(levelOK, "render-cache", fmt.Sprintf("off: CLEARANCE_CMP_RENDER_CACHE_TTL is 0, every render runs helm; the cleared-tree cache (CLEARANCE_CMP_CACHE_TTL) is %s", treeTTL), "")
+	} else {
+		add(levelOK, "render-cache", fmt.Sprintf("on: a rendered stream is reused for up to %s (never past the clearance's expiry); the cleared-tree cache TTL is %s", ttl, treeTTL), "")
+	}
+	doctorLKG(env, dir, add)
+}
+
+// doctorLKG reports the last-known-good fallback (lkg.go): on or off, and how many renders it has served from this
+// cache directory. A count above zero means the plugin faulted, or a dependency was down, and Argo CD was given a
+// remembered render: look for "LAST-KNOWN-GOOD served" on the sidecar's stderr.
+func doctorLKG(env DoctorEnv, dir string, add func(level, name, msg, fix string)) {
+	on, err := ParseLKG(env.Get(LKGEnv))
+	if err != nil {
+		return // reported with the settings
+	}
+	if !on {
+		add(levelOK, "last-known-good", "off ("+LKGEnv+"): a plugin fault or an unreachable chart host fails the render", "")
 		return
 	}
-	add(levelOK, "render-cache", fmt.Sprintf("on: a rendered stream is reused for up to %s (never past the clearance's expiry); the cleared-tree cache TTL is %s", ttl, treeTTL), "")
+	n := Cache{Dir: dir}.LKGServes()
+	msg := fmt.Sprintf("on: a plugin fault or an unavailable dependency serves the render last cleared for the exact same inputs, after the core confirms it; served %d so far from %s", n, dir)
+	if n > 0 {
+		add(levelWarn, "last-known-good", msg, "the plugin faulted or a dependency was down: read the LAST-KNOWN-GOOD lines on the sidecar's stderr, fix the cause")
+		return
+	}
+	add(levelOK, "last-known-good", msg, "")
 }
 
 func humanBytes(n int64) string {
