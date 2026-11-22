@@ -698,6 +698,13 @@ and `POST /v1/clearances/{id}/deny` `{reason}` are people's, through the delegat
 (`DG-PROPOSER` 403, `DG-TWICE` 409, `DG-FILLED` 409, `DG-FORBIDDEN` 403, `DG-STATE` 409, `DG-REASON` 400,
 `DG-APPROVER-AUTOMATION` 403 and `DG-APPROVER-SAME` 409 (the approver is automation, or the same subject as another approval: [gate.md](gate.md#tier-3-approvers-are-people-c-14-built)), `DG-UNKNOWN` 404, `DG-OFF` 404; `DG-POLICY` and `DG-PROVENANCE` deny the change by policy).
 
+A verifier that registers `proposerKind: unknown` may say why with `provenanceReason` (optional, sent only with
+`unknown`): `unvouched-commits` (the change also carries commits no merged pull request contains, listed in
+`unvouchedCommits`, 1 to 250 distinct 40-hex commits) holds it at tier 3 for one owner-group and one outside-group
+person; `unrecorded-agent` (it looks like an agent's and Clearance has no record of an agent opening it), or no reason,
+denies it with `DG-PROVENANCE`. Anything else about the two fields is a 400. [gate.md](gate.md#unvouched-commits-built)
+has the rules and the threat reasoning; `schemas/change-request.schema.json` has the shape.
+
 Reads here: `GET /v1/clearances` (filters `app`, `env`, `state` holding|cleared|denied|expired|superseded, `repo`, `pr`,
 `tier`, `since`; cursor `<updated_at>,<id>`: the list's order is updated_at then id, so changes that share a second are all paged through; a bare `updated_at` cursor from an older client still means strictly older), `GET /v1/clearances/counts?by=state|tier|app|env|cleared_by`,
 `GET /v1/clearances/{id}` (objects, paths, every reason, requirement, approvals, checks), `GET /v1/clearance-policy`

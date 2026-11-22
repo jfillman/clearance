@@ -65,7 +65,9 @@ which is what the Tower callout and the C1 detail show.
 
 Provenance from the agent gates feeds the tier: a change whose PR is a **confirmed agent** PR is never tier 0 or 1
 by policy alone (it is at least tier 1 with every check, so a person sees agent output land); a PR that looks like an
-agent's but has no receipt (`unknown → agent`) is **denied** outright, as the agent gates already fail it.
+agent's but has no receipt (`unknown → agent`) is **denied** outright, as the agent gates already fail it. A release
+whose only provenance gap is **commits no merged pull request contains** (a direct push, a merge made outside a PR) is
+held at tier 3 for two people instead, when the verifier says so ([Unvouched commits](#unvouched-commits-built)).
 
 ## Who clears, and how
 
@@ -641,7 +643,8 @@ What exists in Clearance now; the check, the release guardrail and the screens f
   the tier as the maximum over paths and objects (`kind:Secret`, `field:secretKeyRef`, `path:clearance.yaml`,
   `image-bump`, `image:not-trusted-registry`, `metadata-only`, `release-stamp`, `non-runtime`, `lines>400`, `checks:ci,render`,
   `provenance:agent`), then the decision: tiers 0 and 1 clear by policy, 2 and 3 hold for a `Requirement`
-  (owner-group people, outside-group people), an unknown proposer is denied (`DG-PROVENANCE`). `Change`: the record,
+  (owner-group people, outside-group people), an unknown proposer is denied (`DG-PROVENANCE`; held at tier 3 when the
+  verifier's reason is `unvouched-commits`, [Unvouched commits](#unvouched-commits-built)). `Change`: the record,
   with `role_for()` (owner first, then outside; `DG-PROPOSER`, `DG-TWICE`, `DG-FILLED`, `DG-FORBIDDEN`, `DG-STATE`; since C-14 also `DG-APPROVER-AUTOMATION` and `DG-APPROVER-SAME`, [rule GATE-APPROVER-001](#tier-3-approvers-are-people-c-14-built)).
 - **Gateway**: `register_change` (a verifier's call; idempotent by repo, PR and head; a holding change is re-evaluated
   with the new check results and clears by policy once they hold; a new head supersedes the heads still holding),
@@ -864,6 +867,75 @@ Limits, stated: an alias is only known if the deployment lists it, since the gat
 other names; the patterns catch naming shapes, not an automation that signs in under a plain person-looking name at a
 plain issuer (the allowlist at sign-in and the delegate list are the controls there); a break-glass window is not an
 approval and is unchanged.
+
+## Unvouched commits (Built)
+
+**What you get.** A change whose proposer is unknown used to be denied whatever the reason (`DG-PROVENANCE`). Two cases
+hid under that one rule, and they are now told apart by the verifier:
+
+| `provenanceReason` (with `proposerKind: unknown`) | The case | Decision |
+| --- | --- | --- |
+| `unvouched-commits` | every pull request the change carries is accounted for (a person's, a confirmed agent's, or AI-co-authored work outside Clearance), but it **also carries commits no merged pull request contains**: a direct push to the released branch, a merge made outside a PR | **held at tier 3**: one person from the app's owner group and one from an outside group |
+| `unrecorded-agent` | something looks like an agent's work and Clearance has no record of an agent opening it: agent impersonation, a forged or modified agent PR (AI001 to AI004) | **denied** (`DG-PROVENANCE`), as before |
+| absent, `null` or `""` | the verifier does not say | **denied** (`DG-PROVENANCE`), as before: fail closed |
+
+**Guardrails, up front.**
+
+- **Two distinct people, neither behind the change.** The hold is an ordinary tier-3 hold: one approver from the owner
+  group, one from an outside group (`CLEARANCE_GATE_OUTSIDE_GROUPS`), never the proposer, a source PR's author or merger,
+  or the promoter (`DG-PROPOSER`), never one person in both seats (`DG-TWICE`; a person in both groups fills one),
+  never two names, subjects or sessions of one person (`DG-APPROVER-SAME`), never automation
+  (`DG-APPROVER-AUTOMATION`). The requirement is at least 1 and 1 whatever the approver table says; a repo's
+  `clearance.yaml` may raise it (`approvers.3`), never lower it. With no outside group configured the hold cannot
+  clear and expires.
+- **Tier 3, always.** The tier is the maximum of the change's own tier and 3, so a one-line image bump with unvouched
+  commits waits for two people like a Secret. Tier 3 is the only tier with an outside reviewer, and code that reached the
+  released branch without a pull request has had no review at all; an owner-only tier 2 would let the owner group,
+  which may include whoever pushed, review itself. The outage policy for tier 3 (hold, by default) applies.
+- **The hold says why.** The change's reasons carry `provenance:unvouched-commits` with the commits as its subject
+  ("2 commits in no merged pull request: 1a2b3c4, 5d6e7f8", the first 8 and a count), which Tower's why-this-tier shows;
+  the `deploy.request` record's result reads "tier 3: holding for ...: 2 commits no merged pull request contains (a
+  direct push or a merge made outside a pull request), so no review vouches for them", and its body keeps every commit.
+- **Fail closed.** No reason, or `unrecorded-agent`, denies. A reason with any `proposerKind` but `unknown`, an unknown
+  reason, `unvouched-commits` without commits, commits without `unvouched-commits`, a malformed or repeated commit, or
+  more than 250 are a 400 (`schemas/change-request.schema.json` encodes the same rules).
+- **Unchanged.** Agent impersonation is still an absolute deny. The token's provenance level for such a change stays
+  `unknown`. The proposer rules, the approval rules, Tower, the audit records, the clear and `/retest` flow are those
+  of every hold; there is no new record type.
+
+**The threat, reasoned.** This loosens an absolute deny into a two-person hold, so what could go wrong:
+
+- *The pusher is not excluded.* A commit's author and committer are claims the pusher writes, so nobody can name who
+  pushed an unvouched commit, and the pusher is not in the change's excluded set. They may be one of the two
+  approvers. They cannot be both (one person never fills both seats), so landing the change still takes a second,
+  distinct person from the other side, who sees the commits named in the hold. No single person can land unreviewed
+  code; that is the guarantee the two-person rule gives, and the reviewers are told exactly which commits had no review.
+- *An agent pushing directly.* An agent with push rights that bypasses pull requests produces unvouched commits, not
+  an agent PR, so the agent gates never see it. It is held for two people (automation can never approve), not denied.
+  An agent PR without a Clearance record stays denied.
+- *A verifier claiming the softer case.* The reason is the verifier's statement, as `proposerKind` already is; only a
+  verifier (`CLEARANCE_VERIFIERS`) registers, and a verifier that lied could already send `proposerKind: person` and
+  get less than a tier-3 hold. The field gives a verifier no new power. A verifier must send `unvouched-commits` only
+  when the unvouched commits are the **only** gap: if any pull request's verdict is not one Clearance accepts, or
+  Clearance could not answer, it sends `unrecorded-agent` or nothing.
+- *Any path with fewer than two distinct non-proposer people is a bug*, and the tests hold it:
+  `internal/gate/unvouched_test.go` (the decision table, the approval rule, the parser), and the schema/parser
+  agreement test.
+
+**What a verifier sends.** With `proposerKind: "unknown"`:
+
+```json
+{"proposerKind": "unknown", "provenanceReason": "unvouched-commits",
+ "unvouchedCommits": ["1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d"]}
+```
+
+`unvouchedCommits` is 1 to 250 distinct 40-hex lowercase commits, with `unvouched-commits` only. `"provenanceReason":
+"unrecorded-agent"` (no commits) asks for the deny explicitly. The fields are optional: a verifier that sends neither
+keeps today's deny.
+
+**Upgrading.** A change already denied under `DG-PROVENANCE` stays denied: its id is the repo, PR and head, and a
+re-registration of a decided change returns it unchanged. A new head (a new release PR, or a new push to it) registers
+a new change that gets the hold.
 
 ## Protected environments, the outage policy, states, exceptions and break-glass (C-6, Built)
 

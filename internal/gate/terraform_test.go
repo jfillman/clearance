@@ -446,6 +446,16 @@ func TestTheChangeRequestSchemaMatchesTheParser(t *testing.T) {
 		"plan, null resources":             tfChange(func() map[string]any { s := plan(nil); s["resources"] = nil; return s }(), nil),
 		"plan, objects":                    tfChange(ok, map[string]any{"objects": replicas}),
 		"plan, a value in fields":          tfChange(plan(nil, res("aws_vpc.lab", "aws_vpc", update, "tags=x")), nil),
+		"manifest, unvouched commits":      change(map[string]any{"proposerKind": "unknown", "provenanceReason": "unvouched-commits", "unvouchedCommits": strs([]string{base})}),
+		"manifest, an unrecorded agent":    change(map[string]any{"proposerKind": "unknown", "provenanceReason": "unrecorded-agent"}),
+		"manifest, a reason for a person":  change(map[string]any{"provenanceReason": "unrecorded-agent"}),
+		"manifest, unvouched, no commits":  change(map[string]any{"proposerKind": "unknown", "provenanceReason": "unvouched-commits"}),
+		"manifest, commits with no reason": change(map[string]any{"proposerKind": "unknown", "unvouchedCommits": strs([]string{base})}),
+		"manifest, commits, agent reason": change(map[string]any{"proposerKind": "unknown", "provenanceReason": "unrecorded-agent",
+			"unvouchedCommits": strs([]string{base})}),
+		"manifest, an unknown reason": change(map[string]any{"proposerKind": "unknown", "provenanceReason": "trust-me"}),
+		"manifest, a commit twice": change(map[string]any{"proposerKind": "unknown", "provenanceReason": "unvouched-commits",
+			"unvouchedCommits": strs([]string{base, base})}),
 	}
 	accepted := 0
 	for name, body := range bodies {
@@ -458,8 +468,8 @@ func TestTheChangeRequestSchemaMatchesTheParser(t *testing.T) {
 			accepted++
 		}
 	}
-	if accepted != 9 {
-		t.Errorf("%d of %d bodies accepted, want 9 (the comparison would be vacuous)", accepted, len(bodies))
+	if accepted != 11 {
+		t.Errorf("%d of %d bodies accepted, want 11 (the comparison would be vacuous)", accepted, len(bodies))
 	}
 }
 

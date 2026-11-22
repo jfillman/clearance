@@ -42,6 +42,11 @@ type ChangeRequest struct {
 	PR                      int64
 	Head, Base              string
 	Proposer, ProposerKind  string
+	// ProvenanceReason is why the proposer is unknown, as the verifier found it (only with ProposerKind "unknown"):
+	// ProvenanceUnvouchedCommits holds the change for two people, anything else (or nothing) denies it (DG-PROVENANCE).
+	// UnvouchedCommits are the commits it names, with ProvenanceUnvouchedCommits only.
+	ProvenanceReason string
+	UnvouchedCommits []string
 	// Source is the people behind the change (source pull request authors and mergers, the promoter); nil = none sent.
 	Source       *SourcePeople
 	Owner        string // the app's owner group; "" = the core looks it up
@@ -88,7 +93,7 @@ func (r ChangeRequest) ID() string {
 	return "ch-" + hex.EncodeToString(h[:])[:16]
 }
 
-var requestKeys = setOf("app", "env", "cluster", "repo", "pr", "head", "base", "proposer", "proposerKind", "source", "owner",
+var requestKeys = setOf("app", "env", "cluster", "repo", "pr", "head", "base", "proposer", "proposerKind", "provenanceReason", "unvouchedCommits", "source", "owner",
 	"protected", "treeDigest", "paths", "linesChanged", "objects", "checks", "policy", "policyCommit", "admission", "agent", "taskId", "definition", "subject")
 var objectKeys = setOf("apiVersion", "kind", "namespace", "name", "op", "fields", "images", "digest")
 var definitionKeys = setOf("name", "path", "old", "new")
@@ -173,6 +178,9 @@ func ParseRequest(v any) (ChangeRequest, error) {
 	}
 	if !slices.Contains(ProposerKinds, r.ProposerKind) {
 		return r, bad("proposerKind is person, agent or unknown")
+	}
+	if perr := parseProvenanceReason(d, &r); perr != nil {
+		return r, perr
 	}
 	if v := d["source"]; v != nil {
 		src, serr := parseSource(v)
@@ -359,6 +367,47 @@ func ParseRequest(v any) (ChangeRequest, error) {
 		return r, bad("a terraform-plan change lists its resources in subject.resources, not objects or definition")
 	}
 	return r, nil
+}
+
+// parseProvenanceReason reads provenanceReason and unvouchedCommits (docs/gate.md, Unvouched commits). Each is
+// absent when missing, null or empty. provenanceReason is one of ProvenanceReasons and is sent only with proposerKind
+// "unknown" (it says why the proposer is unknown); unvouched-commits needs unvouchedCommits (1 to MaxUnvouchedCommits
+// distinct 40-hex commits), and unvouchedCommits needs unvouched-commits.
+func parseProvenanceReason(d map[string]any, r *ChangeRequest) error {
+	if v := d["provenanceReason"]; v != nil && v != "" {
+		str, isStr := v.(string)
+		if !isStr || !slices.Contains(ProvenanceReasons, str) {
+			return bad("provenanceReason is %s", strings.Join(ProvenanceReasons, " or "))
+		}
+		if r.ProposerKind != "unknown" {
+			return bad("provenanceReason says why the proposer is unknown: it is sent only with proposerKind unknown")
+		}
+		r.ProvenanceReason = str
+	}
+	commits, ok := listOfStrings(d, "unvouchedCommits", shaRx.MatchString)
+	if d["unvouchedCommits"] == nil {
+		commits, ok = nil, true
+	}
+	if !ok || len(commits) > MaxUnvouchedCommits {
+		return bad("unvouchedCommits is a list of at most %d 40-hex commits", MaxUnvouchedCommits)
+	}
+	seen := map[string]bool{}
+	for _, c := range commits {
+		if seen[c] {
+			return bad("unvouchedCommits lists %s twice", c)
+		}
+		seen[c] = true
+	}
+	switch {
+	case r.ProvenanceReason == ProvenanceUnvouchedCommits && len(commits) == 0:
+		return bad("provenanceReason unvouched-commits names its commits in unvouchedCommits (at least one)")
+	case r.ProvenanceReason != ProvenanceUnvouchedCommits && len(commits) > 0:
+		return bad("unvouchedCommits is sent only with provenanceReason unvouched-commits")
+	}
+	if len(commits) > 0 {
+		r.UnvouchedCommits = commits
+	}
+	return nil
 }
 
 // listOfStrings reads an optional list of strings (default empty); ok is false when it is not one, or an item

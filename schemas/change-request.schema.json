@@ -5,6 +5,79 @@
   "description": "What a verifier registers with POST /v1/clearances (docs/gate.md): a change to a protected environment. Its subject is a rendered manifest tree (treeDigest and objects), an agent definition's release (definition) or a saved Terraform plan (subject). internal/gate ParseRequest decodes the same shape strictly (unknown fields refused) and checks what a schema cannot.",
   "type": "object",
   "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "provenanceReason"
+        ],
+        "properties": {
+          "provenanceReason": {
+            "enum": [
+              "unvouched-commits",
+              "unrecorded-agent"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "proposerKind"
+        ],
+        "properties": {
+          "proposerKind": {
+            "const": "unknown"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "provenanceReason"
+        ],
+        "properties": {
+          "provenanceReason": {
+            "const": "unvouched-commits"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "unvouchedCommits"
+        ],
+        "properties": {
+          "unvouchedCommits": {
+            "type": "array",
+            "minItems": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "unvouchedCommits"
+        ],
+        "properties": {
+          "unvouchedCommits": {
+            "type": "array",
+            "minItems": 1
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "provenanceReason"
+        ],
+        "properties": {
+          "provenanceReason": {
+            "const": "unvouched-commits"
+          }
+        }
+      }
+    }
+  ],
   "required": [
     "app",
     "env",
@@ -84,6 +157,40 @@
             "agent",
             "unknown"
           ]
+        }
+      ]
+    },
+    "provenanceReason": {
+      "description": "Why proposerKind is unknown, sent only with it (docs/gate.md, Unvouched commits). unvouched-commits: every pull request the change carries is accounted for, but it also carries commits no merged pull request contains (a direct push, a merge made outside a PR); the change holds at tier 3 for one person from the owner group and one from an outside group. unrecorded-agent: it looks like an agent's work and Clearance has no record of an agent opening it; denied (DG-PROVENANCE), as is proposerKind unknown with no reason. Absent, null or empty: no reason.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "const": ""
+        },
+        {
+          "enum": [
+            "unvouched-commits",
+            "unrecorded-agent"
+          ]
+        }
+      ]
+    },
+    "unvouchedCommits": {
+      "description": "The commits no merged pull request contains, with provenanceReason unvouched-commits only (and required with it).",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "maxItems": 250,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          }
         }
       ]
     },
