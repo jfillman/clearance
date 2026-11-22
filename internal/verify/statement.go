@@ -343,12 +343,32 @@ func packetChecks(checks *[7]Check, doc *statement.Document, so StatementOptions
 			c6 = append(c6, bindCheck("every exception row cites a record the packet carries", []string{fmt.Sprintf("%d exception row(s) cite a record the packet does not carry", len(missing))}))
 		}
 		// Every class is present by construction (statement.Summarize lists them all) and the statement is held to it.
-		if len(doc.Summary.Exceptions.ByClass) != len(statement.ExceptionClasses) || len(doc.Summary.ByCoverage) == 0 || doc.Summary.Health.Scopes == nil {
+		// An optional class (statement.OptionalExceptionClasses) is listed only when it has rows; every other class always is.
+		if !listsEveryClass(doc.Summary.Exceptions.ByClass) || len(doc.Summary.ByCoverage) == 0 || doc.Summary.Health.Scopes == nil {
 			c6 = append(c6, bindCheck("every coverage state, exception class and scope is listed", []string{"the statement leaves a state, a class or the health section out"}))
 		}
 	}
 	checks[4] = rollup(checks[4], c5)
 	checks[5] = rollup(checks[5], c6)
+}
+
+// listsEveryClass says whether a statement's exceptions by class list every always-listed class once, and nothing else
+// but an optional class with a count.
+func listsEveryClass(by []statement.Count) bool {
+	seen := map[string]bool{}
+	for _, c := range by {
+		if seen[c.State] || !statement.KnownExceptionClass(c.State) ||
+			(!slices.Contains(statement.ExceptionClasses, c.State) && c.Count == 0) {
+			return false
+		}
+		seen[c.State] = true
+	}
+	for _, c := range statement.ExceptionClasses {
+		if !seen[c] {
+			return false
+		}
+	}
+	return true
 }
 
 func derive(c *ctx, doc *statement.Document) (*statement.Derived, error) {

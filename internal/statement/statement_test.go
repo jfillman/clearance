@@ -381,3 +381,33 @@ func TestAPacketOrDocumentWithAnUnknownSetAMalformedTimeOrAnOverlongListIsRefuse
 		t.Fatal(err)
 	}
 }
+
+// gate-exemption is an optional class (W-42): listed only when the packet has a row of it, so a packet without one makes
+// the statement it always made.
+func TestAnOptionalClassIsListedOnlyWithRows(t *testing.T) {
+	d := build(t, statement.ProfileInsurer, func(p map[string]any) {
+		e := p["exceptions"].(map[string]any)
+		e["rows"] = append(e["rows"].([]any), map[string]any{"class": "gate-exemption", "seq": 6, "resolution": "exemption active"})
+		e["by_class"] = append(e["by_class"].([]any), map[string]any{"state": "gate-exemption", "count": 1})
+	})
+	by := d.Summary.Exceptions.ByClass
+	if len(by) != 8 || by[7].State != "gate-exemption" || by[7].Count != 1 || d.Summary.Exceptions.Unresolved != 1 {
+		t.Fatalf("%+v", d.Summary.Exceptions)
+	}
+	for name, mod := range map[string]func(map[string]any){
+		"a row without its count": func(p map[string]any) {
+			e := p["exceptions"].(map[string]any)
+			e["rows"] = append(e["rows"].([]any), map[string]any{"class": "gate-exemption", "seq": 6, "resolution": "exemption active"})
+		},
+		"a count without its row": func(p map[string]any) {
+			e := p["exceptions"].(map[string]any)
+			e["by_class"] = append(e["by_class"].([]any), map[string]any{"state": "gate-exemption", "count": 1})
+		},
+	} {
+		if _, err := statement.Build(statement.Input{ID: "st-" + strings.Repeat("1", 32), Issuer: "clearance", IssuedAt: "2026-11-14T00:00:00Z",
+			Profile: statement.ProfileInsurer, ScopeLabel: "Production", PolicyVersion: "gate-1", PacketID: "pk-" + strings.Repeat("2", 32),
+			PacketDigest: strings.Repeat("2", 64), PacketJSON: packetJSON(mod)}); err == nil {
+			t.Errorf("%s: cut", name)
+		}
+	}
+}

@@ -1853,11 +1853,13 @@ class ProtectionRequest(Model):
 
     _STRICT: ClassVar[bool] = True
     _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("exempted", "exempted", ("list", ("ref", "GateProtectedPair")), False),
         Field("pairs", "pairs", ("list", ("ref", "GateProtectedPair")), True),
         Field("reason", "reason", ("str",), False),
         Field("seq", "seq", ("int",), False),
     )
 
+    exempted: list[GateProtectedPair] | None = None
     pairs: list[GateProtectedPair]
     reason: str | None = None
     seq: int | None = None

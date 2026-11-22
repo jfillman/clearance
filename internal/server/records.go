@@ -482,6 +482,14 @@ func (s *Server) records(w http.ResponseWriter, r *http.Request) {
 	}
 	wr := prov.Writer()
 	wr.Verified = recordVerified
+	// A gate exemption is decided before the event id is looked up: an agent that asks again for one it was granted
+	// carries the same event id, and the core decides again each time (CLEARANCE_PROTECTED_ENVIRONMENTS may have changed).
+	if s.opt.Gate != nil && gate.IsReport(body.Kind) {
+		if err := s.opt.Gate.DecideExemption(ev); err != nil {
+			exceptionError(w, err)
+			return
+		}
+	}
 	var rec store.Record
 	if source, id, keyed := eventKey(ev); keyed {
 		// The provider's own event id: de-duplicate (O-1, closes R-9). The lock makes the check and the write one step.
@@ -529,9 +537,10 @@ func (s *Server) records(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	var br *gate.BadReport
+	var xr *gate.ExemptionRefused
 	switch {
-	case errors.As(err, &br):
-		writeError(w, http.StatusBadRequest, br.Message)
+	case errors.As(err, &br), errors.As(err, &xr):
+		exceptionError(w, err)
 		return
 	case errors.Is(err, evidence.ErrInvalid), errors.Is(err, evidence.ErrNotStorable), errors.Is(err, evidence.ErrEnvelopeField):
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -545,6 +554,20 @@ func (s *Server) records(w http.ResponseWriter, r *http.Request) {
 		s.opt.OnOutcome(rec)
 	}
 	writeJSON(w, http.StatusOK, refOf(rec))
+}
+
+// exceptionError writes a gate report's refusal: 400 for a malformed one, 409 for a gate exemption the core refuses.
+func exceptionError(w http.ResponseWriter, err error) {
+	var br *gate.BadReport
+	var xr *gate.ExemptionRefused
+	switch {
+	case errors.As(err, &xr):
+		writeError(w, http.StatusConflict, xr.Error())
+	case errors.As(err, &br):
+		writeError(w, http.StatusBadRequest, br.Message)
+	default:
+		writeError(w, http.StatusBadRequest, err.Error())
+	}
 }
 
 // recordVerified: provider (the caller authenticated as it) and ts (the core's clock). Everything else is claimed.

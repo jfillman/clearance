@@ -468,6 +468,9 @@ type ProtectionRequest struct {
 	// Seq is the report's number, which only goes up per cluster: the core refuses a lower or equal one that carries a
 	// different set (an old or replayed report cannot replace a newer one). 0: not numbered.
 	Seq int64 `json:"seq,omitempty"`
+	// Exempted are the pairs the report removes because a gate exemption released their Application. The core refuses
+	// (409) a pair whose environment its CLEARANCE_PROTECTED_ENVIRONMENTS protects. Empty: none.
+	Exempted []ProtectedPair `json:"exempted,omitempty"`
 }
 
 // ProtectionResult is what a report did: the digest of the set the core now holds, whether it differs from the last

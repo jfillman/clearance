@@ -412,7 +412,7 @@ func (e *Env) ExceptionsList(ctx context.Context, args []string) int {
 	s, pos, ee := e.begin("exceptions list", "[--scope S] [--kind K] [--tool T] [--app A] [--since T] [--until T] [--limit N] [--all]", args, func(fs *flag.FlagSet) {
 		lf.register(fs)
 		fs.StringVar(&scope, "scope", "", "only records whose app, target, cluster or environment is this (filtered here, after the read)")
-		fs.StringVar(&kind, "kind", "", "deploy.exception kind: out-of-band, drift, untraced-apply, digest-mismatch, attempted-refused, monitoring-protection")
+		fs.StringVar(&kind, "kind", "", "deploy.exception kind: out-of-band, drift, untraced-apply, digest-mismatch, attempted-refused, monitoring-protection, gate-exemption")
 		fs.StringVar(&tool, "tool", "", "narrow to one tool (deploy.exception, deploy.degraded, breakglass.open, ...)")
 		fs.StringVar(&app, "app", "", "only this app")
 		fs.StringVar(&since, "since", "", "since: an RFC 3339 time, a date, or a span such as 24h or 7d")

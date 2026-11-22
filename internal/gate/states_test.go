@@ -48,6 +48,10 @@ func exceptionOf(f *fixture, kind, changeID string) store.Event {
 		x["actor"], x["detail"] = "arn:aws:iam::123456789012:user/someone", "StopLogging on trail org-trail"
 	case "digest-mismatch":
 		x["expected"], x["observed"] = "sha256:"+strings.Repeat("c", 64), "sha256:"+strings.Repeat("9", 64)
+	case gate.KindGateExemption: // expired: a record that closes one is taken whatever the environment
+		x["exemption"] = map[string]any{"state": "expired", "application": "argocd/gate-api-prod", "entry": "argocd/gate-api-*",
+			"rule": "tenants", "rule_digest": strings.Repeat("d", 64), "reason": "a migration to the new chart",
+			"expires": evidence.ISO(f.clock.now())}
 	}
 	fields := map[string]any{"exception": x}
 	if changeID != "" {

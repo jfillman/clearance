@@ -41,7 +41,8 @@ const (
 )
 
 // ExceptionKinds are deploy.exception's kinds.
-var ExceptionKinds = []string{"out-of-band", "drift", "untraced-apply", "digest-mismatch", KindAttemptedRefused, KindMonitoringProtection}
+var ExceptionKinds = []string{"out-of-band", "drift", "untraced-apply", "digest-mismatch", KindAttemptedRefused, KindMonitoringProtection,
+	KindGateExemption}
 
 // The exception kinds O-1 adds. attempted-refused is an operation something tried and a control refused: nothing
 // landed, so it never moves a change to exception. monitoring-protection is an operation on the controls that watch
@@ -59,6 +60,7 @@ var ExceptionCoverage = map[string]string{
 	"digest-mismatch":        "out-of-band-detected",
 	KindAttemptedRefused:     evidence.CoverageAttemptedRefused,
 	KindMonitoringProtection: "out-of-band-detected",
+	KindGateExemption:        "coverage-unavailable",
 }
 
 // Report caps.
@@ -70,7 +72,7 @@ const (
 
 var (
 	changeIDRx  = regexp.MustCompile(`^ch-[0-9a-f]{16}\z`)
-	exceptionKs = setOf("kind", "objects", "addresses", "actor", "expected", "observed", "state", "detected_at", "detail")
+	exceptionKs = setOf("kind", "objects", "addresses", "actor", "expected", "observed", "state", "detected_at", "detail", "exemption")
 	objectRefKs = setOf("apiVersion", "kind", "namespace", "name", "rendered", "grant")
 	stateKs     = setOf("backend", "key", "version")
 	outageKs    = setOf("from", "to")
@@ -240,7 +242,14 @@ func checkException(ev store.Event) error {
 		}
 	}
 	id, _ := changeRef(ev)
+	if _, present := x["exemption"]; present != (kind == KindGateExemption) {
+		return badReport("exception.exemption is carried by a %s exception, and only by one", KindGateExemption)
+	}
 	switch kind {
+	case KindGateExemption:
+		if err := checkExemption(ev, x); err != nil {
+			return err
+		}
 	case "out-of-band":
 		if objects == 0 {
 			return badReport("an out-of-band exception lists the objects it found (exception.objects)")
@@ -308,6 +317,9 @@ func checkDegraded(ev store.Event, now time.Time) error {
 // Errors: *BadReport, *ErrTransition (a bug), a store error.
 func (s *Service) Report(ctx context.Context, ev store.Event, wr evidence.Writer) (store.Record, error) {
 	if err := CheckReport(ev, s.now()); err != nil {
+		return nil, err
+	}
+	if err := s.DecideExemption(ev); err != nil {
 		return nil, err
 	}
 	cluster, env, _ := where(ev)
