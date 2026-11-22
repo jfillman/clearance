@@ -579,11 +579,11 @@ func TestDoctorFSSandbox(t *testing.T) {
 	oldP := landlockProbe
 	t.Cleanup(func() { landlockProbe = oldP; SetFSSandbox("", "") })
 	f := newDoctorFixture(t)
-	landlockProbe = func() error { return nil }
+	landlockProbe = func() (int, error) { return 4, nil }
 	delete(f.env, FSSandboxEnv)
 	cs, _, _ := f.run(t)
 	doctorWant(t, cs, "fs-sandbox", levelOK, "token is out of their reach")
-	landlockProbe = func() error { return errors.New("injected: no landlock") }
+	landlockProbe = func() (int, error) { return 0, errors.New("injected: no landlock") }
 	cs, _, code := f.run(t)
 	doctorWant(t, cs, "fs-sandbox", levelWarn, "injected: no landlock")
 	if code != 0 {

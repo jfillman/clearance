@@ -12,7 +12,11 @@ import (
 // is an operator's laptop running the parity tool, and the unit tests.
 const shimSupported = false
 
-func landlockAvailable() error { return errors.New("landlock is Linux only") }
+func landlockABI() (int, error) { return 0, errors.New("landlock is Linux only") }
+
+const setupFD = 3
+
+func shimSetupFailed(_ sandboxSpec, err error) error { return err }
 
 func shimExec(sandboxSpec, string, []string, []string) error {
 	return errors.New("clearance-cmp sandbox: Linux only")

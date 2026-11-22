@@ -39,6 +39,28 @@ const (
 // and the last 10 s are left for the error to reach it.
 const PluginDeadline = 80 * time.Second
 
+// ChartLookupTimeout bounds the chart tag lookup Generate makes before the render (for the pre-render cache's key). It
+// is an optimisation: a lookup that times out is no answer, and the render fetches the chart itself.
+const ChartLookupTimeout = 5 * time.Second
+
+// The plugin's calls to the core: one retry after a jittered wait (newCore). coreBudget is the most one call can take,
+// every attempt timing out: (CoreRetries+1) attempts and the waits between them. The startup check reserves all of it,
+// so an unreachable core is ErrCoreUnavailable (and the outage policy's cache) before PluginDeadline, never a deadline.
+const (
+	CoreRetries    = 1
+	CoreBackoff    = 250 * time.Millisecond
+	CoreBackoffMax = 2 * time.Second
+)
+
+func coreBudget(callTimeout time.Duration) time.Duration {
+	total, d := time.Duration(CoreRetries+1)*callTimeout, CoreBackoff
+	for i := 0; i < CoreRetries; i++ {
+		total += min(d, CoreBackoffMax)
+		d *= 2
+	}
+	return total
+}
+
 // Limits are the render bounds.
 type Limits struct {
 	Timeout time.Duration // the render phase, slot wait included
@@ -53,13 +75,13 @@ type Limits struct {
 // limits", has the table). The parity fixture's render (testdata/parity-gate-api, the gate-api Application on
 // hangar-prod) is 5.7 KB of manifests; helm renders it in 0.06 s wall and 0.05 s CPU at 45 MB peak RSS, but needs a
 // data segment of about 96 MiB to start at all (the Go runtime's heap arena map counts), kustomize about 48 MiB. Its
-// chart repository checks out at about 50 MB. So: wall 45 s (and the core call's 20 s still fit inside the 80 s
-// PluginDeadline, under Argo CD's 90 s), CPU 30 s per step, memory 512 MiB per step (5x helm's floor, and the
+// chart repository checks out at about 50 MB. So: wall 30 s (500x the render; with the 5 s chart lookup and the core
+// call's two 20 s attempts it fits the 80 s PluginDeadline, under Argo CD's 90 s), CPU 30 s per step, memory 512 MiB per step (5x helm's floor, and the
 // container limit the install guide recommends), stdout 32 MiB (over 5000x the fixture, 4x the pre-render cache's
 // 8 MiB stream cap), scratch 512 MiB per render (10x the checkout), 4 renders at once (Argo CD's repo-server
 // reposerver.parallelism.limit is commonly 2 or unset).
 func DefaultLimits() Limits {
-	return Limits{Timeout: 45 * time.Second, CPU: 30 * time.Second, Memory: 512 << 20, Output: 32 << 20, Temp: 512 << 20, Renders: 4}
+	return Limits{Timeout: 30 * time.Second, CPU: 30 * time.Second, Memory: 512 << 20, Output: 32 << 20, Temp: 512 << 20, Renders: 4}
 }
 
 // parseLimits reads the settings, reporting every problem rather than the first.
@@ -103,9 +125,11 @@ func parseLimits(get func(string) string, callTimeout time.Duration) (Limits, []
 			l.Renders = n
 		}
 	}
-	if callTimeout > 0 && l.Timeout+callTimeout >= PluginDeadline {
-		errs = append(errs, fmt.Errorf("%s (%s) plus CLEARANCE_CMP_CALL_TIMEOUT (%s) must be under %s: Argo CD kills a plugin at 90 s, and the core must still be asked after the render",
-			EnvRenderTimeout, l.Timeout, callTimeout, PluginDeadline))
+	if callTimeout > 0 {
+		if need := ChartLookupTimeout + l.Timeout + coreBudget(callTimeout); need >= PluginDeadline {
+			errs = append(errs, fmt.Errorf("%s (%s) plus the chart lookup (%s) plus %d attempts of CLEARANCE_CMP_CALL_TIMEOUT (%s) and the wait between them is %s, which must be under %s: Argo CD kills a plugin at 90 s, and an unreachable core must be found out in time for the outage policy",
+				EnvRenderTimeout, l.Timeout, ChartLookupTimeout, CoreRetries+1, callTimeout, need, PluginDeadline))
+		}
 	}
 	return l, errs
 }

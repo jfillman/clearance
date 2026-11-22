@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -37,7 +38,8 @@ const (
 	shimSpecEnv = "CLEARANCE_CMP_SANDBOX_SPEC"
 	// shimFailCode is the shim's exit code when it could not set up the sandbox (the tool never ran).
 	shimFailCode = 125
-	// shimLandlockPrefix starts the shim's stderr when Landlock itself refused (try mode then runs the step without it).
+	// shimLandlockPrefix starts the shim's setup-channel message when Landlock itself refused (try mode then runs the
+	// step without it). It is read from that channel only, never from the tool's stderr.
 	shimLandlockPrefix = "clearance-cmp sandbox: landlock: "
 )
 
@@ -62,6 +64,7 @@ type sandboxSpec struct {
 	RO       []string `json:"ro,omitempty"` // read beneath
 	RW       []string `json:"rw,omitempty"` // read, write, create and remove beneath
 	Dev      []string `json:"dev,omitempty"`
+	ErrFD    int      `json:"errfd,omitempty"` // the setup-error channel's fd (setupFD), 0 none
 }
 
 // systemRX are the directories a step may read and execute from: the tools, their libraries and their configuration
@@ -77,6 +80,7 @@ var fsb struct {
 	token  string // the token file, which no root may contain
 	probed bool
 	usable bool
+	abi    int // the kernel's Landlock ABI, once probed usable
 	cause  error
 	warned bool
 }
@@ -84,8 +88,37 @@ var fsb struct {
 // fsWarn is where the one-line fallback notice goes.
 var fsWarn io.Writer = os.Stderr
 
-// landlockProbe is the availability check; a test replaces it.
-var landlockProbe = landlockAvailable
+// landlockProbe is the availability check; a test replaces it. It returns the kernel's ABI.
+var landlockProbe = probeLandlock
+
+// probeLandlock asks the kernel for its Landlock ABI, then installs a ruleset for real in a disposable child (the shim
+// running `true`): a seccomp profile that allows creating a ruleset but not restrict_self, or a kernel that refuses the
+// rules, is found here, before any render, and not by every render under require.
+func probeLandlock() (int, error) {
+	abi, err := landlockABI()
+	if err != nil {
+		return 0, err
+	}
+	self, err := shimPath()
+	if err != nil {
+		return 0, fmt.Errorf("landlock: %w", err)
+	}
+	tru, err := exec.LookPath("true")
+	if err != nil {
+		return abi, nil // nothing to probe with: the ABI answer stands, and a step's own setup failure still reports
+	}
+	spec := sandboxSpec{Landlock: true, RX: append(append([]string{}, systemRX...), filepath.Dir(tru)), Dev: []string{"/dev"}}
+	env, err := spec.env()
+	if err != nil {
+		return 0, err
+	}
+	cmd := exec.Command(self, shimArg, tru)
+	cmd.Env = []string{env}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return 0, fmt.Errorf("landlock: installing a ruleset failed in a probe (%v): %s", err, strings.TrimSpace(string(out)))
+	}
+	return abi, nil
+}
 
 // SetFSSandbox sets the mode and the token path to keep out, and forgets any earlier probe.
 func SetFSSandbox(mode, tokenFile string) {
@@ -106,11 +139,12 @@ func fsProbeLocked() {
 		return
 	}
 	fsb.probed = true
-	if err := landlockProbe(); err != nil {
+	abi, err := landlockProbe()
+	if err != nil {
 		fsb.cause = err
 		return
 	}
-	fsb.usable = true
+	fsb.usable, fsb.abi = true, abi
 }
 
 // FSSandboxState is what the summary line and doctor report: on, off or unavailable.
@@ -125,6 +159,13 @@ func FSSandboxState() string {
 		return "on"
 	}
 	return "unavailable"
+}
+
+// fsSandboxABI is the kernel's Landlock ABI once the probe found it usable (0 otherwise).
+func fsSandboxABI() int {
+	fsb.Lock()
+	defer fsb.Unlock()
+	return fsb.abi
 }
 
 // fsSandboxCause is why the probe said unavailable (nil when it did not).

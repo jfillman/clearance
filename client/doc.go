@@ -33,7 +33,7 @@
 //
 // Defaults are the policy decided on 2026-11-02: each attempt has Options.Timeout (250 ms) for the whole exchange;
 // a retryable failure is retried Options.Retries (1) time, at once unless Options.RetryBackoff sets a jittered wait
-// between attempts (the Argo CD plugin's 250 ms doubling, at most 2 s); Options.BreakerThreshold (5) consecutive
+// between attempts (the Argo CD plugin waits 125 to 250 ms before its one retry); Options.BreakerThreshold (5) consecutive
 // unavailable calls open the breaker, which fails every call fast for Options.BreakerCooldown (5 s) and then lets
 // one probe through (success closes it, failure opens it again). What is retried depends on whether the call is
 // safe to repeat: Evaluate, RegisterChange, Provenance and the probes are retried on any connection failure,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -80,13 +81,25 @@ func OSRun(ctx context.Context, dir string, env []string, name string, args ...s
 		defer cancel()
 		out, errb = &capWriter{max: lim.Output, over: cancel}, &headWriter{max: 64 << 10}
 		var cmd *exec.Cmd
+		var setup *os.File // the shim's setup-error channel (fssandbox.go): the tool never holds it
 		if selfErr == nil {
-			spec, err := buildSpec(lim, landlock, tool, dir, scratch, b).env()
+			r, w, err := os.Pipe()
 			if err != nil {
+				return err
+			}
+			defer r.Close()
+			setup = r
+			sp := buildSpec(lim, landlock, tool, dir, scratch, b)
+			sp.ErrFD = setupFD
+			spec, err := sp.env()
+			if err != nil {
+				w.Close()
 				return err
 			}
 			cmd = exec.CommandContext(sctx, self, append([]string{shimArg, tool}, args...)...)
 			cmd.Env = append(append([]string{}, fullEnv...), spec)
+			cmd.ExtraFiles = []*os.File{w} // fd 3 in the shim
+			defer w.Close()
 		} else {
 			cmd = exec.CommandContext(sctx, tool, args...)
 			cmd.Env = fullEnv
@@ -94,6 +107,7 @@ func OSRun(ctx context.Context, dir string, env []string, name string, args ...s
 		cmd.Dir = dir
 		cmd.Stdout, cmd.Stderr = out, errb
 		cmd.WaitDelay = 2 * time.Second // a killed step's children cannot hold its pipes open past this
+		ownGroup(cmd)                   // the step and everything it starts are one process group, killed together
 		if isolated {
 			ok, err := sandboxStart(cmd, name, args)
 			if err != nil {
@@ -102,15 +116,26 @@ func OSRun(ctx context.Context, dir string, env []string, name string, args ...s
 			isolated = ok
 		}
 		err := cmd.Start()
+		if len(cmd.ExtraFiles) > 0 {
+			cmd.ExtraFiles[0].Close() // the plugin's copy of the write end: EOF once the shim has exec'd or exited
+		}
 		if err != nil && isolated && startFailedForNetns(err) {
 			return noteStartRefused(name, err)
 		}
 		if err == nil {
 			err = cmd.Wait()
+			killGroup(cmd) // a descendant the step left behind (a backgrounded git, a stalled helper) goes with it
 		}
 		ps = cmd.ProcessState
-		if err != nil && landlock && ps != nil && ps.ExitCode() == shimFailCode && strings.HasPrefix(errb.String(), shimLandlockPrefix) {
-			return fsShimRefused(name, errors.New(strings.TrimSpace(strings.TrimPrefix(errb.String(), "clearance-cmp sandbox: "))))
+		if setup != nil && err != nil {
+			// Only the shim writes this channel, and only before exec: what the tool prints or how it exits never
+			// downgrades the sandbox.
+			msg, _ := io.ReadAll(io.LimitReader(setup, 4096))
+			if s := string(msg); landlock && strings.HasPrefix(s, shimLandlockPrefix) {
+				return fsShimRefused(name, errors.New(strings.TrimPrefix(s, "clearance-cmp sandbox: ")))
+			} else if s != "" {
+				return fmt.Errorf("the sandbox shim could not start %s: %s", name, s)
+			}
 		}
 		return err
 	}

@@ -215,3 +215,51 @@ func TestMemoryBoundStopsAStep(t *testing.T) {
 		t.Fatalf("with room the same step fails: %v", err)
 	}
 }
+
+// A tool cannot talk the plugin into retrying it without the sandbox: printing the shim's own setup-failure text and
+// exiting with the shim's code is just a failed step. Only the shim's setup channel, closed at exec, can do that.
+func TestAToolCannotRequestAnUnsandboxedRetry(t *testing.T) {
+	token := tokenFixture(t)
+	withNetns(t, NetnsOff)
+	SetFSSandbox(NetnsTry, token)
+	needLandlock(t)
+	ctx, b := budgetCtx(t, DefaultLimits())
+	log := filepath.Join(b.root, "runs")
+	fakeTool(t, "helm", `echo x >> '`+log+`'; cat '`+token+`' 2>/dev/null; echo "`+shimLandlockPrefix+`injected" >&2; exit `+strconv.Itoa(shimFailCode))
+	out, err := OSRun(ctx, b.src, nil, "helm", "template", "x", ".")
+	if err == nil {
+		t.Fatal("the step succeeded")
+	}
+	noSecret(t, "helm", out, err)
+	if runs, _ := os.ReadFile(log); strings.Count(string(runs), "x") != 1 {
+		t.Fatalf("the tool ran %d times, want once (no unsandboxed retry)", strings.Count(string(runs), "x"))
+	}
+	if FSSandboxState() != "on" {
+		t.Fatalf("a tool's stderr turned the sandbox %s", FSSandboxState())
+	}
+}
+
+// On a kernel with Landlock ABI 3 or later a step cannot truncate a source file its user may write.
+func TestARenderStepCannotTruncateTheSource(t *testing.T) {
+	withNetns(t, NetnsOff)
+	withFS(t, NetnsTry, "")
+	needLandlock(t)
+	if fsSandboxABI() < 3 {
+		t.Skipf("Landlock ABI %d cannot refuse truncate", fsSandboxABI())
+	}
+	ctx, b := budgetCtx(t, DefaultLimits())
+	src := filepath.Join(b.src, "values.yaml")
+	writeFile(t, src, "keep: me\n")
+	os.Chmod(src, 0o644)
+	fakeTool(t, "helm", `truncate -s 0 "$1"`)
+	if _, err := OSRun(ctx, b.src, nil, "helm", src); err == nil {
+		t.Fatal("a step truncated a source file")
+	}
+	if got, _ := os.ReadFile(src); string(got) != "keep: me\n" {
+		t.Fatalf("the source file is now %q", got)
+	}
+	// its scratch is its own
+	if _, err := OSRun(ctx, b.src, nil, "helm", filepath.Join(b.root, "new")); err != nil {
+		t.Fatalf("truncating in scratch failed: %v", err)
+	}
+}

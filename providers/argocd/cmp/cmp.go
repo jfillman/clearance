@@ -58,7 +58,9 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 	// The pre-render cache (rendercache.go): an unchanged Application is answered before anything is fetched or rendered.
 	// It needs the commit the chart's tag resolves to now, one lookup on the remote.
 	if cfg.RenderCacheTTL > 0 && cfg.Sources == "" && cfg.ChartRepo != "" {
-		cfg.chartCommit, cfg.chartLooked = resolveChart(ctx, d.Exec, cfg.ChartRepo, cfg.ChartRev), true
+		lctx, cancel := context.WithTimeout(ctx, ChartLookupTimeout) // an optimisation: no answer in time is no answer
+		cfg.chartCommit, cfg.chartLooked = resolveChart(lctx, d.Exec, cfg.ChartRepo, cfg.ChartRev), true
+		cancel()
 	}
 	rkey := renderKey(cfg)
 	if e, ok := d.Cache.GetRender(rkey, d.Now(), cfg.RenderCacheTTL); ok {
@@ -214,9 +216,9 @@ func registration(cfg Config, tree *Tree) (*client.ChangeRequest, error) {
 func newCore(cfg Config) (Core, error) {
 	return client.New(client.Options{BaseURL: cfg.CoreURL, Token: client.FileToken(cfg.TokenFile),
 		Timeout: cfg.RegisterWait, UserAgent: "clearance-argocd-cmp", CAFile: cfg.CAFile,
-		// Up to two retries, each after a jittered, doubling wait (250 ms, then 500 ms, at most 2 s): the sidecar's
-		// renders that found the core down together do not come back at the same instant. PluginDeadline bounds it all.
-		Retries: 2, RetryBackoff: 250 * time.Millisecond, RetryBackoffMax: 2 * time.Second})
+		// One retry after a jittered wait (125-250 ms): the sidecar's renders that found the core down together do not
+		// come back at the same instant. ParseConfig checks that every attempt fits inside PluginDeadline (coreBudget).
+		Retries: CoreRetries, RetryBackoff: CoreBackoff, RetryBackoffMax: CoreBackoffMax})
 }
 
 func main() {

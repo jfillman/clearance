@@ -237,7 +237,7 @@ ok    helm           /usr/local/bin/helm v4.2.1
 ok    kustomize      /usr/local/bin/kustomize v5.8.1
 warn  netns          unavailable: renders run WITHOUT a private network namespace (...)  fix: optional hardening: ...
 ok    fs-sandbox     on: render steps can read only the system directories, their source and their own scratch; the token is out of their reach (Landlock, mode try)
-ok    render-limits  wall 45s per render (slot wait included), per step CPU 30s, memory 512Mi, stdout 32Mi; scratch 512Mi per render; 4 renders at once; fits the container's memory limit of 2.0 GiB
+ok    render-limits  wall 30s per render (slot wait included), per step CPU 30s, memory 512Mi, stdout 32Mi; scratch 512Mi per render; 4 renders at once; fits the container's memory limit of 2.0 GiB
 ok    plugin-socket  /home/argocd/cmp-server/plugins exists (...)
 ok    cmp-server     /var/run/argocd/argocd-cmp-server is present
 doctor: 13 ok, 1 warn, 0 fail
@@ -261,9 +261,9 @@ parameter would not do, because parameters come from values a tenant writes.
 | `CLEARANCE_CMP_RENDER_CACHE_TTL` | no | `15m` | How long a rendered, stamped stream is reused without cloning or running helm and kustomize (the pre-render cache, under `renders/`). Never past the clearance's own expiry, and a hold or denial is never stored. `0` (or `0s`) turns it off. Chart mode only: the generic `sources` mode is not cached. |
 | `CLEARANCE_CMP_CHART_CACHE_MAX_BYTES` | no | `512Mi` (536870912) | Total size bound of the chart fetch cache (`charts/` under the cache dir). The entry used longest ago is evicted first. `0` turns the chart cache off. A single chart larger than the bound is used for that render and not kept. |
 | `CLEARANCE_CMP_CHART_CACHE_MAX_ENTRIES` | no | `32` | Number of charts kept. `0` turns the chart cache off. |
-| `CLEARANCE_CMP_CALL_TIMEOUT` | no | `20s` | How long one call to the core may take. A failure that is safe to repeat is retried twice, each after a jittered, doubling wait (250 ms, 500 ms, at most 2 s). The whole `generate` has 80 s: Argo CD kills a plugin at 90 s (`ARGOCD_EXEC_TIMEOUT`). |
+| `CLEARANCE_CMP_CALL_TIMEOUT` | no | `20s` | How long one call to the core may take. A failure that is safe to repeat is retried once, after a jittered wait (125 to 250 ms). Both attempts must fit inside the plugin's time with the render (see `CLEARANCE_CMP_RENDER_TIMEOUT`), so an unreachable core is reported as an outage, and the outage policy's cache applies, not as a deadline. The whole `generate` has 80 s: Argo CD kills a plugin at 90 s (`ARGOCD_EXEC_TIMEOUT`). |
 | `CLEARANCE_CMP_FS_SANDBOX` | no | `try` | The filesystem sandbox of the render steps (Landlock). `try`: use it when the kernel has it, else render without it and warn once. `require`: refuse to render without it. `off`: never. Anything else stops the plugin at start. The summary line ends `fs-sandbox=on\|unavailable\|off`. With it on, a `CLEARANCE_TOKEN_FILE` under `/usr`, `/bin`, `/sbin`, `/lib*`, `/etc`, `/proc`, `/sys`, `/dev` or `HOME` stops the plugin at start (those are readable by every step). |
-| `CLEARANCE_CMP_RENDER_TIMEOUT` | no | `45s` | Wall time of the whole render phase: waiting for a slot, fetching the chart, helm, kustomize. Plus `CLEARANCE_CMP_CALL_TIMEOUT` it must stay under 80 s, or the plugin stops at start. |
+| `CLEARANCE_CMP_RENDER_TIMEOUT` | no | `30s` | Wall time of the whole render phase: waiting for a slot, fetching the chart, helm, kustomize. The chart tag lookup before it has 5 s of its own (an optimisation: no answer in time means the render fetches). The lookup, this, and two attempts of `CLEARANCE_CMP_CALL_TIMEOUT` with the wait between them must stay under 80 s, or the plugin stops at start: with the default 20 s call timeout, at most `34s`. |
 | `CLEARANCE_CMP_RENDER_MAX_CPU` | no | `30s` | CPU time of one step (`RLIMIT_CPU`). At least `1s`. |
 | `CLEARANCE_CMP_RENDER_MAX_MEMORY` | no | `512Mi` | Memory of one step: its data segment (`RLIMIT_DATA`), and `GOMEMLIMIT` at three quarters of it for helm and kustomize. At least `128Mi` (helm's Go runtime needs about 96 MiB to start). Bytes, or with `Ki`, `Mi`, `Gi`. |
 | `CLEARANCE_CMP_RENDER_MAX_OUTPUT` | no | `32Mi` | Bytes one step may write to stdout, and the size of the rendered manifests. At least `1Mi`. |
@@ -292,7 +292,7 @@ v5.8.1:
 
 | Bound | Default | Measured | Why this default |
 |---|---|---|---|
-| Wall time, whole render | 45 s | helm 0.06 s; a chart clone a few seconds | Leaves the core call its 20 s inside the plugin's 80 s, under Argo CD's 90 s. The existing 80 s deadline is unchanged. |
+| Wall time, whole render | 30 s | helm 0.06 s; a chart clone a few seconds | 500x the render. With the 5 s chart lookup and both 20 s attempts of the core call (75.25 s) it fits the plugin's 80 s, under Argo CD's 90 s, so a core that does not answer is an outage, not a deadline. The existing 80 s deadline is unchanged. |
 | CPU, per step | 30 s | helm 0.05 s | Only a runaway template or a tight loop reaches it; wall time alone would let a multi-threaded step burn many cores' worth. |
 | Memory, per step | 512 MiB | helm 45 MB peak RSS, but needs about 96 MiB of data segment to start; kustomize about 48 MiB | 5x helm's floor, and the container memory limit this guide recommends, so a step that would go over is stopped with a clear error before the kernel's OOM killer acts. |
 | Stdout per step, and the manifests | 32 MiB | 5.7 KB | Over 5000x the fixture; 4x the pre-render cache's 8 MiB stream cap. |
@@ -315,7 +315,7 @@ The classes are `wall-time`, `cpu`, `memory`, `output`, `temp` and `concurrency`
 
 **What the filesystem sandbox is, and is not.** With `fs-sandbox=on` the isolation is enforced by the kernel: a step
 cannot open the token file or anything else outside the directories listed under `CLEARANCE_CMP_FS_SANDBOX`, cannot
-read the plugin's memory or environment, and cannot lift the rules (no capability, `no_new_privs`). The tests show a fake
+read the plugin's memory or environment, and cannot lift the rules (no capability, `no_new_privs`). The step and everything it starts are one process group, killed when the step returns or is stopped, so nothing it left behind keeps running. Whether a step is retried without the sandbox (in `try`, when the kernel refuses the rules) is decided only by a setup channel the shim closes before the tool runs, never by what the tool prints or how it exits. On a kernel whose Landlock ABI is below 3 (before Linux 6.2) a step can still truncate a file its user may write outside its scratch, such as one in the source directory (reads are refused all the same); `doctor` warns with the ABI. `doctor` reports `on` only after a probe has installed a ruleset in a child process, so a seccomp profile that allows creating rules but not applying them shows as `unavailable`. The tests show a fake
 step, the real `kustomize` and the real `helm` (through a symlinked template) each reading the token without the sandbox and
 failing to with it, and CI's image smoke test shows the same in the built image under Docker's default seccomp profile. It
 does not hide what every step may read (the system directories, `HOME`, the source directory: nothing secret is kept

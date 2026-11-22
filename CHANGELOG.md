@@ -23,14 +23,15 @@ token is now out of the render steps' reach on your nodes, and `render-limits` w
   the summary line adds `fs-sandbox=on|unavailable|off`, and a token file under a directory every step may read stops the plugin at
   start. The same shim sets per-step `RLIMIT_CPU`, `RLIMIT_DATA` and `RLIMIT_FSIZE`; the plugin bounds a render's wall time (slot
   wait included), each step's stdout and the rendered manifests, the render's scratch directory, and the renders running at once in
-  the sidecar (file-lock slots). Settings, all optional: `CLEARANCE_CMP_RENDER_TIMEOUT` (45s), `_RENDER_MAX_CPU` (30s),
+  the sidecar (file-lock slots). Settings, all optional: `CLEARANCE_CMP_RENDER_TIMEOUT` (30s), `_RENDER_MAX_CPU` (30s),
   `_RENDER_MAX_MEMORY` (512Mi), `_RENDER_MAX_OUTPUT` (32Mi), `_RENDER_MAX_TEMP` (512Mi), `CLEARANCE_CMP_MAX_RENDERS` (4). A render
   over a bound stops with `render limit exceeded [render.limit.<class>]`, naming the setting; a malformed value stops the plugin at
   start and `doctor` lists every one. The classes are local until F4's error catalogue lands. The plugin process itself gets a
   256 MiB soft `GOMEMLIMIT` unless one is set. See [the install guide](docs/install-argocd-plugin.md#render-limits-and-the-filesystem-sandbox).
 - **Jittered backoff on calls to the core (`client`, `clearance-cmp`).** `client.Options.RetryBackoff` and `RetryBackoffMax` add a
   random wait in `[d/2, d]`, doubling per retry, between attempts (zero, the default, keeps the outage policy's retry at once). The
-  plugin retries twice at 250 ms, then 500 ms, at most 2 s, inside its 80 s.
+  plugin retries once after 125 to 250 ms, and the startup check reserves the chart lookup (5 s), the render's wall time and both
+  attempts inside its 80 s, so an unreachable core is an outage, never a deadline.
 
 ### Changed
 

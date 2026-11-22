@@ -51,7 +51,7 @@ jobs:
           # kernel limits stop a step (these fail, not skip, in CI when the runner's kernel has no Landlock).
           for t in TestKustomize TestRealKustomizeDoesNotFetchAnHTTPBaseUnderTheSandbox TestRealHelmDoesNotReachAnHTTPDependencyUnderTheSandbox \
             TestRenderStepCannotReadTheToken TestRealKustomizeCannotReadTheToken TestRealHelmCannotReadTheTokenThroughASymlink \
-            TestCPUBoundStopsAStep TestMemoryBoundStopsAStep; do
+            TestCPUBoundStopsAStep TestMemoryBoundStopsAStep TestAToolCannotRequestAnUnsandboxedRetry TestAStepsDescendantsDoNotOutliveIt; do
             grep -E "^--- PASS: $t " "$RUNNER_TEMP/real-binary.log"
           done
           ! grep -E 'is not installed|is not on PATH' "$RUNNER_TEMP/real-binary.log"

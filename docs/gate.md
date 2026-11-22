@@ -1950,7 +1950,7 @@ first instruction:
   would contain the token is never granted, and a `CLEARANCE_TOKEN_FILE` under one of the fixed roots stops the plugin at
   start. `CLEARANCE_CMP_FS_SANDBOX` is `try` (default: use it when the kernel has it, else render without it and warn
   once), `require` (refuse to render without it) or `off`. The summary line ends `fs-sandbox=on|unavailable|off`.
-- **Limits**: a wall time for the whole render phase (`CLEARANCE_CMP_RENDER_TIMEOUT`, 45 s, slot wait included), per step
+- **Limits**: a wall time for the whole render phase (`CLEARANCE_CMP_RENDER_TIMEOUT`, 30 s, slot wait included; the chart tag lookup before it has 5 s), per step
   CPU (`RLIMIT_CPU`, 30 s), memory (`RLIMIT_DATA`, 512 MiB, and `GOMEMLIMIT` at three quarters of it for the Go tools),
   stdout (32 MiB, also the bound on the rendered manifests), the render's scratch directory (512 MiB, measured after
   every step; one file is bounded by `RLIMIT_FSIZE`), and renders at once in the sidecar (`CLEARANCE_CMP_MAX_RENDERS`, 4,
@@ -1958,8 +1958,13 @@ first instruction:
   `render limit exceeded [render.limit.<class>]`, naming the bound and the setting that raises it; nothing syncs. The
   classes (`wall-time`, `cpu`, `memory`, `output`, `temp`, `concurrency`) are this plugin's own: F4's error catalogue had
   not landed when they were added, and they are meant to join it.
-- **Calls to the core** are retried twice after a failure that is safe to repeat, each after a jittered, doubling wait
-  (250 ms, 500 ms, at most 2 s), inside the plugin's 80 s.
+- **Calls to the core** are retried once after a failure that is safe to repeat, after a jittered wait (125 to 250 ms).
+  The startup check reserves the lookup, the render's wall time and both attempts inside the plugin's 80 s, so an
+  unreachable core is an outage (and the outage policy's cache applies), never a deadline.
+- **Containment of the step's processes**: each step is a process group of its own, killed when the step returns or
+  is stopped. Whether a step is retried without Landlock is decided only by the shim's setup channel (a pipe it closes
+  before exec), never by the tool's output or exit status. Landlock ABI 3+ (Linux 6.2+) also refuses truncation outside
+  the scratch directory; `doctor` warns on an older ABI.
 
 The defaults, how they were sized and what is real or best-effort are in the install guide's
 [render limits](install-argocd-plugin.md#render-limits-and-the-filesystem-sandbox).

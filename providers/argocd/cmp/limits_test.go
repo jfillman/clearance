@@ -63,12 +63,22 @@ func TestLimitSettings(t *testing.T) {
 		t.Fatalf("defaults: %+v %v", l, errs)
 	}
 	// The default wall time leaves the core call its time inside the plugin's deadline, under Argo CD's 90 s.
-	if d := DefaultLimits(); d.Timeout+20*time.Second >= PluginDeadline || PluginDeadline >= 90*time.Second {
+	// ... including the chart lookup and every attempt of the core call, so an unreachable core is found out in time.
+	if d := DefaultLimits(); ChartLookupTimeout+d.Timeout+coreBudget(20*time.Second) >= PluginDeadline || PluginDeadline >= 90*time.Second {
 		t.Fatalf("the default wall time %s does not fit", d.Timeout)
 	}
-	l, errs = parseLimits(get(map[string]string{EnvRenderTimeout: "30s", EnvMaxCPU: "5s", EnvMaxMemory: "256Mi", EnvMaxOutput: "8Mi",
+	if got := coreBudget(20 * time.Second); got != 40*time.Second+CoreBackoff {
+		t.Fatalf("core budget %s", got)
+	}
+	if _, errs := parseLimits(get(map[string]string{EnvRenderTimeout: "34s"}), 20*time.Second); len(errs) != 0 {
+		t.Fatalf("34s fits (5+34+40.25 < 80): %v", errs)
+	}
+	if _, errs := parseLimits(get(map[string]string{EnvRenderTimeout: "35s"}), 20*time.Second); len(errs) != 1 {
+		t.Fatal("35s does not fit (5+35+40.25 >= 80) and was accepted")
+	}
+	l, errs = parseLimits(get(map[string]string{EnvRenderTimeout: "20s", EnvMaxCPU: "5s", EnvMaxMemory: "256Mi", EnvMaxOutput: "8Mi",
 		EnvMaxTemp: "2Gi", EnvMaxRenders: "2"}), 20*time.Second)
-	if len(errs) != 0 || l != (Limits{Timeout: 30 * time.Second, CPU: 5 * time.Second, Memory: 256 << 20, Output: 8 << 20, Temp: 2 << 30, Renders: 2}) {
+	if len(errs) != 0 || l != (Limits{Timeout: 20 * time.Second, CPU: 5 * time.Second, Memory: 256 << 20, Output: 8 << 20, Temp: 2 << 30, Renders: 2}) {
 		t.Fatalf("set: %+v %v", l, errs)
 	}
 	// every bad value is reported at once, each naming its setting
@@ -289,7 +299,7 @@ func TestTheSpecLeavesOutEveryRootHoldingTheToken(t *testing.T) {
 func TestFSSandboxModes(t *testing.T) {
 	m := marker(t)
 	probes := 0
-	noLandlock := func() error { probes++; return errors.New("injected: no landlock") }
+	noLandlock := func() (int, error) { probes++; return 0, errors.New("injected: no landlock") }
 
 	w := withFS(t, NetnsRequire, "")
 	landlockProbe = noLandlock

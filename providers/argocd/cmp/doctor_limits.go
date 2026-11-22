@@ -17,8 +17,11 @@ func doctorFSSandbox(env DoctorEnv, add func(level, name, msg, fix string)) {
 	}
 	SetFSSandbox(mode, orDefault(env.Get("CLEARANCE_TOKEN_FILE"), "/var/run/secrets/tokens/clearance"))
 	switch state := FSSandboxState(); {
+	case state == "on" && fsSandboxABI() < 3:
+		add(levelWarn, name, fmt.Sprintf("on: render steps can read only the system directories, their source and their own scratch; the token is out of their reach (Landlock ABI %d, mode %s). This kernel's Landlock cannot refuse truncate(2), so a step could still truncate a file its user may write outside its scratch", fsSandboxABI(), mode),
+			"a kernel with Landlock ABI 3 or later (Linux 6.2+) refuses that too; reads are refused either way")
 	case state == "on":
-		add(levelOK, name, "on: render steps can read only the system directories, their source and their own scratch; the token is out of their reach (Landlock, mode "+mode+")", "")
+		add(levelOK, name, fmt.Sprintf("on: render steps can read only the system directories, their source and their own scratch; the token is out of their reach (Landlock ABI %d, mode %s)", fsSandboxABI(), mode), "")
 	case state == "off":
 		add(levelOK, name, "off: "+FSSandboxEnv+"=off, render steps can read every file this user can, the clearance token included", "")
 	case mode == NetnsRequire:
