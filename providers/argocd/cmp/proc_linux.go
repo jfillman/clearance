@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"strconv"
 	"sync"
@@ -43,18 +44,23 @@ func stepLock() func() {
 	return stepMu.Unlock
 }
 
+// reapTimeout bounds one sweep; a test shortens it.
+var reapTimeout = 5 * time.Second
+
 // reapStep runs after a step's Wait, under stepLock: it kills every child of the plugin (its own group or session
-// too) and reaps every exited one, until there is none (ECHILD) or the bound passes.
-func reapStep() {
+// too) and reaps every exited one, until there is none (ECHILD). An error when the bound passes with any left: the step
+// then fails, it never reports success over a process that outlives it.
+func reapStep() error {
 	if !reaping.Load() {
-		return
+		return nil
 	}
-	reapAll()
+	return reapAll()
 }
 
-// reapAll kills and reaps every child of this process, until there is none (ECHILD) or the bound passes.
-func reapAll() {
-	deadline := time.Now().Add(5 * time.Second)
+// reapAll kills and reaps every child of this process, until there is none (ECHILD); an error when the bound passes
+// first.
+func reapAll() error {
+	deadline := time.Now().Add(reapTimeout)
 	for time.Now().Before(deadline) {
 		for _, pid := range childrenOf(os.Getpid()) {
 			syscall.Kill(-pid, syscall.SIGKILL) // its own group or session, if it made one
@@ -64,11 +70,15 @@ func reapAll() {
 		pid, err := syscall.Wait4(-1, &ws, syscall.WNOHANG, nil)
 		switch {
 		case err == syscall.ECHILD:
-			return
+			return nil
 		case err == nil && pid == 0:
 			time.Sleep(5 * time.Millisecond) // a killed child not yet exited
 		}
 	}
+	if left := childrenOf(os.Getpid()); len(left) > 0 {
+		return fmt.Errorf("%d process(es) a render step started could not be stopped within %s (pids %v)", len(left), reapTimeout, left)
+	}
+	return nil
 }
 
 // childrenOf lists the live (not zombie) pids whose parent is ppid, from /proc/<pid>/stat.

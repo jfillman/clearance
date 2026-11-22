@@ -54,6 +54,11 @@ const (
 	CoreBackoffMax = 2 * time.Second
 )
 
+// PostRenderReserve is the time kept after the render for the plugin's own work around the core call: removing the
+// scratch, canonicalising and hashing the manifests, the caches, encoding the request and writing the stream. The
+// measured fixture takes a few milliseconds for all of it; 2 s covers a render at the output bound on a slow node.
+const PostRenderReserve = 2 * time.Second
+
 func coreBudget(callTimeout time.Duration) time.Duration {
 	total, d := time.Duration(CoreRetries+1)*callTimeout, CoreBackoff
 	for i := 0; i < CoreRetries; i++ {
@@ -131,9 +136,9 @@ func parseLimits(get func(string) string, callTimeout time.Duration) (Limits, []
 		// Each term alone must fit before any is added: a huge duration would overflow the sum below.
 		errs = append(errs, fmt.Errorf("%s (%s) and CLEARANCE_CMP_CALL_TIMEOUT (%s) must each be under %s", EnvRenderTimeout, l.Timeout, callTimeout, PluginDeadline))
 	} else if callTimeout > 0 {
-		if need := ChartLookupTimeout + l.Timeout + coreBudget(callTimeout); need >= PluginDeadline {
-			errs = append(errs, fmt.Errorf("%s (%s) plus the chart lookup (%s) plus %d attempts of CLEARANCE_CMP_CALL_TIMEOUT (%s) and the wait between them is %s, which must be under %s: Argo CD kills a plugin at 90 s, and an unreachable core must be found out in time for the outage policy",
-				EnvRenderTimeout, l.Timeout, ChartLookupTimeout, CoreRetries+1, callTimeout, need, PluginDeadline))
+		if need := ChartLookupTimeout + l.Timeout + PostRenderReserve + coreBudget(callTimeout); need >= PluginDeadline {
+			errs = append(errs, fmt.Errorf("%s (%s) plus the chart lookup (%s), the plugin's own work after the render (%s), and %d attempts of CLEARANCE_CMP_CALL_TIMEOUT (%s) with the wait between them is %s, which must be under %s: Argo CD kills a plugin at 90 s, and an unreachable core must be found out in time for the outage policy",
+				EnvRenderTimeout, l.Timeout, ChartLookupTimeout, PostRenderReserve, CoreRetries+1, callTimeout, need, PluginDeadline))
 		}
 	}
 	return l, errs
@@ -277,11 +282,14 @@ func renderBounded(ctx context.Context, cfg Config, srcDir string, stderr io.Wri
 	release, waited, err := acquireSlot(rctx, filepath.Join(cfg.CacheDir, "slots"), lim.Renders)
 	if err != nil {
 		if rctx.Err() != nil {
-			if ctx.Err() == nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			if errors.Is(err, errAllBusy) { // every slot was held for the whole wait
 				return nil, &LimitError{Limit: LimitConcurrency, Setting: EnvMaxRenders, Bound: strconv.Itoa(lim.Renders),
 					Detail: fmt.Sprintf("waited %s for one of %d render slots, all busy, and ran out of its %s (%s)", waited.Round(time.Millisecond), lim.Renders, EnvRenderTimeout, lim.Timeout)}
 			}
-			return nil, ctx.Err()
+			return nil, wall(err) // the time ran out before a slot was even looked at: the wall time, not the slots
 		}
 		// A slot directory that cannot be used never fails a render: the bound is lost, and said so.
 		fmt.Fprintf(stderr, "clearance: WARNING render concurrency is not bounded (%v): %s needs a writable CLEARANCE_CMP_CACHE_DIR\n", err, EnvMaxRenders)
@@ -342,9 +350,16 @@ func acquireSlot(ctx context.Context, dir string, n int) (func(), time.Duration,
 		files = append(files, f)
 	}
 	delay := 10 * time.Millisecond
+	busy := false // a whole scan found every slot held: only then is running out of time "all busy"
+	expired := func() error {
+		if busy {
+			return fmt.Errorf("%w: %w", errAllBusy, ctx.Err())
+		}
+		return ctx.Err()
+	}
 	for {
-		if err := ctx.Err(); err != nil { // never a slot for a render whose time is over
-			return nil, time.Since(start), err
+		if ctx.Err() != nil { // never a slot for a render whose time is over
+			return nil, time.Since(start), expired()
 		}
 		for i, f := range files {
 			ok, err := tryLock(f)
@@ -352,13 +367,18 @@ func acquireSlot(ctx context.Context, dir string, n int) (func(), time.Duration,
 				return nil, time.Since(start), err
 			}
 			if ok {
+				if ctx.Err() != nil { // the time ran out while the lock was being taken: give it back
+					unlock(f)
+					return nil, time.Since(start), expired()
+				}
 				files[i] = nil // kept open: the lock is held until release
 				return func() { unlock(f); f.Close() }, time.Since(start), nil
 			}
 		}
+		busy = true
 		select {
 		case <-ctx.Done():
-			return nil, time.Since(start), ctx.Err()
+			return nil, time.Since(start), expired()
 		case <-time.After(jitter(delay)):
 		}
 		if delay < 500*time.Millisecond {
@@ -366,6 +386,9 @@ func acquireSlot(ctx context.Context, dir string, n int) (func(), time.Duration,
 		}
 	}
 }
+
+// errAllBusy marks a slot wait that ran out of time after finding every slot held.
+var errAllBusy = errors.New("every render slot is busy")
 
 // jitter is a "full jitter" wait: uniformly random in [d/2, d], so waiters that started together do not retry together.
 func jitter(d time.Duration) time.Duration {

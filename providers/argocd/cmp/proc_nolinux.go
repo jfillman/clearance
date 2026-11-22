@@ -6,5 +6,5 @@ package main
 // The sidecar is Linux only; off Linux this is the parity tool on an operator's machine.
 func EnableReaping()   {}
 func stepLock() func() { return func() {} }
-func reapStep()        {}
-func reapAll()         {}
+func reapStep() error  { return nil }
+func reapAll() error   { return nil }

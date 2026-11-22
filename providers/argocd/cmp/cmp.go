@@ -211,7 +211,7 @@ func renderTree(ctx context.Context, d Deps, cfg Config, srcDir string) (tree *T
 	// attempt and the wait between them (coreBudget): a render that started late, after a pre-render confirmation the
 	// core answered slowly, is cut short, never the call that decides. An unreachable core is then an outage
 	// (ErrCoreUnavailable, the outage policy), not the run's deadline.
-	if reserve := coreBudget(cfg.RegisterWait); reserve > 0 {
+	if reserve := coreBudget(cfg.RegisterWait) + PostRenderReserve; cfg.RegisterWait > 0 {
 		if dl, ok := ctx.Deadline(); ok && time.Until(dl) > reserve {
 			var cancel context.CancelFunc
 			rctx, cancel = context.WithDeadline(ctx, dl.Add(-reserve))
@@ -337,7 +337,9 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), PluginDeadline) // Argo CD kills a plugin at 90 s (ARGOCD_EXEC_TIMEOUT)
 	defer cancel()
 	_, err = Generate(ctx, d, cfg, ".", os.Stdout)
-	reapAll()       // nothing a render step started outlives the plugin (proc_linux.go)
+	if rerr := reapAll(); rerr != nil { // nothing a render step started outlives the plugin (proc_linux.go)
+		fmt.Fprintln(os.Stderr, "clearance-cmp: WARNING", rerr)
+	}
 	if err != nil { // a *CmpError: its code and short line come first
 		fmt.Fprintln(os.Stderr, "clearance-cmp:", err)
 		os.Exit(1)

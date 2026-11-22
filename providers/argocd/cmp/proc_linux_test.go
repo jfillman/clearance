@@ -120,3 +120,85 @@ func procState(pid int) (string, bool) {
 	}
 	return f[0], true
 }
+
+// A descendant that detaches and replaces its whole environment (setsid env -i) is still the plugin's to stop: nothing
+// about it is matched by its environment.
+func TestADetachedDescendantWithAnEmptyEnvironmentIsStopped(t *testing.T) {
+	if _, err := exec.LookPath("setsid"); err != nil {
+		t.Skip("setsid is not installed")
+	}
+	withFS(t, NetnsOff, "")
+	withReaping(t)
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	fakeTool(t, "helm", `(setsid env -i sleep 300 >/dev/null 2>&1 </dev/null & echo $! > '`+pidFile+`') ; exit 0`)
+	if _, err := OSRun(context.Background(), t.TempDir(), nil, "helm", "template", "x", "."); err != nil {
+		t.Fatal(err)
+	}
+	pid := readPid(t, pidFile)
+	if st, ok := procState(pid); ok {
+		syscall.Kill(pid, syscall.SIGKILL)
+		t.Fatalf("a detached descendant with an empty environment outlived its step (state %s)", st)
+	}
+}
+
+// A chain of more than 16 descendants, each in a session of its own and each the parent of the next, is followed to its
+// end: killing one hands the next to the plugin, and the sweep goes on until wait4 says there is no child.
+func TestALongChainOfDetachedDescendantsIsStopped(t *testing.T) {
+	if _, err := exec.LookPath("setsid"); err != nil {
+		t.Skip("setsid is not installed")
+	}
+	withFS(t, NetnsOff, "")
+	withReaping(t)
+	dir := t.TempDir()
+	pids := filepath.Join(dir, "pids")
+	chain := filepath.Join(dir, "chain")
+	if err := os.WriteFile(chain, []byte("#!/bin/sh\necho $$ >> '"+pids+"'\nif [ \"$1\" -gt 0 ]; then setsid '"+chain+"' $(($1 - 1)) </dev/null >/dev/null 2>&1 & fi\nexec sleep 300\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// the step starts the chain detached and waits until all 21 links exist before it exits
+	fakeTool(t, "helm", `setsid '`+chain+`' 20 </dev/null >/dev/null 2>&1 &
+i=0; while [ "$(wc -l < '`+pids+`' 2>/dev/null || echo 0)" -lt 21 ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done`)
+	if _, err := OSRun(context.Background(), t.TempDir(), nil, "helm", "template", "x", "."); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(pids)
+	links := strings.Fields(string(b))
+	if len(links) != 21 {
+		t.Fatalf("the chain had %d links, want 21", len(links))
+	}
+	for _, l := range links {
+		pid, _ := strconv.Atoi(l)
+		if st, ok := procState(pid); ok {
+			syscall.Kill(pid, syscall.SIGKILL)
+			t.Errorf("link %d outlived its step (state %s)", pid, st)
+		}
+	}
+}
+
+// A leftover that cannot be stopped in time fails the step: it is never reported as a success.
+func TestACleanupThatRunsOutOfTimeFailsTheStep(t *testing.T) {
+	withFS(t, NetnsOff, "")
+	withReaping(t)
+	old := reapTimeout
+	reapTimeout = 0 // the sweep has no time at all: whatever is left is left
+	t.Cleanup(func() { reapTimeout = old; reapAll() })
+	if _, err := exec.LookPath("setsid"); err != nil {
+		t.Skip("setsid is not installed")
+	}
+	// detached, so the group kill does not reach it and only the sweep could
+	fakeTool(t, "helm", `(setsid sleep 300 >/dev/null 2>&1 </dev/null &) ; exit 0`)
+	_, err := OSRun(context.Background(), t.TempDir(), nil, "helm", "template", "x", ".")
+	if err == nil || !strings.Contains(err.Error(), "could not be stopped") {
+		t.Fatalf("a step whose leftover outlived the sweep succeeded: %v", err)
+	}
+}
+
+func readPid(t *testing.T, f string) int {
+	t.Helper()
+	b, _ := os.ReadFile(f)
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		t.Fatalf("no pid in %s: %q", f, b)
+	}
+	return pid
+}

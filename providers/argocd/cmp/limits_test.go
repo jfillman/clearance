@@ -73,17 +73,17 @@ func TestLimitSettings(t *testing.T) {
 	}
 	// The default wall time leaves the core call its time inside the plugin's deadline, under Argo CD's 90 s.
 	// ... including the chart lookup and every attempt of the core call, so an unreachable core is found out in time.
-	if d := DefaultLimits(); ChartLookupTimeout+d.Timeout+coreBudget(20*time.Second) >= PluginDeadline || PluginDeadline >= 90*time.Second {
+	if d := DefaultLimits(); ChartLookupTimeout+d.Timeout+PostRenderReserve+coreBudget(20*time.Second) >= PluginDeadline || PluginDeadline >= 90*time.Second {
 		t.Fatalf("the default wall time %s does not fit", d.Timeout)
 	}
 	if got := coreBudget(20 * time.Second); got != 40*time.Second+CoreBackoff {
 		t.Fatalf("core budget %s", got)
 	}
-	if _, errs := parseLimits(get(map[string]string{EnvRenderTimeout: "34s"}), 20*time.Second); len(errs) != 0 {
-		t.Fatalf("34s fits (5+34+40.25 < 80): %v", errs)
+	if _, errs := parseLimits(get(map[string]string{EnvRenderTimeout: "32s"}), 20*time.Second); len(errs) != 0 {
+		t.Fatalf("32s fits (5+32+2+40.25 < 80): %v", errs)
 	}
-	if _, errs := parseLimits(get(map[string]string{EnvRenderTimeout: "35s"}), 20*time.Second); len(errs) != 1 {
-		t.Fatal("35s does not fit (5+35+40.25 >= 80) and was accepted")
+	if _, errs := parseLimits(get(map[string]string{EnvRenderTimeout: "33s"}), 20*time.Second); len(errs) != 1 {
+		t.Fatal("33s does not fit (5+33+2+40.25 >= 80) and was accepted")
 	}
 	l, errs = parseLimits(get(map[string]string{EnvRenderTimeout: "20s", EnvMaxCPU: "5s", EnvMaxMemory: "256Mi", EnvMaxOutput: "8Mi",
 		EnvMaxTemp: "2Gi", EnvMaxRenders: "2"}), 20*time.Second)
@@ -359,8 +359,9 @@ func TestTheRenderLeavesTheCoreItsWholeBudget(t *testing.T) {
 	if _, _, cerr := renderTree(run, d, cfg, t.TempDir()); cerr == nil {
 		t.Fatal("the fake render succeeded")
 	}
-	if left := runEnd.Sub(got); left < coreBudget(cfg.RegisterWait)-time.Second || left > coreBudget(cfg.RegisterWait)+time.Second {
-		t.Fatalf("the render ends %s before the run, want the core's budget %s", left, coreBudget(cfg.RegisterWait))
+	want := coreBudget(cfg.RegisterWait) + PostRenderReserve
+	if left := runEnd.Sub(got); left < want-time.Second || left > want+time.Second {
+		t.Fatalf("the render ends %s before the run, want the core's budget and the plugin's own work, %s", left, want)
 	}
 }
 
@@ -425,5 +426,32 @@ func TestTheTagLookupHasAPrivateScratch(t *testing.T) {
 	}
 	if lim.Output != 2<<20 {
 		t.Fatalf("the lookup's limits are %+v, not the configured ones", lim)
+	}
+}
+
+// Running out of time before any slot was even looked at is the wall time; only a wait that found every slot held is
+// "all busy". A lock taken just as the time ran out is given back.
+func TestOnlyAWaitOnBusySlotsIsBusy(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "slots")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := acquireSlot(ctx, dir, 1); err == nil || errors.Is(err, errAllBusy) {
+		t.Fatalf("an expired wait with a free slot: %v", err)
+	}
+	hold, _, err := acquireSlot(context.Background(), dir, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel = context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, _, err := acquireSlot(ctx, dir, 1); !errors.Is(err, errAllBusy) {
+		t.Fatalf("a wait on a held slot: %v", err)
+	}
+	hold()
+	// the slot that was held is free again: nothing kept it after the expired waits
+	if r, _, err := acquireSlot(context.Background(), dir, 1); err != nil {
+		t.Fatal(err)
+	} else {
+		r()
 	}
 }

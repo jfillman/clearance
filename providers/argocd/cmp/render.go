@@ -128,7 +128,11 @@ func OSRun(ctx context.Context, dir string, env []string, name string, args ...s
 		if err == nil {
 			err = cmd.Wait()
 			killGroup(cmd) // a descendant the step left behind (a backgrounded git, a stalled helper) goes with it
-			reapStep()     // and one that left the group too (proc_linux.go)
+			// ... and one that left the group too (proc_linux.go). A leftover that cannot be stopped fails the step,
+			// whatever the step itself did: it never reports success over a process that outlives it.
+			if rerr := reapStep(); rerr != nil {
+				err = errors.Join(err, fmt.Errorf("%s: %w", name, rerr))
+			}
 		}
 		ps = cmd.ProcessState
 		if setup != nil && err != nil {
