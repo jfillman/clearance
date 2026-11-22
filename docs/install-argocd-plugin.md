@@ -23,6 +23,12 @@ this page is the install, the settings, the checks and the failure modes.
 - **No setting is required without a safe default or a preflight that names it.** A test pins the three settings
   with no default (`CLEARANCE_URL`, `CLEARANCE_CHART_REPOS`, `CLEARANCE_WAIT_IMAGE`); `doctor` names each one unset.
   An upgrade that would add a fourth fails CI ([Every setting](#every-setting)).
+- **Metrics and alerts, off by default** (`CLEARANCE_CMP_METRICS_DIR`, `CLEARANCE_CMP_METRICS_ADDR`). Every run counted
+  by outcome, by error class and stable code, by duration and by the result of its calls to the core, served as
+  Prometheus text by a small container beside the sidecar. Labels are a closed set (the plugin's version, the class, the
+  code): no token, URL, Application or message is ever recorded. An example PrometheusRule alerts on the plugin's fault
+  rate, its render error rate, an unreachable core and the p95 latency, and the same series gate a canary release
+  ([Metrics and alerts](#metrics-and-alerts-optional-off-by-default)).
 
 **The plugin alone does not stop a sync.** It renders, stamps and registers; a refusal shows as a `ComparisonError`
 and a held change as a PreSync wait, but `argocd app sync --strategy apply` skips hooks and a cleared render can be
@@ -52,7 +58,8 @@ plugin runs is fenced in:
 1. [Prerequisites](#prerequisites)
 2. [The sidecar](#the-sidecar): Helm chart values, or a patch of the plain manifests
 3. [Run `doctor` first](#run-doctor-first)
-4. [Every setting](#every-setting), and [last-known-good](#last-known-good-optional-off-by-default)
+4. [Every setting](#every-setting), [last-known-good](#last-known-good-optional-off-by-default), and
+   [metrics and alerts](#metrics-and-alerts-optional-off-by-default)
 5. [Gating one Application](#gating-one-application), by hand or from an ApplicationSet
 6. [Turning it off again](#turning-it-off-again)
 7. [Verifying it works](#verifying-it-works)
@@ -236,10 +243,11 @@ prints one line per check, `ok`, `warn` or `fail`, and a `fix:` for the last two
 | `git`, `helm`, `kustomize` | present on `PATH`, with their versions printed | missing |
 | `netns` | the private network namespace: `on`, `off` (set so) or `unavailable` | `unavailable` while `CLEARANCE_CMP_NETNS=require`; otherwise `unavailable` warns |
 | `fs-sandbox` | the filesystem sandbox of the render steps (Landlock): `on`, `off` (set so) or `unavailable` | `unavailable` while `CLEARANCE_CMP_FS_SANDBOX=require`; otherwise `unavailable` warns |
+| `metrics` | off when `CLEARANCE_CMP_METRICS_DIR` is unset; otherwise the directory takes a probe file (removed) and a store already there reads. `CLEARANCE_CMP_METRICS_ADDR`, when set, is `host:port` | the directory is not writable; `CLEARANCE_CMP_METRICS_ADDR` is malformed or set without the directory. (warns) the store does not read (the next run starts it again) |
 | `render-limits` | the render limits in force; whether `CLEARANCE_CMP_MAX_RENDERS` x `CLEARANCE_CMP_RENDER_MAX_MEMORY` fits the container's memory limit (cgroup `memory.max`) | (warns) it does not fit; a malformed limit fails `setting` |
 | `plugin-socket`, `cmp-server` | `/home/argocd/cmp-server/plugins` exists (`--plugin-dir` changes it) and `/var/run/argocd/argocd-cmp-server` is present | (warns) either is missing, which is normal outside the sidecar |
 
-`doctor` writes nothing except the cache directory's probe file, registers no change, and prints no token.
+`doctor` writes nothing except the probe files of the cache directory (and of the metrics directory, when set), registers no change, and prints no token.
 
 Sample, from a sidecar whose seccomp profile does not allow the namespace:
 
@@ -256,9 +264,10 @@ ok    kustomize      /usr/local/bin/kustomize v5.8.1
 warn  netns          unavailable: renders run WITHOUT a private network namespace (...)  fix: optional hardening: ...
 ok    fs-sandbox     on: render steps can read only the system directories, their source and their own scratch; the token is out of their reach (Landlock, mode try)
 ok    render-limits  wall 30s per render (slot wait included), per step CPU 30s, memory 512Mi, stdout 32Mi; scratch 512Mi per render; 4 renders at once; fits the container's memory limit of 2.0 GiB
+ok    metrics        off: CLEARANCE_CMP_METRICS_DIR is not set, runs record nothing (and nothing listens)
 ok    plugin-socket  /home/argocd/cmp-server/plugins exists (...)
 ok    cmp-server     /var/run/argocd/argocd-cmp-server is present
-doctor: 13 ok, 1 warn, 0 fail
+doctor: 14 ok, 1 warn, 0 fail
 ```
 
 ## Every setting
@@ -291,6 +300,8 @@ parameter would not do, because parameters come from values a tenant writes.
 | `CLEARANCE_WAIT_CA_CONFIGMAP` | no | none | A ConfigMap (key `ca.crt`) in each destination namespace that the wait Job mounts at `/etc/clearance-ca/ca.crt` as its CA. Unset, the Job trusts the system roots only. |
 | `CLEARANCE_CMP_LAST_KNOWN_GOOD` | no | `off` | `on` turns on the [last-known-good](#last-known-good-optional-off-by-default) fallback for a plugin fault or an unreachable chart host. Exactly `off` or `on`; anything else stops the plugin at start. |
 | `CLEARANCE_CMP_LINK_BASE` | no | none | The web UI's base URL: a refusal links `<base>/changes/<id>`. Unset, it links the core's record, `CLEARANCE_URL/v1/clearances/<id>`. An http(s) URL with no credentials, query or fragment. |
+| `CLEARANCE_CMP_METRICS_DIR` | no | none | The directory each run adds its counts to (`cmp-metrics.json`, under a lock). Unset, nothing is recorded. Set it on the plugin sidecar (and the canary sidecar) and on the metrics container, all mounting one emptyDir. See [Metrics and alerts](#metrics-and-alerts-optional-off-by-default). |
+| `CLEARANCE_CMP_METRICS_ADDR` | no | none | `host:port` that `clearance-cmp metrics` listens on (`/metrics`, `/healthz`). Read by the metrics container only. Unset, the command refuses to start: nothing listens. |
 | `CLEARANCE_CMP_NETNS` | no | `try` | `try`: isolate renders in a private network namespace when the kernel allows it, else render without it and warn once. `require`: refuse to render without it. `off`: never attempt it. Anything else stops the plugin at start. The render summary on stderr ends `netns=on\|unavailable\|off`. |
 
 **Sizing the cache.** The chart cache lives under `CLEARANCE_CMP_CACHE_DIR`, which by default is on the `/tmp` emptyDir, so
@@ -422,6 +433,203 @@ id), `ARGOCD_APP_SOURCE_REPO_URL`, `ARGOCD_APP_SOURCE_PATH`, `ARGOCD_APP_PROJECT
 | `kustomizeBuildOptions` | no | Generic mode only; an allow list (`--reorder`, `--enable-managedby-label`, `--load-restrictor LoadRestrictionsRootOnly`). |
 
 Every path must be relative and stay inside its repository (no `..`, no leading `/`).
+
+## Metrics and alerts (optional, off by default)
+
+The plugin is not a server: the cmp-server starts `clearance-cmp` once per render and the process ends when it answers,
+so no render can hold a counter for the next. The counts live in a **file-backed store** instead, and a small
+long-lived process serves it:
+
+- each run, as it ends, adds itself to `cmp-metrics.json` in `CLEARANCE_CMP_METRICS_DIR`: its outcome, its error's class
+  and code, its wall time, and the results of its calls to the core;
+- `clearance-cmp metrics`, in a container of its own in the repo-server pod (the same image, the same directory mounted
+  **read-only**), serves the store on `CLEARANCE_CMP_METRICS_ADDR`, reading it on every scrape.
+
+**Why this design.**
+
+- *Correctness with concurrent renders.* The read-modify-write is serialised by an exclusive `flock` on
+  `cmp-metrics.lock` beside it. Renders are separate processes on one kernel (`CLEARANCE_CMP_MAX_RENDERS` of them, and
+  the canary sidecar's too when it mounts the same volume), so no run's count is lost; a test runs several processes at
+  once and checks the total.
+- *Crash safety.* A run writes a temporary file and renames it over the store, so a reader and the next writer always
+  see a whole file. A run killed mid-write leaves only a stray temporary file, which the next writer removes while it
+  holds the lock, and the kernel releases a dead process's lock. A store that does not parse (it should not happen) is
+  started again and counted in `clearance_cmp_metrics_store_resets_total`: a counter reset, never a broken scrape.
+- *A render never depends on its metrics.* Recording needs nothing running: no server to reach, so none can slow a
+  render or lose a count by being down. A run waits at most 1 s for the lock; past that, or on any write error, it
+  prints a `WARNING` and drops its own count, and its answer to Argo CD is unchanged. The server is stateless, so it
+  can restart or crash without losing or double-counting anything; the store lives as long as the emptyDir (the pod's
+  life), and a new pod is a counter reset that `rate()` already handles.
+- *Nothing secret.* The store holds a closed set of labels: the plugin's build version, the outcome, the error class and
+  its stable code, the core call's result. Never the token, a URL, an Application, a repository or an error message.
+  The metrics container mounts no token and reads no other setting, and it writes only label values that are plain
+  identifiers even though the store is the plugin's own.
+- *Bounded.* At most 8 plugin versions are kept (the one updated longest ago is dropped for a ninth); every other label is
+  a fixed set, so the store stays a few KiB.
+
+**The series.** Every one carries `version`, the image's build version, so the default and canary sidecars (different
+releases) are told apart even when they share the store.
+
+| Series | Type | Labels | What it counts |
+|---|---|---|---|
+| `clearance_cmp_renders_total` | counter | `version`, `outcome` | Runs (`generate`), by `cleared`, `held` or `error`. A run answered from the plugin's caches counts too. |
+| `clearance_cmp_render_errors_total` | counter | `version`, `class`, `code` | Failed runs, by [class](#error-codes) (`fault`, `dependency`, `render`, `refusal`) and stable code. A sidecar setting that stops the plugin at start is a `fault` too, and so is a panic. |
+| `clearance_cmp_render_duration_seconds` | histogram | `version` | A run's wall time, start to answer. Buckets 0.05 s to 80 s (the plugin's whole run). |
+| `clearance_cmp_core_calls_total` | counter | `version`, `result` | Calls to the core: `ok` (a decision), `unavailable` (unreachable or no answer in time: the outage policy decides), `error` (a refusal of the request, an answer the plugin cannot read). |
+| `clearance_cmp_last_run_timestamp_seconds` | gauge | `version` | When a run of that version was last recorded. |
+| `clearance_cmp_metrics_store_up` | gauge | | 1 when the store reads (or has no run yet). |
+| `clearance_cmp_metrics_store_resets_total` | counter | | Times the store did not parse and was started again. |
+
+**Turning it on.** Add one emptyDir, the setting and mount on the plugin sidecar, and the metrics container. With the
+`argo-cd` Helm chart, beside the `clearance-cmp` container of [The sidecar](#the-sidecar):
+
+```yaml
+repoServer:
+  extraContainers:
+    - name: clearance-cmp
+      # ... as above, plus:
+      env:
+        - {name: CLEARANCE_CMP_METRICS_DIR, value: /var/run/clearance-cmp-metrics}
+      volumeMounts:
+        - {name: cmp-metrics, mountPath: /var/run/clearance-cmp-metrics}
+    - name: clearance-cmp-metrics
+      image: ghcr.io/jfillman/clearance-cmp@sha256:<the same digest>
+      command: [/usr/local/bin/clearance-cmp, metrics]
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities: {drop: [ALL]}
+        seccompProfile: {type: RuntimeDefault}
+      env:
+        - {name: CLEARANCE_CMP_METRICS_DIR, value: /var/run/clearance-cmp-metrics}
+        - {name: CLEARANCE_CMP_METRICS_ADDR, value: ":9464"}
+      ports:
+        - {name: cmp-metrics, containerPort: 9464}
+      readinessProbe:
+        httpGet: {path: /healthz, port: cmp-metrics}
+      resources:
+        requests: {cpu: 5m, memory: 16Mi}
+        limits: {memory: 64Mi}
+      volumeMounts:
+        - {name: cmp-metrics, mountPath: /var/run/clearance-cmp-metrics, readOnly: true}
+  volumes:
+    - {name: cmp-metrics, emptyDir: {sizeLimit: 16Mi}}
+```
+
+For plain manifests, add the same container, env, mount and volume to the patch. A canary sidecar
+([gate.md](gate.md#rolling-out-a-plugin-release)) mounts the same `cmp-metrics` volume with the same setting: the store
+is the one thing the two sidecars share, and it is safe to (the lock and the `version` label), unlike `/tmp`. A canary
+of a release before this one records nothing. Run `doctor` in the plugin sidecar to check the directory (`metrics`).
+The port is any free one in the pod; the repo-server's own are 8081 and 8084.
+
+**Scraping.** With the Prometheus Operator, a PodMonitor in the Argo CD namespace (the label is the stock repo-server's):
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: clearance-cmp
+  namespace: argocd
+spec:
+  selector:
+    matchLabels: {app.kubernetes.io/name: argocd-repo-server}
+  podMetricsEndpoints:
+    - {port: cmp-metrics, path: /metrics, interval: 30s}
+```
+
+Without the operator, a scrape job on the pod's `cmp-metrics` port does the same. With more than one repo-server replica
+each pod has its own store; the rules below sum across them.
+
+**Alerts.** An example PrometheusRule; tune the thresholds to your volume (a ratio over a handful of renders is noisy,
+so each alert also asks for a minimum render rate):
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: clearance-cmp
+  namespace: argocd
+spec:
+  groups:
+    - name: clearance-cmp.rules
+      rules:
+        - record: clearance_cmp:renders:rate10m
+          expr: sum by (version) (rate(clearance_cmp_renders_total[10m]))
+        - record: clearance_cmp:fault_ratio:rate10m
+          expr: |
+            sum by (version) (rate(clearance_cmp_render_errors_total{class="fault"}[10m]))
+              / clearance_cmp:renders:rate10m
+        - record: clearance_cmp:render_error_ratio:rate10m
+          expr: |
+            sum by (version) (rate(clearance_cmp_render_errors_total{class="render"}[10m]))
+              / clearance_cmp:renders:rate10m
+        - record: clearance_cmp:duration_seconds:p95_10m
+          expr: histogram_quantile(0.95, sum by (version, le) (rate(clearance_cmp_render_duration_seconds_bucket[10m])))
+    - name: clearance-cmp
+      rules:
+        - alert: ClearanceCmpPluginFaultRate
+          # CMP-FAULT-*: the plugin itself failed (a panic, a tool, a timeout, a sidecar setting).
+          expr: (clearance_cmp:fault_ratio:rate10m > 0.05) and (clearance_cmp:renders:rate10m > 0.01)
+          for: 10m
+          labels: {severity: critical}
+          annotations:
+            summary: "clearance-cmp {{ $labels.version }}: {{ $value | humanizePercentage }} of renders fail with a plugin fault"
+            description: "Read the codes: sum by (code) (rate(clearance_cmp_render_errors_total{class=\"fault\"}[10m])). Error codes: docs/install-argocd-plugin.md."
+        - alert: ClearanceCmpRenderErrorRate
+          # CMP-RENDER-*: the Application's inputs do not render. One app is its owner's; many at once is usually a
+          # plugin release or a sidecar setting (0.52.0 refused every value file).
+          expr: (clearance_cmp:render_error_ratio:rate10m > 0.25) and (clearance_cmp:renders:rate10m > 0.01)
+          for: 30m
+          labels: {severity: warning}
+          annotations:
+            summary: "clearance-cmp {{ $labels.version }}: {{ $value | humanizePercentage }} of renders fail as render errors"
+        - alert: ClearanceCmpCoreUnreachable
+          # The outage policy decides while this fires: allow-and-record trees are served from the cache, the rest hold.
+          expr: |
+            (sum by (version) (rate(clearance_cmp_core_calls_total{result="unavailable"}[5m]))
+              / sum by (version) (rate(clearance_cmp_core_calls_total[5m])) > 0.5)
+            and (sum by (version) (rate(clearance_cmp_core_calls_total[5m])) > 0.01)
+          for: 5m
+          labels: {severity: critical}
+          annotations:
+            summary: "clearance-cmp {{ $labels.version }}: the Clearance core is unreachable for most calls"
+        - alert: ClearanceCmpRenderLatencyP95
+          # The whole run has 80 s and Argo CD kills a plugin at 90 s.
+          expr: (clearance_cmp:duration_seconds:p95_10m > 30) and (clearance_cmp:renders:rate10m > 0.01)
+          for: 15m
+          labels: {severity: warning}
+          annotations:
+            summary: "clearance-cmp {{ $labels.version }}: p95 render time is {{ $value | humanizeDuration }}"
+        - alert: ClearanceCmpMetricsStoreDown
+          expr: max(clearance_cmp_metrics_store_up) == 0 or absent(clearance_cmp_metrics_store_up)
+          for: 15m
+          labels: {severity: warning}
+          annotations:
+            summary: "clearance-cmp metrics are not being served, or the store does not read"
+```
+
+**Gating a canary on the alerts.** A release goes to the canary sidecar first (`clearance-canary`,
+[gate.md](gate.md#rolling-out-a-plugin-release)); its runs carry its own `version`, so the same series judge it beside
+the default sidecar's. Before **Promote**, after the canary app was hard-refreshed on the new image, take a soak window
+(an hour, or long enough for the canary to render a few dozen times; a pre-render cache hit counts as a render, so
+hard-refresh it more than once if it is quiet) and promote only when every one of these holds for `V`, the canary's
+version, and `D`, the default's:
+
+1. it rendered: `sum(increase(clearance_cmp_renders_total{version="V"}[1h])) >= 20` (a canary with no renders has not
+   passed);
+2. no plugin fault: `sum(increase(clearance_cmp_render_errors_total{version="V",class="fault"}[1h])) == 0`;
+3. no more render errors than the default, for the same apps: `clearance_cmp:render_error_ratio:rate10m{version="V"}`
+   at or below `{version="D"}` (an app that errors on both is not the release's doing);
+4. no slower: `clearance_cmp:duration_seconds:p95_10m{version="V"}` at most 1.5 times `{version="D"}`;
+5. none of the alerts above firing with `version="V"`.
+
+A query with no series (no fault was ever counted, so the ratio has no numerator) means zero, not a failure.
+
+Any failure is the **Roll back** step: remove the app from the canary and hard-refresh it. The gate is these queries
+read by the person promoting; nothing here blocks the promotion by itself. To automate it, run the five queries from
+the job that pins the new image and stop when one fails.
 
 ## Gating one Application
 

@@ -9,6 +9,9 @@ import (
 // misbehaving tool (CMP_TEST_HOG) in the limit tests.
 func TestMain(m *testing.M) {
 	maybeShim()
+	if dir := os.Getenv("CMP_TEST_METRICS_RECORD"); dir != "" { // a render process recording its run (metrics_test.go)
+		recordForTest(dir)
+	}
 	switch os.Getenv("CMP_TEST_HOG") {
 	case "memory": // a step that keeps allocating: the Go runtime fails at the data-segment bound
 		var keep [][]byte

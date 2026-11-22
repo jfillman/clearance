@@ -339,6 +339,7 @@ func serveRender(ctx context.Context, d Deps, cfg Config, e renderEntry, out io.
 	}
 	started := time.Now()
 	ch, err := registerInTime(ctx, d.Core, e.Request)
+	d.Stats.coreCall(err)
 	if err != nil {
 		if errors.Is(err, client.ErrCoreUnavailable) {
 			// Read the tree cache again, as the uncached path does after the failure: a hold another render met while

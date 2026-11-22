@@ -157,6 +157,7 @@ echo "$can_cfg" | grep -qF 'command: [/usr/local/bin/clearance-cmp]' && echo "$d
 
 # ---- run the plugin as Argo CD does -----------------------------------------------------------------------------
 default_injected='{"injected":"from-platform"}'
+metrics_args=() # set by the metrics section: the store's volume and CLEARANCE_CMP_METRICS_DIR
 run_plugin() { # CHECKOUT OUT ERR [CACHE_DIR [VALUESJSON]] : echoes the exit code. CACHE_DIR is a host directory mounted
   # as the plugin's cache directory, so that two runs share it as two renders in one sidecar's /tmp do.
   local dir="$1" out="$2" err="$3" cachedir="${4:-}" injected="${5:-$default_injected}" rev cache_mount=()
@@ -164,7 +165,7 @@ run_plugin() { # CHECKOUT OUT ERR [CACHE_DIR [VALUESJSON]] : echoes the exit cod
   rev="$(git -C "$dir" rev-parse HEAD)"
   # shellcheck disable=SC2086
   "$engine" run --rm $net_args --user 999:999 --read-only --tmpfs "$tmpfs_opt" --cap-drop ALL \
-    --workdir /src ${cache_mount[@]+"${cache_mount[@]}"} -v "$dir:/src:ro" -v "$work/token:/var/run/secrets/tokens/clearance:ro" \
+    --workdir /src ${cache_mount[@]+"${cache_mount[@]}"} ${metrics_args[@]+"${metrics_args[@]}"} -v "$dir:/src:ro" -v "$work/token:/var/run/secrets/tokens/clearance:ro" \
     --entrypoint /usr/local/bin/clearance-cmp \
     -e ARGOCD_APP_NAME=smoke-app-dev -e ARGOCD_APP_NAMESPACE=app-smoke-app-dev -e ARGOCD_APP_REVISION="$rev" \
     -e ARGOCD_APP_SOURCE_REPO_URL=https://git.example.test/acme/gitops-smoke.git -e ARGOCD_APP_SOURCE_PATH=. \
@@ -287,6 +288,28 @@ sed 's/^/     run 3 stderr: /' "$work/c3.err"
 [ "$code" = 0 ] && grep -q 'serving the cleared render' "$work/c3.err" && cmp -s "$work/c2.out" "$work/c3.out" \
   && ok "an unchanged render is served from the cache, byte for byte" || bad "the unchanged render was not served from the cache (exit $code)"
 [ ! -s "$work/register.log" ] && ok "and asked the core nothing inside the tree cache's lifetime" || bad "a cached hit inside the lifetime reached the core"
+
+echo "== metrics (F6): a run records into CLEARANCE_CMP_METRICS_DIR, and clearance-cmp metrics serves it"
+mdir="$work/cmp-metrics"; mkdir -p "$mdir"; chmod 777 "$mdir"
+metrics_args=(-v "$mdir:/var/run/clearance-cmp-metrics" -e CLEARANCE_CMP_METRICS_DIR=/var/run/clearance-cmp-metrics)
+code="$(run_plugin "$good" "$work/m1.out" "$work/m1.err")"
+metrics_args=()
+[ "$code" = 0 ] && ok "a render with metrics on exits 0" || bad "a render with metrics on exited $code"
+grep -q 'metrics were not recorded' "$work/m1.err" && bad "the run could not record: $(grep 'metrics were not recorded' "$work/m1.err")" || ok "the run recorded without a warning"
+grep -q '"cleared":1' "$mdir/cmp-metrics.json" 2>/dev/null && ok "the store counts the cleared run" || bad "the store lacks the cleared run: $(cat "$mdir/cmp-metrics.json" 2>&1)"
+grep -q 'smoke-token' "$mdir/cmp-metrics.json" 2>/dev/null && bad "the store holds the token" || ok "the store does not hold the token"
+# The server, as its own container runs it (the store read-only, no token mounted), scraped from inside the container.
+# shellcheck disable=SC2086
+mout="$("$engine" run --rm $net_args --user 999:999 --read-only --cap-drop ALL -v "$mdir:/var/run/clearance-cmp-metrics:ro" \
+  -e CLEARANCE_CMP_METRICS_DIR=/var/run/clearance-cmp-metrics -e CLEARANCE_CMP_METRICS_ADDR=127.0.0.1:9464 --entrypoint /bin/sh "$image" \
+  -c '/usr/local/bin/clearance-cmp metrics & pid=$!; for i in 1 2 3 4 5 6 7 8 9 10; do wget -qO- http://127.0.0.1:9464/metrics && break; sleep 0.5; done; kill "$pid"' 2>&1)"
+echo "$mout" | grep -E '^clearance_cmp_(renders_total|metrics_store_up)' | sed 's/^/     metrics: /'
+echo "$mout" | grep -q '^clearance_cmp_renders_total{version="smoke",outcome="cleared"} 1$' && ok "the server serves the run, labelled with the image's version" || bad "the server did not serve the run: $mout"
+echo "$mout" | grep -q '^clearance_cmp_metrics_store_up 1$' && ok "the store reads (store_up 1)" || bad "store_up is not 1"
+# Off by default: no CLEARANCE_CMP_METRICS_ADDR, nothing listens and the command says so.
+# shellcheck disable=SC2086
+off="$("$engine" run --rm $net_args --user 999:999 --read-only --cap-drop ALL --entrypoint /usr/local/bin/clearance-cmp "$image" metrics 2>&1)"; offcode=$?
+[ "$offcode" = 2 ] && echo "$off" | grep -q 'nothing listens' && ok "with CLEARANCE_CMP_METRICS_ADDR unset, metrics refuses to start (exit 2)" || bad "metrics without an address: exit $offcode, $off"
 
 [ "$fail" = 0 ] && echo "cmp-smoke: PASS" || echo "cmp-smoke: FAIL"
 exit "$fail"

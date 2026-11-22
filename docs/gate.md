@@ -2280,7 +2280,8 @@ config directory, as Argo CD documents.)
 **Two sidecars must not share state.** Give the second its own `/tmp` volume (the render cache,
 `CLEARANCE_CMP_CACHE_DIR`, defaults to `/tmp/clearance-cmp-cache`, and a render's work directory is there too), never the
 other sidecar's `cmp-tmp` or the repo-server's. Both share the `plugins` socket volume (that is how the repo-server
-finds them) and `var-files`. Both may mount the same projected token: the canary calls the core as the same verifier,
+finds them) and `var-files`, and, when the plugin's metrics are on, the metrics store's volume
+(`CLEARANCE_CMP_METRICS_DIR`: locked, and every series labelled by version, so the two releases stay apart). Both may mount the same projected token: the canary calls the core as the same verifier,
 so a release that registers wrongly does so under that identity. Apron renders this when `clearance.gate.canary` is set.
 
 1. **Canary one Application.** Run the new image as the canary sidecar and list one low-risk app (a dev environment's):
@@ -2292,7 +2293,11 @@ so a release that registers wrongly does so under that identity. Apron renders t
    take a quiet canary as passed until the app has been hard-refreshed after the image changed.
 2. **Watch.** The Application's sync, the plugin's `generate` log in the `clearance-cmp-canary` container, and the
    changes it registers (`proposer: system:argocd-cmp`). A render that fails shows as a ComparisonError on that
-   Application alone.
+   Application alone. With the plugin's metrics on, the canary's runs carry its own `version` label: promote only when
+   the canary gate in [install-argocd-plugin.md](install-argocd-plugin.md#metrics-and-alerts-optional-off-by-default)
+   ("Gating a canary on the alerts") holds: it rendered, no plugin fault, no more render errors and no slower than the
+   default sidecar's release. The metrics store (`CLEARANCE_CMP_METRICS_DIR`) is the one volume the two sidecars may
+   share.
 3. **Promote.** Pin the new image as the default sidecar's, then remove the canary block (the app returns to
    `clearance`). Once the default sidecar is ready, **hard-refresh every Application that names `clearance`**: the
    cache key is the same as before the image changed, so without it an Application keeps the old image's render until
