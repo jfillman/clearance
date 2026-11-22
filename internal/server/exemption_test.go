@@ -113,6 +113,9 @@ func TestAReportCannotRemoveAStaticPairForAnExemption(t *testing.T) {
 	body["exempted"] = []any{map[string]any{"app": "web", "env": "prod"}}
 	f.do("PUT", "/v1/protection/hangar-prod", agentProd, body).want(t, 400, "still in pairs")
 	body = pairs("web/prod")
+	body["exempted"] = []any{map[string]any{"app": "api", "env": "staging"}}
+	f.do("PUT", "/v1/protection/hangar-prod", agentProd, body).want(t, 400, "not in the held report")
+	body = pairs("web/prod")
 	body["exempted"] = []any{map[string]any{"app": "web", "env": "staging"}}
 	f.do("PUT", "/v1/protection/hangar-prod", agentProd, body).want(t, 200, "")
 	recs := protectionRecords(f)

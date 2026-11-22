@@ -186,10 +186,11 @@ func orDefault(s, d string) string {
 }
 
 func classIndex(c string) int {
-	for i, x := range append(slices.Clone(ExceptionClasses), OptionalExceptionClasses...) {
-		if x == c {
-			return i
-		}
+	if i := slices.Index(ExceptionClasses, c); i >= 0 {
+		return i
+	}
+	if i := slices.Index(OptionalExceptionClasses, c); i >= 0 {
+		return len(ExceptionClasses) + i
 	}
 	return len(ExceptionClasses) + len(OptionalExceptionClasses)
 }
