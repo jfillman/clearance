@@ -69,7 +69,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if or (not (kindIs "string" $g)) (eq (trim $g) "") (gt (len $g) 253) -}}{{ fail (printf "gateRule.select %q has an empty, over-long or non-string glob" $e.name) }}{{- end -}}
 {{- end -}}
 {{- range $k, $v := (default dict $e.labels) -}}
-{{- if or (gt (len $k) 317) (gt (len (toString $v)) 63) -}}{{ fail (printf "gateRule.select %q has a label that is not key: value" $e.name) }}{{- end -}}
+{{- if or (eq (trim $k) "") (gt (len $k) 317) (gt (len (toString $v)) 63) -}}{{ fail (printf "gateRule.select %q has a label that is not key: value" $e.name) }}{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- range $i, $e := (default list .exempt) -}}

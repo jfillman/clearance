@@ -88,6 +88,9 @@ type acceptance struct {
 	at      time.Time
 	refused string
 	pair    Pair
+	// What was asked about, kept so that the exemption's end can be recorded after its entry left the file.
+	exempt RuleExempt
+	rule   string
 }
 
 // ruleState is the gate rule's memory (ruleMu).
@@ -224,6 +227,14 @@ func (a *Agent) setAnswer(key string, acc *acceptance) {
 	}
 }
 
+// asked is c as it was when the core answered: the entry and the pair the acceptance is for (an entry since removed from
+// the file, or a pair since changed, still names what ended).
+func (acc acceptance) asked(c appClass) appClass {
+	e := acc.exempt
+	c.exempt, c.ruleName, c.gateApp, c.env = &e, acc.rule, acc.pair.App, acc.pair.Env
+	return c
+}
+
 // candidate is an Application the rule selects and an exempt entry names, whatever the entry's state.
 func (c appClass) candidate() bool { return c.ruleName != "" && c.exempt != nil }
 
@@ -249,7 +260,7 @@ func (a *Agent) decideExemptions(ctx context.Context, classes []appClass, digest
 			a.setAnswer(key, nil)
 			settle(false)
 			if wasHonoured {
-				a.postExemption(ctx, c, "expired", why, "gate-exempt-end|"+acc.key+"|"+why)
+				a.postExemption(ctx, acc.asked(c), "expired", why, "gate-exempt-end|"+acc.key+"|"+why)
 			}
 		}
 		if !c.candidate() || c.denied {
@@ -302,19 +313,19 @@ func (a *Agent) decideExemptions(ctx context.Context, classes []appClass, digest
 			if wasHonoured {
 				a.warnOnce(key, "an exemption's acceptance is dropped (the core could not be asked): the Application is gated again: "+truncate(err.Error(), 200))
 				// The end of the exemption is recorded when the core is back (queued, with its event id).
-				a.postExemption(ctx, c, "expired", "dropped", "gate-exempt-end|"+acc.key+"|dropped")
+				a.postExemption(ctx, acc.asked(c), "expired", "dropped", "gate-exempt-end|"+acc.key+"|dropped")
 			}
 		case refused != "":
-			a.setAnswer(key, &acceptance{key: k, at: a.now(), refused: refused, pair: Pair{c.gateApp, c.env}})
+			a.setAnswer(key, &acceptance{key: k, at: a.now(), refused: refused, pair: Pair{c.gateApp, c.env}, exempt: *e, rule: c.ruleName})
 			settle(false)
 			if wasHonoured {
-				a.postExemption(ctx, c, "expired", "revoked", "gate-exempt-end|"+acc.key+"|revoked")
+				a.postExemption(ctx, acc.asked(c), "expired", "revoked", "gate-exempt-end|"+acc.key+"|revoked")
 			}
 			if !had || acc.key != k || acc.refused != refused {
 				a.postExemption(ctx, c, "refused", refused, "gate-exempt-refused|"+k)
 			}
 		default:
-			a.setAnswer(key, &acceptance{key: k, at: a.now(), pair: Pair{c.gateApp, c.env}})
+			a.setAnswer(key, &acceptance{key: k, at: a.now(), pair: Pair{c.gateApp, c.env}, exempt: *e, rule: c.ruleName})
 			settle(true)
 			if !wasHonoured || acc.key != k {
 				a.log.Info("gate exemption accepted by the core", "application", key, "entry", e.Application, "expires", e.Expires)
@@ -328,12 +339,22 @@ func (a *Agent) decideExemptions(ctx context.Context, classes []appClass, digest
 		}
 	}
 	a.ruleMu.Lock()
-	for k := range a.rs.accepted {
+	var gone []acceptance
+	var goneKeys []string
+	for k, acc := range a.rs.accepted {
 		if !present[k] {
 			delete(a.rs.accepted, k)
+			if acc.refused == "" {
+				gone, goneKeys = append(gone, acc), append(goneKeys, k)
+			}
 		}
 	}
 	a.ruleMu.Unlock()
+	for i, acc := range gone { // the Application was deleted: its exemption ended with it
+		ns, name, _ := strings.Cut(goneKeys[i], "/")
+		a.postExemption(ctx, acc.asked(appClass{app: Application{Namespace: ns, Name: name}}), "expired", "withdrawn",
+			"gate-exempt-end|"+acc.key+"|withdrawn")
+	}
 	return changed
 }
 
@@ -440,8 +461,13 @@ func (a *Agent) queuePending(ctx context.Context, event string, req *client.Reco
 	if a.st.Pending == nil {
 		a.st.Pending = map[string]string{}
 	}
-	if _, ok := a.st.Pending[event]; !ok && len(a.st.Pending) >= MaxPendingRecords {
-		a.log.Warn("the queue of exemption records waiting for the core is full: one is dropped", "event", event)
+	// The bound applies to the records that repeat (requested, active, expiring, a stale entry's daily expired): the end of
+	// an acceptance (expired lapsed/revoked/dropped/withdrawn) and a refusal are never dropped. There is one of those per
+	// acceptance, so they are bounded by the Applications the rule exempts.
+	x, _ := req.Record.Exception["exemption"].(map[string]any)
+	terminal := x["state"] == "refused" || (x["state"] == "expired" && x["why"] != "stale")
+	if _, ok := a.st.Pending[event]; !ok && !terminal && len(a.st.Pending) >= MaxPendingRecords {
+		a.log.Warn("the queue of exemption records waiting for the core is full: a repeating record is dropped", "event", event)
 		return
 	}
 	a.st.Pending[event] = string(raw)
@@ -534,6 +560,18 @@ func (a *Agent) releaseSlot(ctx context.Context, key string) bool {
 		return false
 	}
 	return true
+}
+
+// holdsReservation says whether key holds an unfinished release reservation.
+func (a *Agent) holdsReservation(key string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, s := range a.st.Releases {
+		if s.Key == key && !s.Done {
+			return true
+		}
+	}
+	return false
 }
 
 // settleReservation ends key's reservation, if it holds one: released (the Application is off the plugin) counts it as a

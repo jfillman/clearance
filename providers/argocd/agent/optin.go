@@ -212,6 +212,13 @@ func (a *Agent) denied(app Application) bool {
 // classify reads each Application's opt-in state. It writes nothing. An Application outside the agent's projects is not
 // seen at all.
 func (a *Agent) classify(ctx context.Context, apps []Application) []appClass {
+	return a.classifyAs(ctx, apps, false)
+}
+
+// classifyAs is classify; owner is the opt-in loop's own classification, the only one that takes and settles release
+// reservations (it is the one that releases). Any other (the grant loop's) reads them: a release it sees without a
+// reservation stays gated in its view.
+func (a *Agent) classifyAs(ctx context.Context, apps []Application, owner bool) []appClass {
 	out := make([]appClass, 0, len(apps))
 	cache := map[string]nsInfo{}
 	rule := a.currentRule()
@@ -238,7 +245,7 @@ func (a *Agent) classify(ctx context.Context, apps []Application) []appClass {
 			}
 		}
 		if !outside {
-			a.applyRule(ctx, rule, &c)
+			a.applyRule(ctx, rule, &c, owner)
 		}
 		if c.switched && !c.gated() || c.switched && c.denied {
 			if err := a.restorable(c); err != nil {
@@ -254,7 +261,7 @@ func (a *Agent) classify(ctx context.Context, apps []Application) []appClass {
 // applyRule is the gate rule's part of the classification: whether the rule selects the Application, whether an
 // exemption the core took lifts it, and whether a release it causes must wait for the release bound. It reads the
 // Application's current project, destination and labels: the agent never writes the annotation for a ruled Application.
-func (a *Agent) applyRule(ctx context.Context, rule *Rule, c *appClass) {
+func (a *Agent) applyRule(ctx context.Context, rule *Rule, c *appClass, owner bool) {
 	key := c.key()
 	c.wasRuled = a.wasRuleGated(key)
 	if name, ok := rule.Match(c.app); ok {
@@ -267,13 +274,17 @@ func (a *Agent) applyRule(ctx context.Context, rule *Rule, c *appClass) {
 	// A release the rule causes (it gated the Application, and now neither the rule nor the annotation does) is bounded:
 	// past the bound the Application stays gated, and says so.
 	if c.switched && c.wasRuled && !c.gated() && !c.denied && !c.left {
-		if !a.releaseSlot(ctx, key) {
+		ok := a.holdsReservation(key)
+		if !ok && owner {
+			ok = a.releaseSlot(ctx, key)
+		}
+		if !ok {
 			c.ruled, c.releaseHeld, c.exempted = true, true, false
 			if c.ruleName == "" {
 				c.ruleName = "released-later"
 			}
 		}
-	} else {
+	} else if owner {
 		a.settleReservation(ctx, key, !c.switched)
 	}
 }
@@ -592,9 +603,9 @@ func (a *Agent) ReconcileOptIn(ctx context.Context) error {
 		return fmt.Errorf("listing the Applications (nothing is changed): %w", err)
 	}
 	a.pruneRuleState(ctx, apps)
-	classes := a.classify(ctx, apps)
+	classes := a.classifyAs(ctx, apps, true)
 	if rule != nil && a.decideExemptions(ctx, classes, rule.Digest) {
-		classes = a.classify(ctx, apps) // an answer changed what is honoured: this pass acts on it
+		classes = a.classifyAs(ctx, apps, true) // an answer changed what is honoured: this pass acts on it
 	}
 	var errs []error
 
@@ -834,6 +845,11 @@ func (a *Agent) pairAccepted(c appClass) bool {
 
 func (a *Agent) restore(ctx context.Context, classes []appClass, c appClass) error {
 	key := c.key()
+	if c.wasRuled && !c.optedIn && !c.denied && !c.left && !a.holdsReservation(key) {
+		// A release the rule causes is written only on its own reservation (the bound counts it until it completes).
+		a.opt().status[key] = "held: the rule no longer gates it, and its release has no reservation yet"
+		return nil
+	}
 	if why, stop := a.throttled(key); stop {
 		a.opt().status[key] = "held: " + why
 		a.warnOnce(key, "the Application is not written now: "+why)

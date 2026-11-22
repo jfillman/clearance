@@ -88,6 +88,7 @@ func TestABadGateRuleFailsTheRender(t *testing.T) {
 		"short":       {"optIn: {enabled: true}\ngateRule: {version: 1, exempt: [{application: a/b, reason: short, expires: '2026-12-01'}]}\n", "10 to 500"},
 		"empty glob":  {"optIn: {enabled: true}\ngateRule: {version: 1, select: [{name: a, projects: [\"\"]}]}\n", "empty, over-long"},
 		"blank glob":  {"optIn: {enabled: true}\ngateRule: {version: 1, select: [{name: a, namespaces: [\"  \"]}]}\n", "empty, over-long"},
+		"empty label": {"optIn: {enabled: true}\ngateRule: {version: 1, select: [{name: a, labels: {\"\": prod}}]}\n", "not key: value"},
 		"few chars":   {"optIn: {enabled: true}\ngateRule: {version: 1, exempt: [{application: a/b, reason: \"界界界界\", expires: '2026-12-01'}]}\n", "10 to 500"},
 	} {
 		f := dir + "/" + strings.ReplaceAll(name, " ", "-") + ".yaml"

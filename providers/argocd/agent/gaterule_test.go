@@ -695,3 +695,58 @@ func TestTheLoopsCanLoadABadRuleTogether(t *testing.T) {
 	}
 	<-done
 }
+
+// Only the opt-in loop settles a release reservation: the grant loop, whatever rule its classification saw, reads them.
+func TestTheGrantLoopNeverCancelsAReleaseReservation(t *testing.T) {
+	w := newRuleWorld(t, tenantsRule)
+	w.addApp("a-prod", "app-a-prod", nil)
+	w.mustReconcile()
+	w.kube.failApp["a-prod"] = errors.New("conflict") // the release is reserved and cannot complete yet
+	w.writeRule("version: 1\nselect: []\n")
+	w.clock.add(2 * time.Minute)
+	_ = w.reconcile()
+	reserved := func() bool {
+		l, _ := w.savedState()["ruleReleases"].([]any)
+		for _, r := range l {
+			if m := r.(map[string]any); m["key"] == "argocd-apps/a-prod" && m["done"] != true {
+				return true
+			}
+		}
+		return false
+	}
+	if !reserved() {
+		t.Fatal("a's release is reserved")
+	}
+	// The rule gates a again (as a stale classification would see it); the grant loop classifies, the opt-in loop does not.
+	w.writeRule(tenantsRule)
+	w.feeds.publish()
+	_ = w.sync()
+	if !reserved() {
+		t.Fatal("the grant loop cancelled the opt-in loop's reservation")
+	}
+	// The opt-in loop, which owns it, gives it back once the Application is gated again.
+	w.mustReconcile()
+	if reserved() {
+		t.Fatal("abandoned: given back by its owner")
+	}
+}
+
+func TestTheEndOfAnExemptionIsRecordedAfterItsEntryLeavesTheFile(t *testing.T) {
+	w := newRuleWorld(t, tenantsRule)
+	w.addApp("web-prod", "app-web-prod", nil)
+	w.mustReconcile()
+	w.writeRule(exemptRule(t0.Add(30 * 24 * time.Hour).Format(time.RFC3339)))
+	w.clock.add(2 * time.Minute)
+	w.mustReconcile()
+	w.core.down = true
+	w.writeRule(tenantsRule) // removed while the core is down
+	w.clock.add(2 * time.Minute)
+	_ = w.reconcile()
+	w.core.down = false
+	w.clock.add(11 * time.Minute)
+	_ = w.reconcile()
+	ex := w.exemptions("expired")
+	if len(ex) != 1 || ex[0]["why"] != "withdrawn" || ex[0]["entry"] != "argocd-apps/web-prod" || ex[0]["reason"] == nil {
+		t.Fatalf("the withdrawn end names the entry it ended: %v", w.exemptions(""))
+	}
+}

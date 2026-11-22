@@ -1106,8 +1106,9 @@ provider's `source.event_id` is looked up, so an agent that asks again with the 
 list may have changed) and, when taken, gets the earlier record back (`duplicate: true`). A malformed record is 400.
 
 **Removal reports.** `PUT /v1/protection/{cluster}` takes an optional `exempted` list: the pairs the report removes
-because an exemption released their Application. A pair still in `pairs`, or not in the held report, is 400 (except in the held report sent again with its own number,
-a retry after a lost answer, which is taken as it was and records nothing); a pair whose environment the list
+because an exemption released their Application. A pair still in `pairs` is 400, always. A pair not in the held report is 400, except in the held report sent again with
+its own number (a retry after a lost answer), which is taken as it was and records nothing. The static check below runs
+first even then: if the list changed after the report was taken, its retry is refused 409 too; a pair whose environment the list
 protects is refused 409 (`refused: static`), exactly as its exemption would be. The `protection.report` record names
 the exempted pairs ("removed for a gate exemption ...").
 
@@ -2730,8 +2731,16 @@ ignored on its own (the Application stays gated) and reported. There is no appro
   (`revoked`) or withdrawn from the file (`withdrawn`); an expired entry left in the file is reported once a day as `stale`. A refusal is
   recorded as `refused`. The removal report that releases an exempt Application names its pair in `exempted`. A record the core cannot be reached
   for (the end of an exemption dropped because the core was down, say) is queued in the state and delivered when it is back,
-  with its `source.event_id`, so a retry is the same record. A removal report whose answer was lost is sent again with the
-  same number and set; the core takes it as the report it already holds and records nothing more.
+  with its `source.event_id`, so a retry is the same record. The end of an exemption is kept even when its entry has left
+  the file or its Application was deleted. The queue holds at most 500 of the repeating records (`requested`, `active`,
+  `expiring`, a stale entry's daily `expired`); past that a repeating record is dropped and logged. The end of an
+  acceptance and a refusal are never dropped (there is one per acceptance). The queue lives in the state ConfigMap: if
+  the state cannot be written either, a record queued then is lost when the agent restarts, and the log says it was not
+  posted. A removal report whose answer was lost is sent again with the
+  same number and set; the core takes it as the report it already holds and records nothing more (unless
+  `CLEARANCE_PROTECTED_ENVIRONMENTS` changed meanwhile to protect an exempted pair: the retry is then refused 409, and the
+  Application stays gated). Release reservations are taken and settled by the opt-in loop alone, the one that releases; the
+  grant loop only reads them, so a classification made with an older rule cannot cancel one.
 - **Gating again does not wait for the core.** A first gating waits for the core to take the pair (as for the annotation). An
   Application an exemption released (the state remembers which) that the rule gates again, because the exemption lapsed or its acceptance
   was revoked or dropped, is switched at once, without that wait: the core being down is exactly when an acceptance is dropped. That the exemption

@@ -127,7 +127,7 @@ func ParseRule(raw []byte, now time.Time, max time.Duration) (*Rule, error) {
 			}
 		}
 		for k, v := range s.Labels {
-			if k == "" || len(k) > 317 || len(v) > 63 {
+			if strings.TrimSpace(k) == "" || len(k) > 317 || len(v) > 63 {
 				return nil, fmt.Errorf("%s has a label that is not key: value", where)
 			}
 		}
