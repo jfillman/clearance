@@ -147,8 +147,29 @@ func TestACallThatRunsIntoTheRunsEndIsAnOutage(t *testing.T) {
 	if !errors.Is(err, client.ErrCoreUnavailable) || ctx.Err() != nil {
 		t.Fatalf("want an outage before the run ends, got %v (run %v)", err, ctx.Err())
 	}
+	// an answer the core gave keeps its own class, even when the window closed just after it arrived (the call returns
+	// only once the window is over, so a check of the context after the call would see it ended)
+	refused := coreFunc(func(ctx context.Context, _ *client.ChangeRequest) (*client.Change, error) {
+		<-ctx.Done()
+		return nil, &client.APIError{Op: "registerChange", Status: 403, Message: "not a verifier"}
+	})
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel2()
+	_, err = registerInTime(ctx2, refused, &client.ChangeRequest{})
+	var ae *client.APIError
+	if !errors.As(err, &ae) || errors.Is(err, client.ErrCoreUnavailable) {
+		t.Fatalf("a refusal became %v", err)
+	}
+	// the run's own end (or a cancellation) is not this window's: it stays a context error
+	ctx3, cancel3 := context.WithCancel(context.Background())
+	cancel3()
+	if _, err := registerInTime(ctx3, hang, &client.ChangeRequest{}); errors.Is(err, client.ErrCoreUnavailable) {
+		t.Fatalf("a cancelled run became an outage: %v", err)
+	}
 	// an answer in time is passed through unchanged
-	ok := coreFunc(func(context.Context, *client.ChangeRequest) (*client.Change, error) { return &client.Change{ID: "x"}, nil })
+	ok := coreFunc(func(context.Context, *client.ChangeRequest) (*client.Change, error) {
+		return &client.Change{ID: "x"}, nil
+	})
 	if ch, err := registerInTime(context.Background(), ok, &client.ChangeRequest{}); err != nil || ch.ID != "x" {
 		t.Fatal(ch, err)
 	}

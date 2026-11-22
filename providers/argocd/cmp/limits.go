@@ -63,20 +63,29 @@ const coreMargin = 250 * time.Millisecond
 // a margin, not a bound), a core that has not answered when the run is coreMargin from its end is an outage
 // (client.ErrCoreUnavailable), and the outage policy decides, as it does for a core that times out. It never becomes
 // the run's own deadline, which would skip that policy.
+//
+// Only a call that failed because this window ended is converted: the error must itself be a context error, and the
+// window's own cause (errCoreWindow) must be what ended it, not the run's deadline or a cancellation. An answer the core
+// gave (a refusal, a bad response) is never reclassified, even when the window closed just after it arrived.
 func registerInTime(ctx context.Context, core Core, req *client.ChangeRequest) (*client.Change, error) {
 	cctx := ctx
 	if dl, ok := ctx.Deadline(); ok {
 		var cancel context.CancelFunc
-		cctx, cancel = context.WithDeadline(ctx, dl.Add(-coreMargin))
+		cctx, cancel = context.WithDeadlineCause(ctx, dl.Add(-coreMargin), errCoreWindow)
 		defer cancel()
 	}
 	ch, err := core.RegisterChange(cctx, req)
-	if err != nil && cctx.Err() != nil && ctx.Err() == nil && !errors.Is(err, client.ErrCoreUnavailable) {
+	if err != nil && !errors.Is(err, client.ErrCoreUnavailable) &&
+		(errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) &&
+		errors.Is(context.Cause(cctx), errCoreWindow) {
 		return nil, &client.UnavailableError{Op: "registerChange", Reason: client.ReasonTimeout,
 			Err: fmt.Errorf("the core did not answer within the time left in the run: %w", err)}
 	}
 	return ch, err
 }
+
+// errCoreWindow is the cause of a core call's window closing coreMargin before the run's end.
+var errCoreWindow = errors.New("the core call's window before the run's end closed")
 
 // PostRenderReserve is the time kept after the render for the plugin's own work around the core call: removing the
 // scratch, canonicalising and hashing the manifests, the caches, encoding the request and writing the stream. The
