@@ -148,7 +148,7 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 	if err != nil {
 		return "", newErr(CodeRenderRevision, "the change cannot be registered for this revision", err)
 	}
-	ch, err := d.Core.RegisterChange(ctx, req)
+	ch, err := registerInTime(ctx, d.Core, req)
 	if err != nil {
 		if errors.Is(err, client.ErrCoreUnavailable) {
 			// The outage policy (docs/gate.md, C-6): a tree already cleared whose tier lets through while the core is
@@ -212,7 +212,12 @@ func renderTree(ctx context.Context, d Deps, cfg Config, srcDir string) (tree *T
 	// core answered slowly, is cut short, never the call that decides. An unreachable core is then an outage
 	// (ErrCoreUnavailable, the outage policy), not the run's deadline.
 	if reserve := coreBudget(cfg.RegisterWait) + PostRenderReserve; cfg.RegisterWait > 0 {
-		if dl, ok := ctx.Deadline(); ok && time.Until(dl) > reserve {
+		if dl, ok := ctx.Deadline(); ok {
+			if left := time.Until(dl); left <= reserve {
+				// Not enough time left to render and still ask the core (a slow pre-render confirmation came first):
+				// fail now, as a timeout, rather than render into the time the decision needs.
+				return nil, nil, newErr(CodeFaultTimeout, "the render ran out of time", fmt.Errorf("only %s of the run is left, less than the %s the core's call and the plugin's own work need after a render", left.Round(time.Millisecond), reserve))
+			}
 			var cancel context.CancelFunc
 			rctx, cancel = context.WithDeadline(ctx, dl.Add(-reserve))
 			defer cancel()
@@ -332,7 +337,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, "clearance-cmp:", newErr(CodeFaultConfig, "the core client cannot be set up from the sidecar's settings", err))
 		os.Exit(2)
 	}
-	EnableReaping() // a descendant of a render step never outlives it, setsid or not (proc_linux.go)
+	if err := EnableReaping(); err != nil { // a descendant of a render step never outlives it, setsid or not (proc_linux.go)
+		fmt.Fprintln(os.Stderr, "clearance-cmp:", newErr(CodeFaultSandbox, "the render steps' processes cannot be contained", err))
+		os.Exit(2)
+	}
 	d := Deps{Exec: OSExec, Run: OSRun, Core: core, Cache: Cache{Dir: cfg.CacheDir}, Now: time.Now, Stderr: os.Stderr}
 	ctx, cancel := context.WithTimeout(context.Background(), PluginDeadline) // Argo CD kills a plugin at 90 s (ARGOCD_EXEC_TIMEOUT)
 	defer cancel()

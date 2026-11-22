@@ -55,7 +55,7 @@ jobs:
             TestADetachedDescendantDoesNotOutliveItsStep TestTheLandlockProbeNeedsNoToolOnPath \
             TestWithoutReapingOtherProcessesAreLeftAlone TestReapingSerialisesSteps \
             TestADetachedDescendantWithAnEmptyEnvironmentIsStopped TestALongChainOfDetachedDescendantsIsStopped \
-            TestACleanupThatRunsOutOfTimeFailsTheStep; do
+            TestACleanupThatRunsOutOfTimeFailsTheStep TestAZombieIsReapedEvenAtTheBound; do
             grep -E "^--- PASS: $t " "$RUNNER_TEMP/real-binary.log"
           done
           ! grep -E 'is not installed|is not on PATH' "$RUNNER_TEMP/real-binary.log"

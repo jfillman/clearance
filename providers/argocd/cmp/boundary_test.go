@@ -98,3 +98,58 @@ func TestTheLookupIsSkippedWithoutAPrivateScratch(t *testing.T) {
 		t.Fatal("control: the lookup never ran")
 	}
 }
+
+// A slow pre-render confirmation that leaves less time than the core's call and the plugin's own work need: the full
+// render is not started into that time. The run fails at once as a timeout (a fault), and no second call is made that
+// the run's deadline would cut.
+func TestASlowConfirmationLeavesNoTimeToRender(t *testing.T) {
+	e := cachedEnv(t)
+	e.gen(t) // cleared and kept in the pre-render cache
+	e.now = e.now.Add(5 * time.Minute)
+	cfg := e.cfg
+	cfg.RegisterWait = 100 * time.Millisecond // the core's budget plus the plugin's own work: about 2.3 s
+	reserve := coreBudget(cfg.RegisterWait) + PostRenderReserve
+	calls := 0
+	d := e.d
+	d.Core = coreFunc(func(ctx context.Context, r *client.ChangeRequest) (*client.Change, error) {
+		calls++
+		time.Sleep(600 * time.Millisecond) // a confirmation the core answers slowly, and not as cleared
+		return &client.Change{ID: "ch-other", State: "holding", Tier: 2}, nil
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), reserve+400*time.Millisecond)
+	defer cancel()
+	helm := e.exec.count("helm", "")
+	start := time.Now()
+	var out bytes.Buffer
+	_, err := Generate(ctx, d, cfg, e.src, &out)
+	ce, ok := asCmp(err)
+	if !ok || ce.Code != CodeFaultTimeout {
+		t.Fatalf("want %s, got %v", CodeFaultTimeout, err)
+	}
+	if calls != 1 || e.exec.count("helm", "") != helm {
+		t.Fatalf("%d core calls, %d renders after the slow confirmation: want one call and no render", calls, e.exec.count("helm", "")-helm)
+	}
+	if ctx.Err() != nil || time.Since(start) > reserve {
+		t.Fatalf("it returned after %s, not at once", time.Since(start))
+	}
+}
+
+// However long the work before it took, a call to the core that has not been answered when the run is about to end is
+// an outage, so the outage policy decides; it never becomes the run's own deadline.
+func TestACallThatRunsIntoTheRunsEndIsAnOutage(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	hang := coreFunc(func(ctx context.Context, _ *client.ChangeRequest) (*client.Change, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	_, err := registerInTime(ctx, hang, &client.ChangeRequest{})
+	if !errors.Is(err, client.ErrCoreUnavailable) || ctx.Err() != nil {
+		t.Fatalf("want an outage before the run ends, got %v (run %v)", err, ctx.Err())
+	}
+	// an answer in time is passed through unchanged
+	ok := coreFunc(func(context.Context, *client.ChangeRequest) (*client.Change, error) { return &client.Change{ID: "x"}, nil })
+	if ch, err := registerInTime(context.Background(), ok, &client.ChangeRequest{}); err != nil || ch.ID != "x" {
+		t.Fatal(ch, err)
+	}
+}

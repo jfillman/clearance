@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jfillman/clearance/client"
 )
 
 // The render limits (hardening W-34: S3, X7). Every render step (git, helm, kustomize) runs under bounds the kernel
@@ -53,6 +55,28 @@ const (
 	CoreBackoff    = 250 * time.Millisecond
 	CoreBackoffMax = 2 * time.Second
 )
+
+// coreMargin is kept between the end of a call to the core and the run's deadline, for the plugin to act on the answer.
+const coreMargin = 250 * time.Millisecond
+
+// registerInTime is RegisterChange held to the run: however long the work before it took (the 2 s PostRenderReserve is
+// a margin, not a bound), a core that has not answered when the run is coreMargin from its end is an outage
+// (client.ErrCoreUnavailable), and the outage policy decides, as it does for a core that times out. It never becomes
+// the run's own deadline, which would skip that policy.
+func registerInTime(ctx context.Context, core Core, req *client.ChangeRequest) (*client.Change, error) {
+	cctx := ctx
+	if dl, ok := ctx.Deadline(); ok {
+		var cancel context.CancelFunc
+		cctx, cancel = context.WithDeadline(ctx, dl.Add(-coreMargin))
+		defer cancel()
+	}
+	ch, err := core.RegisterChange(cctx, req)
+	if err != nil && cctx.Err() != nil && ctx.Err() == nil && !errors.Is(err, client.ErrCoreUnavailable) {
+		return nil, &client.UnavailableError{Op: "registerChange", Reason: client.ReasonTimeout,
+			Err: fmt.Errorf("the core did not answer within the time left in the run: %w", err)}
+	}
+	return ch, err
+}
 
 // PostRenderReserve is the time kept after the render for the plugin's own work around the core call: removing the
 // scratch, canonicalising and hashing the manifests, the caches, encoding the request and writing the stream. The

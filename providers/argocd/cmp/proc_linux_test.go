@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // A descendant that detaches from the step's process group (setsid: a session and a group of its own) is still
@@ -23,7 +24,7 @@ func TestADetachedDescendantDoesNotOutliveItsStep(t *testing.T) {
 	withReaping(t)
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	// A grandchild in a new session: the step's shell exits at once, the detached sleep would live on.
-	fakeTool(t, "helm", `(setsid sleep 300 >/dev/null 2>&1 </dev/null & echo $! > '`+pidFile+`') ; exit 0`)
+	fakeTool(t, "helm", detachScript("sh", pidFile))
 	if _, err := OSRun(context.Background(), t.TempDir(), nil, "helm", "template", "x", "."); err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +56,9 @@ func TestTheLandlockProbeNeedsNoToolOnPath(t *testing.T) {
 // withReaping turns the subreaper and the sweep on for one test, as the plugin's generate does (EnableReaping).
 func withReaping(t *testing.T) {
 	t.Helper()
-	EnableReaping()
+	if err := EnableReaping(); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { reaping.Store(false) })
 }
 
@@ -130,7 +133,7 @@ func TestADetachedDescendantWithAnEmptyEnvironmentIsStopped(t *testing.T) {
 	withFS(t, NetnsOff, "")
 	withReaping(t)
 	pidFile := filepath.Join(t.TempDir(), "pid")
-	fakeTool(t, "helm", `(setsid env -i sleep 300 >/dev/null 2>&1 </dev/null & echo $! > '`+pidFile+`') ; exit 0`)
+	fakeTool(t, "helm", detachScript("env -i /bin/sh", pidFile))
 	if _, err := OSRun(context.Background(), t.TempDir(), nil, "helm", "template", "x", "."); err != nil {
 		t.Fatal(err)
 	}
@@ -179,14 +182,16 @@ i=0; while [ "$(wc -l < '`+pids+`' 2>/dev/null || echo 0)" -lt 21 ] && [ $i -lt 
 func TestACleanupThatRunsOutOfTimeFailsTheStep(t *testing.T) {
 	withFS(t, NetnsOff, "")
 	withReaping(t)
-	old := reapTimeout
-	reapTimeout = 0 // the sweep has no time at all: whatever is left is left
-	t.Cleanup(func() { reapTimeout = old; reapAll() })
+	old, oldKill := reapTimeout, killProc
+	// A leftover that does not die (the sweep's signal is held back) within a short bound.
+	reapTimeout, killProc = 100*time.Millisecond, func(int, syscall.Signal) error { return nil }
+	t.Cleanup(func() { reapTimeout, killProc = old, oldKill; reapAll() })
 	if _, err := exec.LookPath("setsid"); err != nil {
 		t.Skip("setsid is not installed")
 	}
 	// detached, so the group kill does not reach it and only the sweep could
-	fakeTool(t, "helm", `(setsid sleep 300 >/dev/null 2>&1 </dev/null &) ; exit 0`)
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	fakeTool(t, "helm", detachScript("sh", pidFile))
 	_, err := OSRun(context.Background(), t.TempDir(), nil, "helm", "template", "x", ".")
 	if err == nil || !strings.Contains(err.Error(), "could not be stopped") {
 		t.Fatalf("a step whose leftover outlived the sweep succeeded: %v", err)
@@ -201,4 +206,38 @@ func readPid(t *testing.T, f string) int {
 		t.Fatalf("no pid in %s: %q", f, b)
 	}
 	return pid
+}
+
+// detachScript is a fake tool that starts a detached descendant and exits only once that descendant has detached: the
+// descendant writes its pid to marker after setsid has run (it is the setsid'd shell, which then execs sleep), and the
+// tool waits for the marker. shell is how the descendant is started ("sh", or "env -i /bin/sh" to empty its
+// environment).
+func detachScript(shell, marker string) string {
+	return `(setsid ` + shell + ` -c 'echo $$ > "$0"; exec /bin/sleep 300' '` + marker + `' </dev/null >/dev/null 2>&1 &)
+i=0; while [ ! -s '` + marker + `' ] && [ $i -lt 500 ]; do sleep 0.01; i=$((i+1)); done
+exit 0`
+}
+
+// A zombie left at the bound is reaped, not reported as gone: the sweep succeeds only when wait4 says no child is left.
+func TestAZombieIsReapedEvenAtTheBound(t *testing.T) {
+	withReaping(t)
+	old := reapTimeout
+	reapTimeout = 0
+	t.Cleanup(func() { reapTimeout = old })
+	pid, err := syscall.ForkExec("/bin/true", []string{"true"}, nil) // never waited for: it becomes a zombie
+	if err != nil {
+		t.Skip("cannot start /bin/true:", err)
+	}
+	for i := 0; i < 200; i++ {
+		if st, ok := procState(pid); ok && st == "Z" {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := reapAll(); err != nil {
+		t.Fatalf("the sweep failed with only a zombie left: %v", err)
+	}
+	if st, ok := procState(pid); ok {
+		t.Fatalf("the zombie is still there (state %s)", st)
+	}
 }
