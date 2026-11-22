@@ -9,6 +9,11 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+**Upgrading.** No setting is newly required. The two new settings are off or unset by default:
+`CLEARANCE_CMP_LAST_KNOWN_GOOD` (`off`) and `CLEARANCE_CMP_LINK_BASE` (unset: links go to the core's record). An alert or
+script that matches the start of the plugin's error message must allow the new `<code>: ` prefix; the old message is
+kept whole on the `detail:` line.
+
 ### Added
 
 - **The grant-expiry webhook: expiry holds even when the agent stops (I-44; `providers/argocd/grantexpiry`, `charts/clearance-argocd-agent`
@@ -28,6 +33,24 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   `providers/argocd/crd/admission.yaml`: with it rendered `true`, a CREATE after the active grant's `spec.expiresAt` is refused (the API
   server's own `creationTimestamp` is the clock). UPDATEs are not covered; the webhook is. Proven on envtest in both modes; verify live before
   turning it on.
+
+- **`clearance-cmp` errors have classes and stable codes (hardening F4, U1).** Each failure is a plugin fault
+  (`CMP-FAULT-*`), an unavailable dependency (`CMP-DEP-*`: git or the chart host cannot be reached), a render error
+  (`CMP-RENDER-*`) or a refusal (`CMP-REFUSED-*`). The `ComparisonError` starts with one short line `<code>: <summary>`,
+  then `hold: <url>` for a refused or held change (`CLEARANCE_CMP_LINK_BASE/changes/<id>`, or the core's
+  `/v1/clearances/<id>`), then the old message as `detail:`. A panic in the render is recovered as `CMP-FAULT-PANIC`. The
+  table is in docs/install-argocd-plugin.md, "Error codes".
+- **Last-known-good fallback, off by default (hardening F5).** `CLEARANCE_CMP_LAST_KNOWN_GOOD=on`: a plugin fault or
+  an unavailable dependency, for an Application whose gitops revision, chart commit and parameters are exactly those of
+  a render already cleared, serves that render after the core confirms the same change (the outage policy when it is
+  down), instead of turning the app Unknown. Never a render error or a refusal, never a new revision, moved tag or
+  changed parameter. When the chart host is unreachable it uses the commit the tag was last cleared at. Every serve is
+  logged (`LAST-KNOWN-GOOD served`) and counted (`lkg/served`, shown by `doctor`). Its store (`lkg/` under the cache dir)
+  has its own bounds (1024 entries, 256 MiB) and is lost with an emptyDir.
+- **The settings rule is enforced (hardening F8).** `settings.go` lists every sidecar setting with what it does unset;
+  a test fails when the plugin reads an unlisted `CLEARANCE_*` name, when a documented default is not the real one, when
+  a setting with no default is not named by `doctor`, or when a new setting with no default appears. The audit added
+  `CLEARANCE_CA_FILE` and `CLEARANCE_WAIT_CA_CONFIGMAP` to the install guide's settings table, where they were missing.
 
 ### Changed
 

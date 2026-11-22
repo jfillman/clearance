@@ -70,9 +70,16 @@ func (c ChartCache) now() time.Time {
 // order `git clone --branch` reads them. It returns "" when the remote does not say (the caller fetches and sees the
 // real answer): the lookup is an optimisation and a wrong or missing answer only costs a clone.
 func resolveChart(ctx context.Context, run Exec, repo, rev string) string {
+	commit, _ := lookupChart(ctx, run, repo, rev)
+	return commit
+}
+
+// lookupChart is resolveChart that also says why there is no answer: err is set when the lookup itself failed (git
+// could not run or reach the remote), nil when the remote answered without the ref.
+func lookupChart(ctx context.Context, run Exec, repo, rev string) (string, error) {
 	out, err := run(ctx, os.TempDir(), "git", "ls-remote", "--", repo, "refs/heads/"+rev, "refs/tags/"+rev, "refs/tags/"+rev+"^{}")
 	if err != nil {
-		return ""
+		return "", err
 	}
 	refs := map[string]string{}
 	for _, ln := range strings.Split(string(out), "\n") {
@@ -83,10 +90,10 @@ func resolveChart(ctx context.Context, run Exec, repo, rev string) string {
 	}
 	for _, r := range []string{"refs/heads/" + rev, "refs/tags/" + rev + "^{}", "refs/tags/" + rev} {
 		if s := refs[r]; s != "" {
-			return s
+			return s, nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
 // Fetch puts the chart repository's tree at rev into dest (which must not exist) and returns the commit it is, and how:

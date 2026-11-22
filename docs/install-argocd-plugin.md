@@ -9,6 +9,21 @@ plain manifests. Nothing here depends on a particular platform.
 What the plugin is and how it decides is in [gate.md](gate.md#the-argo-cd-plugin-and-the-presync-wait-g-argo-4-and-g-argo-5-built);
 this page is the install, the settings, the checks and the failure modes.
 
+**What it gives you, and the guardrails on it.**
+
+- **Every failure says what kind it is.** The first line of a `ComparisonError` is one short line starting with a stable
+  code: `CMP-FAULT-*` (the plugin failed), `CMP-DEP-*` (git or the chart host is unavailable), `CMP-RENDER-*` (the
+  Application's inputs do not render) or `CMP-REFUSED-*` (Clearance said no). A refusal of a change links to it on the
+  next line (`hold: <url>`). The codes never change meaning: alert and search on them ([Error codes](#error-codes)).
+- **Last-known-good, off by default** (`CLEARANCE_CMP_LAST_KNOWN_GOOD=on`). A plugin fault or an unreachable chart host,
+  for an Application whose gitops revision, chart and parameters are exactly those of a render already cleared, serves
+  that render again instead of turning the app Unknown. It never answers a render error or a refusal, never a new
+  revision, a moved tag or a changed parameter, and never without the core confirming the same change (or the outage
+  policy allowing it). Every serve is logged and counted ([Last-known-good](#last-known-good-optional-off-by-default)).
+- **No setting is required without a safe default or a preflight that names it.** A test pins the three settings
+  with no default (`CLEARANCE_URL`, `CLEARANCE_CHART_REPOS`, `CLEARANCE_WAIT_IMAGE`); `doctor` names each one unset.
+  An upgrade that would add a fourth fails CI ([Every setting](#every-setting)).
+
 **The plugin alone does not stop a sync.** It renders, stamps and registers; a refusal shows as a `ComparisonError`
 and a held change as a PreSync wait, but `argocd app sync --strategy apply` skips hooks and a cleared render can be
 followed by a push. What refuses an object that no cleared grant lists is the admission policy and the Argo CD agent
@@ -20,11 +35,11 @@ turn enforcement on.
 1. [Prerequisites](#prerequisites)
 2. [The sidecar](#the-sidecar): Helm chart values, or a patch of the plain manifests
 3. [Run `doctor` first](#run-doctor-first)
-4. [Every setting](#every-setting)
+4. [Every setting](#every-setting), and [last-known-good](#last-known-good-optional-off-by-default)
 5. [Gating one Application](#gating-one-application), by hand or from an ApplicationSet
 6. [Turning it off again](#turning-it-off-again)
 7. [Verifying it works](#verifying-it-works)
-8. [Troubleshooting](#troubleshooting)
+8. [Troubleshooting](#troubleshooting), by [error code](#error-codes) and by message
 9. [Upgrade and rollback](#upgrade-and-rollback)
 10. [What the plugin does not do](#what-the-plugin-does-not-do)
 
@@ -243,6 +258,10 @@ parameter would not do, because parameters come from values a tenant writes.
 | `CLEARANCE_CMP_CHART_CACHE_MAX_BYTES` | no | `512Mi` (536870912) | Total size bound of the chart fetch cache (`charts/` under the cache dir). The entry used longest ago is evicted first. `0` turns the chart cache off. A single chart larger than the bound is used for that render and not kept. |
 | `CLEARANCE_CMP_CHART_CACHE_MAX_ENTRIES` | no | `32` | Number of charts kept. `0` turns the chart cache off. |
 | `CLEARANCE_CMP_CALL_TIMEOUT` | no | `20s` | How long one call to the core may take. The whole render has 80 s: Argo CD kills a plugin at 90 s (`ARGOCD_EXEC_TIMEOUT`). |
+| `CLEARANCE_CA_FILE` | no | none | A PEM file of extra root certificates (besides the system roots) for an `https` `CLEARANCE_URL` signed by a private CA. A missing or empty file stops the plugin at start. See [tls.md](tls.md#client-side). |
+| `CLEARANCE_WAIT_CA_CONFIGMAP` | no | none | A ConfigMap (key `ca.crt`) in each destination namespace that the wait Job mounts at `/etc/clearance-ca/ca.crt` as its CA. Unset, the Job trusts the system roots only. |
+| `CLEARANCE_CMP_LAST_KNOWN_GOOD` | no | `off` | `on` turns on the [last-known-good](#last-known-good-optional-off-by-default) fallback for a plugin fault or an unreachable chart host. Exactly `off` or `on`; anything else stops the plugin at start. |
+| `CLEARANCE_CMP_LINK_BASE` | no | none | The web UI's base URL: a refusal links `<base>/changes/<id>`. Unset, it links the core's record, `CLEARANCE_URL/v1/clearances/<id>`. An http(s) URL with no credentials, query or fragment. |
 | `CLEARANCE_CMP_NETNS` | no | `try` | `try`: isolate renders in a private network namespace when the kernel allows it, else render without it and warn once. `require`: refuse to render without it. `off`: never attempt it. Anything else stops the plugin at start. The render summary on stderr ends `netns=on\|unavailable\|off`. |
 
 **Sizing the cache.** The chart cache lives under `CLEARANCE_CMP_CACHE_DIR`, which by default is on the `/tmp` emptyDir, so
@@ -252,6 +271,56 @@ disk; with one, set it above `CLEARANCE_CMP_CHART_CACHE_MAX_BYTES` with room to 
 read-only cache never fails a render (it clones for itself, as without the cache) but it stops giving hits, and an
 emptyDir that goes over its `sizeLimit` evicts the pod. `doctor` warns when the volume's free space is below the byte
 bound. The cache is lost whenever the pod restarts (an emptyDir); nothing depends on it.
+
+**The rule for settings (F8).** No setting is required without a safe default, or a preflight refusal that names it:
+0.52.0 added `CLEARANCE_CHART_REPOS` with neither, and every chart behind a sidecar upgraded without it was refused.
+`providers/argocd/cmp/settings.go` lists every setting with what it does unset, and `settings_test.go` enforces it:
+every `CLEARANCE_*` name the plugin reads is listed and has a row above; a setting with a default parses exactly the
+same set to that default as unset (so this table cannot drift from the code); `doctor` names each setting with no
+default when it is unset; and the settings with no default are pinned to `CLEARANCE_URL`, `CLEARANCE_CHART_REPOS` and
+`CLEARANCE_WAIT_IMAGE`. The audit for this rule found two settings missing from this table (`CLEARANCE_CA_FILE`,
+`CLEARANCE_WAIT_CA_CONFIGMAP`, both optional); they are above now.
+
+### Last-known-good (optional, off by default)
+
+`CLEARANCE_CMP_LAST_KNOWN_GOOD=on`. Without it, any failure of the plugin turns every Application it renders from
+Synced to Unknown with a `ComparisonError`, even when nothing about the app changed. With it:
+
+| The run | What happens |
+|---|---|
+| A **plugin fault** (`CMP-FAULT-*`: a panic, a tool that cannot start or is killed, its own I/O, the render's deadline, the sandbox under `require`) or an **unavailable dependency** (`CMP-DEP-*`: git or the chart host cannot be reached, or the clone fails after the tag resolved), before the decision | looks up the render last **cleared** for exactly these inputs |
+| an entry exists, and the tree cache says cleared for the same change within `CLEARANCE_CMP_CACHE_TTL` | serves it, no core call |
+| an entry exists, and the core answers the stored registration `cleared` as the **same** change | serves it |
+| the core is unreachable | the outage policy: served only for an `allow-and-record` tier, otherwise `CMP-REFUSED-OUTAGE-HOLD` |
+| the core says anything else (another change, held, denied) | drops the entry; the fault stands |
+| a **render error** (`CMP-RENDER-*`) or a **refusal** (`CMP-REFUSED-*`) | never falls back |
+| no entry for these exact inputs | the fault stands (fail closed) |
+
+"These inputs" is everything the output depends on: the Application, the gitops revision (`ARGOCD_APP_REVISION`, a full
+commit), the commit the chart's tag resolves to on this run (looked up on the remote, never the tag's name), every
+plugin parameter, the destination's Kubernetes and API versions, and the core's URL. Not the plugin's own version: a
+plugin upgrade that breaks rendering still serves what the previous one rendered and was cleared, which is the case
+this is for. A new revision, a moved tag, a changed parameter, a tag the remote says it does not have, generic mode
+(`sources`), or a revision that is not a commit has no entry. When the chart's host **cannot be reached at all**, the
+commit is the one this tag last resolved to when these exact inputs were cleared: what is running now, so a tag moved
+during the outage is seen when the host is back, not before. A hold or denial of the tree drops its entries.
+
+Every serve prints `clearance: LAST-KNOWN-GOOD served: <app>/<env> hit <code> (...)` on stderr with the fault's code,
+the revision, chart commit, change and a running count `lkg-serves=N`, kept in `lkg/served` under the cache directory;
+`doctor` reports the count and warns when it is above zero. Every miss prints why (`last-known-good not served ...;
+failing closed`). With it on, the render's deadline is the run's less one `CLEARANCE_CMP_CALL_TIMEOUT` and the tag
+lookup is bounded at 15 s, so a slow fault still leaves time to confirm.
+
+The store is `lkg/` under `CLEARANCE_CMP_CACHE_DIR`, separate from the pre-render cache and its bounds: at most 1024
+entries and 256 MiB, the entry used longest ago going first, and no lifetime of its own (the core's confirmation is the
+lifetime). A cleared full render rewrites its entry and a pre-render hit marks it used. **It is on the cache volume:**
+on the default `/tmp` emptyDir it is empty after the pod restarts, so it covers faults within a pod's life (a tool
+crash, a full disk, a flaky chart host) but not the first renders after an upgrade restarts the pod. To cover an
+upgrade, put `CLEARANCE_CMP_CACHE_DIR` on a volume that outlives the pod, writable only by the sidecar.
+
+**Why off by default.** It changes what a failure looks like: an Application stays Synced on bytes the running plugin did
+not produce, so a broken plugin is visible only in the log line, the counter and `doctor`. Turn it on where Unknown apps
+cost more than that, and alert on `LAST-KNOWN-GOOD served`.
 
 Set by Argo CD for every render (not yours to set): `ARGOCD_APP_NAME` (the Helm release name),
 `ARGOCD_APP_NAMESPACE` (the destination namespace), `ARGOCD_APP_REVISION` (the commit synced; must be a full commit
@@ -430,7 +499,51 @@ plugin), never an un-gated sync.
 ## Troubleshooting
 
 Argo CD shows the plugin's stderr as the Application's `ComparisonError` (`CMP processing failed ... clearance-cmp: <message>`).
-These are the messages in the code, with their fixes. A configuration error exits 2, a refusal or a failed render exits 1.
+The message is `<code>: <one short line>`, then `hold: <url>` when a change was refused or held, then `detail: <the
+full message>`. A configuration error exits 2, anything else 1.
+
+### Error codes
+
+Each code is stable: it is never renamed or given another meaning. The class says whose problem it is and whether
+[last-known-good](#last-known-good-optional-off-by-default) may answer it (fault and dependency only, and only before
+the decision).
+
+| Code | Class | Means | Do |
+|---|---|---|---|
+| `CMP-FAULT-PANIC` | fault | The plugin panicked (a bug); it was recovered. | Report it with the detail line. |
+| `CMP-FAULT-INTERNAL` | fault | The plugin's own failure with no more specific code: its scratch files, writing the output, an unexpected error. | Check the pod's `/tmp` (full, read-only); report it if it persists. |
+| `CMP-FAULT-TOOL` | fault | `helm`, `kustomize` or `git` could not be started, or was killed by a signal (out of memory). | Check the image and the container's memory limit. |
+| `CMP-FAULT-TIMEOUT` | fault | The render ran out of time. | Check egress to the chart repository; see `CLEARANCE_CMP_CALL_TIMEOUT`. |
+| `CMP-FAULT-SANDBOX` | fault | `CLEARANCE_CMP_NETNS=require` and the private network namespace cannot be created. | Fix the seccomp profile, or set `try`. |
+| `CMP-FAULT-CONFIG` | fault | A sidecar setting is missing or malformed (including `CLEARANCE_CHART_REPOS` unset). | Run `doctor`; fix the named setting. |
+| `CMP-FAULT-TOKEN` | fault | The token file could not be read; nothing was sent. | Check the projected token volume; `doctor` `token`. |
+| `CMP-FAULT-CORE-RESPONSE` | fault | The core answered something the plugin cannot read. | Check `CLEARANCE_URL` points at the core, not a proxy page. |
+| `CMP-FAULT-WAIT-IMAGE` | fault | A change is held for people but `CLEARANCE_WAIT_IMAGE` is not set, so no wait Job. | Set `CLEARANCE_WAIT_IMAGE`; the `hold:` line links the change. |
+| `CMP-DEP-CHART-UNREACHABLE` | dependency | `git` or the chart's host could not be reached to resolve the tag, and the fetch failed. | Check the chart host and egress. |
+| `CMP-DEP-CHART-FETCH` | dependency | The chart's tag resolved on the remote but the fetch then failed. | Check the chart host; retry. |
+| `CMP-RENDER-PARAMS` | render | A plugin parameter (`PARAM_*`) or Argo CD variable is missing or malformed. | Fix the Application's `plugin.parameters`. |
+| `CMP-RENDER-REFUSED` | render | A source the platform does not allow, or a symlink or path that leaves its repository. | Fix the source or list it in `CLEARANCE_CHART_REPOS`. |
+| `CMP-RENDER-FETCH` | render | The chart's tag does not exist on its repository (or no lookup ran and the clone failed). | Check `chartRevision`; the sidecar has no git credential. |
+| `CMP-RENDER-HELM` | render | `helm template` failed on the chart and values. | Fix the chart or values; vendor dependencies under `charts/`. |
+| `CMP-RENDER-KUSTOMIZE` | render | `kustomize build` failed. | Fix the kustomization; keep bases in the repository. |
+| `CMP-RENDER-SOURCES` | render | Generic mode: the Application's sources do not render, or use a feature the plugin refuses. Generic mode does not tell an unreachable host from a bad source. | Fix the source, or leave the app ungated. |
+| `CMP-RENDER-TREE` | render | The render cannot be hashed: no objects, too many, a duplicate, an ambiguous YAML scalar. | Fix the render; quote the scalar. |
+| `CMP-RENDER-REVISION` | render | `ARGOCD_APP_REVISION` is not a full commit, or the source repository has no owner/name. | Refresh the Application. |
+| `CMP-REFUSED-DENIED` | refusal | The change is denied. | Open the `hold:` link. |
+| `CMP-REFUSED-EXPIRED` | refusal | The change's clearance expired. | Open the `hold:` link; clear it again. |
+| `CMP-REFUSED-SUPERSEDED` | refusal | A newer change replaced it. | Sync the newer commit. |
+| `CMP-REFUSED-EXCEPTION` | refusal | The change is under a deploy exception, not cleared. | Open the `hold:` link. |
+| `CMP-REFUSED-DEGRADED` | refusal | The change is in degraded mode, not cleared. | Open the `hold:` link. |
+| `CMP-REFUSED-STATE` | refusal | The change is in another state that does not sync. | Open the `hold:` link. |
+| `CMP-REFUSED-OUTAGE-HOLD` | refusal | The core is unreachable and nothing cleared and `allow-and-record` is remembered for the tree. | Restore the core; `doctor` `core`. |
+| `CMP-REFUSED-BY-CORE` | refusal | The core refused the registration (4xx): the token's audience, not a verifier, a bad request. | See the messages below; `doctor` `core-auth`. |
+
+The links go to `CLEARANCE_CMP_LINK_BASE/changes/<id>` (the web UI) when that is set, else to the core's
+`CLEARANCE_URL/v1/clearances/<id>`.
+
+### By message
+
+The `detail:` line is the message in the code; these are the common ones, with their fixes.
 
 | ComparisonError says | Meaning | Fix |
 |---|---|---|
