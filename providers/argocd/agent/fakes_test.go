@@ -51,6 +51,7 @@ type fakeKube struct {
 	apps          []agent.Application
 	objs          map[string][]agent.ObjectDetail // by namespace
 	data          map[string]map[string]string
+	putErr        func(d map[string]string) error // a refusal of some ConfigMap writes
 	grantOps      int
 	workOps       int // anything that would touch a workload: must stay 0
 	failList      bool
@@ -252,6 +253,11 @@ func (k *fakeKube) PutData(_ context.Context, ns, name string, d map[string]stri
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.verbs["put"]++
+	if k.putErr != nil {
+		if err := k.putErr(d); err != nil {
+			return err
+		}
+	}
 	cur := map[string]string{}
 	for a, b := range k.data[ns+"/"+name] { // a merge patch of data: other keys stay
 		cur[a] = b
@@ -279,6 +285,8 @@ type fakeCore struct {
 	refuse     func(req *client.ProtectionRequest) error // a refusal for some reports (a 4xx)
 	// exempt decides a gate-exemption record as the core would (W-42): nil takes it; an *client.APIError refuses it.
 	exempt func(state, env string) error
+	// loseReport commits the next protection report and then answers with an error, as a lost answer (W-42).
+	loseReport bool
 }
 
 func (c *fakeCore) ProtectionSeq(context.Context, string) (int64, error) {
@@ -336,6 +344,10 @@ func (c *fakeCore) ReportProtection(_ context.Context, cluster string, req *clie
 		}
 	}
 	c.held = append([]client.ProtectedPair(nil), req.Pairs...)
+	if c.loseReport {
+		c.loseReport = false
+		return nil, errors.New("the answer was lost")
+	}
 	return res, nil
 }
 

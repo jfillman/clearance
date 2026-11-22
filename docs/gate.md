@@ -1106,7 +1106,8 @@ provider's `source.event_id` is looked up, so an agent that asks again with the 
 list may have changed) and, when taken, gets the earlier record back (`duplicate: true`). A malformed record is 400.
 
 **Removal reports.** `PUT /v1/protection/{cluster}` takes an optional `exempted` list: the pairs the report removes
-because an exemption released their Application. A pair still in `pairs`, or not in the held report, is 400; a pair whose environment the list
+because an exemption released their Application. A pair still in `pairs`, or not in the held report, is 400 (except in the held report sent again with its own number,
+a retry after a lost answer, which is taken as it was and records nothing); a pair whose environment the list
 protects is refused 409 (`refused: static`), exactly as its exemption would be. The `protection.report` record names
 the exempted pairs ("removed for a gate exemption ...").
 
@@ -2698,7 +2699,10 @@ field, label or annotation creates an exemption (`clearance.hangar.io/exempt` is
 
 **Releases are bounded.** Narrowing the rule can release many Applications at once, so rule-caused releases (narrowing, or an
 exemption) are limited to `--gate-release-max` (`gateRuleOptions.releaseMax`, default 3) per hour, counted in the agent's state so a
-restart does not reset it; the rest stay gated and their status says `held: ... release bound`. A release follows the normal removal
+restart does not reset it; the rest stay gated and their status says `held: ... release bound`. A release first takes a
+reservation, saved in the state before anything is written (one that cannot be saved is not taken, and the Application stays
+gated); the reservation counts until the release completes, however long that takes, and the completed release counts for the
+hour from when it completed. A release abandoned (the Application is gated again) gives its reservation back. A release follows the normal removal
 order: report the removal (reason `<app> the rule no longer matches (<app>/<env>)`, or the exemption), unlabel, restore the source,
 remove the grant, and nothing is released while the core has not taken the report.
 
@@ -2724,10 +2728,14 @@ ignored on its own (the Application stays gated) and reported. There is no appro
 - **Records.** `requested` at each ask (one record a day per key: the core de-duplicates on `source.event_id` after deciding), `active`
   once a day while honoured, `expiring` once, seven days before `expires`, and `expired` when it lapses (`why: lapsed`), is revoked
   (`revoked`) or withdrawn from the file (`withdrawn`); an expired entry left in the file is reported once a day as `stale`. A refusal is
-  recorded as `refused`. The removal report that releases an exempt Application names its pair in `exempted`.
+  recorded as `refused`. The removal report that releases an exempt Application names its pair in `exempted`. A record the core cannot be reached
+  for (the end of an exemption dropped because the core was down, say) is queued in the state and delivered when it is back,
+  with its `source.event_id`, so a retry is the same record. A removal report whose answer was lost is sent again with the
+  same number and set; the core takes it as the report it already holds and records nothing more.
 - **Gating again does not wait for the core.** A first gating waits for the core to take the pair (as for the annotation). An
   Application an exemption released (the state remembers which) that the rule gates again, because the exemption lapsed or its acceptance
-  was revoked or dropped, is switched at once, without that wait: the core being down is exactly when an acceptance is dropped. Its pair
+  was revoked or dropped, is switched at once, without that wait: the core being down is exactly when an acceptance is dropped. That the exemption
+  released it is saved in the state before its source is put back; if it cannot be saved, it is not put back. Its pair
   is in every report the agent sends from then on, so it reaches the core when the core is back. The switch is what gates it at once (the
   plugin renders nothing the core has not cleared); its merged grant and the namespace label still follow the signed feed, as always.
 

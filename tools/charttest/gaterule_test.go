@@ -64,6 +64,18 @@ func TestTheGateRuleRendersOnlyWhenSet(t *testing.T) {
 	}
 }
 
+// Reasons are counted in characters, as the agent counts them: 200 three-byte characters are a valid reason.
+func TestAGateRuleReasonIsCountedInCharacters(t *testing.T) {
+	reason := strings.Repeat("界", 200)
+	f := t.TempDir() + "/wide.yaml"
+	if err := os.WriteFile(f, []byte("optIn: {enabled: true}\ngateRule: {version: 1, select: [{name: a, projects: [\"*\"]}], exempt: [{application: a/b, reason: \""+reason+"\", expires: '2026-12-01'}]}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := helmAgent(t, "-f", f); err != nil {
+		t.Fatalf("a 600-byte, 200-character reason is refused: %v %s", err, out)
+	}
+}
+
 func TestABadGateRuleFailsTheRender(t *testing.T) {
 	dir := t.TempDir()
 	for name, c := range map[string]struct{ values, want string }{
@@ -74,6 +86,9 @@ func TestABadGateRuleFailsTheRender(t *testing.T) {
 		"twice":       {"optIn: {enabled: true}\ngateRule: {version: 1, select: [{name: a, projects: [x]}, {name: a, projects: [y]}]}\n", "named twice"},
 		"no expiry":   {"optIn: {enabled: true}\ngateRule: {version: 1, exempt: [{application: a/b, reason: a long enough reason}]}\n", "needs application, reason and expires"},
 		"short":       {"optIn: {enabled: true}\ngateRule: {version: 1, exempt: [{application: a/b, reason: short, expires: '2026-12-01'}]}\n", "10 to 500"},
+		"empty glob":  {"optIn: {enabled: true}\ngateRule: {version: 1, select: [{name: a, projects: [\"\"]}]}\n", "empty, over-long"},
+		"blank glob":  {"optIn: {enabled: true}\ngateRule: {version: 1, select: [{name: a, namespaces: [\"  \"]}]}\n", "empty, over-long"},
+		"few chars":   {"optIn: {enabled: true}\ngateRule: {version: 1, exempt: [{application: a/b, reason: \"界界界界\", expires: '2026-12-01'}]}\n", "10 to 500"},
 	} {
 		f := dir + "/" + strings.ReplaceAll(name, " ", "-") + ".yaml"
 		if err := os.WriteFile(f, []byte(c.values), 0o600); err != nil {

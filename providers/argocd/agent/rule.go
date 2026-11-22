@@ -97,6 +97,11 @@ func ParseRule(raw []byte, now time.Time, max time.Duration) (*Rule, error) {
 		}
 		return nil, fmt.Errorf("the rule file is not the rule's YAML: %w", err)
 	}
+	// One document only: a second one (well formed or not) is refused, so a broken tail cannot leave a valid head in force.
+	var extra any
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		return nil, errors.New("the rule file holds more than one YAML document")
+	}
 	if r.Version != RuleVersion {
 		return nil, fmt.Errorf("the rule file's version is %d, this agent reads version %d", r.Version, RuleVersion)
 	}

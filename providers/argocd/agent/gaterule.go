@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -70,10 +72,13 @@ func (g *GateRule) check() error {
 // nothing is released until it is.
 var ErrRuleNotReady = errors.New("the gate rule is configured and no good copy of it can be read (the file, or the state's copy)")
 
-// RuleSlot is one rule-caused release in the window (persisted).
+// RuleSlot is one rule-caused release (persisted). A reservation (Done false) is taken before the release starts and
+// counts until the release completes or is abandoned, whatever its age; a completed one counts from when it completed (At)
+// for the window.
 type RuleSlot struct {
-	Key string `json:"key"`
-	At  string `json:"at"`
+	Key  string `json:"key"`
+	At   string `json:"at"`
+	Done bool   `json:"done,omitempty"`
 }
 
 // acceptance is the core's last answer about one Application's exemption: for key (the pair, the Application, the entry
@@ -112,15 +117,19 @@ func (a *Agent) loadRule(ctx context.Context) (*Rule, error) {
 		a.ruleMu.Unlock()
 		if changed {
 			a.log.Info("gate rule loaded", "digest", r.Digest, "select", len(r.Select), "exempt", len(r.Exempt))
-			a.mu.Lock()
-			if a.st.RuleDigest != r.Digest {
-				a.st.RuleRaw, a.st.RuleDigest = r.Raw, r.Digest
-				if serr := a.saveLocked(ctx); serr != nil {
-					a.log.Warn("the gate rule's copy could not be saved in the state", "err", serr)
-				}
-			}
-			a.mu.Unlock()
 		}
+		// The state's copy is what a restart falls back on: it is written until a write succeeds (the state says which
+		// digest it holds; a failed write leaves the old copy there, and the next pass tries again).
+		a.mu.Lock()
+		if a.st.RuleDigest != r.Digest {
+			oldRaw, oldDigest := a.st.RuleRaw, a.st.RuleDigest
+			a.st.RuleRaw, a.st.RuleDigest = r.Raw, r.Digest
+			if serr := a.saveLocked(ctx); serr != nil {
+				a.st.RuleRaw, a.st.RuleDigest = oldRaw, oldDigest
+				a.log.Warn("the gate rule's copy could not be saved in the state (tried again next pass)", "err", serr)
+			}
+		}
+		a.mu.Unlock()
 		a.forgetOnce(ctx, "gate-rule|")
 		return r, nil
 	}
@@ -221,6 +230,7 @@ func (c appClass) candidate() bool { return c.ruleName != "" && c.exempt != nil 
 // decideExemptions asks the core about every exemption that would release an Application, and posts the exemptions'
 // records. It says whether an answer changed what is honoured (the pass classifies again).
 func (a *Agent) decideExemptions(ctx context.Context, classes []appClass, digest string) bool {
+	a.flushPending(ctx)
 	changed := false
 	present := map[string]bool{}
 	for _, c := range classes {
@@ -228,11 +238,18 @@ func (a *Agent) decideExemptions(ctx context.Context, classes []appClass, digest
 		present[key] = true
 		acc, had := a.answer(key)
 		wasHonoured := had && acc.refused == ""
+		// changed is measured against what this pass's classification honoured (c.exempted), not against the cache: an
+		// answer that was too old to be honoured and is renewed now must make the pass classify again.
+		settle := func(honoured bool) {
+			if honoured != c.exempted {
+				changed = true
+			}
+		}
 		drop := func(why string) {
 			a.setAnswer(key, nil)
+			settle(false)
 			if wasHonoured {
-				changed = true
-				a.postExemption(ctx, c, "expired", why, "")
+				a.postExemption(ctx, c, "expired", why, "gate-exempt-end|"+acc.key+"|"+why)
 			}
 		}
 		if !c.candidate() || c.denied {
@@ -258,6 +275,7 @@ func (a *Agent) decideExemptions(ctx context.Context, classes []appClass, digest
 				drop("lapsed")
 			} else {
 				a.setAnswer(key, nil)
+				settle(false)
 				if a.dueEvery("gate-exempt-stale|"+key+"|"+e.Expires, 24*time.Hour) {
 					a.postExemption(ctx, c, "expired", "stale", "gate-exempt-stale|"+key+"|"+e.Expires)
 				}
@@ -268,33 +286,37 @@ func (a *Agent) decideExemptions(ctx context.Context, classes []appClass, digest
 			if had {
 				drop("revoked")
 			}
+			settle(false)
 			continue
 		}
 		k := exemptKey(c, digest)
 		if had && acc.key == k && a.now().Sub(acc.at) < a.cfg.OptIn.Rule.Recheck {
+			settle(acc.refused == "" && a.honoured(c, digest))
 			continue // answered, and not due again
 		}
 		refused, err := a.askExemption(ctx, c, k)
 		switch {
 		case err != nil: // unreachable, or the deadline passed: fail closed at once
 			a.setAnswer(key, nil)
+			settle(false)
 			if wasHonoured {
-				changed = true
 				a.warnOnce(key, "an exemption's acceptance is dropped (the core could not be asked): the Application is gated again: "+truncate(err.Error(), 200))
+				// The end of the exemption is recorded when the core is back (queued, with its event id).
+				a.postExemption(ctx, c, "expired", "dropped", "gate-exempt-end|"+acc.key+"|dropped")
 			}
 		case refused != "":
 			a.setAnswer(key, &acceptance{key: k, at: a.now(), refused: refused, pair: Pair{c.gateApp, c.env}})
+			settle(false)
 			if wasHonoured {
-				changed = true
-				a.postExemption(ctx, c, "expired", "revoked", "")
+				a.postExemption(ctx, c, "expired", "revoked", "gate-exempt-end|"+acc.key+"|revoked")
 			}
 			if !had || acc.key != k || acc.refused != refused {
 				a.postExemption(ctx, c, "refused", refused, "gate-exempt-refused|"+k)
 			}
 		default:
 			a.setAnswer(key, &acceptance{key: k, at: a.now(), pair: Pair{c.gateApp, c.env}})
+			settle(true)
 			if !wasHonoured || acc.key != k {
-				changed = true
 				a.log.Info("gate exemption accepted by the core", "application", key, "entry", e.Application, "expires", e.Expires)
 			}
 			if a.dueEvery("gate-exempt-active|"+k, 24*time.Hour) {
@@ -379,23 +401,81 @@ func (a *Agent) currentDigest() string {
 	return strings.Repeat("0", 64)
 }
 
-// postExemption posts one of an exemption's state records; once is the Once fingerprint that marks it posted ("": none).
+// postExemption posts one of an exemption's state records. once is its Once fingerprint, which also derives its event id
+// (the day is part of it, so a daily repost is a new record and a retry of today's is the same one). A post the core
+// cannot be reached for is queued in the state and retried every pass; the event id makes the retry idempotent.
 func (a *Agent) postExemption(ctx context.Context, c appClass, state, why, once string) {
 	if c.exempt == nil || c.exempt.Invalid != "" || !dnsLabel.MatchString(c.gateApp) || !dnsLabel.MatchString(c.env) {
 		return
 	}
-	event := ""
-	if once != "" {
-		sum := sha256.Sum256([]byte(once + "|" + a.now().UTC().Format("2006-01-02")))
-		event = "gs-" + hex.EncodeToString(sum[:16])
-	}
-	if _, err := a.core.Record(ctx, a.exemptionRecord(c, state, why, event)); err != nil {
+	sum := sha256.Sum256([]byte(once + "|" + a.now().UTC().Format("2006-01-02")))
+	event := "gs-" + hex.EncodeToString(sum[:16])
+	req := a.exemptionRecord(c, state, why, event)
+	if _, err := a.core.Record(ctx, req); err != nil {
+		var ae *client.APIError
+		if !errors.As(err, &ae) { // unreachable: delivered when the core is back
+			a.queuePending(ctx, event, req)
+		}
 		a.log.Warn("a gate exemption's record could not be posted", "application", c.key(), "state", state, "err", err)
 		return
 	}
-	if once != "" {
+	a.mu.Lock()
+	a.st.Once[once] = a.now().UTC().Format(time.RFC3339)
+	if err := a.saveLocked(ctx); err != nil {
+		a.log.Warn("the state could not be saved", "err", err)
+	}
+	a.mu.Unlock()
+}
+
+// MaxPendingRecords bounds the queue of exemption records waiting for the core.
+const MaxPendingRecords = 500
+
+func (a *Agent) queuePending(ctx context.Context, event string, req *client.RecordRequest) {
+	raw, err := json.Marshal(req)
+	if err != nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.st.Pending == nil {
+		a.st.Pending = map[string]string{}
+	}
+	if _, ok := a.st.Pending[event]; !ok && len(a.st.Pending) >= MaxPendingRecords {
+		a.log.Warn("the queue of exemption records waiting for the core is full: one is dropped", "event", event)
+		return
+	}
+	a.st.Pending[event] = string(raw)
+	if err := a.saveLocked(ctx); err != nil {
+		a.log.Warn("the state could not be saved", "err", err)
+	}
+}
+
+// flushPending posts the queued exemption records. One the core takes (or refuses: it will not take it later) leaves the
+// queue; one it still cannot be reached for stays.
+func (a *Agent) flushPending(ctx context.Context) {
+	a.mu.Lock()
+	events := make([]string, 0, len(a.st.Pending))
+	for e := range a.st.Pending {
+		events = append(events, e)
+	}
+	a.mu.Unlock()
+	sort.Strings(events)
+	for _, e := range events {
 		a.mu.Lock()
-		a.st.Once[once] = a.now().UTC().Format(time.RFC3339)
+		raw := a.st.Pending[e]
+		a.mu.Unlock()
+		var req client.RecordRequest
+		if json.Unmarshal([]byte(raw), &req) == nil {
+			if _, err := a.core.Record(ctx, &req); err != nil {
+				var ae *client.APIError
+				if !errors.As(err, &ae) {
+					return // still unreachable: the rest wait too
+				}
+				a.log.Warn("a queued gate exemption record was refused by the core and is dropped", "event", e, "err", err)
+			}
+		}
+		a.mu.Lock()
+		delete(a.st.Pending, e)
 		if err := a.saveLocked(ctx); err != nil {
 			a.log.Warn("the state could not be saved", "err", err)
 		}
@@ -419,38 +499,62 @@ func appObject(c appClass) []map[string]any {
 	return []map[string]any{{"apiVersion": "argoproj.io/v1alpha1", "kind": "Application", "namespace": c.app.Namespace, "name": c.app.Name}}
 }
 
-// releaseSlot says whether a rule-caused release of key may go ahead now: it already has a slot in the window, or the
-// window has room (the slot is then taken and persisted).
+// releaseSlot says whether a rule-caused release of key may go ahead now: key already holds a reservation, or the
+// reservations and the releases completed in the window leave room, and a new reservation could be saved. A reservation
+// that cannot be saved is not taken (a restart must not forget a release it counted).
 func (a *Agent) releaseSlot(ctx context.Context, key string) bool {
 	g := a.cfg.OptIn.Rule
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	cut := a.now().Add(-g.ReleaseWindow)
 	var keep []RuleSlot
-	have := false
+	held := false
 	for _, s := range a.st.Releases {
-		t, err := time.Parse(time.RFC3339Nano, s.At)
-		if err != nil || !t.After(cut) {
+		if s.Done {
+			if t, err := time.Parse(time.RFC3339Nano, s.At); err == nil && t.After(cut) {
+				keep = append(keep, s)
+			}
 			continue
 		}
 		keep = append(keep, s)
-		if s.Key == key {
-			have = true
-		}
+		held = held || s.Key == key
 	}
-	if have {
-		a.st.Releases = keep
+	prev := a.st.Releases
+	a.st.Releases = keep
+	if held {
 		return true
 	}
 	if len(keep) >= g.ReleaseMax {
-		a.st.Releases = keep
 		return false
 	}
-	a.st.Releases = append(keep, RuleSlot{Key: key, At: a.now().UTC().Format(time.RFC3339Nano)})
+	a.st.Releases = append(append([]RuleSlot(nil), keep...), RuleSlot{Key: key, At: a.now().UTC().Format(time.RFC3339Nano)})
 	if err := a.saveLocked(ctx); err != nil {
-		a.log.Warn("the release slot could not be saved", "err", err)
+		a.st.Releases = prev
+		a.log.Warn("a release reservation could not be saved: the release waits", "application", key, "err", err)
+		return false
 	}
 	return true
+}
+
+// settleReservation ends key's reservation, if it holds one: released (the Application is off the plugin) counts it as a
+// release completed now; otherwise (it is gated again) the release was abandoned and the reservation is dropped.
+func (a *Agent) settleReservation(ctx context.Context, key string, released bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for i, s := range a.st.Releases {
+		if s.Key != key || s.Done {
+			continue
+		}
+		if released {
+			a.st.Releases[i] = RuleSlot{Key: key, At: a.now().UTC().Format(time.RFC3339Nano), Done: true}
+		} else {
+			a.st.Releases = append(a.st.Releases[:i:i], a.st.Releases[i+1:]...)
+		}
+		if err := a.saveLocked(ctx); err != nil {
+			a.log.Warn("the state could not be saved", "err", err)
+		}
+		return
+	}
 }
 
 // markRuleGated keeps, in the state, which Applications the rule gates (a later release of one is rule-caused and
@@ -484,14 +588,15 @@ func (a *Agent) wasRuleGated(key string) bool {
 	return ok
 }
 
-func (a *Agent) setExemptReleased(ctx context.Context, key string, released bool) {
+func (a *Agent) setExemptReleased(ctx context.Context, key string, released bool) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.st.ExemptReleased == nil {
 		a.st.ExemptReleased = map[string]string{}
 	}
-	if _, ok := a.st.ExemptReleased[key]; ok == released {
-		return
+	prev, ok := a.st.ExemptReleased[key]
+	if ok == released {
+		return nil
 	}
 	if released {
 		a.st.ExemptReleased[key] = a.now().UTC().Format(time.RFC3339)
@@ -499,8 +604,14 @@ func (a *Agent) setExemptReleased(ctx context.Context, key string, released bool
 		delete(a.st.ExemptReleased, key)
 	}
 	if err := a.saveLocked(ctx); err != nil {
-		a.log.Warn("the state could not be saved", "err", err)
+		if released {
+			delete(a.st.ExemptReleased, key)
+		} else {
+			a.st.ExemptReleased[key] = prev
+		}
+		return err
 	}
+	return nil
 }
 
 func (a *Agent) exemptReleased(key string) bool {
@@ -535,6 +646,12 @@ func (a *Agent) pruneRuleState(ctx context.Context, apps []Application) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	changed := false
+	for i, s := range a.st.Releases {
+		if !s.Done && !live[s.Key] { // gone: counted as a release now, so the window still holds it
+			a.st.Releases[i] = RuleSlot{Key: s.Key, At: a.now().UTC().Format(time.RFC3339Nano), Done: true}
+			changed = true
+		}
+	}
 	for _, m := range []map[string]string{a.st.RuleGated, a.st.ExemptReleased} {
 		for k := range m {
 			if !live[k] {

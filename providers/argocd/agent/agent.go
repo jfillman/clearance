@@ -145,6 +145,8 @@ type Agent struct {
 
 	schemaMu sync.Mutex
 	schema   schemaState
+	optMu    sync.Mutex // optS's creation
+	warnMu   sync.Mutex // optS.warned (both loops warn)
 	optS     *optState  // the opt-in's memory (the opt-in loop's own)
 	repMu    sync.Mutex // rep
 	rep      report     // the last set of protected pairs the core took
@@ -203,6 +205,8 @@ type State struct {
 	RuleGated      map[string]string `json:"ruleGated,omitempty"`
 	Releases       []RuleSlot        `json:"ruleReleases,omitempty"`
 	ExemptReleased map[string]string `json:"exemptReleased,omitempty"`
+	// Pending are gate exemption records the core could not be reached for (event id -> the request), retried every pass.
+	Pending map[string]string `json:"pendingRecords,omitempty"`
 }
 
 // Pair is an app and environment.

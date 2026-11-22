@@ -273,6 +273,8 @@ func (a *Agent) applyRule(ctx context.Context, rule *Rule, c *appClass) {
 				c.ruleName = "released-later"
 			}
 		}
+	} else {
+		a.settleReservation(ctx, key, !c.switched)
 	}
 }
 
@@ -519,6 +521,8 @@ type optState struct {
 }
 
 func (a *Agent) opt() *optState {
+	a.optMu.Lock()
+	defer a.optMu.Unlock()
 	if a.optS == nil {
 		a.optS = &optState{fails: map[string]int{}, retry: map[string]time.Time{},
 			status: map[string]string{}, warned: map[string]string{}}
@@ -526,13 +530,25 @@ func (a *Agent) opt() *optState {
 	return a.optS
 }
 
+// warnOnce logs msg for key unless it was the last warning logged for key. The grant loop and the opt-in loop both warn
+// (the gate rule's load runs on both), so the map is behind its own lock.
 func (a *Agent) warnOnce(key, msg string, kv ...any) {
 	s := a.opt()
-	if s.warned[key] == msg {
-		return
-	}
+	a.warnMu.Lock()
+	same := s.warned[key] == msg
 	s.warned[key] = msg
-	a.log.Warn(msg, append([]any{"application", key}, kv...)...)
+	a.warnMu.Unlock()
+	if !same {
+		a.log.Warn(msg, append([]any{"application", key}, kv...)...)
+	}
+}
+
+// unwarn forgets key's last warning, so the next one is logged.
+func (a *Agent) unwarn(key string) {
+	s := a.opt()
+	a.warnMu.Lock()
+	delete(s.warned, key)
+	a.warnMu.Unlock()
 }
 
 // scopeParameter is the plugin's clusterScopedKinds, from the cluster's discovery (read again every ScopesEvery). It
@@ -644,7 +660,7 @@ func (a *Agent) ReconcileOptIn(ctx context.Context) error {
 		}
 		regate := c.ruled && a.exemptReleased(c.key())
 		if c.switched && regate && a.pairAccepted(c) {
-			a.setExemptReleased(ctx, c.key(), false) // gated again, and the core has its pair
+			_ = a.setExemptReleased(ctx, c.key(), false) // gated again, and the core has its pair (a failed save is tried again)
 		}
 		// A pair is added at the core before its Application is switched: not until the core has taken it. The exception is
 		// an Application an exemption released that the rule gates again (it lapsed, or its acceptance was revoked or
@@ -778,10 +794,10 @@ func (a *Agent) switchApp(ctx context.Context, apps []Application, c appClass, s
 	}
 	if c.switched && c.marker == shape && sameJSON(live, want) && (shape == "source" || len(c.app.Sources) == 1) {
 		a.opt().status[key] = StatusSwitched
-		delete(a.opt().warned, key)
+		a.unwarn(key)
 		return nil // nothing to write
 	}
-	if ok, why := a.parentCheck(ctx, apps, c.app, c.ruled && !c.optedIn); !ok {
+	if ok, why := a.parentCheck(ctx, apps, c.app, c.ruled); !ok {
 		return block(why)
 	}
 	if why, stop := a.throttled(key); stop {
@@ -802,7 +818,7 @@ func (a *Agent) switchApp(ctx context.Context, apps []Application, c appClass, s
 		return err
 	}
 	a.opt().status[key] = StatusSwitched
-	delete(a.opt().warned, key)
+	a.unwarn(key)
 	a.log.Info("Application switched to the plugin", "application", key, "shape", shape)
 	return nil
 }
@@ -851,20 +867,26 @@ func (a *Agent) restore(ctx context.Context, classes []appClass, c appClass) err
 	} else { // the source was already put back by something else: only the marker is left
 		e.Source, e.Sources = c.app.Source, c.app.Sources
 	}
+	// An exemption's release is marked in the state BEFORE the source is put back, and not done when the mark cannot be
+	// saved: gating it again later must not wait for the core, and a crash after the write must not lose that.
+	if c.exempted {
+		if err := a.setExemptReleased(ctx, key, true); err != nil {
+			a.opt().status[key] = "held: the exemption's release could not be recorded in the state, so it is not released yet"
+			return fmt.Errorf("recording the exemption's release of %s (the Application stays on the plugin): %w", key, err)
+		}
+	}
 	err := a.kube.UpdateApplicationSource(ctx, c.app, e)
 	a.wrote(ctx, key, err)
 	if err != nil {
 		return err
 	}
 	delete(a.opt().status, key)
-	delete(a.opt().warned, key)
+	a.unwarn(key)
 	a.repMu.Lock()
 	delete(a.explained, key)
 	a.repMu.Unlock()
 	a.markRuleGated(ctx, key, "", false)
-	if c.exempted {
-		a.setExemptReleased(ctx, key, true)
-	}
+	a.settleReservation(ctx, key, true)
 	a.log.Info("Application put back to its original sources", "application", key, "denied", c.denied, "annotated", c.optedIn, "exempted", c.exempted)
 	return nil
 }
@@ -876,7 +898,7 @@ func (a *Agent) writeStatus(ctx context.Context, classes []appClass) error {
 	cur := map[string]string{}
 	for _, c := range classes {
 		switch {
-		case c.optedIn && c.denied:
+		case (c.optedIn || c.ruleName != "") && c.denied:
 			cur[c.key()] = StatusDenied + ": the deny list names it"
 		case c.restoreBad != "":
 			cur[c.key()] = s.status[c.key()]

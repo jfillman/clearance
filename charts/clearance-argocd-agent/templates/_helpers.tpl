@@ -65,10 +65,17 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if has $e.name $names -}}{{ fail (printf "gateRule.select %q is named twice" $e.name) }}{{- end -}}
 {{- $names = append $names $e.name -}}
 {{- if not (or $e.projects $e.namespaces $e.labels) -}}{{ fail (printf "gateRule.select %q names none of projects, namespaces and labels: it would match everything (write projects: [\"*\"] to mean that)" $e.name) }}{{- end -}}
+{{- range $g := concat (default list $e.projects) (default list $e.namespaces) -}}
+{{- if or (not (kindIs "string" $g)) (eq (trim $g) "") (gt (len $g) 253) -}}{{ fail (printf "gateRule.select %q has an empty, over-long or non-string glob" $e.name) }}{{- end -}}
+{{- end -}}
+{{- range $k, $v := (default dict $e.labels) -}}
+{{- if or (gt (len $k) 317) (gt (len (toString $v)) 63) -}}{{ fail (printf "gateRule.select %q has a label that is not key: value" $e.name) }}{{- end -}}
+{{- end -}}
 {{- end -}}
 {{- range $i, $e := (default list .exempt) -}}
 {{- if not (and $e.application $e.reason $e.expires) -}}{{ fail (printf "gateRule.exempt[%d] needs application, reason and expires" $i) }}{{- end -}}
-{{- if or (lt (len (toString $e.reason)) 10) (gt (len (toString $e.reason)) 500) -}}{{ fail (printf "gateRule.exempt[%d].reason is 10 to 500 characters" $i) }}{{- end -}}
+{{- $n := len (splitList "" (toString $e.reason)) -}}{{- /* characters, as the agent counts them, not bytes */ -}}
+{{- if or (lt $n 10) (gt $n 500) -}}{{ fail (printf "gateRule.exempt[%d].reason is 10 to 500 characters" $i) }}{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- if .Values.ha.enabled -}}

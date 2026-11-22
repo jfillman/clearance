@@ -224,7 +224,7 @@ func (a *Agent) send(ctx context.Context, req *client.ProtectionRequest, cur []P
 	a.lastSend = a.now()
 	a.repMu.Unlock()
 	a.forgetOnce(ctx, "report-refused")
-	delete(a.opt().warned, "core/protection")
+	a.unwarn("core/protection")
 	a.mu.Lock()
 	newSeq := max(req.Seq, res.HeldSeq)
 	if newSeq != a.st.ReportSeq || !slices.Equal(a.st.Reported, cur) {

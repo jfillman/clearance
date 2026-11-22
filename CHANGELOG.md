@@ -25,7 +25,10 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   rule or on `gateRule` without `optIn.enabled`. New flags, all with safe defaults (the rule is off until a file is named):
   `--gate-rule-file`, `--gate-exempt-max`, `--gate-release-max`, `--gate-exemption-recheck`, `--gate-exemption-recheck-timeout`.
   **With default values the chart renders byte for byte as before.** Needs a core with the `gate-exemption` kind for exemptions
-  (an older core refuses the record and every exemption is ignored). docs/gate.md, "The gate rule (W-42)".
+  (an older core refuses the record and every exemption is ignored). docs/gate.md, "The gate rule (W-42)". Release reservations are saved before any write and count until the release completes;
+  an exemption's release is recorded before the source is put back; exemption records the core missed are queued and
+  retried by event id; and `PUT /v1/protection` takes the held report sent again (same number and set, a retry after a lost
+  answer) as it was, without re-checking its exempted pairs or recording it again.
 
 - **A new exception kind, `gate-exemption`, decided by the core (W-42; `internal/gate`, `POST /v1/records`, `PUT /v1/protection`).**
   The record an Argo CD agent posts when its platform gate rule exempts one Application until a date: `exception.exemption`

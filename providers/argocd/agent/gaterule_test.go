@@ -348,6 +348,9 @@ func TestARevokedOrDroppedExemptionGatesAgainWithoutTheCore(t *testing.T) {
 				w.core.down = false
 				w.clock.add(time.Minute)
 				w.mustReconcile()
+				if ex := w.exemptions("expired"); len(ex) != 1 || ex[0]["why"] != "dropped" {
+					t.Fatalf("the end of the dropped exemption is delivered when the core is back, across a restart: %v", w.exemptions(""))
+				}
 				if !w.isSwitched("web-prod") || len(lastReport(w.optWorld)) != 1 {
 					t.Fatalf("the pair is reported on return: %v", lastReport(w.optWorld))
 				}
@@ -365,6 +368,9 @@ func TestAnExemptionNeverUngatesAnAnnotatedApplicationOrADeniedOne(t *testing.T)
 	w.mustReconcile()
 	if w.isSwitched("clearance") {
 		t.Fatal("the deny list beats the rule")
+	}
+	if st := w.status()["argocd-apps/clearance"]; !strings.HasPrefix(st, "denied") {
+		t.Fatalf("a rule-only denied Application says so: %q", st)
 	}
 	w.writeRule(exemptRule(t0.Add(30 * 24 * time.Hour).Format(time.RFC3339)))
 	w.clock.add(2 * time.Minute)
@@ -457,23 +463,25 @@ func TestARuledNamespaceGetsItsGrantAndLabelAndLosesThemWhenReleased(t *testing.
 }
 
 func TestARuledApplicationSetChildNeedsTheMarkerPreserved(t *testing.T) {
-	w := newRuleWorld(t, tenantsRule)
+	w := newRuleWorld(t, "version: 1\nselect:\n  - name: web\n    namespaces: [app-web, app-both]\n")
 	c := w.addApp("web", "app-web", nil)
 	c.Owners = []agent.OwnerRef{{Kind: "ApplicationSet", Name: "tenants"}}
-	d := w.addApp("api", "app-api", protect())
+	b := w.addApp("both", "app-both", protect()) // the rule and the annotation both select it
+	b.Owners = []agent.OwnerRef{{Kind: "ApplicationSet", Name: "tenants"}}
+	d := w.addApp("api", "app-api", protect()) // the annotation alone
 	d.Owners = []agent.OwnerRef{{Kind: "ApplicationSet", Name: "tenants"}}
 	ignore := []agent.IgnoreDifference{{JSONPointers: []string{"/spec/source", "/spec/sources"}}}
 	w.kube.appsets["tenants"] = agent.AppSet{Name: "tenants", IgnoreApplicationDifferences: ignore}
 	w.mustReconcile()
-	if w.isSwitched("web") || !w.isSwitched("api") {
-		t.Fatal("a rule-only child waits for preservedFields; an annotated one does not")
+	if w.isSwitched("web") || w.isSwitched("both") || !w.isSwitched("api") {
+		t.Fatal("a rule-selected child waits for preservedFields, annotated or not; an annotation-only one does not")
 	}
 	if st := w.status()["argocd-apps/web"]; !strings.Contains(st, "preservedFields") {
 		t.Fatalf("status: %q", st)
 	}
 	w.kube.appsets["tenants"] = agent.AppSet{Name: "tenants", IgnoreApplicationDifferences: ignore, PreservedAnnotations: []string{agent.AnnSwitched}}
 	w.mustReconcile()
-	if !w.isSwitched("web") {
+	if !w.isSwitched("web") || !w.isSwitched("both") {
 		t.Fatal("switched once the marker is preserved")
 	}
 	// The ApplicationSet wipes the marker anyway: left alone, and reported as drift.
@@ -499,4 +507,191 @@ func TestARuledApplicationSetChildNeedsTheMarkerPreserved(t *testing.T) {
 	if drift != 0 {
 		t.Fatal("at most once a day")
 	}
+}
+
+func TestARuleFileWithASecondDocumentIsRefused(t *testing.T) {
+	if _, err := agent.ParseRule([]byte("version: 1\nselect: []\n---\nnot: [valid\n"), t0, agent.DefaultExemptMax); err == nil {
+		t.Fatal("a broken second document is refused")
+	}
+	if _, err := agent.ParseRule([]byte("version: 1\nselect: []\n---\nversion: 1\n"), t0, agent.DefaultExemptMax); err == nil {
+		t.Fatal("any second document is refused")
+	}
+	w := newRuleWorld(t, tenantsRule)
+	w.addApp("web-prod", "app-web-prod", nil)
+	w.mustReconcile()
+	w.writeRule("version: 1\nselect: []\n---\nnot: [valid\n")
+	w.clock.add(2 * time.Minute)
+	w.mustReconcile()
+	if !w.isSwitched("web-prod") {
+		t.Fatal("the valid head of a broken file is not put in force: the last good rule stays")
+	}
+}
+
+func (w *ruleWorld) savedState() map[string]any {
+	var m map[string]any
+	_ = json.Unmarshal([]byte(w.kube.data["clearance-system/clearance-argocd-agent-state"]["state.json"]), &m)
+	return m
+}
+
+func failStateWritesWhen(w *ruleWorld, cond func(raw string) bool) {
+	w.kube.putErr = func(d map[string]string) error {
+		if raw, ok := d["state.json"]; ok && cond(raw) {
+			return errors.New("the state ConfigMap cannot be written")
+		}
+		return nil
+	}
+}
+
+func TestTheRulesCopyIsSavedOnceTheStateCanBeWritten(t *testing.T) {
+	w := newRuleWorld(t, tenantsRule)
+	failStateWritesWhen(w, func(string) bool { return true })
+	w.addApp("web-prod", "app-web-prod", nil)
+	_ = w.reconcile()
+	if w.savedState()["ruleDigest"] != nil {
+		t.Fatal("nothing saved while the state cannot be written")
+	}
+	w.kube.putErr = nil
+	w.clock.add(time.Minute)
+	_ = w.reconcile()
+	if d, _ := w.savedState()["ruleDigest"].(string); len(d) != 64 {
+		t.Fatalf("the copy is saved on the next pass, the file unchanged: %v", w.savedState()["ruleDigest"])
+	}
+}
+
+func TestARenewedExemptionIsHonouredInTheSamePass(t *testing.T) {
+	w := newRuleWorld(t, tenantsRule)
+	w.addApp("web-prod", "app-web-prod", nil)
+	w.mustReconcile()
+	w.writeRule(exemptRule(t0.Add(30 * 24 * time.Hour).Format(time.RFC3339)))
+	w.clock.add(2 * time.Minute)
+	w.mustReconcile()
+	if w.isSwitched("web-prod") {
+		t.Fatal("released")
+	}
+	// No pass for six minutes: the acceptance is too old to be honoured until it is renewed, which the next pass does.
+	w.clock.add(6 * time.Minute)
+	w.mustReconcile()
+	if w.isSwitched("web-prod") {
+		t.Fatal("the pass renewed the acceptance and switched the Application anyway")
+	}
+}
+
+func TestAReservedReleaseCountsUntilItCompletes(t *testing.T) {
+	w := newRuleWorld(t, tenantsRule)
+	names := []string{"a-prod", "b-prod", "c-prod", "d-prod", "e-prod", "f-prod"}
+	for _, n := range names {
+		w.addApp(n, "app-"+n, nil)
+	}
+	w.mustReconcile()
+	w.kube.failApp["a-prod"] = errors.New("conflict") // a's release is reserved and cannot complete
+	w.writeRule("version: 1\nselect: []\n")
+	w.clock.add(2 * time.Minute)
+	_ = w.reconcile()
+	if w.isSwitched("b-prod") || w.isSwitched("c-prod") || !w.isSwitched("a-prod") {
+		t.Fatal("b and c released, a reserved")
+	}
+	// An hour on: b and c have left the window, a's reservation has not (it never completed), so two more go.
+	w.clock.add(61 * time.Minute)
+	_ = w.reconcile()
+	released := 0
+	for _, n := range names[3:] {
+		if !w.isSwitched(n) {
+			released++
+		}
+	}
+	if released != 2 {
+		t.Fatalf("%d of d, e, f released beside a's open reservation, want 2", released)
+	}
+	// a completes: it counts from now, so the last one waits another hour.
+	delete(w.kube.failApp, "a-prod")
+	w.clock.add(11 * time.Minute)
+	_ = w.reconcile()
+	still := 0
+	for _, n := range names {
+		if w.isSwitched(n) {
+			still++
+		}
+	}
+	if w.isSwitched("a-prod") || still != 1 {
+		t.Fatalf("a released on its reservation, one left waiting: %d switched", still)
+	}
+}
+
+func TestNoReleaseWithoutASavedReservation(t *testing.T) {
+	w := newRuleWorld(t, tenantsRule)
+	w.addApp("web-prod", "app-web-prod", nil)
+	w.mustReconcile()
+	failStateWritesWhen(w, func(raw string) bool { return strings.Contains(raw, `"ruleReleases"`) })
+	w.writeRule("version: 1\nselect: []\n")
+	w.clock.add(2 * time.Minute)
+	_ = w.reconcile()
+	_ = w.reconcile()
+	if !w.isSwitched("web-prod") {
+		t.Fatal("released though its reservation could not be saved")
+	}
+	w.kube.putErr = nil
+	w.clock.add(2 * time.Minute)
+	w.mustReconcile()
+	if w.isSwitched("web-prod") {
+		t.Fatal("released once the reservation is saved")
+	}
+}
+
+func TestAnExemptionsReleaseIsRecordedBeforeTheSourceIsPutBack(t *testing.T) {
+	w := newRuleWorld(t, tenantsRule)
+	w.addApp("web-prod", "app-web-prod", nil)
+	w.mustReconcile()
+	failStateWritesWhen(w, func(raw string) bool { return strings.Contains(raw, `"exemptReleased"`) })
+	w.writeRule(exemptRule(t0.Add(30 * 24 * time.Hour).Format(time.RFC3339)))
+	w.clock.add(2 * time.Minute)
+	_ = w.reconcile()
+	if !w.isSwitched("web-prod") {
+		t.Fatal("put back though the release could not be recorded")
+	}
+	w.kube.putErr = nil
+	w.clock.add(11 * time.Minute)
+	w.mustReconcile()
+	rel, _ := w.savedState()["exemptReleased"].(map[string]any)
+	if w.isSwitched("web-prod") || rel["argocd-apps/web-prod"] == nil {
+		t.Fatalf("released, with the release in the state: %v", w.savedState()["exemptReleased"])
+	}
+}
+
+func TestAnExemptionRemovalWhoseAnswerWasLostIsSentAgainAsItWas(t *testing.T) {
+	w := newRuleWorld(t, tenantsRule)
+	w.addApp("web-prod", "app-web-prod", nil)
+	w.mustReconcile()
+	w.writeRule(exemptRule(t0.Add(30 * 24 * time.Hour).Format(time.RFC3339)))
+	w.core.loseReport = true
+	w.clock.add(2 * time.Minute)
+	_ = w.reconcile()
+	if !w.isSwitched("web-prod") {
+		t.Fatal("nothing is put back while the report's answer is lost")
+	}
+	lost := w.core.reports[len(w.core.reports)-1]
+	w.clock.add(2 * time.Minute)
+	w.mustReconcile()
+	again := w.core.reports[len(w.core.reports)-1]
+	if again.Seq != lost.Seq || len(again.Exempted) != 1 || w.isSwitched("web-prod") {
+		t.Fatalf("the same report again (seq %d, then %d), then the release: %+v", lost.Seq, again.Seq, again)
+	}
+	if s := w.savedState(); fmt.Sprint(s["reportSeq"]) != fmt.Sprint(lost.Seq) {
+		t.Fatalf("the state holds the committed report: %v", s["reportSeq"])
+	}
+}
+
+func TestTheLoopsCanLoadABadRuleTogether(t *testing.T) {
+	w := newRuleWorld(t, "not: [yaml")
+	w.feeds.publish()
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < 50; i++ {
+			_ = w.a.SyncGrants(bg)
+		}
+		close(done)
+	}()
+	for i := 0; i < 50; i++ {
+		_ = w.reconcile()
+	}
+	<-done
 }
