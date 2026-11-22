@@ -45,5 +45,12 @@ var Settings = []Setting{
 	{Name: "CLEARANCE_CMP_CALL_TIMEOUT", Rule: RuleDefault, Default: "20s"},
 	{Name: NetnsEnv, Rule: RuleDefault, Default: "try"},
 	{Name: LKGEnv, Rule: RuleDefault, Default: "off"},
+	{Name: FSSandboxEnv, Rule: RuleDefault, Default: "try"},
+	{Name: EnvRenderTimeout, Rule: RuleDefault, Default: "30s"},
+	{Name: EnvMaxCPU, Rule: RuleDefault, Default: "30s"},
+	{Name: EnvMaxMemory, Rule: RuleDefault, Default: "512Mi"},
+	{Name: EnvMaxOutput, Rule: RuleDefault, Default: "32Mi"},
+	{Name: EnvMaxTemp, Rule: RuleDefault, Default: "512Mi"},
+	{Name: EnvMaxRenders, Rule: RuleDefault, Default: "4"},
 	{Name: "CLEARANCE_CMP_LINK_BASE", Rule: RuleOptional},
 }

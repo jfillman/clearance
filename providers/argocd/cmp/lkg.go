@@ -47,9 +47,9 @@ const (
 	lkgKeyVersion = 1
 	lkgMaxEntries = 1024
 	lkgMaxBytes   = 256 << 20
-	// lookupTimeout bounds the tag lookup when last-known-good is on: an unreachable chart host must leave the run
-	// time to confirm the remembered change with the core.
-	lookupTimeout = 15 * time.Second
+	// lookupTimeout bounds the tag lookup (with or without last-known-good): an unreachable chart host must leave the
+	// run time to render and to confirm with the core. It is ChartLookupTimeout, which the startup check reserves.
+	lookupTimeout = ChartLookupTimeout
 )
 
 // ParseLKG reads CLEARANCE_CMP_LAST_KNOWN_GOOD: "off" (the default, also unset) or "on"; anything else stops the plugin.

@@ -1,14 +1,17 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"go.yaml.in/yaml/v3"
 
@@ -24,30 +27,90 @@ func OSExec(ctx context.Context, dir, name string, args ...string) ([]byte, erro
 }
 
 // OSRun is OSExec with extra environment (the generic renderer's: Helm's cache directories, git's allowed protocols).
+//
+// Every step runs under the render's limits (limits.go) and, where the kernel has it, the filesystem sandbox
+// (fssandbox.go): it is started through this binary's shim, which sets the resource limits and the Landlock rules and
+// then execs the tool. Its stdout is capped, its stderr kept to its first 64 KiB, and the render's scratch directory is
+// measured after it. A bound it goes over is a *LimitError.
 func OSRun(ctx context.Context, dir string, env []string, name string, args ...string) ([]byte, error) {
+	// In the plugin's generate, one step at a time (the sandbox probe included), so the sweep after a step only ever
+	// meets that step's leftovers (proc_linux.go).
+	defer stepLock()()
+	b := budgetFrom(ctx)
+	lim := DefaultLimits()
+	if b != nil {
+		lim = b.lim
+	}
+	// The step's own scratch, under the render's root: its TMPDIR, and the network-off files.
+	scratch, err := os.MkdirTemp(workDir(ctx), "clearance-step-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(scratch)
 	if argosrc.NetworkOffFor(name, args) { // helm template and kustomize build read files only (argosrc/sandbox.go)
-		scratch, err := os.MkdirTemp("", "clearance-nonet-")
-		if err != nil {
-			return nil, err
-		}
-		defer os.RemoveAll(scratch)
 		off, err := argosrc.NetworkOffEnv(scratch)
 		if err != nil {
 			return nil, err
 		}
 		env = append(append([]string{}, env...), off...)
 	}
-	var out, errb bytes.Buffer
-	// The sidecar's environment carries no credential for these tools: git and helm get a bare one.
-	fullEnv := append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1"}, env...)
+	// The sidecar's environment carries no credential for these tools: git and helm get a bare one. GOMEMLIMIT makes
+	// the Go tools (helm, kustomize) collect before they reach the memory bound rather than fail at it.
+	fullEnv := append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1",
+		"TMPDIR=" + scratch, "GOMEMLIMIT=" + strconv.FormatInt(lim.Memory/4*3, 10)}, env...)
+	tool, err := exec.LookPath(name)
+	if err != nil {
+		return nil, fmt.Errorf("%s %s: %w", name, firstArg(args), err)
+	}
+	landlock, err := fsSandboxFor(name)
+	if err != nil {
+		return nil, err
+	}
+	self, selfErr := shimPath()
+	if selfErr != nil && landlock {
+		if err := fsShimRefused(name, selfErr); err != errRetryBare {
+			return nil, err
+		}
+		landlock = false
+	}
+	var (
+		out  *capWriter
+		errb *headWriter
+		ps   *os.ProcessState
+	)
 	// A render step runs in a user+network namespace of its own when the mode and the kernel allow (netns.go).
-	run := func(isolated bool) error {
-		out.Reset()
-		errb.Reset()
-		cmd := exec.CommandContext(ctx, name, args...)
+	run := func(isolated, landlock bool) error {
+		sctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		out, errb = &capWriter{max: lim.Output, over: cancel}, &headWriter{max: 64 << 10}
+		var cmd *exec.Cmd
+		var setup *os.File // the shim's setup-error channel (fssandbox.go): the tool never holds it
+		if selfErr == nil {
+			r, w, err := os.Pipe()
+			if err != nil {
+				return err
+			}
+			defer r.Close()
+			setup = r
+			sp := buildSpec(lim, landlock, tool, dir, scratch, b)
+			sp.ErrFD = setupFD
+			spec, err := sp.env()
+			if err != nil {
+				w.Close()
+				return err
+			}
+			cmd = exec.CommandContext(sctx, self, append([]string{shimArg, tool}, args...)...)
+			cmd.Env = append(append([]string{}, fullEnv...), spec)
+			cmd.ExtraFiles = []*os.File{w} // fd 3 in the shim
+			defer w.Close()
+		} else {
+			cmd = exec.CommandContext(sctx, tool, args...)
+			cmd.Env = fullEnv
+		}
 		cmd.Dir = dir
-		cmd.Stdout, cmd.Stderr = &out, &errb
-		cmd.Env = fullEnv
+		cmd.Stdout, cmd.Stderr = out, errb
+		cmd.WaitDelay = 2 * time.Second // a killed step's children cannot hold its pipes open past this
+		ownGroup(cmd)                   // the step and everything it starts are one process group, killed together
 		if isolated {
 			ok, err := sandboxStart(cmd, name, args)
 			if err != nil {
@@ -56,31 +119,134 @@ func OSRun(ctx context.Context, dir string, env []string, name string, args ...s
 			isolated = ok
 		}
 		err := cmd.Start()
+		if len(cmd.ExtraFiles) > 0 {
+			cmd.ExtraFiles[0].Close() // the plugin's copy of the write end: EOF once the shim has exec'd or exited
+		}
 		if err != nil && isolated && startFailedForNetns(err) {
 			return noteStartRefused(name, err)
 		}
 		if err == nil {
 			err = cmd.Wait()
+			killGroup(cmd) // a descendant the step left behind (a backgrounded git, a stalled helper) goes with it
+			// ... and one that left the group too (proc_linux.go). A leftover that cannot be stopped fails the step,
+			// whatever the step itself did: it never reports success over a process that outlives it.
+			if rerr := reapStep(); rerr != nil {
+				err = errors.Join(err, fmt.Errorf("%s: %w", name, rerr))
+			}
+		}
+		ps = cmd.ProcessState
+		if setup != nil && err != nil {
+			// Only the shim writes this channel, and only before exec: what the tool prints or how it exits never
+			// downgrades the sandbox.
+			msg, _ := io.ReadAll(io.LimitReader(setup, 4096))
+			if s := string(msg); landlock && strings.HasPrefix(s, shimLandlockPrefix) {
+				return fsShimRefused(name, errors.New(strings.TrimPrefix(s, "clearance-cmp sandbox: ")))
+			} else if s != "" {
+				return fmt.Errorf("the sandbox shim could not start %s: %s", name, s)
+			}
 		}
 		return err
 	}
-	err := run(true)
-	if err == errRetryBare { // try mode, the kernel refused the namespace
-		err = run(false)
+	isolated := true
+	for attempt := 0; attempt < 3; attempt++ {
+		err = run(isolated, landlock)
+		if err != errRetryBare {
+			break
+		}
+		// try mode: the kernel refused the namespace, or Landlock, after a good probe. Once each, at most.
+		if NetnsState() != "on" {
+			isolated = false
+		}
+		if FSSandboxState() != "on" {
+			landlock = false
+		}
 	}
+	step := name + " " + firstArg(args)
 	if err != nil {
 		var ne *netnsError
 		if errors.As(err, &ne) {
 			return nil, err
 		}
+		if le := stepLimit(lim, step, out, errb.String(), ps, ctx.Err() == nil, selfErr == nil); le != nil {
+			return nil, le
+		}
 		msg := strings.TrimSpace(errb.String())
 		if len(msg) > 2000 {
 			msg = msg[:2000] + "..."
 		}
-		return nil, fmt.Errorf("%s %s: %w: %s", name, firstArg(args), err, msg)
+		return nil, fmt.Errorf("%s: %w: %s", step, err, msg)
 	}
-	return out.Bytes(), nil
+	if b != nil {
+		n, err := dirSize(b.root)
+		if err != nil {
+			return nil, fmt.Errorf("%s: the render's scratch could not be measured after it: %w", step, err)
+		}
+		if n > lim.Temp {
+			return nil, &LimitError{Limit: LimitTemp, Setting: EnvMaxTemp, Bound: FormatSize(lim.Temp), Step: step,
+				Detail: fmt.Sprintf("left the render's scratch directory at %s", FormatSize(n))}
+		}
+	}
+	return out.buf, nil
 }
+
+// stepLimit says which bound, if any, stopped a failed step. limited is whether the shim set the kernel limits.
+func stepLimit(lim Limits, step string, out *capWriter, stderr string, ps *os.ProcessState, ctxLive, limited bool) *LimitError {
+	if out != nil && out.full {
+		return &LimitError{Limit: LimitOutput, Setting: EnvMaxOutput, Bound: FormatSize(lim.Output), Step: step,
+			Detail: fmt.Sprintf("wrote more than %s to stdout", FormatSize(lim.Output))}
+	}
+	if !limited || ps == nil {
+		return nil
+	}
+	cpu, rss := stepUsage(ps)
+	switch signalLimit(ps) {
+	case LimitCPU:
+		return &LimitError{Limit: LimitCPU, Setting: EnvMaxCPU, Bound: lim.CPU.String(), Step: step,
+			Detail: fmt.Sprintf("used %.1fs of CPU", cpu)}
+	case LimitTemp:
+		return &LimitError{Limit: LimitTemp, Setting: EnvMaxTemp, Bound: FormatSize(lim.Temp), Step: step,
+			Detail: "tried to write a file larger than the bound"}
+	case "killed":
+		if ctxLive && cpu >= lim.CPU.Seconds() {
+			return &LimitError{Limit: LimitCPU, Setting: EnvMaxCPU, Bound: lim.CPU.String(), Step: step,
+				Detail: fmt.Sprintf("used %.1fs of CPU", cpu)}
+		}
+	}
+	if !ctxLive {
+		return nil // stopped by its deadline: whatever it printed, the deadline is the cause (renderBounded says so)
+	}
+	low := strings.ToLower(stderr)
+	switch {
+	// The Go runtime ("fatal error: runtime: cannot allocate memory", "out of memory allocating heap arena map"), git
+	// and C tools ("malloc failed"), and a thread stack (it counts against RLIMIT_DATA: "pthread_create failed").
+	case strings.Contains(low, "out of memory") || strings.Contains(low, "cannot allocate memory") || strings.Contains(low, "malloc failed") ||
+		strings.Contains(low, "pthread_create failed"):
+		d := "ran out of memory"
+		if rss > 0 {
+			d += fmt.Sprintf(" (peak resident %s)", FormatSize(rss&^(1<<20-1)))
+		}
+		return &LimitError{Limit: LimitMemory, Setting: EnvMaxMemory, Bound: FormatSize(lim.Memory), Step: step, Detail: d}
+	case strings.Contains(low, "file too large"):
+		return &LimitError{Limit: LimitTemp, Setting: EnvMaxTemp, Bound: FormatSize(lim.Temp), Step: step,
+			Detail: "tried to write a file larger than the bound"}
+	}
+	return nil
+}
+
+// shimPath is this binary, which the shim is. Off Linux there is none.
+func shimPath() (string, error) {
+	if !shimSupported {
+		return "", errors.New("the sandbox shim is Linux only")
+	}
+	selfOnce.Do(func() { selfExe, selfErr = os.Executable() })
+	return selfExe, selfErr
+}
+
+var (
+	selfOnce sync.Once
+	selfExe  string
+	selfErr  error
+)
 
 var errRetryBare = errors.New("retry without a network namespace")
 
@@ -109,7 +275,7 @@ type Rendered struct {
 // `kustomize build` of a directory beside it. srcDir is the plugin's source directory (the gitops repository).
 func Render(ctx context.Context, run Exec, cfg Config, srcDir string) (*Rendered, error) {
 	out := &Rendered{ChartRepo: cfg.ChartRepo, ChartTag: cfg.ChartRev}
-	tmp, err := os.MkdirTemp("", "clearance-cmp-")
+	tmp, err := os.MkdirTemp(workDir(ctx), "clearance-cmp-")
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +384,7 @@ func RenderSources(ctx context.Context, run argosrc.Runner, cfg Config) (*Render
 	if err != nil {
 		return nil, err
 	}
-	tmp, err := os.MkdirTemp("", "clearance-cmp-")
+	tmp, err := os.MkdirTemp(workDir(ctx), "clearance-cmp-")
 	if err != nil {
 		return nil, err
 	}

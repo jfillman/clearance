@@ -67,6 +67,8 @@ type Config struct {
 	WaitTimeout     time.Duration
 	RegisterWait    time.Duration // how long one call to the core may take
 	Netns           string        // CLEARANCE_CMP_NETNS: try (default), require or off (netns.go)
+	FSSandbox       string        // CLEARANCE_CMP_FS_SANDBOX: try (default), require or off (fssandbox.go)
+	Limits          Limits        // the render limits (limits.go); the zero value is DefaultLimits
 }
 
 var (
@@ -115,6 +117,9 @@ func ParseConfig(get func(string) string) (Config, error) {
 	if c.Netns, err = ParseNetns(get(NetnsEnv)); err != nil {
 		return c, err
 	}
+	if c.FSSandbox, err = ParseFSSandbox(get(FSSandboxEnv)); err != nil {
+		return c, err
+	}
 	if c.LKG, err = ParseLKG(get(LKGEnv)); err != nil {
 		return c, err
 	}
@@ -152,10 +157,12 @@ func ParseConfig(get func(string) string) (Config, error) {
 	if err != nil {
 		return c, err
 	}
+	var limitErrs []error
+	c.Limits, limitErrs = parseLimits(get, c.RegisterWait)
 	if c.CacheDir != "" && chartBytes > 0 && chartEntries > 0 {
 		c.ChartCache = ChartCache{Dir: filepath.Join(c.CacheDir, "charts"), MaxBytes: chartBytes, MaxEntries: int(chartEntries)}
 	}
-	return c, c.validate()
+	return c, errors.Join(append(limitErrs, c.validate())...)
 }
 
 func orDefault(v, d string) string {
@@ -218,6 +225,13 @@ func (c Config) validate() error {
 	}
 	if c.WaitImage != "" && !imageRx.MatchString(c.WaitImage) {
 		errs = append(errs, fmt.Errorf("CLEARANCE_WAIT_IMAGE %q is not an image reference", c.WaitImage))
+	}
+	if c.FSSandbox != NetnsOff {
+		// The sandbox lets every step read these directories: a token kept under one of them is not protected.
+		if hit := systemRootsHolding(c.TokenFile); len(hit) > 0 {
+			errs = append(errs, fmt.Errorf("CLEARANCE_TOKEN_FILE %s is under %s, which every render step may read: mount the token under /var/run/secrets (the default, /var/run/secrets/tokens/clearance), or set %s=off to say it is unprotected",
+				c.TokenFile, hit[0], FSSandboxEnv))
+		}
 	}
 	if c.LinkBase != "" {
 		if u, err := url.Parse(c.LinkBase); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {

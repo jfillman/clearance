@@ -51,18 +51,23 @@ const (
 	CodeFaultToken        = "CMP-FAULT-TOKEN"         // the token file could not be read; nothing was sent
 	CodeFaultCoreResponse = "CMP-FAULT-CORE-RESPONSE" // the core answered something the plugin cannot read
 	CodeFaultWaitImage    = "CMP-FAULT-WAIT-IMAGE"    // a change is held but CLEARANCE_WAIT_IMAGE is not set
+	CodeFaultBusy         = "CMP-FAULT-BUSY"          // every render slot (CLEARANCE_CMP_MAX_RENDERS) stayed busy for the render's wall time
 
 	CodeDepChartUnreachable = "CMP-DEP-CHART-UNREACHABLE" // git or the chart's host could not be reached to resolve the tag
 	CodeDepChartFetch       = "CMP-DEP-CHART-FETCH"       // the chart's tag resolved on the remote, but the fetch then failed
 
-	CodeRenderParams    = "CMP-RENDER-PARAMS"    // a plugin parameter (PARAM_*) or Argo CD variable is missing or malformed
-	CodeRenderRefused   = "CMP-RENDER-REFUSED"   // a source the platform does not allow, or a symlink or path that leaves its repository
-	CodeRenderFetch     = "CMP-RENDER-FETCH"     // the chart's tag did not resolve on the remote (no such tag, a private or unreachable repository)
-	CodeRenderHelm      = "CMP-RENDER-HELM"      // helm template failed on the chart and values
-	CodeRenderKustomize = "CMP-RENDER-KUSTOMIZE" // kustomize build failed
-	CodeRenderSources   = "CMP-RENDER-SOURCES"   // generic mode: the Application's sources do not render, or use a feature the plugin refuses
-	CodeRenderTree      = "CMP-RENDER-TREE"      // the render cannot be hashed (no objects, too many, a duplicate, an ambiguous YAML scalar)
-	CodeRenderRevision  = "CMP-RENDER-REVISION"  // ARGOCD_APP_REVISION is not a commit, or the source repository has no owner/name
+	CodeRenderParams    = "CMP-RENDER-PARAMS"       // a plugin parameter (PARAM_*) or Argo CD variable is missing or malformed
+	CodeRenderRefused   = "CMP-RENDER-REFUSED"      // a source the platform does not allow, or a symlink or path that leaves its repository
+	CodeRenderFetch     = "CMP-RENDER-FETCH"        // the chart's tag did not resolve on the remote (no such tag, a private or unreachable repository)
+	CodeRenderHelm      = "CMP-RENDER-HELM"         // helm template failed on the chart and values
+	CodeRenderKustomize = "CMP-RENDER-KUSTOMIZE"    // kustomize build failed
+	CodeRenderSources   = "CMP-RENDER-SOURCES"      // generic mode: the Application's sources do not render, or use a feature the plugin refuses
+	CodeRenderTree      = "CMP-RENDER-TREE"         // the render cannot be hashed (no objects, too many, a duplicate, an ambiguous YAML scalar)
+	CodeRenderRevision  = "CMP-RENDER-REVISION"     // ARGOCD_APP_REVISION is not a commit, or the source repository has no owner/name
+	CodeRenderLimitCPU  = "CMP-RENDER-LIMIT-CPU"    // a render step used more CPU than CLEARANCE_CMP_RENDER_MAX_CPU
+	CodeRenderLimitMem  = "CMP-RENDER-LIMIT-MEMORY" // a render step needed more memory than CLEARANCE_CMP_RENDER_MAX_MEMORY
+	CodeRenderLimitOut  = "CMP-RENDER-LIMIT-OUTPUT" // a step's output, or the manifests, went over CLEARANCE_CMP_RENDER_MAX_OUTPUT
+	CodeRenderLimitTemp = "CMP-RENDER-LIMIT-TEMP"   // the render's scratch space, or one file, went over CLEARANCE_CMP_RENDER_MAX_TEMP
 
 	CodeRefusedDenied     = "CMP-REFUSED-DENIED"      // the change is denied
 	CodeRefusedExpired    = "CMP-REFUSED-EXPIRED"     // the change's clearance expired
@@ -78,10 +83,11 @@ const (
 var Codes = map[string]ErrClass{
 	CodeFaultPanic: ClassFault, CodeFaultInternal: ClassFault, CodeFaultTool: ClassFault, CodeFaultTimeout: ClassFault,
 	CodeFaultSandbox: ClassFault, CodeFaultConfig: ClassFault, CodeFaultToken: ClassFault,
-	CodeFaultCoreResponse: ClassFault, CodeFaultWaitImage: ClassFault,
+	CodeFaultCoreResponse: ClassFault, CodeFaultWaitImage: ClassFault, CodeFaultBusy: ClassFault,
 	CodeDepChartUnreachable: ClassDep, CodeDepChartFetch: ClassDep,
 	CodeRenderParams: ClassRender, CodeRenderRefused: ClassRender, CodeRenderFetch: ClassRender, CodeRenderHelm: ClassRender,
 	CodeRenderKustomize: ClassRender, CodeRenderSources: ClassRender, CodeRenderTree: ClassRender, CodeRenderRevision: ClassRender,
+	CodeRenderLimitCPU: ClassRender, CodeRenderLimitMem: ClassRender, CodeRenderLimitOut: ClassRender, CodeRenderLimitTemp: ClassRender,
 	CodeRefusedDenied: ClassRefusal, CodeRefusedExpired: ClassRefusal, CodeRefusedSuperseded: ClassRefusal,
 	CodeRefusedException: ClassRefusal, CodeRefusedDegraded: ClassRefusal, CodeRefusedState: ClassRefusal,
 	CodeRefusedOutageHold: ClassRefusal, CodeRefusedByCore: ClassRefusal,
@@ -159,12 +165,20 @@ func classifyRender(ctx context.Context, err error, lookup chartLookupResult, ge
 	if ce, ok := asCmp(err); ok {
 		return ce
 	}
+	// A render limit (limits.go): its code says which, and so its class (a fault for the time and the slots, which a
+	// slow network or a busy sidecar can cause; a render error for the rest, which the same inputs reach again).
+	var le *LimitError
+	if errors.As(err, &le) {
+		return newErr(le.Code(), le.Summary(), err)
+	}
 	msg := err.Error()
 	var ne *netnsError
 	var ee *exec.Error
 	var xe *exec.ExitError
 	var pe *fs.PathError
 	switch {
+	case errors.As(err, &ne) && strings.Contains(msg, FSSandboxEnv+"="+NetnsRequire):
+		return newErr(CodeFaultSandbox, "the render steps cannot get the filesystem sandbox (CLEARANCE_CMP_FS_SANDBOX=require)", err)
 	case errors.As(err, &ne):
 		return newErr(CodeFaultSandbox, "the render steps cannot get a private network namespace (CLEARANCE_CMP_NETNS=require)", err)
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled), ctx.Err() != nil:

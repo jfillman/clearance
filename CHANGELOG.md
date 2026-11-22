@@ -12,7 +12,9 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 **Upgrading.** No setting is newly required. The two new settings are off or unset by default:
 `CLEARANCE_CMP_LAST_KNOWN_GOOD` (`off`) and `CLEARANCE_CMP_LINK_BASE` (unset: links go to the core's record). An alert or
 script that matches the start of the plugin's error message must allow the new `<code>: ` prefix; the old message is
-kept whole on the `detail:` line.
+kept whole on the `detail:` line. The new render limits (all optional) fit current renders with wide margins (measured: a 5.7 KB render
+takes 0.06 s and 45 MB; every default is ten times that or more). Run `doctor` in the new image: `fs-sandbox` says whether the
+token is now out of the render steps' reach on your nodes, and `render-limits` whether the bounds fit the container.
 
 ### Added
 
@@ -67,6 +69,24 @@ kept whole on the `detail:` line.
   a test fails when the plugin reads an unlisted `CLEARANCE_*` name, when a documented default is not the real one, when
   a setting with no default is not named by `doctor`, or when a new setting with no default appears. The audit added
   `CLEARANCE_CA_FILE` and `CLEARANCE_WAIT_CA_CONFIGMAP` to the install guide's settings table, where they were missing.
+- **The clearance token is out of a render step's reach, and every render is bounded (`clearance-cmp`; W-34 S3, X6, X7).** Every
+  `git`, `helm` and `kustomize` the plugin runs now starts through the binary's own shim, which applies Landlock (unprivileged; no
+  capability, no user namespace, no node change; `RuntimeDefault` seccomp allows it) so the step reads only the system directories,
+  its source and its own scratch directory, and gets `EACCES` for the mounted token and anything else under `/var` or `/run`.
+  `CLEARANCE_CMP_FS_SANDBOX` is `try` (default; a kernel without Landlock renders unprotected and warns once), `require` or `off`;
+  the summary line adds `fs-sandbox=on|unavailable|off`, and a token file under a directory every step may read stops the plugin at
+  start. The same shim sets per-step `RLIMIT_CPU`, `RLIMIT_DATA` and `RLIMIT_FSIZE`; the plugin bounds a render's wall time (slot
+  wait included), each step's stdout and the rendered manifests, the render's scratch directory, and the renders running at once in
+  the sidecar (file-lock slots). Settings, all optional: `CLEARANCE_CMP_RENDER_TIMEOUT` (30s), `_RENDER_MAX_CPU` (30s),
+  `_RENDER_MAX_MEMORY` (512Mi), `_RENDER_MAX_OUTPUT` (32Mi), `_RENDER_MAX_TEMP` (512Mi), `CLEARANCE_CMP_MAX_RENDERS` (4). A render
+  over a bound stops with a coded error naming the setting: `CMP-RENDER-LIMIT-CPU`, `-MEMORY`, `-OUTPUT`, `-TEMP` (render errors,
+  never answered by last-known-good), `CMP-FAULT-TIMEOUT` for the wall time and `CMP-FAULT-BUSY` when every slot stayed busy
+  (faults); a malformed value stops the plugin at start and `doctor` lists every one. The plugin process itself gets a
+  256 MiB soft `GOMEMLIMIT` unless one is set. See [the install guide](docs/install-argocd-plugin.md#render-limits-and-the-filesystem-sandbox).
+- **Jittered backoff on calls to the core (`client`, `clearance-cmp`).** `client.Options.RetryBackoff` and `RetryBackoffMax` add a
+  random wait in `[d/2, d]`, doubling per retry, between attempts (zero, the default, keeps the outage policy's retry at once). The
+  plugin retries once after 125 to 250 ms, and the startup check reserves the chart lookup (5 s), the render's wall time and both
+  attempts inside its 80 s, so an unreachable core is an outage, never a deadline.
 
 ### Changed
 

@@ -2156,8 +2156,45 @@ allows them (a `Localhost` profile that adds those two calls to the default; `Un
 other filter). Nothing else changes: it still runs non-root, with all capabilities dropped and privilege escalation
 off. A cluster that has done this sets `CLEARANCE_CMP_NETNS=require`, so a node that stops allowing it fails the render
 instead of silently losing the isolation.
-Paths and the chart tag are validated (relative, no `..` segment, no leading `-`). The sidecar's `git` and `helm` run with a
-bare environment, so the clearance token is not in their reach.
+
+**Filesystem sandbox and render limits (W-34: S3, X6, X7).** A bare environment keeps the clearance token out of a step's
+variables, but not out of its reach: the token is a file the sidecar's user can read, and every `git`, `helm` and
+`kustomize` runs as that user. So every step is started through the binary's own shim, which applies, before the tool's
+first instruction:
+
+- **Landlock** (unprivileged; Linux 5.13+ with Landlock active; containerd's and Docker's `RuntimeDefault` seccomp profiles
+  allow its calls): the step reads only `/usr`, `/bin`, `/sbin`, `/lib*`, `/etc`, `/proc`, `/sys`, `/dev`, `HOME`, its tool's
+  directory and the plugin's source directory, and reads and writes only its render's scratch directory. The token's
+  directory, the service-account directory and everything else under `/var` and `/run` answer `EACCES`, for the step and
+  everything it starts; Landlock also refuses it `ptrace` access to the plugin (`/proc/<plugin>/mem`, `environ`). A root that
+  would contain the token is never granted, and a `CLEARANCE_TOKEN_FILE` under one of the fixed roots stops the plugin at
+  start. `CLEARANCE_CMP_FS_SANDBOX` is `try` (default: use it when the kernel has it, else render without it and warn
+  once), `require` (refuse to render without it) or `off`. The summary line ends `fs-sandbox=on|unavailable|off`.
+- **Limits**: a wall time for the whole render phase (`CLEARANCE_CMP_RENDER_TIMEOUT`, 30 s, slot wait included; the chart tag lookup before it has 5 s), per step
+  CPU (`RLIMIT_CPU`, 30 s), memory (`RLIMIT_DATA`, 512 MiB, and `GOMEMLIMIT` at three quarters of it for the Go tools),
+  stdout (32 MiB, also the bound on the rendered manifests), the render's scratch directory (512 MiB, measured after
+  every step; one file is bounded by `RLIMIT_FSIZE`), and renders at once in the sidecar (`CLEARANCE_CMP_MAX_RENDERS`, 4,
+  file-lock slots under the cache directory, waited for with a jittered backoff). Going over one stops the render with
+  an error code that names the bound and the setting that raises it: `CMP-RENDER-LIMIT-CPU`, `-MEMORY`, `-OUTPUT` and
+  `-TEMP` are render errors (the same inputs reach them again, so last-known-good never answers them);
+  `CMP-FAULT-TIMEOUT` (the wall time) and `CMP-FAULT-BUSY` (no slot in time) are faults: nothing syncs, unless
+  last-known-good is on and serves the same, already cleared render after the core confirms it.
+- **Calls to the core** are retried once after a failure that is safe to repeat, after a jittered wait (125 to 250 ms).
+  The startup check reserves the lookup, the render's wall time and both attempts inside the plugin's 80 s, and the
+  render's deadline always leaves the final call that whole budget (a render that starts late, after a slow
+  pre-render confirmation, is cut short instead), so an unreachable core is an outage (and the outage policy's cache
+  applies), never a deadline.
+- **Containment of the step's processes**: each step is a process group of its own, killed when the step returns or
+  is stopped, and the plugin is a child subreaper that runs its steps one at a time and kills and reaps every child
+  after each, so a descendant that calls `setsid` (with any environment) is re-parented to it and killed after the step
+  as well. The `parity` tool does not sweep. Whether a step is retried without Landlock is decided only by the shim's setup channel (a pipe it closes
+  before exec), never by the tool's output or exit status. Landlock ABI 3+ (Linux 6.2+) also refuses truncation outside
+  the scratch directory; `doctor` warns on an older ABI.
+
+The defaults, how they were sized and what is real or best-effort are in the install guide's
+[render limits](install-argocd-plugin.md#render-limits-and-the-filesystem-sandbox).
+
+Paths and the chart tag are validated (relative, no `..` segment, no leading `-`).
 
 Images: `providers/argocd/cmp/Dockerfile` (alpine with git, helm and kustomize pinned and checksum-verified, the static
 binary, `plugin.yaml` and `plugin-canary.yaml`; uid 999) and `providers/argocd/wait/Dockerfile` (distroless static). Both build from the

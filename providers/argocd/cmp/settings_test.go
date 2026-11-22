@@ -35,7 +35,8 @@ func setting(name string) (Setting, bool) {
 // Every CLEARANCE_* name in the plugin's code is a listed setting (or a name the plugin only mentions).
 func TestEverySettingInTheCodeIsListed(t *testing.T) {
 	notSettings := map[string]bool{
-		"CLEARANCE_VERIFIERS": true, // the core's setting, named in a doctor hint
+		"CLEARANCE_VERIFIERS":        true, // the core's setting, named in a doctor hint
+		"CLEARANCE_CMP_SANDBOX_SPEC": true, // the plugin's instructions to its own sandbox shim (fssandbox.go), never set by anyone
 	}
 	files, _ := filepath.Glob("*.go")
 	rx := regexp.MustCompile(`"(CLEARANCE_[A-Z0-9_]+)"`)

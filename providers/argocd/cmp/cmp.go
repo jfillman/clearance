@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -59,14 +60,18 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 		return "", classifyConfig(err) // the sources parameter, or a list entry (a sidecar setting)
 	}
 	// The pre-render cache (rendercache.go) and the last-known-good store (lkg.go) need the commit the chart's tag
-	// resolves to now, one lookup on the remote: an unchanged Application is answered before anything is rendered.
+	// resolves to now, one lookup on the remote: an unchanged Application is answered before anything is rendered. The
+	// lookup is bounded (ChartLookupTimeout, reserved by the startup check): no answer in time is no answer, and the
+	// render fetches the chart itself.
 	if (cfg.RenderCacheTTL > 0 || cfg.LKG) && cfg.Sources == "" && cfg.ChartRepo != "" {
-		lctx, cancel := ctx, context.CancelFunc(func() {})
-		if cfg.LKG {
-			lctx, cancel = context.WithTimeout(ctx, lookupTimeout) // an unreachable host must leave time to confirm
+		lctx, cancel := context.WithTimeout(ctx, lookupTimeout)
+		// The configured step limits, and a private scratch: never the shared /tmp. Without one the lookup is skipped (it
+		// is an optimisation; the render resolves the tag in its own scratch).
+		if lctx, done, ok := lookupBudget(lctx, cfg); ok {
+			cfg.chartCommit, cfg.chartLookupErr = lookupChart(lctx, d.Exec, cfg.ChartRepo, cfg.ChartRev)
+			cfg.chartLooked = true
+			done()
 		}
-		cfg.chartCommit, cfg.chartLookupErr = lookupChart(lctx, d.Exec, cfg.ChartRepo, cfg.ChartRev)
-		cfg.chartLooked = true
 		cancel()
 	}
 	rkey, lkey := renderKey(cfg), lkgKey(cfg)
@@ -109,7 +114,7 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 	if r.ChartMerge != "" {
 		fmt.Fprintf(d.Stderr, ", chart %s@%s (%s), chart-cache=%s", cfg.ChartRepo, cfg.ChartRev, r.ChartMerge[:12], r.ChartFetch)
 	}
-	fmt.Fprintf(d.Stderr, ", netns=%s\n", NetnsState())
+	fmt.Fprintf(d.Stderr, ", netns=%s, fs-sandbox=%s\n", NetnsState(), FSSandboxState())
 
 	now := d.Now()
 	started := time.Now() // wall clock, against the decisions DropRenders records
@@ -143,12 +148,13 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 	if err != nil {
 		return "", newErr(CodeRenderRevision, "the change cannot be registered for this revision", err)
 	}
-	ch, err := d.Core.RegisterChange(ctx, req)
+	ch, err := registerInTime(ctx, d.Core, req)
 	if err != nil {
 		if errors.Is(err, client.ErrCoreUnavailable) {
 			// The outage policy (docs/gate.md, C-6): a tree already cleared whose tier lets through while the core is
 			// down is served from what was remembered; anything else holds, because an unknown tier is never allowed.
-			if e, ok := d.Cache.Get(cfg.App, cfg.Env, cfg.Cluster, tree.Root, now); ok && e.Outage == "allow-and-record" {
+			// A fresh clock: the call can have taken most of the run, and an entry is never served past its ExpiresAt.
+			if e, ok := d.Cache.Get(cfg.App, cfg.Env, cfg.Cluster, tree.Root, d.Now()); ok && e.Outage == "allow-and-record" {
 				fmt.Fprintf(d.Stderr, "clearance: the core is unreachable (%v); serving %s from the cache (tier %d, allow-and-record)\n", err, e.ID, e.Tier)
 				return emitted(emit(tree, out, Cleared, e.ID, cfg))
 			}
@@ -202,10 +208,21 @@ func emitted(o Outcome, err error) (Outcome, error) {
 // render still leaves time to confirm the remembered change.
 func renderTree(ctx context.Context, d Deps, cfg Config, srcDir string) (tree *Tree, r *Rendered, cerr *CmpError) {
 	rctx := ctx
-	if dl, ok := ctx.Deadline(); ok && cfg.LKG && cfg.RegisterWait > 0 && time.Until(dl) > cfg.RegisterWait {
-		var cancel context.CancelFunc
-		rctx, cancel = context.WithDeadline(ctx, dl.Add(-cfg.RegisterWait))
-		defer cancel()
+	// The registration after the render (or last-known-good's confirmation) always keeps its whole budget, every
+	// attempt and the wait between them (coreBudget): a render that started late, after a pre-render confirmation the
+	// core answered slowly, is cut short, never the call that decides. An unreachable core is then an outage
+	// (ErrCoreUnavailable, the outage policy), not the run's deadline.
+	if reserve := coreBudget(cfg.RegisterWait) + PostRenderReserve; cfg.RegisterWait > 0 {
+		if dl, ok := ctx.Deadline(); ok {
+			if left := time.Until(dl); left <= reserve {
+				// Not enough time left to render and still ask the core (a slow pre-render confirmation came first):
+				// fail now, as a timeout, rather than render into the time the decision needs.
+				return nil, nil, newErr(CodeFaultTimeout, "the render ran out of time", fmt.Errorf("only %s of the run is left, less than the %s the core's call and the plugin's own work need after a render", left.Round(time.Millisecond), reserve))
+			}
+			var cancel context.CancelFunc
+			rctx, cancel = context.WithDeadline(ctx, dl.Add(-reserve))
+			defer cancel()
+		}
 	}
 	defer func() {
 		if p := recover(); p != nil {
@@ -213,16 +230,17 @@ func renderTree(ctx context.Context, d Deps, cfg Config, srcDir string) (tree *T
 			cerr = newErr(CodeFaultPanic, "the plugin panicked while rendering", fmt.Errorf("panic: %v", p))
 		}
 	}()
-	var err error
-	if cfg.Sources != "" {
-		run := d.Run
-		if run == nil {
-			run = OSRun
+	// The render runs under its limits, in a slot and a scratch root of its own (limits.go).
+	r, err := renderBounded(rctx, cfg, srcDir, d.Stderr, func(ctx context.Context) (*Rendered, error) {
+		if cfg.Sources != "" {
+			run := d.Run
+			if run == nil {
+				run = OSRun
+			}
+			return RenderSources(ctx, run, cfg)
 		}
-		r, err = RenderSources(rctx, run, cfg)
-	} else {
-		r, err = Render(rctx, d.Exec, cfg, srcDir)
-	}
+		return Render(ctx, d.Exec, cfg, srcDir)
+	})
 	if err != nil {
 		return nil, nil, classifyRender(rctx, err, chartLookup(cfg), cfg.Sources != "")
 	}
@@ -291,10 +309,14 @@ func registration(cfg Config, tree *Tree) (*client.ChangeRequest, error) {
 
 func newCore(cfg Config) (Core, error) {
 	return client.New(client.Options{BaseURL: cfg.CoreURL, Token: client.FileToken(cfg.TokenFile),
-		Timeout: cfg.RegisterWait, Retries: 1, UserAgent: "clearance-argocd-cmp", CAFile: cfg.CAFile})
+		Timeout: cfg.RegisterWait, UserAgent: "clearance-argocd-cmp", CAFile: cfg.CAFile,
+		// One retry after a jittered wait (125-250 ms): the sidecar's renders that found the core down together do not
+		// come back at the same instant. ParseConfig checks that every attempt fits inside PluginDeadline (coreBudget).
+		Retries: CoreRetries, RetryBackoff: CoreBackoff, RetryBackoffMax: CoreBackoffMax})
 }
 
 func main() {
+	maybeShim()                                     // a render step's sandbox shim (fssandbox.go): applies its limits and execs the tool, never returns
 	if len(os.Args) > 1 && os.Args[1] == "parity" { // the parity suite (parity.go), not the plugin
 		os.Exit(parityMain(os.Args[2:], os.Stdout, os.Stderr))
 	}
@@ -307,15 +329,27 @@ func main() {
 		os.Exit(2)
 	}
 	SetNetns(cfg.Netns)
+	SetFSSandbox(cfg.FSSandbox, cfg.TokenFile)
+	if os.Getenv("GOMEMLIMIT") == "" {
+		debug.SetMemoryLimit(256 << 20) // the plugin itself: a soft bound, so the GC works before the container's limit does
+	}
 	core, err := newCore(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "clearance-cmp:", newErr(CodeFaultConfig, "the core client cannot be set up from the sidecar's settings", err))
 		os.Exit(2)
 	}
+	if err := EnableReaping(); err != nil { // a descendant of a render step never outlives it, setsid or not (proc_linux.go)
+		fmt.Fprintln(os.Stderr, "clearance-cmp:", newErr(CodeFaultSandbox, "the render steps' processes cannot be contained", err))
+		os.Exit(2)
+	}
 	d := Deps{Exec: OSExec, Run: OSRun, Core: core, Cache: Cache{Dir: cfg.CacheDir}, Now: time.Now, Stderr: os.Stderr}
-	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Second) // Argo CD kills a plugin at 90 s (ARGOCD_EXEC_TIMEOUT)
+	ctx, cancel := context.WithTimeout(context.Background(), PluginDeadline) // Argo CD kills a plugin at 90 s (ARGOCD_EXEC_TIMEOUT)
 	defer cancel()
-	if _, err := Generate(ctx, d, cfg, ".", os.Stdout); err != nil { // a *CmpError: its code and short line come first
+	_, err = Generate(ctx, d, cfg, ".", os.Stdout)
+	if rerr := reapAll(); rerr != nil { // nothing a render step started outlives the plugin (proc_linux.go)
+		fmt.Fprintln(os.Stderr, "clearance-cmp: WARNING", rerr)
+	}
+	if err != nil { // a *CmpError: its code and short line come first
 		fmt.Fprintln(os.Stderr, "clearance-cmp:", err)
 		os.Exit(1)
 	}

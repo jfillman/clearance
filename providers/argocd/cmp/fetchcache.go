@@ -77,7 +77,11 @@ func resolveChart(ctx context.Context, run Exec, repo, rev string) string {
 // lookupChart is resolveChart that also says why there is no answer: err is set when the lookup itself failed (git
 // could not run or reach the remote), nil when the remote answered without the ref.
 func lookupChart(ctx context.Context, run Exec, repo, rev string) (string, error) {
-	out, err := run(ctx, os.TempDir(), "git", "ls-remote", "--", repo, "refs/heads/"+rev, "refs/tags/"+rev, "refs/tags/"+rev+"^{}")
+	dir := workDir(ctx) // the render's (or the lookup's) own scratch, when it has one (limits.go)
+	if dir == "" {
+		dir = os.TempDir()
+	}
+	out, err := run(ctx, dir, "git", "ls-remote", "--", repo, "refs/heads/"+rev, "refs/tags/"+rev, "refs/tags/"+rev+"^{}")
 	if err != nil {
 		return "", err
 	}

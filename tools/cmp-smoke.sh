@@ -197,6 +197,15 @@ case "$netns_state" in
   on|unavailable|off) ok "the summary line reports netns=$netns_state (CLEARANCE_CMP_NETNS unset = try)";;
   *) bad "the summary line has no netns= state";;
 esac
+# The filesystem sandbox (CLEARANCE_CMP_FS_SANDBOX, default try; W-34 X6): Landlock is unprivileged and docker's
+# default seccomp profile allows it, so on a kernel that has it (the CI runner's) the state must be "on". Set
+# ALLOW_NO_LANDLOCK=1 to run this script on a kernel without Landlock.
+fs_state="$(sed -n 's/.*, fs-sandbox=\([a-z]*\).*/\1/p' "$work/good.err" | head -1)"
+case "$fs_state" in
+  on) ok "the summary line reports fs-sandbox=on: render steps ran under Landlock";;
+  unavailable|off) [ "${ALLOW_NO_LANDLOCK:-}" = 1 ] && ok "the summary line reports fs-sandbox=$fs_state (ALLOW_NO_LANDLOCK=1)" || bad "fs-sandbox=$fs_state: this kernel or seccomp profile gave the render steps no Landlock";;
+  *) bad "the summary line has no fs-sandbox= state";;
+esac
 n="$(wc -l < "$work/register.log" | tr -d ' ')"
 [ "$n" = 1 ] && ok "one register call reached the core" || bad "$n register calls reached the core, want 1"
 grep -q '"app":"smoke-app"' "$work/register.log" && grep -q '"_authorization":true' "$work/register.log" && grep -q '"render":"ok"' "$work/register.log" \
@@ -213,6 +222,25 @@ grep -q '^clearance-cmp: CMP-RENDER-REFUSED: ' "$work/link.err" \
   && ok "its first line carries the render-error code CMP-RENDER-REFUSED" || bad "the refusal's first line lacks its error code"
 [ ! -s "$work/link.out" ] && ok "no manifests were written" || bad "manifests were written for a refused checkout"
 [ ! -s "$work/register.log" ] && ok "nothing was registered" || bad "a refused checkout was registered"
+
+echo "== the filesystem sandbox in the built image: a render step cannot read the mounted token"
+# The image's own shim (what OSRun starts every git, helm and kustomize through), as the sidecar runs: uid 999, a
+# read-only root, no capabilities, docker's default seccomp profile, the token mounted read-only where the install
+# guide mounts it. The control (the same shim, Landlock off) reads the token, so the refusal is the sandbox's.
+shim() { # LANDLOCK(true|false) : prints the step's output, echoes nothing else
+  "$engine" run --rm --user 999:999 --read-only --tmpfs "$tmpfs_opt" --cap-drop ALL \
+    -v "$work/token:/var/run/secrets/tokens/clearance:ro" --entrypoint /usr/local/bin/clearance-cmp \
+    -e CLEARANCE_CMP_SANDBOX_SPEC="{\"landlock\":$1,\"rx\":[\"/usr\",\"/bin\",\"/sbin\",\"/lib\",\"/etc\"],\"ro\":[\"/proc\"],\"rw\":[\"/tmp\"],\"dev\":[\"/dev\"]}" \
+    "$image" __clearance-sandbox-exec /bin/cat /var/run/secrets/tokens/clearance 2>&1
+}
+ctl_out="$(shim false)"
+echo "$ctl_out" | grep -q smoke-token && ok "control: without Landlock the step reads the token (uid 999 can)" || bad "control: the token was not readable even without the sandbox: $ctl_out"
+if [ "$fs_state" = on ]; then
+  ll_out="$(shim true)"
+  echo "$ll_out" | sed 's/^/     shim: /'
+  echo "$ll_out" | grep -q smoke-token && bad "a sandboxed step read the token" || ok "a sandboxed step cannot read the token"
+  echo "$ll_out" | grep -qi 'permission denied' && ok "it was refused with EACCES" || bad "the sandboxed read did not fail with EACCES"
+fi
 
 echo "== doctor: the preflight, in the built image, with the sidecar's own environment (no PARAM_*, no ARGOCD_APP_*)"
 run_doctor() { # OUT CHART_REPOS : echoes the exit code
@@ -231,7 +259,7 @@ run_doctor() { # OUT CHART_REPOS : echoes the exit code
 code="$(run_doctor "$work/doctor.out" "$chart_url")"
 sed 's/^/     doctor: /' "$work/doctor.out"
 [ "$code" = 0 ] && ok "doctor exits 0 on a good setup" || bad "doctor exit $code, want 0"
-for want in '^ok    settings' '^(ok|warn)  *token' '^ok    core ' '^ok    core-auth' '^ok    chart-repos' '^ok    cache' '^ok    git ' '^ok    helm .*'"$want_helm" '^ok    kustomize .*'"$want_kustomize" '^(ok|warn)  *netns' '^doctor: [0-9]+ ok, [0-9]+ warn, 0 fail'; do
+for want in '^ok    settings' '^(ok|warn)  *token' '^ok    core ' '^ok    core-auth' '^ok    chart-repos' '^ok    cache' '^ok    git ' '^ok    helm .*'"$want_helm" '^ok    kustomize .*'"$want_kustomize" '^(ok|warn)  *netns' '^(ok|warn)  *fs-sandbox' '^(ok|warn)  *render-limits' '^doctor: [0-9]+ ok, [0-9]+ warn, 0 fail'; do
   grep -Eq "$want" "$work/doctor.out" && ok "doctor prints $want" || bad "doctor output lacks $want"
 done
 grep -q 'smoke-token' "$work/doctor.out" && bad "doctor printed the token" || ok "doctor did not print the token"
