@@ -80,6 +80,13 @@ func run() error {
 		optEvery  = fs.Duration("optin-interval", 30*time.Second, "how often the opt-in reconciles the Applications")
 		optReport = fs.Duration("optin-report-every", 5*time.Minute, "how often the protected pairs are reported again unchanged")
 		optBytes  = fs.Int("optin-max-grant-bytes", 1_500_000, "a merged grant over this many bytes is refused and reported")
+		elect     = fs.Bool("leader-elect", envBool("CLEARANCE_LEADER_ELECT"), "run the loops only while holding the leader Lease (for more than one replica; I-44 option 0). Off: one replica runs them, as before")
+		leaseName = fs.String("leader-lease", env("CLEARANCE_LEADER_LEASE", "clearance-argocd-agent"), "the Lease's name, in --state-namespace")
+		leaseDur  = fs.Duration("leader-lease-duration", 15*time.Second, "how long the lease holds without a renewal")
+		leaseRen  = fs.Duration("leader-renew-deadline", 10*time.Second, "how long the holder keeps trying to renew before it stops its loops and exits")
+		leaseTry  = fs.Duration("leader-retry-period", 2*time.Second, "how often a candidate tries, and the holder renews")
+		podName   = fs.String("identity", env("POD_NAME", ""), "this replica's identity in the lease (the pod's name)")
+		heartbeat = fs.Duration("status-heartbeat", 0, "refresh status.checkedAt of every valid grant once it is this old, so an alert on its age sees a stalled expiry pass (0: off, status is written only when valid changes)")
 		showVer   = fs.Bool("version", false, "print the version")
 	)
 	if err := fs.Parse(os.Args[1:]); err != nil {
@@ -103,6 +110,7 @@ func run() error {
 	} else {
 		return fmt.Errorf("--grant-api is <group>/<version>")
 	}
+	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	kube, err := agent.InCluster(grants, *argoNS)
 	if err != nil {
 		return err
@@ -119,19 +127,28 @@ func run() error {
 	}
 	a, err := agent.New(agent.Config{GrantCRD: grants.Plural + "." + grants.Group, Cluster: *cluster, Environment: *environ, Issuer: *issuer, Version: version,
 		GrantInterval: *grantEvry, ScanInterval: *scanEvry, ArgoNamespace: *argoNS, Projects: list(*projects),
-		StateNS: *stateNS, RepostOnStart: *repost,
+		StateNS: *stateNS, RepostOnStart: *repost, StatusHeartbeat: *heartbeat,
 		OptIn: agent.OptIn{Enabled: *optIn, PluginName: *optPlugin, DenyApps: list(*optDeny), Namespaces: list(*optNS), Interval: *optEvery,
 			ReportEvery: *optReport, MaxGrantBytes: *optBytes},
 		Wait: agent.WaitPin{Image: *waitImage, URL: *waitURL, HostAlias: *waitAlias, CAConfigMap: *waitCA}},
 		kube, &agent.HTTPFeeds{Base: *apiURL, Token: tok, HTTP: hc},
 		&agent.HTTPCore{Client: cc, Feeds: agent.HTTPFeeds{Base: *coreURL, Token: tok, HTTP: hc}}, nil,
-		slog.New(slog.NewJSONHandler(os.Stderr, nil)))
+		log)
 	if err != nil {
 		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := a.Run(ctx); err != nil && ctx.Err() == nil {
+	runLoops := a.Run
+	if *elect {
+		if *podName == "" {
+			return fmt.Errorf("--identity (POD_NAME) is required with --leader-elect")
+		}
+		e := &agent.Elector{Store: kube, Namespace: *stateNS, Name: *leaseName, Identity: *podName, Duration: *leaseDur,
+			RenewDeadline: *leaseRen, RetryPeriod: *leaseTry, Log: log}
+		runLoops = func(ctx context.Context) error { return e.Run(ctx, a.Run) }
+	}
+	if err := runLoops(ctx); err != nil && ctx.Err() == nil {
 		return err
 	}
 	return nil

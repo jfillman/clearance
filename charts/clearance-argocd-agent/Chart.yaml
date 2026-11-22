@@ -2,7 +2,8 @@ apiVersion: v2
 name: clearance-argocd-agent
 description: >-
   Clearance's Argo CD gate agent for a protected cluster: syncs the core's signed grant feed into ClearanceGrants,
-  posts deploy.outcome for finished Argo CD operations, and posts deploy.exception for what runs without a grant.
+  posts deploy.outcome for finished Argo CD operations, and posts deploy.exception for what runs without a grant; optionally
+  the grant-expiry webhook, the clock beside the admission policy.
 type: application
 # The release workflow packages the chart at the tag's version; these are the development placeholders.
 version: 0.0.0-dev

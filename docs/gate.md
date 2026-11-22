@@ -370,7 +370,8 @@ What follows for G-ARGO-2:
   one (see "The running tree and the active grant").
 - **Expiry is the agent's.** Kubernetes CEL in admission has no clock; the agent sets `status.valid` (status
   subresource, written only by the agent) and removes the active label on expiry, and the policy checks
-  `status.valid`.
+  `status.valid`. (Built later, I-44: the [grant-expiry webhook](#the-grant-expiry-webhook-i-44-built) is the clock beside
+  the policy, so expiry no longer depends on the agent running.)
 - **The Warn to Deny toggle flips two fields**, `validationActions` and `parameterNotFoundAction` (Allow in Warn,
   Deny in Deny), and Warn has a gap the agent covers: with no grant, nothing warns.
 - `auditAnnotations` must be typed: `string(params.metadata.name)` (an untyped `params.metadata.name` is refused at
@@ -489,8 +490,9 @@ kube-apiserver); **not yet applied** anywhere. Apron renders them into an upper 
   read-only mount of the one projected token volume. The waiter mounts a clearance token, so anything that could
   redirect it is refused. It still needs an active grant to exist under Deny (the param resolves first). Envtest: the CMP's
   Job is admitted; about 40 deviations (listed in `test_admission.py`) are each refused by the policy.
-- **Not checked by admission:** the stamp's content (CEL has no digest function), expiry by time (the agent's
-  `status.valid`), the signature. Those stay the CMP's, the agent's and G-ARGO-3's.
+- **Not checked by the policy:** the stamp's content (CEL has no digest function), expiry by time (the agent's
+  `status.valid`; since I-44 also the [grant-expiry webhook](#the-grant-expiry-webhook-i-44-built)'s clock, and the policy's
+  optional CREATE-only clock), the signature. Those stay the CMP's, the agent's and G-ARGO-3's.
 
 ### Release records and the Clearance record (decided 2026-11-03)
 
@@ -1148,7 +1150,8 @@ conformance suite** as `argocd-agent` (G-ARGO-9, with the plugin: `TestArgoConfo
 [the provider protocol](provider-protocol.md#the-gates-adapters-g-tf-7-g-argo-9)). The gate is **live on hangar-prod in
 Warn mode, not Deny** (reported by the owner, 2026-11-09): admission warns about what a grant does not list and refuses
 nothing, so nothing here claims enforcement. The numbered proof below is **Unverified** by this repository (its steps were
-not run for this change). One controller on the protected cluster, one replica, three loops. It holds no key and
+not run for this change). One controller on the protected cluster, one replica by default (two behind a leader Lease with
+`ha.enabled`, [below](#the-grant-expiry-webhook-i-44-built)), three loops. It holds no key and
 decides nothing; its credential is the pod's projected service-account token (audience `clearance`), read fresh for
 every request. Provider identity `argocd-agent/<version>` is in `source.provider` of every record it posts, and the core's verified
 `provider` is `argocd-agent` with the registered version (live records name `argocd-agent`, owner, 2026-11-09).
@@ -1219,7 +1222,8 @@ A carried entry lives only as long as its change's clearance:
   deleted on the next pass).
 - **Expired:** each entry has its own `expiresAt` (the token's), and the agent drops the entry on its own clock every
   pass, **whether or not the feed can be read**, so a carried tree cannot outlive its clearance because the active
-  grant is still valid. The admission policy has no clock; it never reads `expiresAt`.
+  grant is still valid. The admission policy has no clock; it never reads `expiresAt` (the
+  [grant-expiry webhook](#the-grant-expiry-webhook-i-44-built) does, on every write it sees).
 - The agent carries at most 16 changes (the newest by decision time); another namespace's trees are never carried.
 
 What this admits, and what it does not: the running tree, a tree that was cleared and has not merged, and a tree
@@ -1304,7 +1308,9 @@ stamp literally).
 | HTTPRoute | `Exact /v1/records`, `/v1/breakglass` on the core's host; `/v1/keys` and `/v1/grant-feeds/*` on clearance-api's |
 
 On hangar-prod: the chart `charts/clearance-argocd-agent` (values: `cluster`, `apiURL`, `coreURL`, `argocd.namespace`,
-`argocd.projects`, `scope`, `protectedNamespaces`, `hostAliases`, `networkPolicy`), the image `ghcr.io/jfillman/clearance-argocd-agent`.
+`argocd.projects`, `scope`, `protectedNamespaces`, `hostAliases`, `networkPolicy`; and, all off by default, `gate.enforce`, `grantExpiry`,
+`ha`, `statusHeartbeat` and `alerts`: [the grant-expiry webhook](#the-grant-expiry-webhook-i-44-built)), the image
+`ghcr.io/jfillman/clearance-argocd-agent` (the agent, and the webhook's `/grant-expiry`).
 
 **Proof on hangar-prod** (Unverified until run; the manager runs it, with the agent deployed, the namespace
 `app-<x>-prod` labelled `clearance.hangar.io/protected=true`, G-ARGO-2's CRD and policy installed):
@@ -1356,6 +1362,116 @@ What cluster scope still limits:
   included, can be switched and the namespace labelled protected. Restrict what a project may deploy to in the Argo CD
   AppProject (`destinations`), which is the control point for this; do not rely on the agent's scope for it.
 - **The observer's audit-policy list is separate** and is not affected by this option.
+
+## The grant-expiry webhook (I-44, Built)
+
+Status: **Built**, off by default; tested in Go (table-driven, a replay of every `test_admission.py` case against the handler) and against a
+real kube-apiserver (`providers/argocd/grantexpiry/test_webhook.py`, envtest, CI `admission-policy`). **Not applied** to any cluster: an
+installer turns it on (values below). Code: [`providers/argocd/grantexpiry`](../providers/argocd/grantexpiry/); chart:
+`charts/clearance-argocd-agent`, `grantExpiry`.
+
+**What you get.**
+
+- **Expiry holds even when the agent stops.** The admission policy has no clock: an expired grant stops admitting only once the agent marks
+  it `status.valid: false`. If the agent crashes, is evicted, loses its RBAC or has its writes refused, an expired grant keeps admitting every
+  write it lists. The webhook compares every matching entry's expiry with its own clock on every Argo CD write to a protected namespace,
+  CREATE and UPDATE, so expiry no longer depends on any process having written anything.
+- **It can only refuse.** The webhook never admits what the policy refuses: both must pass. It mirrors the policy's matching exactly and adds
+  the clock. It allows a write only if an entry lists the object's key (`<group>/<kind>/<name>`) at exactly its stamped hash and that entry
+  is unexpired: the grant's own `objects[key]` (`spec.expiresAt`, and `objects[key].expiresAt` when the entry has one, as a merged grant's
+  do), or a `carried[]` entry that lists the key at the hash (its `expiresAt`, and the object's own when set). An expired matching entry is
+  never rescued by an unexpired entry that does not match. A missing or unreadable expiry counts as expired. As in the policy, every active
+  grant of the namespace must pass, and with none the write is refused. The gate's own PreSync wait Job is exempt exactly as in the policy
+  (the same field allowlist, the pinned URL or the previous one, with or without the CA volume). It reads no `status`: `status.valid` stays
+  the policy's check.
+- **Audit first.** `grantExpiry.enforce: false` (the default once enabled) always allows. A write enforce would refuse gets a warning, and when
+  the clock is the reason, the audit annotation `clearance.hangar.io/expired-grant` (`<namespace>/<grant>: <reason>`), so the API server's
+  audit log lists exactly the writes I-44 would have let through. The configuration is `failurePolicy: Ignore` in audit.
+- **Option 0, hardening for the agent** (off by default): `ha.enabled` runs two agent replicas behind one `coordination.k8s.io` Lease (only the
+  holder runs the loops; a holder that cannot renew within 10 s stops and exits), RollingUpdate, a PodDisruptionBudget (`minAvailable: 1`) and a
+  topology spread. `statusHeartbeat` (for example `5m`) refreshes `status.checkedAt` of every valid grant once it is that old, so its age shows
+  a stalled expiry pass. `alerts.enabled` renders a PrometheusRule and a PodMonitor: `ClearanceGrantStatusStale` (an active grant's
+  `checkedAt` older than `alerts.checkedAtStaleAfter`), `ClearanceGrantExpiredButValid` (an active grant past `expiresAt` still valid: the
+  I-44 state) and `ClearanceGrantExpiryNotSynced`. The grant times come from the webhook pods' `/metrics`, because a stalled agent cannot
+  report its own stall.
+- **An optional CREATE-only clock in the policy itself** (option 2'), off as shipped: the `createclock` variable of
+  `providers/argocd/crd/admission.yaml` (the installer renders `true`). On a CREATE the API server stamps `metadata.creationTimestamp` with its
+  own clock before admission runs, overwriting what the client sent, so the policy can refuse a CREATE after the grant's `spec.expiresAt`. It
+  says nothing on an UPDATE, and every Argo CD re-sync is an UPDATE, so it is defence in depth, not the fix. It is stricter than the webhook:
+  it reads only the grant's own expiry. Proven on envtest (`test_admission.py`, both modes); the owner verifies it live with a dry-run create
+  under a grant whose `expiresAt` has passed before it is turned on.
+
+**Guardrails.**
+
+- **The chart refuses `gate.enforce: true` unless `grantExpiry.enabled` and `grantExpiry.enforce` are both true.** `gate.enforce` is the mode
+  the installer runs the policy's first binding in (the chart does not render the policy; Apron's `clearance.gate.enforce`). The only override
+  is `grantExpiry.acceptResidualRisk: true`, set knowingly. The same rule refuses the way back in the wrong order: the webhook cannot return
+  to audit while the policy denies.
+- **The narrowest scope the API allows.** `namespaceSelector: clearance.hangar.io/protected=true`, CREATE and UPDATE, `scope: Namespaced`,
+  `resources: ["*"]` (no subresources), and `matchConditions`: Argo CD's application controller only, no subresource, and not the resources
+  the policy excludes (`clearancegrants`, core `events` and `endpoints`, `events.k8s.io` events, `endpointslices`, `leases`), so the agent can
+  bootstrap and the control plane keeps writing. A ValidatingWebhookConfiguration has no `excludeResourceRules`, hence the conditions. Every
+  expression is `has()`-guarded (a CEL error in a match condition refuses under `Fail`); each guard and each exclusion has a test, in CEL and
+  on a real API server. Blast radius: Argo CD's controller writing to a protected namespace. Nobody else, no other namespace.
+- **Fail closed, narrowly, at enforce.** `failurePolicy: Fail`, `timeoutSeconds: 3`, `sideEffects: None`, `matchPolicy: Equivalent`. A dead
+  webhook closes the gate for protected namespaces, which is what "no active grant" already does under Deny: no new kind of outage. A pod
+  whose grant cache has not synced, or has not heard from the API server for `maxCacheAge` (10 min), is not Ready, and refuses in enforce.
+- **No credential, no writes.** The webhook is its own Deployment (`clearance-grant-expiry`, the agent's image with command
+  `/grant-expiry`, never the agent's process) and its own service account, whose RBAC is `get`, `list`, `watch` on `clearancegrants`. It
+  holds no Clearance token and calls no Clearance API. Two replicas, `maxUnavailable: 0`, a PDB (`minAvailable: 1`), spread across nodes and
+  zones; the chart refuses enforce with fewer than two. On SIGTERM it reports not Ready and keeps answering for `--shutdown-delay` (5 s)
+  while its endpoint is removed.
+- **TLS is the core's scheme** ([tls.md](tls.md)): a cert-manager Certificate, signed by the chart's own namespaced CA by default (a
+  self-signed Issuer, a CA Certificate and a CA Issuer: nothing but cert-manager is needed, no trust-manager, no Apron) or by a named Issuer or
+  ClusterIssuer such as a shared cluster CA (`grantExpiry.tls.certManager.issuerRef`). cert-manager's CA injector writes the configuration's
+  `caBundle` (`cert-manager.io/inject-ca-from`). Without cert-manager: `tls.certManager.enabled: false`, a `kubernetes.io/tls` Secret
+  (`existingSecret`) and its CA (`caBundle`). The certificate is re-read when it changes, as the core's is.
+- **Clock skew: none.** `grantExpiry.skew` (`--skew`, default `0s`) would let an entry live that long past its expiry; never negative. Entries
+  expire on the webhook pod's clock, as they do on the agent's today.
+
+**Rollout, and why the order matters.** `failurePolicy: Fail` refuses only an unreachable webhook, not an audit-mode allow, so a pod still in
+audit would let an expired grant through after the policy went to Deny. The order:
+
+1. `grantExpiry.enabled: true` (audit). Watch the warnings and the `clearance.hangar.io/expired-grant` annotations; nothing is refused.
+2. `grantExpiry.enforce: true`. The Deployment rolls to `--mode=enforce`; its readiness probe asks for that mode (`/readyz?mode=enforce`), so
+   a pod still in audit is not Ready. Sync waves order it: the certificate (`grantExpiry.syncWaves.certificate`, 0), the Deployment, its
+   Service and PDB (1), then the configuration (2), so `Fail` takes effect only once every pod enforces. From here the webhook alone refuses
+   what the policy would refuse on matching and expiry, so flip it only after audit was clean.
+3. Only then `gate.enforce: true`: the policy's binding to Deny. It belongs in a later wave than the configuration (or a later sync).
+
+**Leaving enforce runs in reverse, as two separate changes**: `gate.enforce: false` first (the policy stops denying); only after that has
+synced, `grantExpiry.enforce: false` (the webhook returns to audit and `Ignore`). The chart refuses a render with the policy in Deny and the
+webhook not enforcing. Sync waves are one fixed order and cannot reverse on the way down, hence two changes.
+
+**Settings** (`charts/clearance-argocd-agent`):
+
+| Value | Default | Meaning |
+| --- | --- | --- |
+| `gate.enforce` | `false` | The policy's mode as the installer runs it; `true` needs the webhook enforcing (above) |
+| `grantExpiry.enabled` | `false` | Render the webhook (nothing renders when false) |
+| `grantExpiry.enforce` | `false` | Enforce and `Fail`; false is audit and `Ignore` |
+| `grantExpiry.acceptResidualRisk` | `false` | The recorded override of the `gate.enforce` rule |
+| `grantExpiry.replicas` | `2` | At least 2 to enforce |
+| `grantExpiry.timeoutSeconds` | `3` | The API server's call timeout (1 to 30) |
+| `grantExpiry.skew` | `0s` | Clock-skew allowance |
+| `grantExpiry.argocdUser` | `system:serviceaccount:<argocd.namespace>:argocd-application-controller` | The writer it checks, as the policy names it |
+| `grantExpiry.maxCacheAge` | `10m` | Not Ready (and refusing in enforce) after this long without word from the API server |
+| `grantExpiry.syncWaves` | `{certificate: "0", deployment: "1", webhook: "2"}` | Must ascend |
+| `grantExpiry.tls.*` | cert-manager, own CA | As the core's `tls.certManager.*`; or `existingSecret` and `caBundle` |
+| `waitJob.previousURL` | empty | The previous core URL the policy's exemption admits for one release |
+| `ha.enabled` | `false` | Two agent replicas behind a leader Lease, a PDB, a spread |
+| `statusHeartbeat` | empty | Refresh `status.checkedAt` this often (e.g. `5m`) |
+| `alerts.enabled` | `false` | PrometheusRule and PodMonitor; needs `grantExpiry.enabled` and `statusHeartbeat` |
+
+The webhook's flags (`/grant-expiry --help`): `--mode`, `--argocd-user`, `--skew`, `--grant-api`, `--listen` (`:8443`, POST `/validate`),
+`--probe-listen` (`:8080`: `/healthz`, `/readyz`, `/metrics`), `--tls-cert-file`, `--tls-key-file`, `--max-cache-age`, `--wait-image`,
+`--wait-url`, `--wait-previous-url`, `--wait-host-alias`, `--wait-ca-configmap`, `--shutdown-delay`. The agent's new flags: `--leader-elect`,
+`--leader-lease`, `--leader-lease-duration`, `--leader-renew-deadline`, `--leader-retry-period`, `--identity` (`POD_NAME`),
+`--status-heartbeat`.
+
+**Not verified:** none of this has run on a cluster. Unverified: the webhook's latency under Argo CD's sync bursts on a real cluster (the
+decision is an in-memory lookup), cert-manager's CA injection timing on the first install (the configuration is applied in audit, `Ignore`,
+long before it becomes `Fail`), and the CREATE-only clock on a production API server (proven on envtest 1.36.2 only).
 
 ## The Go core (R-1c, Built, deployed on hangar-dev 2026-11-03)
 
@@ -2573,7 +2689,8 @@ rather than per-Application entries because carried trees and the conflict rule 
 agent's clock at every pass, feed or no feed. So nothing new is admitted during an outage and each object runs out at its own expiry, not
 at the longest sibling's (`TestEachObjectRunsOutAtItsOwnClearancesExpiryWhileTheFeedIsUnreadable`). **Admission cannot enforce this itself:**
 Kubernetes CEL in admission has no clock, so the policy never reads `expiresAt`; the bound is the agent's pass interval
-(`--grant-interval`, 30 s) and it holds only while the agent runs. If the agent is down, nothing expires (as for per-change grants).
+(`--grant-interval`, 30 s) and it holds only while the agent runs. If the agent is down, nothing expires (as for per-change grants),
+unless the [grant-expiry webhook](#the-grant-expiry-webhook-i-44-built) enforces: it compares each object's `expiresAt` with its own clock.
 
 - **Two Applications, one key.** The rule is: **the Application that already holds a key in the grant keeps it** (the incumbent, read
   from `app` in the held grant), at its own newest live hash, and the newcomer's claim on that key is left out. **A key that two

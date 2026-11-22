@@ -32,18 +32,28 @@ jobs:
       - run: helm lint charts/clearance-argocd-agent --strict -f charts/clearance-argocd-agent/ci/minimal-values.yaml
       - run: helm lint charts/clearance-argocd-agent --strict -f charts/clearance-argocd-agent/ci/optin-values.yaml
       - run: helm lint charts/clearance-argocd-agent --strict -f charts/clearance-argocd-agent/ci/cluster-values.yaml
+      - run: helm lint charts/clearance-argocd-agent --strict -f charts/clearance-argocd-agent/ci/grant-expiry-values.yaml
       - run: helm lint charts/clearance-observe-aws --strict -f charts/clearance-observe-aws/ci/minimal-values.yaml
       - run: helm lint charts/clearance-observe-k8s --strict -f charts/clearance-observe-k8s/ci/minimal-values.yaml
       - run: helm lint charts/clearance-witness --strict -f charts/clearance-witness/ci/minimal-values.yaml
       - name: render tests
         run: go test -v ./tools/charttest/
-      - name: kubeconform (Kubernetes schemas, and the CRDs catalog for CNPG, ESO and Gateway API)
+      - name: kubeconform (Kubernetes schemas, and the CRDs catalog for CNPG, ESO, Gateway API, cert-manager and the Prometheus Operator)
         run: |
           set -euo pipefail
           go install "github.com/yannh/kubeconform/cmd/kubeconform@${KUBECONFORM_VERSION}"
           for f in charts/clearance/ci/*-values.yaml; do
             echo "== $f"
             helm template clearance charts/clearance -n clearance -f "$f" |
+              "$(go env GOPATH)/bin/kubeconform" -strict -summary -kubernetes-version 1.35.0 \
+                -schema-location default \
+                -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+                -ignore-missing-schemas
+          done
+          # The agent chart too: its grant-expiry webhook, cert-manager objects and Prometheus Operator objects (I-44).
+          for f in charts/clearance-argocd-agent/ci/*-values.yaml; do
+            echo "== $f"
+            helm template t charts/clearance-argocd-agent -n clearance-system -f "$f" |
               "$(go env GOPATH)/bin/kubeconform" -strict -summary -kubernetes-version 1.35.0 \
                 -schema-location default \
                 -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \

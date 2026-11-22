@@ -1,7 +1,8 @@
 # ClearanceGrant (G-ARGO-2, Built): Clearance's decision that one rendered tree may land in one protected namespace,
 # published to the cluster by the grant-sync agent (G-ARGO-3) from the signed grant feed (C-10). Namespaced, in the
 # protected namespace it covers. Only the agent's service account writes it (policy clearance-grant-writer), and only
-# the agent writes status.valid, which is how expiry reaches admission: Kubernetes CEL in admission has no clock.
+# the agent writes status.valid, which is how expiry reaches the admission policy: Kubernetes CEL in admission has no clock
+# (the grant-expiry webhook, providers/argocd/grantexpiry, is the clock beside it: I-44).
 #
 # docs/gate.md "Phase 2 design pass" (c) and "G-ARGO-2: the grant and the admission policy" say how it is used.
 apiVersion: apiextensions.k8s.io/v1
@@ -60,7 +61,7 @@ spec:
                     properties:
                       rendered: {type: string, minLength: 1, maxLength: 80}
                       changed: {type: boolean, description: "In the diff this grant clears (display only; unchanged objects stay admitted)."}
-                      expiresAt: {type: string, format: date-time, description: "A merged grant only: when the clearance this object came from expires; the agent drops the object then (admission never reads it)."}
+                      expiresAt: {type: string, format: date-time, description: "A merged grant only: when the clearance this object came from expires; the agent drops the object then, and the grant-expiry webhook compares it with its clock (the admission policy never reads it)."}
                       app: {type: string, maxLength: 253, description: "A merged grant only: the Application that owns the object (the incumbent when two claim one key). Display; admission does not read it."}
                 carried:
                   type: array
@@ -77,7 +78,7 @@ spec:
                     properties:
                       change: {type: string, maxLength: 64}
                       tree: {type: string, maxLength: 71}
-                      expiresAt: {type: string, format: date-time, description: "The agent drops the entry at this time; admission never reads it."}
+                      expiresAt: {type: string, format: date-time, description: "The agent drops the entry at this time, and the grant-expiry webhook compares it with its clock; the admission policy never reads it."}
                       objects:
                         type: object
                         maxProperties: 2000
@@ -89,7 +90,7 @@ spec:
                             changed: {type: boolean}
                             app: {type: string, maxLength: 253}
                             expiresAt: {type: string, format: date-time}
-                expiresAt: {type: string, format: date-time, description: "The agent enforces it (status.valid); admission never reads it."}
+                expiresAt: {type: string, format: date-time, description: "The agent enforces it (status.valid), and the grant-expiry webhook compares it with its clock; the admission policy reads it only with its optional CREATE-only clock."}
                 clearance:
                   type: object
                   properties:

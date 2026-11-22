@@ -72,6 +72,32 @@ metadata:
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "agent.fullname" . }}-state}
 subjects:
   - {kind: ServiceAccount, name: {{ .Values.serviceAccount.name }}, namespace: {{ .Release.Namespace }}}
+{{- if .Values.ha.enabled }}
+---
+# HA (I-44 option 0): the leader Lease, in this namespace only. create cannot be limited to one name; get and update are.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "agent.fullname" . }}-leader
+  labels: {{- include "agent.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [create]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, update]
+    resourceNames: [clearance-argocd-agent]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "agent.fullname" . }}-leader
+  labels: {{- include "agent.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "agent.fullname" . }}-leader}
+subjects:
+  - {kind: ServiceAccount, name: {{ .Values.serviceAccount.name }}, namespace: {{ .Release.Namespace }}}
+{{- end }}
 ---
 # Argo CD's Applications: read and watch{{ if .Values.optIn.enabled }}, and (the opt-in) patch{{ else }} only{{ end }}.
 apiVersion: rbac.authorization.k8s.io/v1

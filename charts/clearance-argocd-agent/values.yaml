@@ -58,6 +58,9 @@ waitJob:
   # destination namespace (trust-manager's Bundle target, say). Empty: no mount, the wait Job trusts the system roots. The
   # admission policy's exemption must carry the same optional volume (apron renders it): set both together.
   caConfigMap: ""
+  # The previous core URL the admission policy's exemption admits for one release after the URL changes (Apron's
+  # clearance.gate.previousURL). Read only by the grant-expiry webhook, which exempts the same wait Job. Empty: none.
+  previousURL: ""
 
 # TLS to the core and the api (I-43). coreURL and apiURL become https URLs; the agent verifies the server. A private CA
 # (cert-manager's own, or a cluster CA) is a ConfigMap in this namespace with the CA certificate under key ca.crt; name it
@@ -88,6 +91,91 @@ optIn:
   reportEvery: 5m
   # A merged grant over this many bytes is refused and reported; the namespace keeps its last good grant.
   maxGrantBytes: 1500000
+
+# -- The gate's mode, and the grant-expiry webhook (I-44) -------------------------------------------------------------
+# The admission policy (providers/argocd/crd/admission.yaml) has no clock: an expired grant stops admitting only once the
+# agent marks it invalid, so a stalled agent leaves an expired grant admitting Argo CD's writes. The grant-expiry webhook
+# below is the clock. This chart does not render the policy (the installer does); gate.enforce tells the chart the mode
+# the installer runs the policy in, so the chart can refuse an unsafe pair:
+#   gate.enforce: true (the policy's first binding Deny) is refused unless grantExpiry.enabled and grantExpiry.enforce are
+#   both true, or grantExpiry.acceptResidualRisk is true. That one rule orders both directions: turn the webhook to enforce
+#   first and the policy to Deny after it; on the way back, gate.enforce false first and grantExpiry.enforce false only in a
+#   later change (docs/gate.md, "The grant-expiry webhook").
+gate:
+  enforce: false
+
+grantExpiry:
+  # Render the webhook: its Deployment (the agent's image, command /grant-expiry; never the agent's process), Service,
+  # PodDisruptionBudget, certificate and the ValidatingWebhookConfiguration clearance-grant-expiry. Off: nothing renders.
+  enabled: false
+  # The Deployment's, Service's and configuration's name.
+  name: clearance-grant-expiry
+  # false (audit): the webhook always allows; a write it would refuse gets a warning, and when the clock is the reason the
+  # audit annotation clearance.hangar.io/expired-grant; failurePolicy Ignore. true (enforce): it refuses, failurePolicy
+  # Fail. Readiness reports the mode, and the probe asks for this one, so a pod still in audit is not Ready in an
+  # enforce rollout.
+  enforce: false
+  # The recorded override of the gate.enforce rule above: Deny without an enforcing webhook, knowingly accepting that an
+  # expired grant keeps admitting writes while the agent is stalled. Leave false.
+  acceptResidualRisk: false
+  replicas: 2
+  # A grant entry stays live this long past its expiresAt (clock-skew allowance). 0s: none.
+  skew: 0s
+  # Argo CD's application controller, as the admission policy's matchConditions name it. Empty:
+  # system:serviceaccount:<argocd.namespace>:argocd-application-controller.
+  argocdUser: ""
+  # The webhook's call timeout. 3 s; a lookup is an in-memory read.
+  timeoutSeconds: 3
+  # The cache is not synced (the pod is not Ready; enforce refuses) when the API server has not been heard from this long.
+  maxCacheAge: 10m
+  # Argo CD sync waves: the certificate, then the Deployment (Healthy only when every pod is Ready in the rendered mode),
+  # then the configuration. The admission policy's binding belongs in a LATER wave than the configuration (or a later sync):
+  # its Deny may only follow an enforcing webhook.
+  syncWaves: {certificate: "0", deployment: "1", webhook: "2"}
+  # The serving certificate: the same scheme as the core's tls.* (cert-manager; docs/tls.md). issuerRef empty: the chart
+  # builds its own namespaced CA (a self-signed Issuer, a CA Certificate, a CA Issuer), so the install needs nothing but
+  # cert-manager; set, an existing Issuer or ClusterIssuer (a shared cluster CA) signs it. Either way cert-manager's CA
+  # injector writes the configuration's caBundle (cert-manager.io/inject-ca-from).
+  tls:
+    certManager:
+      enabled: true
+      issuerRef: {name: "", kind: Issuer}
+      duration: 2160h
+      renewBefore: 720h
+      caDuration: 87600h
+    # With certManager.enabled false: a kubernetes.io/tls Secret in this namespace for the Service's names, and the
+    # base64 PEM of the CA that signed it (the configuration's caBundle).
+    existingSecret: ""
+    caBundle: ""
+  resources:
+    requests: {cpu: 10m, memory: 24Mi}
+    limits: {memory: 96Mi}
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+
+# -- Agent HA and the staleness alert (I-44, option 0) ----------------------------------------------------------------
+# Off by default: one replica, Recreate, as before. On: ha.replicas replicas behind one coordination.k8s.io Lease (only the
+# holder runs the loops), RollingUpdate, a PodDisruptionBudget (minAvailable 1) and a topology spread.
+ha:
+  enabled: false
+  replicas: 2
+  leaseDuration: 15s
+  renewDeadline: 10s
+  retryPeriod: 2s
+# Refresh status.checkedAt of every valid grant once it is this old (one status patch per grant each time), so its age
+# shows a stalled expiry pass. Empty: off (status is written only when valid changes). The alerts need it.
+statusHeartbeat: ""
+# A PrometheusRule (and a PodMonitor for the grant-expiry pods, which export the grant times: a stalled agent cannot
+# report itself). Needs the Prometheus Operator's CRDs, grantExpiry.enabled and statusHeartbeat.
+alerts:
+  enabled: false
+  # ClearanceGrantStatusStale: an active grant's status.checkedAt is older than this (set it above statusHeartbeat).
+  checkedAtStaleAfter: 15m
+  # ClearanceGrantExpiredButValid: an active grant past spec.expiresAt is still status.valid this long (the I-44 state).
+  expiredButValidFor: 2m
+  # Labels on the PrometheusRule and the PodMonitor (the operator's ruleSelector / podMonitorSelector).
+  labels: {}
 
 # hangar-prod reaches the lab core over plain HTTP through a host alias to the other cluster's ingress.
 hostAliases: []
