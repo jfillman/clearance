@@ -107,6 +107,10 @@ func (e *Elector) defaults() error {
 	switch {
 	case e.Store == nil || e.Namespace == "" || e.Name == "" || e.Identity == "":
 		return errors.New("agent: leader election needs a store, the lease's namespace and name, and an identity")
+	case e.Duration%time.Second != 0:
+		// The Lease stores whole seconds (leaseDurationSeconds), and other replicas judge a takeover by that number: a
+		// fractional duration would leave this replica's fence open past the stored lease's end.
+		return errors.New("agent: the lease's duration must be a whole number of seconds")
 	case e.RenewDeadline >= e.Duration:
 		return errors.New("agent: the lease's renew deadline must be shorter than its duration")
 	case e.RetryPeriod >= e.RenewDeadline:

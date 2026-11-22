@@ -135,7 +135,7 @@ func TestAReleasedLeaseIsTakenAtOnce(t *testing.T) {
 func TestRunStopsTheWorkWhenTheLeaseCannotBeRenewed(t *testing.T) {
 	store := &memLeases{}
 	e := &Elector{Store: store, Namespace: "ns", Name: "agent", Identity: "pod-a",
-		Duration: 300 * time.Millisecond, RenewDeadline: 150 * time.Millisecond, RetryPeriod: 20 * time.Millisecond, Log: quiet}
+		Duration: time.Second, RenewDeadline: 150 * time.Millisecond, RetryPeriod: 20 * time.Millisecond, Log: quiet}
 	started, stopped := make(chan struct{}), make(chan struct{})
 	errc := make(chan error, 1)
 	go func() {
@@ -224,6 +224,8 @@ func TestTheElectorRefusesAnUnsafeConfiguration(t *testing.T) {
 		"no identity":                {Store: &memLeases{}, Namespace: "n", Name: "l"},
 		"renew deadline >= duration": {Store: &memLeases{}, Namespace: "n", Name: "l", Identity: "p", Duration: time.Second, RenewDeadline: time.Second},
 		"retry >= renew deadline":    {Store: &memLeases{}, Namespace: "n", Name: "l", Identity: "p", RenewDeadline: time.Second, RetryPeriod: time.Second},
+		"a fractional duration (4.9 s; the Lease stores 4 s)": {Store: &memLeases{}, Namespace: "n", Name: "l", Identity: "p",
+			Duration: 4900 * time.Millisecond, RenewDeadline: 2 * time.Second, RetryPeriod: 500 * time.Millisecond},
 		"no margin (3 s, 2 s, 1 s)": {Store: &memLeases{}, Namespace: "n", Name: "l", Identity: "p", Duration: 3 * time.Second,
 			RenewDeadline: 2 * time.Second, RetryPeriod: time.Second},
 	} {

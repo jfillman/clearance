@@ -53,11 +53,20 @@ func geContainer(t *testing.T, docs map[string]obj) obj {
 
 func argsOf(c obj) []string { return toStrings(c["args"]) }
 
-func wave(o obj) int {
-	w, _ := get(o, "metadata", "annotations", "argocd.argoproj.io/sync-wave").(string)
+// wave is the object's Argo CD sync wave. The annotation must be there and parse: an unannotated object is in wave 0 for
+// Argo CD, so a missing one must fail the test, not compare as some sentinel.
+func wave(t *testing.T, o obj) int {
+	t.Helper()
+	if o == nil {
+		t.Fatal("the object is not in the render")
+	}
+	w, ok := get(o, "metadata", "annotations", "argocd.argoproj.io/sync-wave").(string)
+	if !ok {
+		t.Fatalf("%v %v has no sync-wave annotation", o["kind"], get(o, "metadata", "name"))
+	}
 	n, err := strconv.Atoi(w)
 	if err != nil {
-		return -1000
+		t.Fatalf("%v %v: sync-wave %q is not a number", o["kind"], get(o, "metadata", "name"), w)
 	}
 	return n
 }
@@ -165,9 +174,9 @@ func TestTheWebhookDeploymentIsHAAndReadOnly(t *testing.T) {
 // Sync waves: certificate < Deployment (and its Service and PDB) < configuration.
 func TestSyncWavesOrderTheDeploymentBeforeTheConfiguration(t *testing.T) {
 	docs := agentDocs(t, geEnforce...)
-	cert := wave(docs["Certificate/<nil>/clearance-grant-expiry-tls"])
-	dep := wave(docs["Deployment/<nil>/clearance-grant-expiry"])
-	cfg := wave(docs["ValidatingWebhookConfiguration/<nil>/clearance-grant-expiry"])
+	cert := wave(t, docs["Certificate/<nil>/clearance-grant-expiry-tls"])
+	dep := wave(t, docs["Deployment/<nil>/clearance-grant-expiry"])
+	cfg := wave(t, docs["ValidatingWebhookConfiguration/<nil>/clearance-grant-expiry"])
 	if !(cert < dep && dep < cfg) || cert < 0 {
 		t.Fatalf("waves certificate %d, deployment %d, configuration %d", cert, dep, cfg)
 	}
@@ -175,13 +184,13 @@ func TestSyncWavesOrderTheDeploymentBeforeTheConfiguration(t *testing.T) {
 	moved := agentDocs(t, append(geEnforce, "--set", "grantExpiry.syncWaves.certificate=-3", "--set", "grantExpiry.syncWaves.deployment=-2",
 		"--set", "grantExpiry.syncWaves.webhook=-1")...)
 	for _, k := range []string{"ServiceAccount/<nil>/clearance-grant-expiry", "ClusterRole/<nil>/clearance-grant-expiry", "ClusterRoleBinding/<nil>/clearance-grant-expiry"} {
-		if w := wave(moved[k]); w >= wave(moved["Deployment/<nil>/clearance-grant-expiry"]) {
-			t.Errorf("%s is in wave %d, not before the Deployment's %d", k, w, wave(moved["Deployment/<nil>/clearance-grant-expiry"]))
+		if w := wave(t, moved[k]); w >= wave(t, moved["Deployment/<nil>/clearance-grant-expiry"]) {
+			t.Errorf("%s is in wave %d, not before the Deployment's %d", k, w, wave(t, moved["Deployment/<nil>/clearance-grant-expiry"]))
 		}
 	}
 	for _, k := range []string{"Service/<nil>/clearance-grant-expiry", "PodDisruptionBudget/<nil>/clearance-grant-expiry"} {
-		if wave(docs[k]) != dep {
-			t.Errorf("%s is in wave %d, the Deployment's is %d", k, wave(docs[k]), dep)
+		if wave(t, docs[k]) != dep {
+			t.Errorf("%s is in wave %d, the Deployment's is %d", k, wave(t, docs[k]), dep)
 		}
 	}
 	if _, err := helmAgent(t, append(geOn, "--set", "grantExpiry.syncWaves.webhook=1")...); err == nil {
