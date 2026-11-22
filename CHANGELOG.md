@@ -9,6 +9,29 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+**Upgrading.** No setting is newly required, and the defaults fit current renders with wide margins (measured: a 5.7 KB render
+takes 0.06 s and 45 MB; every default is ten times that or more). Run `doctor` in the new image: `fs-sandbox` says whether the
+token is now out of the render steps' reach on your nodes, and `render-limits` whether the bounds fit the container.
+
+### Added
+
+- **The clearance token is out of a render step's reach, and every render is bounded (`clearance-cmp`; W-34 S3, X6, X7).** Every
+  `git`, `helm` and `kustomize` the plugin runs now starts through the binary's own shim, which applies Landlock (unprivileged; no
+  capability, no user namespace, no node change; `RuntimeDefault` seccomp allows it) so the step reads only the system directories,
+  its source and its own scratch directory, and gets `EACCES` for the mounted token and anything else under `/var` or `/run`.
+  `CLEARANCE_CMP_FS_SANDBOX` is `try` (default; a kernel without Landlock renders unprotected and warns once), `require` or `off`;
+  the summary line adds `fs-sandbox=on|unavailable|off`, and a token file under a directory every step may read stops the plugin at
+  start. The same shim sets per-step `RLIMIT_CPU`, `RLIMIT_DATA` and `RLIMIT_FSIZE`; the plugin bounds a render's wall time (slot
+  wait included), each step's stdout and the rendered manifests, the render's scratch directory, and the renders running at once in
+  the sidecar (file-lock slots). Settings, all optional: `CLEARANCE_CMP_RENDER_TIMEOUT` (45s), `_RENDER_MAX_CPU` (30s),
+  `_RENDER_MAX_MEMORY` (512Mi), `_RENDER_MAX_OUTPUT` (32Mi), `_RENDER_MAX_TEMP` (512Mi), `CLEARANCE_CMP_MAX_RENDERS` (4). A render
+  over a bound stops with `render limit exceeded [render.limit.<class>]`, naming the setting; a malformed value stops the plugin at
+  start and `doctor` lists every one. The classes are local until F4's error catalogue lands. The plugin process itself gets a
+  256 MiB soft `GOMEMLIMIT` unless one is set. See [the install guide](docs/install-argocd-plugin.md#render-limits-and-the-filesystem-sandbox).
+- **Jittered backoff on calls to the core (`client`, `clearance-cmp`).** `client.Options.RetryBackoff` and `RetryBackoffMax` add a
+  random wait in `[d/2, d]`, doubling per retry, between attempts (zero, the default, keeps the outage policy's retry at once). The
+  plugin retries twice at 250 ms, then 500 ms, at most 2 s, inside its 80 s.
+
 ### Changed
 
 - **The admission policy's wait-Job exemption admits the plugin's optional CA, and for one release a previous core URL

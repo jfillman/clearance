@@ -47,7 +47,11 @@ jobs:
       - run: |
           set -euo pipefail
           go test -count=1 -v ./internal/argosrc ./providers/argocd/cmp ./tools/charttest 2>&1 | tee "$RUNNER_TEMP/real-binary.log"
-          for t in TestKustomize TestRealKustomizeDoesNotFetchAnHTTPBaseUnderTheSandbox TestRealHelmDoesNotReachAnHTTPDependencyUnderTheSandbox; do
+          # ... and the render-step sandbox and limits (W-34): the token is out of a step's reach under Landlock, and the
+          # kernel limits stop a step (these fail, not skip, in CI when the runner's kernel has no Landlock).
+          for t in TestKustomize TestRealKustomizeDoesNotFetchAnHTTPBaseUnderTheSandbox TestRealHelmDoesNotReachAnHTTPDependencyUnderTheSandbox \
+            TestRenderStepCannotReadTheToken TestRealKustomizeCannotReadTheToken TestRealHelmCannotReadTheTokenThroughASymlink \
+            TestCPUBoundStopsAStep TestMemoryBoundStopsAStep; do
             grep -E "^--- PASS: $t " "$RUNNER_TEMP/real-binary.log"
           done
           ! grep -E 'is not installed|is not on PATH' "$RUNNER_TEMP/real-binary.log"

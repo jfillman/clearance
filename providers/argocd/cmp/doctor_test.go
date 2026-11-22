@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -59,7 +60,8 @@ type doctorFixture struct {
 	plugin string
 	server string
 	core   *doctorStubCore
-	free   int64 // free bytes the fake volume reports (0: unknown)
+	free   int64  // free bytes the fake volume reports (0: unknown)
+	memMax string // the container's cgroup memory.max ("": unreadable)
 }
 
 func newDoctorFixture(t *testing.T) *doctorFixture {
@@ -81,7 +83,7 @@ func newDoctorFixture(t *testing.T) *doctorFixture {
 	f.env = map[string]string{
 		"CLEARANCE_URL": f.core.srv.URL, "CLEARANCE_TOKEN_FILE": f.token, "CLEARANCE_CMP_CACHE_DIR": filepath.Join(dir, "cache"),
 		"CLEARANCE_CHART_REPOS": "https://git.example.test/org/charts.git, oci://registry.example.test/org/charts",
-		"CLEARANCE_WAIT_IMAGE":  "registry.example.test/clearance-wait:v1", NetnsEnv: "off",
+		"CLEARANCE_WAIT_IMAGE":  "registry.example.test/clearance-wait:v1", NetnsEnv: "off", FSSandboxEnv: "off",
 	}
 	return f
 }
@@ -101,6 +103,12 @@ func (f *doctorFixture) run(t *testing.T) ([]Check, string, int) {
 		},
 		PluginDir: f.plugin, CmpServer: f.server, Timeout: 2 * time.Second,
 		FreeBytes: func(string) (int64, bool) { return f.free, f.free > 0 },
+		ReadFile: func(p string) ([]byte, error) {
+			if f.memMax == "" {
+				return nil, os.ErrNotExist
+			}
+			return []byte(f.memMax + "\n"), nil
+		},
 	}
 	checks := Doctor(context.Background(), env)
 	var out bytes.Buffer
@@ -150,7 +158,7 @@ func TestDoctorAllGood(t *testing.T) {
 			t.Errorf("%s is %s: %s", c.Name, c.Level, c.Msg)
 		}
 	}
-	for _, name := range []string{"settings", "token", "core", "core-auth", "chart-repos", "cache", "chart-cache", "render-cache", "git", "helm", "kustomize", "netns", "plugin-socket", "cmp-server"} {
+	for _, name := range []string{"settings", "token", "core", "core-auth", "chart-repos", "cache", "chart-cache", "render-cache", "git", "helm", "kustomize", "netns", "fs-sandbox", "render-limits", "plugin-socket", "cmp-server"} {
 		if len(doctorFind(cs, name)) == 0 {
 			t.Errorf("no %s check", name)
 		}
@@ -563,5 +571,59 @@ func TestDoctorDoesNotReadATokenFileTheTokenCheckRejected(t *testing.T) {
 		doctorWant(t, cs, "core-auth", levelFail, "not checked")
 	case <-time.After(20 * time.Second):
 		t.Fatal("doctor read a rejected token file")
+	}
+}
+
+// The filesystem sandbox check: on, off (said so), unavailable (a warning in try, a failure in require).
+func TestDoctorFSSandbox(t *testing.T) {
+	oldP := landlockProbe
+	t.Cleanup(func() { landlockProbe = oldP; SetFSSandbox("", "") })
+	f := newDoctorFixture(t)
+	landlockProbe = func() error { return nil }
+	delete(f.env, FSSandboxEnv)
+	cs, _, _ := f.run(t)
+	doctorWant(t, cs, "fs-sandbox", levelOK, "token is out of their reach")
+	landlockProbe = func() error { return errors.New("injected: no landlock") }
+	cs, _, code := f.run(t)
+	doctorWant(t, cs, "fs-sandbox", levelWarn, "injected: no landlock")
+	if code != 0 {
+		t.Fatal("try without Landlock failed doctor")
+	}
+	f.env[FSSandboxEnv] = "require"
+	cs, _, code = f.run(t)
+	doctorWant(t, cs, "fs-sandbox", levelFail, FSSandboxEnv+"=require")
+	if code != 1 {
+		t.Fatal("require without Landlock passed doctor")
+	}
+	f.env[FSSandboxEnv] = "on"
+	cs, _, _ = f.run(t)
+	doctorWant(t, cs, "fs-sandbox", levelFail, FSSandboxEnv)
+	doctorWant(t, cs, "setting", levelFail, FSSandboxEnv)
+}
+
+// The limits check prints the bounds, and warns when a full set of concurrent renders could pass the container's limit.
+func TestDoctorRenderLimits(t *testing.T) {
+	if !shimSupported {
+		t.Skip("the memory comparison is Linux only")
+	}
+	f := newDoctorFixture(t)
+	f.memMax = strconv.FormatInt(4<<30, 10)
+	cs, _, _ := f.run(t)
+	doctorWant(t, cs, "render-limits", levelOK, "fits the container's memory limit")
+	f.memMax = strconv.FormatInt(512<<20, 10)
+	cs, _, code := f.run(t)
+	doctorWant(t, cs, "render-limits", levelWarn, EnvMaxRenders)
+	if code != 0 {
+		t.Fatal("a warning failed doctor")
+	}
+	f.env[EnvMaxRenders] = "1"
+	cs, _, _ = f.run(t)
+	doctorWant(t, cs, "render-limits", levelOK, "1 renders at once")
+	f.env[EnvMaxMemory], f.env[EnvMaxCPU] = "lots", "never"
+	cs, _, code = f.run(t)
+	doctorWant(t, cs, "setting", levelFail, EnvMaxMemory)
+	doctorWant(t, cs, "setting", levelFail, EnvMaxCPU)
+	if code != 1 {
+		t.Fatal("bad limits passed doctor")
 	}
 }

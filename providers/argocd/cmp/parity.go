@@ -506,6 +506,9 @@ func parityRun(ctx context.Context, dir string, env []string, name string, args 
 // -- the command ------------------------------------------------------------------------------------------------
 
 func parityMain(args []string, stdout, stderr io.Writer) int {
+	// The parity tool runs on an operator's machine with the operator's git credential helpers, and holds no clearance
+	// token: the filesystem sandbox of the sidecar's render steps (fssandbox.go) is not for it. The limits still apply.
+	SetFSSandbox(NetnsOff, "")
 	fs := flag.NewFlagSet("parity", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	apps := fs.String("apps", "", "`kubectl get applications -o json` output (required)")

@@ -1936,8 +1936,35 @@ allows them (a `Localhost` profile that adds those two calls to the default; `Un
 other filter). Nothing else changes: it still runs non-root, with all capabilities dropped and privilege escalation
 off. A cluster that has done this sets `CLEARANCE_CMP_NETNS=require`, so a node that stops allowing it fails the render
 instead of silently losing the isolation.
-Paths and the chart tag are validated (relative, no `..` segment, no leading `-`). The sidecar's `git` and `helm` run with a
-bare environment, so the clearance token is not in their reach.
+
+**Filesystem sandbox and render limits (W-34: S3, X6, X7).** A bare environment keeps the clearance token out of a step's
+variables, but not out of its reach: the token is a file the sidecar's user can read, and every `git`, `helm` and
+`kustomize` runs as that user. So every step is started through the binary's own shim, which applies, before the tool's
+first instruction:
+
+- **Landlock** (unprivileged; Linux 5.13+ with Landlock active; containerd's and Docker's `RuntimeDefault` seccomp profiles
+  allow its calls): the step reads only `/usr`, `/bin`, `/sbin`, `/lib*`, `/etc`, `/proc`, `/sys`, `/dev`, `HOME`, its tool's
+  directory and the plugin's source directory, and reads and writes only its render's scratch directory. The token's
+  directory, the service-account directory and everything else under `/var` and `/run` answer `EACCES`, for the step and
+  everything it starts; Landlock also refuses it `ptrace` access to the plugin (`/proc/<plugin>/mem`, `environ`). A root that
+  would contain the token is never granted, and a `CLEARANCE_TOKEN_FILE` under one of the fixed roots stops the plugin at
+  start. `CLEARANCE_CMP_FS_SANDBOX` is `try` (default: use it when the kernel has it, else render without it and warn
+  once), `require` (refuse to render without it) or `off`. The summary line ends `fs-sandbox=on|unavailable|off`.
+- **Limits**: a wall time for the whole render phase (`CLEARANCE_CMP_RENDER_TIMEOUT`, 45 s, slot wait included), per step
+  CPU (`RLIMIT_CPU`, 30 s), memory (`RLIMIT_DATA`, 512 MiB, and `GOMEMLIMIT` at three quarters of it for the Go tools),
+  stdout (32 MiB, also the bound on the rendered manifests), the render's scratch directory (512 MiB, measured after
+  every step; one file is bounded by `RLIMIT_FSIZE`), and renders at once in the sidecar (`CLEARANCE_CMP_MAX_RENDERS`, 4,
+  file-lock slots under the cache directory, waited for with a jittered backoff). Going over one stops the render with
+  `render limit exceeded [render.limit.<class>]`, naming the bound and the setting that raises it; nothing syncs. The
+  classes (`wall-time`, `cpu`, `memory`, `output`, `temp`, `concurrency`) are this plugin's own: F4's error catalogue had
+  not landed when they were added, and they are meant to join it.
+- **Calls to the core** are retried twice after a failure that is safe to repeat, each after a jittered, doubling wait
+  (250 ms, 500 ms, at most 2 s), inside the plugin's 80 s.
+
+The defaults, how they were sized and what is real or best-effort are in the install guide's
+[render limits](install-argocd-plugin.md#render-limits-and-the-filesystem-sandbox).
+
+Paths and the chart tag are validated (relative, no `..` segment, no leading `-`).
 
 Images: `providers/argocd/cmp/Dockerfile` (alpine with git, helm and kustomize pinned and checksum-verified, the static
 binary, `plugin.yaml` and `plugin-canary.yaml`; uid 999) and `providers/argocd/wait/Dockerfile` (distroless static). Both build from the

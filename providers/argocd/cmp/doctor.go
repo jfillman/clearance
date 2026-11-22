@@ -59,6 +59,7 @@ type DoctorEnv struct {
 	CmpServer string // path of argocd-cmp-server
 	Timeout   time.Duration
 	FreeBytes func(dir string) (int64, bool) // free space of the volume holding dir; false when it cannot be read
+	ReadFile  func(string) ([]byte, error)   // the container's cgroup files (doctor_limits.go); nil is os.ReadFile
 }
 
 func osDoctorEnv() DoctorEnv {
@@ -128,6 +129,8 @@ func Doctor(ctx context.Context, env DoctorEnv) []Check {
 	doctorCaches(env, add)
 	doctorTools(ctx, env, add)
 	doctorNetns(env, add)
+	doctorFSSandbox(env, add)
+	doctorLimits(env, cfg, add)
 	doctorSocket(env, add)
 	return out
 }
@@ -142,6 +145,10 @@ func doctorSettings(env DoctorEnv, add func(level, name, msg, fix string)) Confi
 	if _, err := ParseNetns(env.Get(NetnsEnv)); err != nil {
 		bad("setting", err.Error(), "set "+NetnsEnv+" to try, require or off, or remove it")
 		blank[NetnsEnv] = true
+	}
+	if _, err := ParseFSSandbox(env.Get(FSSandboxEnv)); err != nil {
+		bad("setting", err.Error(), "set "+FSSandboxEnv+" to try, require or off, or remove it")
+		blank[FSSandboxEnv] = true
 	}
 	for _, d := range []string{"CLEARANCE_CMP_CACHE_TTL", "CLEARANCE_WAIT_TIMEOUT", "CLEARANCE_CMP_CALL_TIMEOUT"} {
 		if v := env.Get(d); v != "" {

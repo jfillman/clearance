@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"github.com/jfillman/clearance/internal/tlsutil"
 	"io"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/url"
@@ -43,6 +44,12 @@ type Options struct {
 	Timeout time.Duration
 	// Retries is how many times a retryable failure is retried; default 1, negative is none.
 	Retries int
+	// RetryBackoff is the base wait before a retry: retry n waits a random time in [b/2, b] with b =
+	// RetryBackoff*2^(n-1), at most RetryBackoffMax ("equal jitter", so callers that failed together do not retry
+	// together). Zero, the default, retries at once (the gate's 250 ms outage policy). The caller's context bounds it.
+	RetryBackoff time.Duration
+	// RetryBackoffMax caps one wait; default 8 times RetryBackoff.
+	RetryBackoffMax time.Duration
 	// BreakerThreshold is how many consecutive unavailable calls open the breaker; default 5, negative is none.
 	BreakerThreshold int
 	// BreakerCooldown is how long an open breaker fails calls fast before one probe goes through; default 5 s.
@@ -103,6 +110,12 @@ func New(opt Options) (*Client, error) {
 		opt.BreakerThreshold = DefaultBreakerThreshold
 	case opt.BreakerThreshold < 0:
 		opt.BreakerThreshold = 0
+	}
+	if opt.RetryBackoff < 0 {
+		return nil, errors.New("clearance client: RetryBackoff is not negative")
+	}
+	if opt.RetryBackoffMax <= 0 {
+		opt.RetryBackoffMax = 8 * opt.RetryBackoff
 	}
 	if opt.BreakerCooldown <= 0 {
 		opt.BreakerCooldown = DefaultBreakerCooldown
@@ -448,11 +461,34 @@ func (c *Client) call(ctx context.Context, cl call, out any) error {
 		if !res.retryable {
 			break
 		}
+		if attempt <= c.opt.Retries && c.opt.RetryBackoff > 0 {
+			select {
+			case <-ctx.Done():
+				c.breaker.cancel(probe)
+				return fmt.Errorf("clearance client: %s: %w", cl.op, ctx.Err())
+			case <-time.After(backoff(c.opt.RetryBackoff, c.opt.RetryBackoffMax, attempt)):
+			}
+		}
 	}
 	if !cl.probe {
 		c.breaker.done(probe, true)
 	}
 	return last
+}
+
+// backoff is the wait before retry n (n >= 1): random in [d/2, d], d = base*2^(n-1) capped at ceiling.
+func backoff(base, ceiling time.Duration, n int) time.Duration {
+	d := base
+	for i := 1; i < n && d < ceiling; i++ {
+		d *= 2
+	}
+	if d > ceiling {
+		d = ceiling
+	}
+	if d < 2 {
+		return d
+	}
+	return d/2 + rand.N(d/2+1)
 }
 
 func (c *Client) attempt(ctx context.Context, cl call, payload []byte, out any) attemptResult {

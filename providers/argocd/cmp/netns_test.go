@@ -37,7 +37,10 @@ func withNetns(t *testing.T, mode string) *bytes.Buffer {
 	oldW, oldI := netnsWarn, isolate
 	netnsWarn = &w
 	SetNetns(mode)
-	t.Cleanup(func() { netnsWarn, isolate = oldW, oldI; SetNetns("") })
+	// These tests' fake tools write a marker beside themselves, which the filesystem sandbox (tested on its own in
+	// fssandbox_linux_test.go) would refuse.
+	SetFSSandbox(NetnsOff, "")
+	t.Cleanup(func() { netnsWarn, isolate = oldW, oldI; SetNetns(""); SetFSSandbox("", "") })
 	return &w
 }
 

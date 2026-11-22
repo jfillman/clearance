@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"time"
 
 	"github.com/jfillman/clearance/client"
@@ -65,15 +66,17 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 			return o, err
 		}
 	}
-	if cfg.Sources != "" {
-		run := d.Run
-		if run == nil {
-			run = OSRun
+	// The render runs under its limits and in a scratch root of its own (limits.go): a bound it goes over is a LimitError.
+	r, err = renderBounded(ctx, cfg, srcDir, d.Stderr, func(ctx context.Context) (*Rendered, error) {
+		if cfg.Sources != "" {
+			run := d.Run
+			if run == nil {
+				run = OSRun
+			}
+			return RenderSources(ctx, run, cfg)
 		}
-		r, err = RenderSources(ctx, run, cfg)
-	} else {
-		r, err = Render(ctx, d.Exec, cfg, srcDir)
-	}
+		return Render(ctx, d.Exec, cfg, srcDir)
+	})
 	if err != nil {
 		return "", err
 	}
@@ -97,7 +100,7 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 	if r.ChartMerge != "" {
 		fmt.Fprintf(d.Stderr, ", chart %s@%s (%s), chart-cache=%s", cfg.ChartRepo, cfg.ChartRev, r.ChartMerge[:12], r.ChartFetch)
 	}
-	fmt.Fprintf(d.Stderr, ", netns=%s\n", NetnsState())
+	fmt.Fprintf(d.Stderr, ", netns=%s, fs-sandbox=%s\n", NetnsState(), FSSandboxState())
 
 	now := d.Now()
 	started := time.Now() // wall clock, against the decisions DropRenders records
@@ -210,10 +213,14 @@ func registration(cfg Config, tree *Tree) (*client.ChangeRequest, error) {
 
 func newCore(cfg Config) (Core, error) {
 	return client.New(client.Options{BaseURL: cfg.CoreURL, Token: client.FileToken(cfg.TokenFile),
-		Timeout: cfg.RegisterWait, Retries: 1, UserAgent: "clearance-argocd-cmp", CAFile: cfg.CAFile})
+		Timeout: cfg.RegisterWait, UserAgent: "clearance-argocd-cmp", CAFile: cfg.CAFile,
+		// Up to two retries, each after a jittered, doubling wait (250 ms, then 500 ms, at most 2 s): the sidecar's
+		// renders that found the core down together do not come back at the same instant. PluginDeadline bounds it all.
+		Retries: 2, RetryBackoff: 250 * time.Millisecond, RetryBackoffMax: 2 * time.Second})
 }
 
 func main() {
+	maybeShim()                                     // a render step's sandbox shim (fssandbox.go): applies its limits and execs the tool, never returns
 	if len(os.Args) > 1 && os.Args[1] == "parity" { // the parity suite (parity.go), not the plugin
 		os.Exit(parityMain(os.Args[2:], os.Stdout, os.Stderr))
 	}
@@ -226,13 +233,17 @@ func main() {
 		os.Exit(2)
 	}
 	SetNetns(cfg.Netns)
+	SetFSSandbox(cfg.FSSandbox, cfg.TokenFile)
+	if os.Getenv("GOMEMLIMIT") == "" {
+		debug.SetMemoryLimit(256 << 20) // the plugin itself: a soft bound, so the GC works before the container's limit does
+	}
 	core, err := newCore(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "clearance-cmp:", err)
 		os.Exit(2)
 	}
 	d := Deps{Exec: OSExec, Run: OSRun, Core: core, Cache: Cache{Dir: cfg.CacheDir}, Now: time.Now, Stderr: os.Stderr}
-	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Second) // Argo CD kills a plugin at 90 s (ARGOCD_EXEC_TIMEOUT)
+	ctx, cancel := context.WithTimeout(context.Background(), PluginDeadline) // Argo CD kills a plugin at 90 s (ARGOCD_EXEC_TIMEOUT)
 	defer cancel()
 	if _, err := Generate(ctx, d, cfg, ".", os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "clearance-cmp:", err)
