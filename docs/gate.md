@@ -1459,7 +1459,8 @@ installer turns it on (values below). Code: [`providers/argocd/grantexpiry`](../
   the policy's check.
 - **Audit first.** `grantExpiry.enforce: false` (the default once enabled) always allows. A write enforce would refuse gets a warning, and when
   the clock is the reason, the audit annotation `clearance.hangar.io/expired-grant` (`<namespace>/<grant>: <reason>`), so the API server's
-  audit log lists exactly the writes I-44 would have let through. The configuration is `failurePolicy: Ignore` in audit.
+  audit log lists exactly the writes enforce would refuse because of expiry (the writes the policy alone admits
+  while an expired grant is still marked valid). The configuration is `failurePolicy: Ignore` in audit.
 - **Option 0, hardening for the agent** (off by default): `ha.enabled` runs two agent replicas behind one `coordination.k8s.io` Lease (only the
   holder runs the loops; a holder that cannot renew within 10 s stops and exits; every grant, state, Application and namespace
   write goes through the lease's fence, refused once the lease is no longer surely held and given a deadline one retry period
