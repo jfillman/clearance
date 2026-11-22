@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -14,72 +15,63 @@ import (
 )
 
 // Containment that survives setsid(2). A step's process group (proc_unix.go) misses a descendant that starts a session
-// or a group of its own. So the plugin is a child subreaper (PR_SET_CHILD_SUBREAPER: unprivileged, Linux 3.4+, nothing
-// to configure): an orphaned descendant of a step, however it detached, is re-parented to the plugin and not to init.
-//
-// Every step's environment carries a token of its own (stepEnv). After the step, reapStep kills and reaps every child
-// of the plugin whose environment holds that token: only that step's adopted descendants, never another step's
-// processes or anything else the plugin runs (the parity tool's workers run steps and `argocd` side by side). It goes on
-// until none is left, so a chain of descendants each in its own session is followed to its end, within a time bound.
-// A descendant that clears its environment before it is adopted is not recognised; the plugin's own run then ends with
-// reapAll (main), which kills every child left.
+// or a group of its own. So in the plugin's own `generate` (EnableReaping, from main) the plugin is a child subreaper
+// (PR_SET_CHILD_SUBREAPER: unprivileged, Linux 3.4+, nothing to configure): an orphaned descendant of a step, however
+// it detached, is re-parented to the plugin and not to init. Steps then run one at a time (stepMu), and after each one
+// the plugin kills and reaps every child it has, zombies included: at that moment every child is a leftover of the step
+// that just ended, because the plugin starts processes only through its steps. The parity tool, which runs steps and
+// `argocd` side by side on an operator's machine, does not reap: there a descendant that detaches is not followed.
 
-const stepEnv = "CLEARANCE_CMP_STEP_ID"
+var (
+	reaping       atomic.Bool
+	subreaperOnce sync.Once
+	stepMu        sync.Mutex
+)
 
-var subreaperOnce sync.Once
-
-// becomeSubreaper makes this process the subreaper of what its steps start (once).
-func becomeSubreaper() {
+// EnableReaping turns the subreaper and the sweep after every step on, for this process.
+func EnableReaping() {
 	subreaperOnce.Do(func() { unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) })
+	reaping.Store(true)
 }
 
-// reapStep kills and reaps the plugin's children that carry the step's token, until none is left or the bound passes.
-func reapStep(token string) {
-	if token == "" {
+// stepLock serialises the steps while reaping is on (a no-op otherwise); the returned func releases it.
+func stepLock() func() {
+	if !reaping.Load() {
+		return func() {}
+	}
+	stepMu.Lock()
+	return stepMu.Unlock
+}
+
+// reapStep runs after a step's Wait, under stepLock: it kills every child of the plugin (its own group or session
+// too) and reaps every exited one, until there is none (ECHILD) or the bound passes.
+func reapStep() {
+	if !reaping.Load() {
 		return
 	}
-	needle := []byte(stepEnv + "=" + token + "\x00")
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		var found []int
-		for _, pid := range childrenOf(os.Getpid()) {
-			if env, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/environ"); err == nil && bytes.Contains(append(env, 0), needle) {
-				found = append(found, pid)
-			}
-		}
-		if len(found) == 0 {
-			return
-		}
-		for _, pid := range found {
-			syscall.Kill(-pid, syscall.SIGKILL) // its own group or session, if it made one
-			syscall.Kill(pid, syscall.SIGKILL)
-			var ws syscall.WaitStatus
-			syscall.Wait4(pid, &ws, 0, nil) // its children, if any, are now the plugin's: the next pass finds them
-		}
-	}
+	reapAll()
 }
 
-// reapAll kills and reaps every child of this process, until there is none (ECHILD) or the bound passes. Only the
-// plugin's `generate` calls it, once, at its very end, when it runs nothing else.
+// reapAll kills and reaps every child of this process, until there is none (ECHILD) or the bound passes.
 func reapAll() {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		kids := childrenOf(os.Getpid())
-		for _, pid := range kids {
-			syscall.Kill(-pid, syscall.SIGKILL)
+		for _, pid := range childrenOf(os.Getpid()) {
+			syscall.Kill(-pid, syscall.SIGKILL) // its own group or session, if it made one
 			syscall.Kill(pid, syscall.SIGKILL)
 		}
 		var ws syscall.WaitStatus
-		if _, err := syscall.Wait4(-1, &ws, syscall.WNOHANG, nil); err == syscall.ECHILD && len(kids) == 0 {
+		pid, err := syscall.Wait4(-1, &ws, syscall.WNOHANG, nil)
+		switch {
+		case err == syscall.ECHILD:
 			return
-		}
-		if len(kids) == 0 {
-			time.Sleep(10 * time.Millisecond)
+		case err == nil && pid == 0:
+			time.Sleep(5 * time.Millisecond) // a killed child not yet exited
 		}
 	}
 }
 
-// childrenOf lists the pids whose parent is ppid, from /proc/<pid>/stat.
+// childrenOf lists the live (not zombie) pids whose parent is ppid, from /proc/<pid>/stat.
 func childrenOf(ppid int) []int {
 	ents, err := os.ReadDir("/proc")
 	if err != nil {
@@ -101,7 +93,7 @@ func childrenOf(ppid int) []int {
 			continue
 		}
 		f := bytes.Fields(b[i+1:])
-		if len(f) >= 2 && string(f[0]) != "Z" { // a zombie is reaped by whoever waits for it, not taken here
+		if len(f) >= 2 && string(f[0]) != "Z" {
 			if p, err := strconv.Atoi(string(f[1])); err == nil && p == ppid {
 				out = append(out, pid)
 			}

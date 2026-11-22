@@ -65,10 +65,13 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 	// render fetches the chart itself.
 	if (cfg.RenderCacheTTL > 0 || cfg.LKG) && cfg.Sources == "" && cfg.ChartRepo != "" {
 		lctx, cancel := context.WithTimeout(ctx, lookupTimeout)
-		lctx, done := lookupBudget(lctx, cfg) // the configured step limits, and a private scratch: never the shared /tmp
-		cfg.chartCommit, cfg.chartLookupErr = lookupChart(lctx, d.Exec, cfg.ChartRepo, cfg.ChartRev)
-		cfg.chartLooked = true
-		done()
+		// The configured step limits, and a private scratch: never the shared /tmp. Without one the lookup is skipped (it
+		// is an optimisation; the render resolves the tag in its own scratch).
+		if lctx, done, ok := lookupBudget(lctx, cfg); ok {
+			cfg.chartCommit, cfg.chartLookupErr = lookupChart(lctx, d.Exec, cfg.ChartRepo, cfg.ChartRev)
+			cfg.chartLooked = true
+			done()
+		}
 		cancel()
 	}
 	rkey, lkey := renderKey(cfg), lkgKey(cfg)
@@ -329,6 +332,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "clearance-cmp:", newErr(CodeFaultConfig, "the core client cannot be set up from the sidecar's settings", err))
 		os.Exit(2)
 	}
+	EnableReaping() // a descendant of a render step never outlives it, setsid or not (proc_linux.go)
 	d := Deps{Exec: OSExec, Run: OSRun, Core: core, Cache: Cache{Dir: cfg.CacheDir}, Now: time.Now, Stderr: os.Stderr}
 	ctx, cancel := context.WithTimeout(context.Background(), PluginDeadline) // Argo CD kills a plugin at 90 s (ARGOCD_EXEC_TIMEOUT)
 	defer cancel()

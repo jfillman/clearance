@@ -17,6 +17,7 @@ import (
 // process group is killed when it returns, and on a deadline.
 func TestAStepsDescendantsDoNotOutliveIt(t *testing.T) {
 	withFS(t, NetnsOff, "")
+	withReaping(t) // as in the plugin's generate (on Linux the plugin is then the subreaper, and reaps what it kills)
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	alive := func() (int, bool) {
 		b, _ := os.ReadFile(pidFile)

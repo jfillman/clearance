@@ -245,16 +245,16 @@ func workDir(ctx context.Context) string {
 // lookupBudget is the chart tag lookup's context: the configured step limits and a scratch root of its own (removed
 // by done), no source directory and no slot. Without it the lookup would run under the default limits with the
 // system temp directory, which holds every render's scratch and the caches, open to it.
-func lookupBudget(ctx context.Context, cfg Config) (context.Context, func()) {
+func lookupBudget(ctx context.Context, cfg Config) (context.Context, func(), bool) {
 	lim := cfg.Limits
 	if lim == (Limits{}) {
 		lim = DefaultLimits()
 	}
 	root, err := os.MkdirTemp("", "clearance-lookup-")
 	if err != nil {
-		return ctx, func() {} // no scratch: the lookup is an optimisation, and OSRun still bounds it by default
+		return ctx, func() {}, false // no private scratch: skip the lookup (an optimisation), never run it with the shared /tmp
 	}
-	return withBudget(ctx, &budget{lim: lim, root: root}), func() { os.RemoveAll(root) }
+	return withBudget(ctx, &budget{lim: lim, root: root}), func() { os.RemoveAll(root) }, true
 }
 
 // renderBounded runs render under cfg.Limits: a slot among CLEARANCE_CMP_MAX_RENDERS, one wall-time deadline for all of

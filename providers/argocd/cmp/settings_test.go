@@ -36,7 +36,6 @@ func setting(name string) (Setting, bool) {
 func TestEverySettingInTheCodeIsListed(t *testing.T) {
 	notSettings := map[string]bool{
 		"CLEARANCE_VERIFIERS":        true, // the core's setting, named in a doctor hint
-		"CLEARANCE_CMP_STEP_ID":      true, // a render step's own token, which its descendants carry (proc_linux.go)
 		"CLEARANCE_CMP_SANDBOX_SPEC": true, // the plugin's instructions to its own sandbox shim (fssandbox.go), never set by anyone
 	}
 	files, _ := filepath.Glob("*.go")

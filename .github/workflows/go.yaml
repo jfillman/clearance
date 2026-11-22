@@ -53,7 +53,7 @@ jobs:
             TestRenderStepCannotReadTheToken TestRealKustomizeCannotReadTheToken TestRealHelmCannotReadTheTokenThroughASymlink \
             TestCPUBoundStopsAStep TestMemoryBoundStopsAStep TestAToolCannotRequestAnUnsandboxedRetry TestAStepsDescendantsDoNotOutliveIt \
             TestADetachedDescendantDoesNotOutliveItsStep TestTheLandlockProbeNeedsNoToolOnPath \
-            TestReapingAStepLeavesOtherProcessesAlone; do
+            TestWithoutReapingOtherProcessesAreLeftAlone TestReapingSerialisesSteps; do
             grep -E "^--- PASS: $t " "$RUNNER_TEMP/real-binary.log"
           done
           ! grep -E 'is not installed|is not on PATH' "$RUNNER_TEMP/real-binary.log"

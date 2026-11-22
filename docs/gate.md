@@ -1991,8 +1991,9 @@ first instruction:
   pre-render confirmation, is cut short instead), so an unreachable core is an outage (and the outage policy's cache
   applies), never a deadline.
 - **Containment of the step's processes**: each step is a process group of its own, killed when the step returns or
-  is stopped, and the plugin is a child subreaper, so a descendant that calls `setsid` is re-parented to it and
-  killed after the step as well. Whether a step is retried without Landlock is decided only by the shim's setup channel (a pipe it closes
+  is stopped, and the plugin is a child subreaper that runs its steps one at a time and kills and reaps every child
+  after each, so a descendant that calls `setsid` (with any environment) is re-parented to it and killed after the step
+  as well. The `parity` tool does not sweep. Whether a step is retried without Landlock is decided only by the shim's setup channel (a pipe it closes
   before exec), never by the tool's output or exit status. Landlock ABI 3+ (Linux 6.2+) also refuses truncation outside
   the scratch directory; `doctor` warns on an older ABI.
 

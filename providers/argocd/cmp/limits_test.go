@@ -406,7 +406,10 @@ func TestStderrDoesNotMaskADeadline(t *testing.T) {
 func TestTheTagLookupHasAPrivateScratch(t *testing.T) {
 	cfg := Config{Limits: DefaultLimits()}
 	cfg.Limits.Output = 2 << 20
-	ctx, done := lookupBudget(context.Background(), cfg)
+	ctx, done, ok := lookupBudget(context.Background(), cfg)
+	if !ok {
+		t.Fatal("no private scratch for the lookup")
+	}
 	defer done()
 	var dir string
 	var lim Limits
