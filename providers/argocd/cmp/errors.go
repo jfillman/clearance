@@ -133,6 +133,8 @@ func newErr(code, summary string, err error) *CmpError {
 		}
 		if err == nil {
 			err = errors.New(summary)
+		} else if !strings.Contains(err.Error(), summary) {
+			err = fmt.Errorf("%s: %w", summary, err) // the whole summary stays in the detail; errors.Is/As still see err
 		}
 		summary = summary[:cut] + "..."
 	}

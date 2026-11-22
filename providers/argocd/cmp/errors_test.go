@@ -185,6 +185,26 @@ func TestALongSummaryKeepsTheFirstLineShort(t *testing.T) {
 	}
 }
 
+func TestACutSummaryStaysWholeInTheDetail(t *testing.T) {
+	id := strings.Repeat("b", 128)
+	e := newEnv(t)
+	e.cfg.WaitImage = ""
+	e.core.answer = &client.Change{ID: id, State: "holding"}
+	_, _, err := e.generate(t)
+	wantCode(t, err, CodeFaultWaitImage)
+	full := "change " + id + " is held for people, but CLEARANCE_WAIT_IMAGE is not set"
+	if first := strings.Split(err.Error(), "\n")[0]; len(first) > maxFirstLine {
+		t.Fatalf("first line %d bytes", len(first))
+	}
+	if !strings.Contains(err.Error(), "detail: "+full+": ") || !strings.Contains(err.Error(), "PreSync wait Job cannot be injected") {
+		t.Fatalf("%q", err.Error())
+	}
+	inner := errors.New("inner")
+	if ce := newErr(CodeFaultInternal, strings.Repeat("x", 200), inner); !errors.Is(ce, inner) {
+		t.Fatal("the cut lost errors.Is")
+	}
+}
+
 func TestChangeLink(t *testing.T) {
 	cfg := Config{CoreURL: "https://core.example.test/"}
 	if got := ChangeLink(cfg, "ch-1"); got != "https://core.example.test/v1/clearances/ch-1" {
