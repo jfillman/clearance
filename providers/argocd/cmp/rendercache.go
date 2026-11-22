@@ -95,14 +95,33 @@ func renderKey(cfg Config) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (c Cache) renderPath(key string) string { return filepath.Join(c.Dir, "renders", key+".json") }
+func (c Cache) renderPath(key string) string { return c.entryPath(rendersDir, key) }
+
+// The two stores of renderEntry files under the cache directory: the pre-render cache and the last-known-good store
+// (lkg.go). Same format, different keys and lifetimes.
+const (
+	rendersDir = "renders"
+	lkgDir     = "lkg"
+)
+
+func (c Cache) entryPath(sub, key string) string { return filepath.Join(c.Dir, sub, key+".json") }
 
 // GetRender is the cached render for key, if it is still within its clearance and lifetime and is whole.
 func (c Cache) GetRender(key string, now time.Time, ttl time.Duration) (renderEntry, bool) {
+	e, ok := c.getEntry(rendersDir, key, now)
+	if !ok || !now.Before(e.ExpiresAt) || now.Sub(e.CachedAt) >= ttl {
+		return renderEntry{}, false
+	}
+	return e, true
+}
+
+// getEntry reads the entry for key in sub if it is whole (it names its key, has a change and a stream whose SHA-256 is
+// the recorded one), and marks it used. Lifetimes are the caller's.
+func (c Cache) getEntry(sub, key string, now time.Time) (renderEntry, bool) {
 	if key == "" || c.Dir == "" {
 		return renderEntry{}, false
 	}
-	p := c.renderPath(key)
+	p := c.entryPath(sub, key)
 	b, err := os.ReadFile(p)
 	if err != nil {
 		return renderEntry{}, false
@@ -113,9 +132,6 @@ func (c Cache) GetRender(key string, now time.Time, ttl time.Duration) (renderEn
 	if json.Unmarshal(b, &e) != nil || e.Key != key || e.ID == "" || len(e.Stream) == 0 || e.StreamSum != sumHex(e.Stream) {
 		return renderEntry{}, false
 	}
-	if !now.Before(e.ExpiresAt) || now.Sub(e.CachedAt) >= ttl {
-		return renderEntry{}, false
-	}
 	os.Chtimes(p, now, now) // last used
 	return e, true
 }
@@ -123,11 +139,13 @@ func (c Cache) GetRender(key string, now time.Time, ttl time.Duration) (renderEn
 // PutRender stores a cleared render atomically. started is when this run began asking the core: if a hold or a
 // denial for the same tree was recorded since (DropRenders), the cleared answer is older than that decision and is
 // not stored. A failure only costs the next render its work.
-func (c Cache) PutRender(e renderEntry, started time.Time) {
+func (c Cache) PutRender(e renderEntry, started time.Time) { c.putEntry(rendersDir, e, started) }
+
+func (c Cache) putEntry(sub string, e renderEntry, started time.Time) {
 	if c.Dir == "" || e.Key == "" || e.ID == "" || len(e.Stream) == 0 || len(e.Stream) > renderCacheMaxStream {
 		return
 	}
-	dir := filepath.Join(c.Dir, "renders")
+	dir := filepath.Join(c.Dir, sub)
 	if os.MkdirAll(dir, 0o700) != nil {
 		return
 	}
@@ -145,15 +163,19 @@ func (c Cache) PutRender(e renderEntry, started time.Time) {
 	}
 	_, werr := tmp.Write(b)
 	cerr := tmp.Close()
-	if werr != nil || cerr != nil || os.Rename(tmp.Name(), c.renderPath(e.Key)) != nil {
+	if werr != nil || cerr != nil || os.Rename(tmp.Name(), c.entryPath(sub, e.Key)) != nil {
 		os.Remove(tmp.Name())
 		return
 	}
 	if c.decidedSince(e.App, e.Env, e.Cluster, e.Tree, started) { // a decision landed while this was written
-		os.Remove(c.renderPath(e.Key))
+		os.Remove(c.entryPath(sub, e.Key))
 		return
 	}
-	c.pruneRenders(dir)
+	if sub == lkgDir {
+		c.pruneRenders(dir, lkgMaxEntries, lkgMaxBytes)
+	} else {
+		c.pruneRenders(dir, renderCacheMaxEntries, 0)
+	}
 }
 
 // decidedSince is whether a hold or denial of the tree was recorded (DropRenders) at or after t.
@@ -176,17 +198,18 @@ func (c Cache) PutUndecided(app, env, cluster string, e CacheEntry, started time
 
 // tombstone is the file whose time says when a hold or denial of the tree was last recorded.
 func (c Cache) tombstone(app, env, cluster, tree string) string {
-	return filepath.Join(c.Dir, "renders", ".dropped-"+sumHex([]byte(app+"\x00"+env+"\x00"+cluster+"\x00"+tree)))
+	return filepath.Join(c.Dir, rendersDir, ".dropped-"+sumHex([]byte(app+"\x00"+env+"\x00"+cluster+"\x00"+tree)))
 }
 
 // DropRenders forgets every render of this app, environment, cluster and tree, whatever its key (the key also has
-// parameters that do not change the tree, and the core's answer is about the tree), and records the decision so a
-// cleared answer that was already in flight is not stored after it. Called when the core says hold or denied.
+// parameters that do not change the tree, and the core's answer is about the tree), in the pre-render cache and the
+// last-known-good store, and records the decision so a cleared answer that was already in flight is not stored after
+// it. Called when the core says hold or denied.
 func (c Cache) DropRenders(app, env, cluster, tree string) {
 	if c.Dir == "" || tree == "" {
 		return
 	}
-	dir := filepath.Join(c.Dir, "renders")
+	dir := filepath.Join(c.Dir, rendersDir)
 	if os.MkdirAll(dir, 0o700) != nil {
 		return
 	}
@@ -194,6 +217,12 @@ func (c Cache) DropRenders(app, env, cluster, tree string) {
 	os.WriteFile(ts, nil, 0o600)
 	now := time.Now()
 	os.Chtimes(ts, now, now)
+	for _, sub := range []string{rendersDir, lkgDir} {
+		c.dropTree(filepath.Join(c.Dir, sub), app, env, cluster, tree)
+	}
+}
+
+func (c Cache) dropTree(dir, app, env, cluster, tree string) {
 	ents, _ := os.ReadDir(dir)
 	for _, e := range ents {
 		if !strings.HasSuffix(e.Name(), ".json") {
@@ -211,8 +240,10 @@ func (c Cache) DropRenders(app, env, cluster, tree string) {
 	}
 }
 
-// pruneRenders keeps the newest-used renderCacheMaxEntries entries and clears temporary files an interrupted write left.
-func (c Cache) pruneRenders(dir string) {
+// pruneRenders keeps the newest-used maxEntries entries (and, when maxBytes > 0, at most maxBytes of them) and clears
+// temporary files an interrupted write left. Each store has its own bounds: the last-known-good store is not evicted
+// by the pre-render cache's traffic.
+func (c Cache) pruneRenders(dir string, maxEntries int, maxBytes int64) {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
 		return
@@ -220,8 +251,9 @@ func (c Cache) pruneRenders(dir string) {
 	type f struct {
 		name string
 		mod  time.Time
+		size int64
 	}
-	var files []f
+	var files, tags []f
 	for _, e := range ents {
 		info, err := e.Info()
 		if err != nil {
@@ -233,15 +265,24 @@ func (c Cache) pruneRenders(dir string) {
 				os.Remove(filepath.Join(dir, e.Name()))
 			}
 		case strings.HasSuffix(e.Name(), ".json"):
-			files = append(files, f{e.Name(), info.ModTime()})
+			files = append(files, f{e.Name(), info.ModTime(), info.Size()})
+		case strings.HasSuffix(e.Name(), ".tag"): // last-known-good tag pointers (lkg.go), a few bytes each
+			tags = append(tags, f{e.Name(), info.ModTime(), info.Size()})
 		}
 	}
-	if len(files) <= renderCacheMaxEntries {
-		return
+	sort.Slice(tags, func(i, j int) bool { return tags[i].mod.After(tags[j].mod) })
+	for i, x := range tags {
+		if i >= maxEntries {
+			os.Remove(filepath.Join(dir, x.name))
+		}
 	}
-	sort.Slice(files, func(i, j int) bool { return files[i].mod.Before(files[j].mod) })
-	for _, x := range files[:len(files)-renderCacheMaxEntries] {
-		os.Remove(filepath.Join(dir, x.name))
+	sort.Slice(files, func(i, j int) bool { return files[i].mod.After(files[j].mod) }) // newest first
+	var total int64
+	for i, x := range files {
+		total += x.size
+		if i >= maxEntries || (maxBytes > 0 && total > maxBytes && i > 0) {
+			os.Remove(filepath.Join(dir, x.name))
+		}
 	}
 }
 
@@ -257,8 +298,9 @@ func (c Cache) DropRender(key string) {
 	}
 }
 
-// serveRender answers a pre-render hit. The cache skips the clone, Helm and kustomize; it never decides. The core is
-// asked exactly as often as without the cache:
+// serveRender answers a pre-render hit, or a last-known-good lookup (fault non-nil: the plugin's fault this run, lkg.go).
+// The cache skips the clone, Helm and kustomize; it never decides. The core is asked exactly as often as without the
+// cache:
 //
 //	the tree cache says cleared within CLEARANCE_CMP_CACHE_TTL, same change  -> serve, no core call (as before)
 //	otherwise                                                                -> RegisterChange(stored request)
@@ -266,18 +308,28 @@ func (c Cache) DropRender(key string) {
 //	  cleared as another change, holding, denied, anything else              -> drop the entries, render in full
 //	  the core is unreachable                                                -> the outage policy, allow-and-record only
 //
-// handled is false when the caller must render in full.
-func serveRender(ctx context.Context, d Deps, cfg Config, e renderEntry, out io.Writer) (o Outcome, handled bool, err error) {
+// handled is false when the caller must render in full (for a last-known-good lookup: fail with the fault).
+func serveRender(ctx context.Context, d Deps, cfg Config, e renderEntry, out io.Writer, fault *CmpError) (o Outcome, handled bool, err error) {
 	now := d.Now()
+	sub := rendersDir
+	if fault != nil {
+		sub = lkgDir
+	}
 	serve := func(how string) (Outcome, bool, error) {
-		fmt.Fprintf(d.Stderr, "clearance: %s/%s is unchanged (chart %s@%s, gitops %s): %s; serving the cleared render %s from the cache without a clone, helm or kustomize, tree %s\n",
-			cfg.App, cfg.Env, cfg.ChartRev, shortRes(cfg.chartCommit), shortRes(cfg.Revision), how, e.ID, shortRes(e.Tree))
+		if fault != nil {
+			n := d.Cache.countLKGServe()
+			fmt.Fprintf(d.Stderr, "clearance: LAST-KNOWN-GOOD served: %s/%s hit %s (%s); %s; serving the render last cleared for this exact gitops revision %s, chart %s@%s and parameters, change %s, tree %s; lkg-serves=%d\n",
+				cfg.App, cfg.Env, fault.Code, fault.Summary, how, shortRes(cfg.Revision), cfg.ChartRev, shortRes(cfg.chartCommit), e.ID, shortRes(e.Tree), n)
+		} else {
+			fmt.Fprintf(d.Stderr, "clearance: %s/%s is unchanged (chart %s@%s, gitops %s): %s; serving the cleared render %s from the cache without a clone, helm or kustomize, tree %s\n",
+				cfg.App, cfg.Env, cfg.ChartRev, shortRes(cfg.chartCommit), shortRes(cfg.Revision), how, e.ID, shortRes(e.Tree))
+		}
 		_, werr := out.Write(e.Stream)
 		return Cleared, true, werr
 	}
 	te, tok := d.Cache.Get(cfg.App, cfg.Env, cfg.Cluster, e.Tree, now)
 	if tok && te.ID != e.ID || e.Request == nil {
-		d.Cache.DropRender(e.Key) // stamped with a change the tree cache no longer names: render and ask
+		os.Remove(d.Cache.entryPath(sub, e.Key)) // stamped with a change the tree cache no longer names: render and ask
 		return "", false, nil
 	}
 	if tok && now.Sub(te.CachedAt) < cfg.CacheTTL {
@@ -294,9 +346,9 @@ func serveRender(ctx context.Context, d Deps, cfg Config, e renderEntry, out io.
 				fmt.Fprintf(d.Stderr, "clearance: the core is unreachable (%v); serving %s from the cache (tier %d, allow-and-record)\n", err, te.ID, te.Tier)
 				return serve("outage policy")
 			}
-			return "", true, fmt.Errorf("clearance outage hold: the core is unreachable and tree %s has no cleared, allow-and-record entry: %w", shortRes(e.Tree), err)
+			return "", true, outageHold(e.Tree, err)
 		}
-		return "", true, fmt.Errorf("clearance refused the change: %w", err)
+		return "", true, classifyCore(err)
 	}
 	if ch.State == "cleared" && ch.ID == e.ID {
 		exp, _ := time.Parse(time.RFC3339Nano, ch.ExpiresAt)
@@ -306,7 +358,7 @@ func serveRender(ctx context.Context, d Deps, cfg Config, e renderEntry, out io.
 		d.Cache.PutUndecided(cfg.App, cfg.Env, cfg.Cluster, CacheEntry{ID: ch.ID, Tier: ch.Tier, Outage: ch.Outage, Tree: e.Tree, CachedAt: now, ExpiresAt: exp}, started)
 		if d.Cache.decidedSince(cfg.App, cfg.Env, cfg.Cluster, e.Tree, started) {
 			// A hold or denial of this tree was recorded while the call was pending: the answer is older than it.
-			d.Cache.DropRender(e.Key)
+			os.Remove(d.Cache.entryPath(sub, e.Key))
 			return "", false, nil
 		}
 		return serve("the core confirmed the same change")
@@ -316,4 +368,10 @@ func serveRender(ctx context.Context, d Deps, cfg Config, e renderEntry, out io.
 	d.Cache.DropRenders(cfg.App, cfg.Env, cfg.Cluster, e.Tree)
 	d.Cache.Drop(cfg.App, cfg.Env, cfg.Cluster, e.Tree)
 	return "", false, nil
+}
+
+// outageHold is the refusal while the core cannot be reached and nothing cleared is remembered for the tree.
+func outageHold(tree string, err error) *CmpError {
+	return newErr(CodeRefusedOutageHold, "the core is unreachable and this tree has no cleared, allow-and-record entry",
+		fmt.Errorf("clearance outage hold: the core is unreachable and tree %s has no cleared, allow-and-record entry: %w", shortRes(tree), err))
 }

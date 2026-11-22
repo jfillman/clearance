@@ -209,6 +209,8 @@ sed 's/^/     stderr: /' "$work/link.err"
 [ "$code" != 0 ] && ok "exit $code (non-zero)" || bad "a symlinked value file rendered"
 grep -q 'refused: value file hangar-smoke/dev/values.yaml resolves outside the repository' "$work/link.err" \
   && ok "the refusal names the value file" || bad "the expected refusal is missing"
+grep -q '^clearance-cmp: CMP-RENDER-REFUSED: ' "$work/link.err" \
+  && ok "its first line carries the render-error code CMP-RENDER-REFUSED" || bad "the refusal's first line lacks its error code"
 [ ! -s "$work/link.out" ] && ok "no manifests were written" || bad "manifests were written for a refused checkout"
 [ ! -s "$work/register.log" ] && ok "nothing was registered" || bad "a refused checkout was registered"
 
