@@ -123,3 +123,23 @@ func TestAReportCannotRemoveAStaticPairForAnExemption(t *testing.T) {
 		t.Fatalf("the record names the exemption: %s", res)
 	}
 }
+
+// A removal report taken by the core whose answer was lost is sent again with the same number and set: the core takes it
+// as it was (its exempted pairs are no longer held), records nothing more, and the agent's state can catch up.
+func TestAReplayedExemptionRemovalIsTakenAsItWas(t *testing.T) {
+	f := protectionFixture(t, "")
+	f.do("PUT", "/v1/protection/hangar-prod", agentProd, pairs("web/prod", "web/staging")).want(t, 200, "")
+	body := pairs("web/prod")
+	body["exempted"] = []any{map[string]any{"app": "web", "env": "staging"}}
+	body["reason"] = "argocd/web-staging exempted"
+	f.do("PUT", "/v1/protection/hangar-prod", agentProd, body).want(t, 200, "")
+	n := len(f.records())
+	again := f.do("PUT", "/v1/protection/hangar-prod", agentProd, body).want(t, 200, "")
+	if again.body["changed"] != false || len(f.records()) != n {
+		t.Fatalf("a replay records nothing: %v (%d -> %d records)", again.body, n, len(f.records()))
+	}
+	// Another number with the same exempted pair is a new report, and the pair is not held: refused.
+	next := pairs("web/prod")
+	next["exempted"] = body["exempted"]
+	f.do("PUT", "/v1/protection/hangar-prod", agentProd, next).want(t, 400, "not in the held report")
+}

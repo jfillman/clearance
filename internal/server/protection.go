@@ -250,8 +250,16 @@ func (s *Server) reportProtection(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		// The same report again (its number and its set are the ones held): the agent's heartbeat, or a retry after a lost
+		// answer. It renews the report's time as always, but records no reason a second time, and its exempted pairs are
+		// not checked again (they were when it was first taken, and are no longer held).
+		replay := cur.Digest != "" && cur.Digest == digest && body.Seq == cur.Seq
+		reason := body.Reason
+		if replay {
+			reason = ""
+		}
 		for _, e := range exempted { // an exempted pair is one the report removes: it must be held
-			if !slices.Contains(was, e) {
+			if !replay && !slices.Contains(was, e) {
 				status, why = http.StatusBadRequest, fmt.Sprintf("exempted: %s/%s is not in the held report: an exempted pair is one the report removes", e.App, e.Env)
 				return nil
 			}
@@ -307,7 +315,7 @@ func (s *Server) reportProtection(w http.ResponseWriter, r *http.Request) {
 				onlyAdds = false
 			}
 		}
-		if (changed && !onlyAdds) || (!changed && body.Reason != "") { // removals, mixed reports and reasons are bounded
+		if (changed && !onlyAdds) || (!changed && reason != "") { // removals, mixed reports and reasons are bounded
 			if next.WindowCount >= MaxProtectionRecordsPerHour {
 				status, why = http.StatusTooManyRequests, fmt.Sprintf("at most %d removals or explained reports are recorded per hour for a cluster", MaxProtectionRecordsPerHour)
 				return nil
@@ -322,7 +330,7 @@ func (s *Server) reportProtection(w http.ResponseWriter, r *http.Request) {
 			next.Seq = body.Seq
 		}
 		out.HeldSeq = next.Seq
-		if !changed && body.Reason == "" {
+		if !changed && reason == "" {
 			return tx.PutProtection(r.Context(), next)
 		}
 		for _, n := range pairs {
@@ -346,8 +354,8 @@ func (s *Server) reportProtection(w http.ResponseWriter, r *http.Request) {
 		}
 		result += list("; added ", out.Added, nil) + list("; removed ", out.Removed, out.StaticRemoved)
 		result += list("; removed for a gate exemption ", exempted, nil)
-		if body.Reason != "" {
-			result += "; reason (claimed): " + body.Reason
+		if reason != "" {
+			result += "; reason (claimed): " + reason
 		}
 		if len(result) > MaxFieldText {
 			result = result[:MaxFieldText-3] + "..."
