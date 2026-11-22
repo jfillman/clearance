@@ -328,29 +328,36 @@ func TestTheLeaseWireRoundTrips(t *testing.T) {
 	}
 }
 
-// slowGet advances the clock while a GET is in flight (a pause or a slow API server).
+// slowGet runs before() when a GET starts and after() when it returns: a pause or a slow API server, during which the
+// holder can renew.
 type slowGet struct {
 	*memLeases
-	during func()
+	before, after *func()
 }
 
 func (s slowGet) GetLease(ctx context.Context, ns, name string) (Lease, error) {
+	if f := *s.before; f != nil {
+		f()
+	}
 	l, err := s.memLeases.GetLease(ctx, ns, name)
-	if s.during != nil {
-		s.during()
+	if f := *s.after; f != nil {
+		f()
 	}
 	return l, err
 }
 
 // A candidate records when it SAW the holder's renewal, after its GET returned, not when it started the GET: a renewal
 // read late must not be back-dated, or the candidate takes a lease the holder still renews (CodeRabbit on clearance#210).
+// B's GET starts at t=0; while it is in flight the clock reaches 12 and A renews; the GET returns at 14. A sample taken
+// before the GET (0) would let B take over at 15; the sample after it (14) holds B off until 29.
 func TestTheObservationTimeIsTakenAfterTheGetReturns(t *testing.T) {
 	store := &memLeases{}
 	at := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	t0 := at
 	clock := func() time.Time { return at }
 	a := &Elector{Store: store, Namespace: "ns", Name: "agent", Identity: "pod-a", Now: clock, Log: quiet}
-	var slow time.Duration
-	b := &Elector{Store: slowGet{store, func() { at = at.Add(slow) }}, Namespace: "ns", Name: "agent", Identity: "pod-b", Now: clock, Log: quiet}
+	var before, after func()
+	b := &Elector{Store: slowGet{store, &before, &after}, Namespace: "ns", Name: "agent", Identity: "pod-b", Now: clock, Log: quiet}
 	for _, e := range []*Elector{a, b} {
 		if err := e.defaults(); err != nil {
 			t.Fatal(err)
@@ -360,23 +367,29 @@ func TestTheObservationTimeIsTakenAfterTheGetReturns(t *testing.T) {
 	if ok, _ := a.tryAcquireOrRenew(ctx); !ok { // t=0
 		t.Fatal("a takes the lease")
 	}
-	if ok, _ := b.tryAcquireOrRenew(ctx); ok { // b sees renewal 0 at t=0
+	if ok, _ := b.tryAcquireOrRenew(ctx); ok { // b sees renewal 0 at t=0, immediately
 		t.Fatal("b must not take it")
 	}
-	at = at.Add(12 * time.Second)
-	if ok, _ := a.tryAcquireOrRenew(ctx); !ok { // a renews at t=12; its fence runs to 12+15-2 = 25
-		t.Fatal("a renews")
+	before = func() {
+		at = t0.Add(12 * time.Second)
+		if ok, _ := a.tryAcquireOrRenew(ctx); !ok { // a renews at t=12 while b's GET is in flight; a's fence runs to 25
+			t.Error("a renews")
+		}
 	}
-	slow = 2 * time.Second // b starts its GET at 12 and gets a's renewal back at 14
-	if ok, _ := b.tryAcquireOrRenew(ctx); ok {
+	after = func() { at = t0.Add(14 * time.Second) }
+	if ok, _ := b.tryAcquireOrRenew(ctx); ok { // started at t=0, returned at t=14 with a's renewal
 		t.Fatal("b must not take a lease renewed 2 s ago")
 	}
-	slow = 0
-	at = at.Add(2 * time.Second) // t=16: one lease duration after the stale start sample, not after b saw it
+	before, after = nil, nil
+	at = t0.Add(16 * time.Second) // past 0+15: a pre-GET sample would take over here, while a may write until 25
 	if ok, _ := b.tryAcquireOrRenew(ctx); ok {
-		t.Fatal("b took the lease at 16 s, while a may still write until 25 s: the observation was back-dated")
+		t.Fatal("b took the lease at 16 s: the observation was back-dated to when the GET started")
 	}
-	at = at.Add(14 * time.Second) // t=30: 16 s after b saw the renewal at 14
+	at = t0.Add(28 * time.Second)
+	if ok, _ := b.tryAcquireOrRenew(ctx); ok {
+		t.Fatal("b took the lease at 28 s, before 14+15")
+	}
+	at = t0.Add(30 * time.Second)
 	if ok, err := b.tryAcquireOrRenew(ctx); !ok || err != nil {
 		t.Fatalf("a full duration after b saw the last renewal it takes over: %v %v", ok, err)
 	}
