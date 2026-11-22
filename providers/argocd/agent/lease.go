@@ -133,21 +133,25 @@ func (e *Elector) tryAcquireOrRenew(ctx context.Context) (bool, error) {
 		if err := e.Store.CreateLease(ctx, l); err != nil {
 			return false, err
 		}
-		e.observed, e.observedAt = l, now
+		e.observed, e.observedAt = l, e.Now()
 		return true, nil
 	}
 	if err != nil {
 		return false, err
 	}
+	// The observation time is sampled AFTER the GET returns: a GET that was slow (or a pause before it) must not
+	// back-date when this replica saw the holder's renewal, or it would take a lease the holder still renews and both
+	// would write. now (sampled before) stays the holder's own conservative start, which the write fence uses.
+	seen := e.Now()
 	if cur.Holder != e.observed.Holder || !cur.RenewTime.Equal(e.observed.RenewTime) || cur.ResourceVersion != e.observed.ResourceVersion {
-		e.observed, e.observedAt = cur, now
+		e.observed, e.observedAt = cur, seen
 	}
 	held := cur.Holder == e.Identity
 	dur := time.Duration(cur.DurationSeconds) * time.Second
 	if dur <= 0 {
 		dur = e.Duration
 	}
-	if !held && cur.Holder != "" && now.Before(e.observedAt.Add(dur)) {
+	if !held && cur.Holder != "" && seen.Before(e.observedAt.Add(dur)) {
 		return false, nil // another replica holds it and has renewed within its duration, as this replica saw it
 	}
 	next := cur
@@ -159,7 +163,7 @@ func (e *Elector) tryAcquireOrRenew(ctx context.Context) (bool, error) {
 	if err := e.Store.UpdateLease(ctx, next); err != nil {
 		return false, err
 	}
-	e.observed, e.observedAt = next, now
+	e.observed, e.observedAt = next, e.Now()
 	return true, nil
 }
 

@@ -327,3 +327,58 @@ func TestTheLeaseWireRoundTrips(t *testing.T) {
 		t.Fatal("a released lease sends an empty holder, not none")
 	}
 }
+
+// slowGet advances the clock while a GET is in flight (a pause or a slow API server).
+type slowGet struct {
+	*memLeases
+	during func()
+}
+
+func (s slowGet) GetLease(ctx context.Context, ns, name string) (Lease, error) {
+	l, err := s.memLeases.GetLease(ctx, ns, name)
+	if s.during != nil {
+		s.during()
+	}
+	return l, err
+}
+
+// A candidate records when it SAW the holder's renewal, after its GET returned, not when it started the GET: a renewal
+// read late must not be back-dated, or the candidate takes a lease the holder still renews (CodeRabbit on clearance#210).
+func TestTheObservationTimeIsTakenAfterTheGetReturns(t *testing.T) {
+	store := &memLeases{}
+	at := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return at }
+	a := &Elector{Store: store, Namespace: "ns", Name: "agent", Identity: "pod-a", Now: clock, Log: quiet}
+	var slow time.Duration
+	b := &Elector{Store: slowGet{store, func() { at = at.Add(slow) }}, Namespace: "ns", Name: "agent", Identity: "pod-b", Now: clock, Log: quiet}
+	for _, e := range []*Elector{a, b} {
+		if err := e.defaults(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx := context.Background()
+	if ok, _ := a.tryAcquireOrRenew(ctx); !ok { // t=0
+		t.Fatal("a takes the lease")
+	}
+	if ok, _ := b.tryAcquireOrRenew(ctx); ok { // b sees renewal 0 at t=0
+		t.Fatal("b must not take it")
+	}
+	at = at.Add(12 * time.Second)
+	if ok, _ := a.tryAcquireOrRenew(ctx); !ok { // a renews at t=12; its fence runs to 12+15-2 = 25
+		t.Fatal("a renews")
+	}
+	slow = 2 * time.Second // b starts its GET at 12 and gets a's renewal back at 14
+	if ok, _ := b.tryAcquireOrRenew(ctx); ok {
+		t.Fatal("b must not take a lease renewed 2 s ago")
+	}
+	slow = 0
+	at = at.Add(2 * time.Second) // t=16: one lease duration after the stale start sample, not after b saw it
+	if ok, _ := b.tryAcquireOrRenew(ctx); ok {
+		t.Fatal("b took the lease at 16 s, while a may still write until 25 s: the observation was back-dated")
+	}
+	at = at.Add(14 * time.Second) // t=30: 16 s after b saw the renewal at 14
+	if ok, err := b.tryAcquireOrRenew(ctx); !ok || err != nil {
+		t.Fatalf("a full duration after b saw the last renewal it takes over: %v %v", ok, err)
+	}
+	// An immediate GET keeps the old behaviour: covered by TestTheLeaseGoesToOneCandidateAndPassesOnlyAfterItsDuration.
+}
