@@ -9,7 +9,9 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
-**Upgrading.** No setting is newly required. The two new settings are off or unset by default:
+## [0.55.0] - 2026-11-22
+
+**Upgrading from 0.54.x.** No setting is newly required. The two new settings are off or unset by default:
 `CLEARANCE_CMP_LAST_KNOWN_GOOD` (`off`) and `CLEARANCE_CMP_LINK_BASE` (unset: links go to the core's record). An alert or
 script that matches the start of the plugin's error message must allow the new `<code>: ` prefix; the old message is
 kept whole on the `detail:` line. The new render limits (all optional) fit current renders with wide margins (measured: a 5.7 KB render
