@@ -11,6 +11,11 @@ import (
 // event for the same object (by resourceVersion when the event has one, else by time within Match); an audit event
 // waits, for a short while, for a watch change that has not arrived yet. A watch change still unmatched after Grace
 // (plus however far behind the queue is) is a gap.
+//
+// A finalized delete (Change.Finalized: the API server removed an object once a write took its last finalizer away,
+// as the garbage collector does to end a foreground deletion) is matched by time alone. Its resourceVersion is the
+// deletion's, and no audit event carries that one: the write that ended it reports the version it read. Matched by
+// version, every foreground deletion (an Argo CD hook's delete policy, for one) was reported as a change nobody audited.
 type Gaps struct {
 	Grace time.Duration // how long an audit event may trail the change it reports
 	Match time.Duration // how close in time an audit event and a watch change are to be the same change
@@ -48,7 +53,7 @@ func (g *Gaps) Watched(ch Change) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	for i, a := range g.audits { // the audit event came first
-		if a.key == k && g.same(a.rv, a.at, ch.RV, ch.At) {
+		if a.key == k && g.same(a.rv, a.at, ch.RV, ch.At, ch.Finalized) {
 			g.audits = append(g.audits[:i], g.audits[i+1:]...)
 			g.matched++
 			return
@@ -57,8 +62,8 @@ func (g *Gaps) Watched(ch Change) {
 	g.pending = append(g.pending, &pend{ch, k})
 }
 
-func (g *Gaps) same(auditRV string, auditAt time.Time, watchRV string, watchAt time.Time) bool {
-	if auditRV != "" && watchRV != "" {
+func (g *Gaps) same(auditRV string, auditAt time.Time, watchRV string, watchAt time.Time, finalized bool) bool {
+	if auditRV != "" && watchRV != "" && !finalized {
 		return auditRV == watchRV
 	}
 	d := watchAt.Sub(auditAt)
@@ -74,7 +79,7 @@ func (g *Gaps) Audited(kind, ns, name, rv string, at, now time.Time) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	for i, p := range g.pending {
-		if p.key == k && g.same(rv, at, p.RV, p.At) {
+		if p.key == k && g.same(rv, at, p.RV, p.At, p.Finalized) {
 			g.pending = append(g.pending[:i], g.pending[i+1:]...)
 			g.matched++
 			return

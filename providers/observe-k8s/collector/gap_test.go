@@ -102,6 +102,67 @@ func TestGapsBothArrivalOrders(t *testing.T) {
 	}
 }
 
+// A foreground deletion ends when a write (the garbage collector's) removes the last finalizer: the API server then deletes
+// the object, and the DELETED event's resourceVersion is the deletion's, which no audit event carries. It is matched to
+// the write that ended it by time, in either order; a plain delete is still matched by version only.
+func TestFinalizedDeleteIsMatchedToTheWriteThatEndedIt(t *testing.T) {
+	marked := func(rv string) map[string]any {
+		o := configMap("shop", "web-config", rv, map[string]any{"v": "1"})
+		md := o["metadata"].(map[string]any)
+		md["deletionTimestamp"], md["finalizers"] = "2026-11-01T00:00:00Z", []any{"foregroundDeletion"}
+		return o
+	}
+	for _, auditFirst := range []bool{false, true} {
+		g := NewGaps(3 * time.Minute)
+		c := testCache()
+		c.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "10", map[string]any{"v": "1"}), t0, true)
+		// the delete request marks it (rv 11) and is audited at that version
+		g.Audited("ConfigMap", "shop", "web-config", "11", t0, t0.Add(time.Second))
+		if ch, ok := c.Put("ConfigMap", "MODIFIED", marked("11"), t0, false); ok {
+			g.Watched(ch)
+		}
+		// the garbage collector's patch removes the finalizer; its audit event reports rv 12, the deletion is rv 13
+		del, ok := c.Put("ConfigMap", "DELETED", marked("13"), t0.Add(2*time.Second), false)
+		if !ok || !del.Deleted || !del.Finalized {
+			t.Fatalf("a delete of a marked object is finalized: %+v", del)
+		}
+		if auditFirst {
+			g.Audited("ConfigMap", "shop", "web-config", "12", t0.Add(2*time.Second), t0.Add(2*time.Second))
+			g.Watched(del)
+		} else {
+			g.Watched(del)
+			g.Audited("ConfigMap", "shop", "web-config", "12", t0.Add(2*time.Second), t0.Add(6*time.Second))
+		}
+		if got := g.Expired(t0.Add(10*time.Minute), 0); len(got) != 0 {
+			t.Fatalf("audit first %v: a finalized delete reported as a gap: %+v", auditFirst, got)
+		}
+	}
+
+	// a plain delete (no deletionTimestamp) is not finalized and still needs its own version
+	g := NewGaps(3 * time.Minute)
+	c := testCache()
+	c.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "20", map[string]any{"v": "1"}), t0, true)
+	del, _ := c.Put("ConfigMap", "DELETED", configMap("shop", "web-config", "21", map[string]any{"v": "1"}), t0, false)
+	if del.Finalized {
+		t.Fatalf("a plain delete is not finalized: %+v", del)
+	}
+	g.Watched(del)
+	g.Audited("ConfigMap", "shop", "web-config", "99", t0, t0.Add(time.Second)) // a write at another version
+	if got := g.Expired(t0.Add(10*time.Minute), 0); len(got) != 1 || got[0].RV != "21" {
+		t.Fatalf("a plain delete with no audit event at its version is a gap: %+v", got)
+	}
+	// and a finalized delete with no audited write near it is still a gap
+	g = NewGaps(3 * time.Minute)
+	c = testCache()
+	c.Put("ConfigMap", "ADDED", marked("30"), t0, true)
+	del, _ = c.Put("ConfigMap", "DELETED", marked("31"), t0, false)
+	g.Watched(del)
+	g.Audited("ConfigMap", "shop", "web-config", "29", t0.Add(-5*time.Minute), t0.Add(time.Second)) // long before it
+	if got := g.Expired(t0.Add(10*time.Minute), 0); len(got) != 1 || !got[0].Finalized {
+		t.Fatalf("a finalized delete with no audited write within Match is a gap: %+v", got)
+	}
+}
+
 // The collector turns an unaudited change into an observation and a not-attributed audit-gap assessment, and degrades
 // the feed (the core writes the observation.audit-gap record from the degraded health record).
 func TestUnauditedChangeBecomesAnAuditGapRecord(t *testing.T) {
