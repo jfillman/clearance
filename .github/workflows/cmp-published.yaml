@@ -9,9 +9,6 @@ name: cmp-published
 #
 # workflow_dispatch runs it by hand against any pushed index (a past release's, to check this workflow itself).
 on:
-  # TEMPORARY (I-74 validation, removed before merge): run on this branch against v0.57.1's pushed index.
-  push:
-    branches: [i74-test-published-arch]
   workflow_call:
     inputs:
       image:
@@ -74,9 +71,9 @@ jobs:
       - id: pull
         name: pull the index's linux/${{ matrix.arch }} image by its digest
         env:
-          IMAGE: ${{ inputs.image || 'ghcr.io/jfillman/clearance-cmp' }}
-          DIGEST: ${{ inputs.digest || 'sha256:82021a1e587ad9604aa83de1a063805461b3644264eedcc7a85657c3d4a667c3' }}
-          VERSION: ${{ inputs.version || 'v0.57.1' }}
+          IMAGE: ${{ inputs.image }}
+          DIGEST: ${{ inputs.digest }}
+          VERSION: ${{ inputs.version }}
           ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
