@@ -62,24 +62,15 @@ jobs:
           ! grep -E 'is not installed|is not on PATH' "$RUNNER_TEMP/real-binary.log"
         env:
           CLEARANCE_AGENT_SCHEMA: ${{ github.workspace }}/.autopilot/src/autopilot/engine/schemas/agent-definition.schema.json
-      # Fuzz the parsers (section 12): every Fuzz* target in the module, 10s each (tools/fuzz-all.sh finds them).
+      # Fuzz the parsers (section 12): every Fuzz* target in the module, 10s each (tools/fuzz-all.sh finds them), but
+      # the plugin's path and parameter targets, which cmp.yaml's cmp-fuzz job runs for 30s each.
       - run: tools/fuzz-all.sh 10s
-      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
-  # The built clearance-cmp image, run the way Argo CD runs the plugin (tools/cmp-smoke.sh; docs/gate.md, "The smoke
-  # test of the built image"): cwd is the checkout, Argo CD's environment, uid 999, a read-only root, a tmpfs /tmp, a
-  # chart served over git://, and a fake core that answers "cleared". 0.52.0 passed every unit test and failed this.
-  cmp-image-smoke:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.26.11"
-      # Built for the runner's architecture, loaded into the local daemon, never pushed.
-      - run: docker build -f providers/argocd/cmp/Dockerfile --build-arg VERSION=smoke -t clearance-cmp:smoke .
         env:
-          DOCKER_BUILDKIT: "1"
-      - run: tools/cmp-smoke.sh clearance-cmp:smoke
+          FUZZ_EXCLUDE: '^github\.com/jfillman/clearance/(providers/argocd/cmp|internal/argosrc)$'
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+  # The plugin's image smoke test, upgrade test, fuzzing, soak and HA checks are .github/workflows/cmp.yaml, which the
+  # release workflow also calls before it builds an image.
+
   # The agent image (providers/argocd/agent/Dockerfile) carries two binaries since I-44: the agent (the entrypoint) and the
   # grant-expiry webhook (/grant-expiry, the chart's grantExpiry Deployment). Built for the runner's architecture, never pushed.
   agent-image:

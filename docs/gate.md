@@ -2063,7 +2063,7 @@ doubtful entry is discarded and the work is done again.
 | --- | --- | --- | --- |
 | **Chart fetch** (`charts/`) | the `git clone` (about nine tenths of a render) | the allow list's spelling of the repository and the **commit the tag resolves to now** | until evicted (bounds below) |
 | **Pre-render** (`renders/`) | the fetch, `helm` and `kustomize` (never the decision) | a hash of every input of the output (below) | the rendered bytes are reused until the clearance's `expiresAt`, and at most `CLEARANCE_CMP_RENDER_CACHE_TTL` |
-| **Cleared tree** (`*.json`) | the core call, after a render | app, environment, cluster and tree digest | `CLEARANCE_CMP_CACHE_TTL` (2 min), and the outage policy above |
+| **Cleared tree** (`*.json`) | the core call, after a render | app, environment, cluster and tree digest | `CLEARANCE_CMP_CACHE_TTL` (2 min), and the outage policy above; at most 4096 entries, the oldest written going first |
 | **Last-known-good** (`lkg/`, off by default) | a failed render, after a plugin fault or an unavailable dependency only; never the decision | the pre-render key less the plugin's version and sandbox mode | until evicted (1024 entries, 256 MiB) or a hold or denial of the tree |
 
 **Chart fetch cache.** Every render asks the remote what the pinned revision is (`git ls-remote`, one round trip), so a tag
@@ -2320,7 +2320,7 @@ The unit tests fake git and helm and pass the plugin an absolute directory, so t
 as Argo CD runs it: 0.52.0 passed all of them and refused every value file on its first real run (I-38), because Argo CD
 runs `clearance-cmp` with the source directory `.`. CI therefore builds the image from `providers/argocd/cmp/Dockerfile`
 for the runner's architecture (never pushed) and runs `tools/cmp-smoke.sh IMAGE` (the `cmp-image-smoke` job in
-`.github/workflows/go.yaml`). The script creates a gitops checkout on disk with real value files and a kustomize
+`.github/workflows/cmp.yaml`, which the release also runs: [the plugin's release gates](#the-plugins-release-gates-w-34-f7)). The script creates a gitops checkout on disk with real value files and a kustomize
 directory, a chart repository served by `git daemon` and listed in `CLEARANCE_CHART_REPOS`, and a fake core
 (`tools/cmpsmoke`) that answers the register call as cleared. It runs the image's `clearance-cmp` with the checkout as
 the working directory, the `ARGOCD_APP_*`, `PARAM_*` and `KUBE_*` environment Argo CD sets, uid 999, a read-only root
@@ -2338,6 +2338,33 @@ It also runs `clearance-cmp doctor` in the built image with the sidecar's enviro
 
 The other CI jobs install the same pinned helm and kustomize (`tools/install-cmp-tools.sh`, which reads the versions and
 checksums from the Dockerfile), so the tests that run the real binaries run, and a step fails the job if they skip.
+
+### The plugin's release gates (W-34 F7)
+
+Unit tests fake git, helm and the core and run one render at a time, so they cannot see what a real upgrade, hostile
+parameters or a long-lived sidecar do. `.github/workflows/cmp.yaml` runs five jobs on every push and pull request, and
+`release.yaml` calls the same workflow (`cmp-gates`) on the tagged commit before it builds anything: the core image and
+the provider images need it, and every chart, the install test and the GitHub Release come after those, so **a tag whose
+plugin fails one publishes nothing**. Main's other CI (the `go` and `chart` workflows) is still checked by hand before a
+tag is cut.
+
+| Job | What it runs | It fails when |
+| --- | --- | --- |
+| `cmp-image-smoke` | the built image, as Argo CD runs it (`tools/cmp-smoke.sh`, [above](#the-smoke-test-of-the-built-image)) | any check of the smoke test fails |
+| `cmp-upgrade` | the previous release's binary (the newest `v*` tag not on this commit, built from that tag) and this build's, on one cache directory and metrics store (`tools/cmp-upgrade.sh`) | the new binary fails on the old caches, emits other manifests than the old one, serves the old binary's pre-render entry (its key holds the plugin version), resets the metrics store, cannot serve the old last-known-good entry with the chart host down, or the old binary fails on what the new one wrote (rollback). A changed chart cache format is allowed (a miss, reported). `ALLOW_OUTPUT_CHANGE=1` makes a changed output a warning, for a release that changes it on purpose. |
+| `cmp-fuzz` | Go fuzzing, 30 s per target, of `safeRel`, `ParseConfig` (every `PARAM_*` a tenant writes, then `Canonical`, the cache keys and the sources parameter), the paths `Render` hands helm and kustomize on a checkout with links that leave it, `NormalizeRepo`, and argosrc's `resolveFileOrDirectory`, `resolveValueFile`, `sourcePath`, `checkBuildOptions` and `ParseSources` | any input panics, an absolute or `..` path is accepted, an accepted path leaves its repository, a chart comes from a repository the platform did not list, or a build option off the allow list is passed on |
+| `cmp-soak` | 200 renders of the fixtures by the real binary, each its own process, over three chart commits and four sets of values with a two-entry chart cache and the metrics server running throughout; then 8 renders at once five times, and renders killed with SIGKILL mid-run (`tools/cmp-soak.sh`); and 2000 in one process under the race detector (`TestSoakGenerateInProcess`) | a render fails or emits other bytes than the first render of the same inputs; a scratch directory, a temporary file or a render step's process is left; the chart or pre-render cache passes its bound, or the cache directory still grows once every input has been seen; the metrics server's open files or threads grow; goroutines or open files grow in one process; a killed run's scratch is not swept |
+| `cmp-ha` | the documented two-replica, PDB values for the `argo-cd` chart rendered by that chart, and the HA tests ([install guide](install-argocd-plugin.md#more-than-one-repo-server-ha-optional)) | the render is not two replicas with a PDB selecting them and the sidecar on a per-pod emptyDir, or a cold or restarted replica emits other manifests, or renders sharing one cache directory are not safe |
+
+The upgrade and soak fixture (`tools/cmp-fixture.sh`) is a real git checkout with three value files and a kustomize
+directory, a chart repository with three tags served by `git daemon`, the fake core (`tools/cmpsmoke`) and the helm and
+kustomize the image ships. The go job's own fuzz step leaves these two packages to `cmp-fuzz`.
+
+Two bounds came out of the soak work: the cleared-tree cache had none (every new tree added a file for the pod's life;
+now at most 4096, the oldest written going first), and a run killed before its cleanup (SIGKILL: Argo CD's exec timeout,
+an OOM kill) left its render scratch on the `/tmp` emptyDir, which outlives the container, until the pod was replaced
+(now a later render removes any `clearance-render-*` or `clearance-lookup-*` directory older than 10 minutes, past any
+live run's 80 s).
 
 ### Parity with the Tekton check, and what is not yet the same
 

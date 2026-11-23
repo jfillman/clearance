@@ -855,9 +855,11 @@ vocabulary (`vocabulary.*`): see [install.md](install.md).
 go build ./cmd/clearance
 go test -race ./...          # the Postgres tests need CLEARANCE_TEST_DSN and skip without it
 tools/fuzz-all.sh 10s        # every Fuzz* target, as CI runs them
+tools/fuzz-all.sh 30s ./providers/argocd/cmp ./internal/argosrc   # only the Argo CD plugin's, as the cmp-fuzz job does
 ```
 
-CI (`.github/workflows/go.yaml`) runs vet, gofmt, the race tests, the fuzz targets and govulncheck; it checks out
+CI (`.github/workflows/go.yaml`) runs vet, gofmt, the race tests, the fuzz targets (the Argo CD plugin's run in
+`.github/workflows/cmp.yaml`, with its smoke, upgrade, soak and HA jobs: [gate.md](gate.md#the-plugins-release-gates-w-34-f7)) and govulncheck; it checks out
 Autopilot's agent-definition schema so `internal/profile` can prove its embedded copy is byte for byte the same
 (`CLEARANCE_AGENT_SCHEMA`; the test skips without it), and builds and dry-runs the `register` action. The contract is
 regenerated with `go generate ./internal/server`. The release version is the `VERSION` file (`internal/release`):

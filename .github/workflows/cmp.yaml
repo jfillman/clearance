@@ -1,0 +1,154 @@
+name: cmp
+# The Argo CD plugin's (clearance-cmp, providers/argocd/cmp) release gates, W-34 F7 and F9: the smoke test of the built
+# image, the upgrade test against the previous release, the fuzz targets on path and parameter handling, the soak, and
+# the repo-server HA checks. Every push and pull request runs them, and release.yaml calls this workflow
+# (workflow_call) before it builds or pushes any image, so a tag whose plugin fails one of them publishes nothing
+# (docs/gate.md, "The plugin's release gates").
+on:
+  push:
+    branches: ["**"] # a tag push runs these through release.yaml instead
+  pull_request:
+  workflow_call:
+permissions:
+  contents: read
+env:
+  GO_VERSION: "1.26.11"
+jobs:
+  # The built clearance-cmp image, run the way Argo CD runs the plugin (tools/cmp-smoke.sh; docs/gate.md, "The smoke
+  # test of the built image"): cwd is the checkout, Argo CD's environment, uid 999, a read-only root, a tmpfs /tmp, a
+  # chart served over git://, and a fake core that answers "cleared". 0.52.0 passed every unit test and failed this.
+  cmp-image-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      # Built for the runner's architecture, loaded into the local daemon, never pushed.
+      - run: docker build -f providers/argocd/cmp/Dockerfile --build-arg VERSION=smoke -t clearance-cmp:smoke .
+        env:
+          DOCKER_BUILDKIT: "1"
+      - run: tools/cmp-smoke.sh clearance-cmp:smoke
+
+  # The previous release's binary (the newest v* tag that is not this commit's) and this build's, on one cache directory
+  # and metrics store: the new one reads or safely ignores every cache the old one wrote, emits the same manifests, keeps
+  # the metrics, serves the old last-known-good entry, and the old one still works on what the new one wrote (rollback).
+  cmp-upgrade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - run: |
+          tools/install-cmp-tools.sh "$RUNNER_TEMP/cmp-tools"
+          echo "$RUNNER_TEMP/cmp-tools" >> "$GITHUB_PATH"
+      - name: build the previous release's clearance-cmp and this one
+        run: |
+          set -euo pipefail
+          prev="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname --no-contains HEAD | head -1)"
+          test -n "$prev"
+          echo "previous release: $prev"
+          git worktree add --detach "$RUNNER_TEMP/prev" "$prev"
+          (cd "$RUNNER_TEMP/prev" && CGO_ENABLED=0 go build -trimpath -ldflags "-X main.pluginVersion=$prev" -o "$RUNNER_TEMP/cmp-old" ./providers/argocd/cmp)
+          CGO_ENABLED=0 go build -trimpath -ldflags "-X main.pluginVersion=ci-${GITHUB_SHA::12}" -o "$RUNNER_TEMP/cmp-new" ./providers/argocd/cmp
+      - run: tools/cmp-upgrade.sh "$RUNNER_TEMP/cmp-old" "$RUNNER_TEMP/cmp-new"
+
+  # Go native fuzzing of the plugin's path and parameter handling (ParseConfig, safeRel, the value-file, chart and
+  # kustomize paths Render is given, NormalizeRepo; argosrc's app paths, value files, source paths, kustomize build
+  # options and the sources parameter), 30 s per target. The go job's fuzz step leaves these packages to this one.
+  cmp-fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - run: |
+          set -euo pipefail
+          tools/fuzz-all.sh 30s ./providers/argocd/cmp ./internal/argosrc | tee "$RUNNER_TEMP/fuzz.log"
+          # Every target ran (a renamed or deleted one would otherwise drop out silently).
+          for t in FuzzSafeRel FuzzParseConfig FuzzRenderPaths FuzzNormalizeRepo FuzzResolveFileOrDirectory \
+            FuzzResolveValueFile FuzzSourcePath FuzzCheckBuildOptions FuzzParseSources; do
+            grep -E "^== .* $t \(30s\)$" "$RUNNER_TEMP/fuzz.log"
+          done
+
+  # The soak: 200 renders of the fixtures by the real binary, each its own process, on one cache with the metrics server
+  # running throughout, then concurrent renders and SIGKILLed ones (tools/cmp-soak.sh); and 2000 in one process under the
+  # race detector, for what a run leaks into the process (goroutines, open files) and onto the volume.
+  cmp-soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - run: |
+          tools/install-cmp-tools.sh "$RUNNER_TEMP/cmp-tools"
+          echo "$RUNNER_TEMP/cmp-tools" >> "$GITHUB_PATH"
+      - run: CGO_ENABLED=0 go build -trimpath -ldflags "-X main.pluginVersion=ci-soak" -o "$RUNNER_TEMP/clearance-cmp" ./providers/argocd/cmp
+      - run: tools/cmp-soak.sh "$RUNNER_TEMP/clearance-cmp" 200
+      - run: |
+          set -euo pipefail
+          CLEARANCE_CMP_SOAK=2000 go test -race -count=1 -run '^TestSoakGenerateInProcess$' -v ./providers/argocd/cmp | tee "$RUNNER_TEMP/soak.log"
+          grep -E '^--- PASS: TestSoakGenerateInProcess ' "$RUNNER_TEMP/soak.log"
+
+  # The repo-server with two replicas and a PodDisruptionBudget (docs/install-argocd-plugin.md, "More than one
+  # repo-server"): the documented argo-cd values render with that chart into what the guide says, and the tests that a
+  # cold replica emits the same manifests, that a crash's leftovers do no harm and that renders sharing a cache are safe.
+  cmp-ha:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: azure/setup-helm@v4.3.0
+        with:
+          version: v3.21.3
+      - run: pip install pyyaml
+      - name: the documented HA values, rendered by the argo-cd chart (10.3.2, Argo CD v3.5.0)
+        run: |
+          set -euo pipefail
+          helm repo add argo https://argoproj.github.io/argo-helm
+          helm template argocd argo/argo-cd --version 10.3.2 -n argocd -f docs/examples/argo-cd-repo-server-ha-values.yaml > "$RUNNER_TEMP/argocd.yaml"
+          python3 - "$RUNNER_TEMP/argocd.yaml" <<'PY'
+          import sys, yaml
+          docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+          dep = [d for d in docs if d["kind"] == "Deployment" and d["metadata"]["name"] == "argocd-repo-server"]
+          pdb = [d for d in docs if d["kind"] == "PodDisruptionBudget" and d["metadata"]["name"] == "argocd-repo-server"]
+          assert len(dep) == 1 and len(pdb) == 1, (len(dep), len(pdb))
+          spec = dep[0]["spec"]
+          assert spec["replicas"] == 2, spec["replicas"]
+          assert pdb[0]["spec"]["minAvailable"] == 1, pdb[0]["spec"]
+          sel = pdb[0]["spec"]["selector"]["matchLabels"]
+          labels = spec["template"]["metadata"]["labels"]
+          assert all(labels.get(k) == v for k, v in sel.items()), (sel, labels)
+          pod = spec["template"]["spec"]
+          assert pod["terminationGracePeriodSeconds"] >= 90, pod.get("terminationGracePeriodSeconds")
+          cmp = [c for c in pod["containers"] if c["name"] == "clearance-cmp"]
+          assert len(cmp) == 1, [c["name"] for c in pod["containers"]]
+          mounts = {m["name"]: m["mountPath"] for m in cmp[0]["volumeMounts"]}
+          assert mounts.get("cmp-tmp") == "/tmp" and mounts.get("plugins") == "/home/argocd/cmp-server/plugins", mounts
+          vols = {v["name"]: v for v in pod["volumes"]}
+          assert "emptyDir" in vols["cmp-tmp"], vols["cmp-tmp"]  # per pod: each replica's caches are its own
+          env = {e["name"]: e.get("value") for e in cmp[0]["env"]}
+          assert env["CLEARANCE_CMP_CACHE_DIR"].startswith("/tmp/"), env
+          print("ok: 2 repo-server replicas, a PDB (minAvailable 1) selecting them, the clearance-cmp sidecar on a per-pod emptyDir")
+          PY
+      - name: a cold replica, a crashed one, and renders sharing one cache
+        run: |
+          set -euo pipefail
+          go test -race -count=1 -v -run '^(TestASecondReplicaWithAColdCacheEmitsTheSameManifests|TestAReplicaRestartedMidWriteEmitsTheSameManifests|TestConcurrentRendersSharingOneCacheDirectoryAreSafe|TestConcurrentRendersFetchTheChartOnce|TestTheTreeCacheIsBounded|TestAKilledRunsScratchIsSweptByTheNextRender)$' ./providers/argocd/cmp | tee "$RUNNER_TEMP/ha.log"
+          for t in TestASecondReplicaWithAColdCacheEmitsTheSameManifests TestAReplicaRestartedMidWriteEmitsTheSameManifests \
+            TestConcurrentRendersSharingOneCacheDirectoryAreSafe TestConcurrentRendersFetchTheChartOnce TestTheTreeCacheIsBounded \
+            TestAKilledRunsScratchIsSweptByTheNextRender; do
+            grep -E "^--- PASS: $t " "$RUNNER_TEMP/ha.log"
+          done

@@ -1,0 +1,55 @@
+# Values for the official argo-cd Helm chart (checked against chart 10.3.2, Argo CD v3.5.0): the repo-server with two
+# replicas, a PodDisruptionBudget, and the clearance-cmp sidecar on each replica. Opt in by adding this to your own
+# argo-cd values; nothing in Clearance's own charts changes, and a single repo-server (the chart's default) keeps
+# working as before. What each of the plugin's caches does on a second replica and on a restart:
+# docs/install-argocd-plugin.md, "More than one repo-server".
+#
+# CI renders this file with that chart and checks the Deployment, the PDB and the sidecar (the cmp-ha job,
+# .github/workflows/cmp.yaml). Replace the placeholders (the core's URL, the chart allow list, the image digests).
+repoServer:
+  # Two pods, so a node drain or a rollout always leaves one rendering. Each pod has its own caches (an emptyDir).
+  replicas: 2
+  pdb:
+    enabled: true
+    # Voluntary disruptions (a drain, a cluster upgrade) take one replica at a time, never both.
+    minAvailable: 1
+  # Spread the replicas over nodes, so one node's loss is not both.
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+  # The plugin finishes or fails a render within 80 s (Argo CD kills a plugin at 90 s); a pod being drained is given
+  # that long to answer the renders it has started before it is killed.
+  terminationGracePeriodSeconds: 90
+  extraContainers:
+    - name: clearance-cmp
+      image: ghcr.io/jfillman/clearance-cmp@sha256:<digest of the release you pin>
+      command: [/var/run/argocd/argocd-cmp-server]
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities: {drop: [ALL]}
+        seccompProfile: {type: RuntimeDefault}
+      env:
+        - {name: CLEARANCE_URL, value: "https://clearance.example.test"}
+        - {name: CLEARANCE_TOKEN_FILE, value: /var/run/secrets/tokens/clearance}
+        - {name: CLEARANCE_CHART_REPOS, value: "https://git.example.test/platform/charts.git"}
+        - {name: CLEARANCE_WAIT_IMAGE, value: "ghcr.io/jfillman/clearance-wait@sha256:<digest>"}
+        - {name: CLEARANCE_CMP_CACHE_DIR, value: /tmp/clearance-cmp-cache}
+      resources:
+        requests: {cpu: 50m, memory: 128Mi}
+        limits: {memory: 512Mi}
+      volumeMounts:
+        - {name: var-files, mountPath: /var/run/argocd}
+        - {name: plugins, mountPath: /home/argocd/cmp-server/plugins}
+        - {name: cmp-tmp, mountPath: /tmp}
+        - {name: clearance-token, mountPath: /var/run/secrets/tokens, readOnly: true}
+  volumes:
+    # Per pod: each replica's chart cache, pre-render cache, tree cache and last-known-good store are its own.
+    - {name: cmp-tmp, emptyDir: {}}
+    - name: clearance-token
+      projected:
+        sources:
+          - serviceAccountToken: {audience: clearance, expirationSeconds: 3600, path: clearance}

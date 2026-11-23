@@ -9,6 +9,38 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+**Upgrading.** No setting is newly required and no default changes. The cleared-tree cache now has a bound (4096
+entries) and a render removes a killed run's stale scratch; both only remove what nothing reads.
+
+### Added
+
+- **Release gates for the Argo CD plugin (W-34 F7; `.github/workflows/cmp.yaml`).** Five jobs on every push and pull
+  request, and called by `release.yaml` (`cmp-gates`) on the tagged commit before any image is built, so a tag whose
+  plugin fails one publishes nothing: `cmp-image-smoke` (moved from `go.yaml`, unchanged; it was not a release gate
+  before), `cmp-upgrade` (`tools/cmp-upgrade.sh`: the previous release's binary and this one on one cache directory and
+  metrics store; the same manifests, every cache read or safely ignored, the metrics kept, the old last-known-good entry
+  served, and rollback), `cmp-fuzz` (Go fuzz targets on path and parameter handling in `providers/argocd/cmp` and
+  `internal/argosrc`, 30 s each), `cmp-soak` (`tools/cmp-soak.sh`: 200 real renders, concurrent and SIGKILLed ones, plus
+  2000 in one process under the race detector; fails on an error, a leak or a cache past its bounds) and `cmp-ha`.
+  docs/gate.md, "The plugin's release gates". `tools/fuzz-all.sh` takes packages and `FUZZ_EXCLUDE`.
+- **Running the repo-server with more than one replica (W-34 F9).** docs/install-argocd-plugin.md, "More than one
+  repo-server": what each of the plugin's stores (chart cache, pre-render cache, tree cache, last-known-good, metrics,
+  scratch, render slots) does on a second replica, on a container restart and on a new pod, and an opt-in example for
+  the `argo-cd` chart with two replicas and a PodDisruptionBudget (`docs/examples/argo-cd-repo-server-ha-values.yaml`,
+  rendered and checked against chart 10.3.2 in CI). Tests that a cold replica and a replica restarted mid-write emit
+  the same manifests and that renders sharing one cache directory are safe (`providers/argocd/cmp/ha_test.go`).
+  **Upgrading:** nothing to do; Clearance's charts and the plugin's defaults are unchanged.
+
+### Fixed
+
+- **The plugin's cleared-tree cache grew without bound (W-34 F7).** Every new tree a sidecar cleared added a file under
+  `CLEARANCE_CMP_CACHE_DIR` for the pod's whole life. It now keeps the newest 4096 (about 1 MiB), the oldest written
+  going first; losing one costs at most a call to the core.
+- **A killed render's scratch stayed on the volume until the pod was replaced.** A run killed before its cleanup
+  (SIGKILL: Argo CD's exec timeout, an OOM kill) left its `clearance-render-*` directory, with the chart checkout and
+  the rendered manifests, on the `/tmp` emptyDir, which outlives the container. A later render now removes any such
+  directory (and `clearance-lookup-*`) older than 10 minutes; no live run is older than 80 s.
+
 ## [0.56.0] - 2026-11-23
 
 **Upgrading from 0.55.x.** No setting is newly required; everything new is off or unset by default: the Argo CD agent's gate rule

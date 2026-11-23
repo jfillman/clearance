@@ -329,6 +329,7 @@ func renderBounded(ctx context.Context, cfg Config, srcDir string, stderr io.Wri
 		release = func() {}
 	}
 	defer release()
+	sweepStaleScratch(os.TempDir(), time.Now())
 	root, err := os.MkdirTemp("", "clearance-render-")
 	if err != nil {
 		return nil, err
@@ -354,6 +355,31 @@ func renderBounded(ctx context.Context, cfg Config, srcDir string, stderr io.Wri
 			Detail: fmt.Sprintf("rendered %s of manifests", FormatSize(n))}
 	}
 	return r, nil
+}
+
+// staleScratchAge is how old a render's or a lookup's scratch directory must be before another run removes it. No run
+// lives past PluginDeadline (80 s; Argo CD kills a plugin at 90 s), so a scratch this old belongs to a process that is
+// gone: one killed with SIGKILL (Argo CD's own exec timeout, the container's OOM kill) never ran its cleanup, and the
+// sidecar's /tmp emptyDir outlives the container. Without the sweep each such kill would keep its scratch (a chart
+// checkout, rendered manifests) on the volume until the pod is replaced.
+const staleScratchAge = 10 * time.Minute
+
+// sweepStaleScratch removes the scratch directories (clearance-render-*, clearance-lookup-*) in dir older than
+// staleScratchAge. Anything else in dir, and a scratch still in use, is left alone; a failure is not an error.
+func sweepStaleScratch(dir string, now time.Time) {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range ents {
+		n := e.Name()
+		if !e.IsDir() || !(strings.HasPrefix(n, "clearance-render-") || strings.HasPrefix(n, "clearance-lookup-")) {
+			continue
+		}
+		if info, err := e.Info(); err == nil && now.Sub(info.ModTime()) > staleScratchAge {
+			os.RemoveAll(filepath.Join(dir, n))
+		}
+	}
 }
 
 // acquireSlot takes one of n file locks under dir (shared by every plugin process in the sidecar, which the
