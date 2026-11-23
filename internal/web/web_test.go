@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -18,6 +19,12 @@ import (
 	"github.com/jfillman/clearance/internal/core"
 	"github.com/jfillman/clearance/internal/gate"
 )
+
+// jwtShape matches a compact JWT: three dot-separated base64url segments, the
+// first starting with the encoded `{"`. A bare "eyJ" is not a leak signal: the
+// session's random 43-character CSRF token is base64url and contains that
+// three-character run by chance about once in 6,000 sessions.
+var jwtShape = regexp.MustCompile(`eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*`)
 
 func TestSignInFlowAndCookie(t *testing.T) {
 	e := newEnv(t, nil)
@@ -68,7 +75,7 @@ func TestSignInFlowAndCookie(t *testing.T) {
 		t.Fatalf("session info: %+v", si)
 	}
 	raw := e.do("GET", "/auth/session", nil, "").Body.String()
-	if strings.Contains(raw, "eyJ") || strings.Contains(raw, "AT-must") {
+	if jwtShape.MatchString(raw) || strings.Contains(raw, "AT-must") {
 		t.Error("session info leaks a token")
 	}
 	if w := e.do("GET", "/changes", nil, ""); w.Code != 200 || w.Header().Get("Cache-Control") != "no-cache" {
@@ -77,7 +84,7 @@ func TestSignInFlowAndCookie(t *testing.T) {
 	if g := e.do("GET", "/assets/app-abc.js", nil, "").Header().Get("Cache-Control"); !strings.Contains(g, "immutable") || !strings.Contains(g, "31536000") {
 		t.Errorf("assets cache: %q", g)
 	}
-	if strings.Contains(e.logs.String(), testSecret) || strings.Contains(e.logs.String(), "eyJ") {
+	if strings.Contains(e.logs.String(), testSecret) || jwtShape.MatchString(e.logs.String()) {
 		t.Error("a secret or token was logged")
 	}
 }
@@ -779,4 +786,13 @@ func FuzzUpstreamPath(f *testing.F) {
 			t.Fatalf("not rooted: %q", got)
 		}
 	})
+}
+
+func TestJWTShapeIgnoresRandomIDs(t *testing.T) {
+	if jwtShape.MatchString(`{"user":"ada","csrf":"abeyJcdefghijklmnopqrstuvwxyz0123456789ABCDE"}`) {
+		t.Error("a random id containing eyJ is not a JWT")
+	}
+	if !jwtShape.MatchString(`{"t":"eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJhIn0.c2ln"}`) {
+		t.Error("a compact JWT must match")
+	}
 }
