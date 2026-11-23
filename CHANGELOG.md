@@ -16,7 +16,7 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   run from a local chart fixture, the cleared-tree cache lookup, `ParseConfig`, `Canonical`, `Canonicalize` and the Helm,
   Kustomize and directory source resolution, with fakes for git, helm, kustomize and the core, so no network. A
   `cmp-bench` job in `cmp.yaml` (`tools/cmp-bench.sh`) runs them on the pull request's head and its merge base in one job,
-  compares them with a pinned benchstat and fails when time/op or allocs/op is more than 25% worse at p < 0.05. Pull
+  compares them with a pinned benchstat and fails when time/op or allocs/op is more than 25% worse at p < 0.01 and again on a second measurement. Pull
   requests only, not a release gate. No product code changed; a few test helpers now take a `testing.TB`.
   See docs/gate.md, "Benchmarks".
 

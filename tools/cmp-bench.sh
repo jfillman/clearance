@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Benchmarks of the clearance-cmp plugin's hot paths, this checkout against its merge base, on one machine (W-34 P4;
 # docs/gate.md, "Benchmarks"). It fails when a benchmark is slower, or allocates more, than the merge base by more than
-# THRESHOLD percent and benchstat finds the difference significant (p < 0.05).
+# THRESHOLD percent and benchstat finds the difference significant (p < ALPHA), and a second measurement of that
+# benchmark alone, with twice the samples, finds it again.
 #
 #   tools/cmp-bench.sh BASE_REF OUT_DIR       # BASE_REF is the commit to compare with; the merge base of it and HEAD is used
 #
 # Environment: THRESHOLD (percent, default 25), RUNS (samples per benchmark and side, default 6), BENCHTIME (default
-# 300ms), BENCHSTAT (the benchstat binary, default the one on PATH).
+# 300ms), ALPHA (the significance level, default 0.01), BENCHSTAT (the benchstat binary, default the one on PATH).
 #
 # The merge base is checked out in a worktree and the head's own test files (the benchmarks and the helpers they use)
 # are copied over it, so both sides run the same benchmark code and only the product code differs. If that does not
@@ -14,14 +15,16 @@
 # got are left out of the comparison with a warning. Each side's test binary is built once, then the two are run
 # alternately RUNS times, so a drift of the machine's speed lands on both sides.
 #
-# OUT_DIR gets base.txt and head.txt (the raw benchmark output), benchstat.txt (the comparison, as benchstat prints it)
-# and benchstat.csv (the same, which the check reads).
+# OUT_DIR gets base.txt and head.txt (the raw benchmark output), benchstat.txt (the comparison, as benchstat prints it),
+# benchstat.csv (the same, which the check reads) and verdict.txt; for a benchmark that was past the bar and measured
+# again, also confirm-base.txt, confirm-head.txt and benchstat-confirm.txt.
 set -euo pipefail
 base_ref="${1:?usage: tools/cmp-bench.sh BASE_REF OUT_DIR}"
 out="${2:?usage: tools/cmp-bench.sh BASE_REF OUT_DIR}"
 threshold="${THRESHOLD:-25}"
 runs="${RUNS:-6}"
 benchtime="${BENCHTIME:-300ms}"
+alpha="${ALPHA:-0.01}"
 benchstat="${BENCHSTAT:-benchstat}"
 pkgs=(providers/argocd/cmp internal/argosrc)
 
@@ -63,36 +66,74 @@ for side in base head; do
   done
 done
 
-for i in $(seq 1 "$runs"); do
-  for side in base head; do
-    src="$root"; [ "$side" = base ] && src="$wt/base"
-    for p in "${pkgs[@]}"; do
-      (cd "$src/$p" && "$wt/$side-$(basename "$p").test" -test.run '^$' -test.bench . -test.benchmem -test.benchtime "$benchtime" -test.count 1) \
-        >> "$out/$side.txt" 2>> "$out/run.log"
+# sample FILE_PREFIX COUNT FILTER: COUNT alternating runs of the benchmarks matching FILTER, into FILE_PREFIX{base,head}.txt.
+sample() {
+  local prefix="$1" count="$2" filter="$3" side p src
+  for _ in $(seq 1 "$count"); do
+    for side in base head; do
+      src="$root"; [ "$side" = base ] && src="$wt/base"
+      for p in "${pkgs[@]}"; do
+        (cd "$src/$p" && "$wt/$side-$(basename "$p").test" -test.run '^$' -test.bench "$filter" -test.benchmem -test.benchtime "$benchtime" -test.count 1) \
+          >> "$out/$prefix$side.txt" 2>> "$out/run.log"
+      done
     done
   done
-  echo "sample $i of $runs done"
-done
+}
 
-"$benchstat" "$out/base.txt" "$out/head.txt" | tee "$out/benchstat.txt"
-"$benchstat" -format csv "$out/base.txt" "$out/head.txt" > "$out/benchstat.csv"
+# gate BASE_TXT HEAD_TXT CSV_OUT TEXT_OUT: compares, prints what the benchmarks of the two files did, and writes the
+# benchmarks past the bar to flagged.txt (one name per line, without the -N suffix); returns the number compared.
+#
+# benchstat prints a delta only where it finds one significant (alpha 0.01 here, see ALPHA), and "~" otherwise. The csv
+# holds one table per unit: a header row names the unit, then a row per benchmark (name, old, CI, new, CI, delta, p).
+gate() {
+  "$benchstat" -alpha "$alpha" "$1" "$2" > "$4"
+  "$benchstat" -alpha "$alpha" -format csv "$1" "$2" > "$3"
+  awk -F, -v limit="$threshold" -v flagged="$out/flagged.txt" '
+    # Every header row (an empty first cell) sets the unit, and a unit the check does not read (B/s, the throughput of a
+    # benchmark that calls SetBytes, where bigger is better) is "other", so its rows are never taken for a time.
+    $1 == "" { unit = ($2 == "sec/op" || $2 == "B/op" || $2 == "allocs/op") ? $2 : "other"; next }
+    $1 == "geomean" || $1 ~ /^(goos|goarch|pkg|cpu):/ || unit == "" || unit == "other" { next }
+    # A row counts only with a measurement on both sides (a benchmark one side lacks has an empty cell).
+    $2 !~ /^[0-9.eE+-]+$/ || $4 !~ /^[0-9.eE+-]+$/ { next }
+    { seen[unit]++ }
+    $6 ~ /^[+-][0-9.]+%$/ {
+      d = substr($6, 1, length($6) - 1) + 0
+      if (d > limit && (unit == "sec/op" || unit == "allocs/op")) {
+        printf "past the bar: %s %s %s (%s)\n", $1, unit, $6, $7
+        n = $1; sub(/-[0-9]+$/, "", n); print n > flagged
+      }
+    }
+    END { exit seen["sec/op"] > 0 ? 0 : 2 }' "$3"
+}
 
-# benchstat prints a delta only where it finds one significant (p < 0.05), and "~" otherwise. The csv holds one table
-# per unit: a header row names the unit, then a row per benchmark (name, old, CI, new, CI, delta, p).
-awk -F, -v limit="$threshold" '
-  # Every header row (an empty first cell) sets the unit, and a unit the check does not read (B/s, the throughput of a
-  # benchmark that calls SetBytes, where bigger is better) is "other", so its rows are never taken for a time.
-  $1 == "" { unit = ($2 == "sec/op" || $2 == "B/op" || $2 == "allocs/op") ? $2 : "other"; next }
-  $1 == "geomean" || $1 ~ /^(goos|goarch|pkg|cpu):/ || unit == "" || unit == "other" { next }
-  # A row counts only with a measurement on both sides (a benchmark one side lacks has an empty cell).
-  $2 !~ /^[0-9.eE+-]+$/ || $4 !~ /^[0-9.eE+-]+$/ { next }
-  { seen[unit]++ }
-  $6 ~ /^[+-][0-9.]+%$/ {
-    d = substr($6, 1, length($6) - 1) + 0
-    if (d > limit && (unit == "sec/op" || unit == "allocs/op")) { printf "REGRESSION %s %s %s (%s)\n", $1, unit, $6, $7; bad++ }
-  }
-  END {
-    if (seen["sec/op"] == 0) { print "no benchmark was compared: the two outputs share none"; exit 2 }
-    printf "%d benchmarks compared; threshold +%s%% on sec/op and allocs/op at p < 0.05\n", seen["sec/op"], limit
-    exit bad > 0
-  }' "$out/benchstat.csv" | tee "$out/verdict.txt"
+: > "$out/flagged.txt"
+sample "" "$runs" "."
+set +e
+gate "$out/base.txt" "$out/head.txt" "$out/benchstat.csv" "$out/benchstat.txt" | tee "$out/verdict.txt"
+rc="${PIPESTATUS[0]}"
+set -e
+cat "$out/benchstat.txt"
+if [ "$rc" = 2 ]; then echo "no benchmark was compared: the two outputs share none" | tee -a "$out/verdict.txt"; exit 2; fi
+echo "benchmarks compared; threshold +${threshold}% on sec/op and allocs/op at alpha ${alpha}" | tee -a "$out/verdict.txt"
+
+# On a shared runner one benchmark in a run can be far off in a few samples of one side (an A/A run, the same code on both
+# sides, has shown a +42% at p=0.04 with a spread of 400%). So a benchmark past the bar is measured again, alone, with
+# twice the samples and the same bar, and the job fails only if it is past the bar again.
+sort -u "$out/flagged.txt" > "$out/candidates.txt"
+if [ ! -s "$out/candidates.txt" ]; then echo "no benchmark is past the bar" | tee -a "$out/verdict.txt"; exit 0; fi
+: > "$out/confirmed.txt"
+while IFS= read -r name; do
+  # benchstat drops the "Benchmark" prefix; the pattern, matched level by level at each "/", needs it: Render/unchanged
+  # is ^BenchmarkRender$/^unchanged$.
+  filter="$(printf '%s' "$name" | sed -e 's|[^/]*|^&$|g' -e 's|^^|^Benchmark|')"
+  echo "measuring $name again with $((runs * 2)) samples of each side" | tee -a "$out/verdict.txt"
+  rm -f "$out/c-base.txt" "$out/c-head.txt" "$out/flagged.txt"; : > "$out/flagged.txt"
+  sample "c-" "$((runs * 2))" "$filter"
+  cat "$out/c-base.txt" >> "$out/confirm-base.txt"; cat "$out/c-head.txt" >> "$out/confirm-head.txt"
+  set +e
+  gate "$out/c-base.txt" "$out/c-head.txt" "$out/c.csv" "$out/c.txt" | tee -a "$out/verdict.txt"
+  set -e
+  cat "$out/c.txt" >> "$out/benchstat-confirm.txt"
+  if [ -s "$out/flagged.txt" ]; then echo "REGRESSION $name: past the bar again" | tee -a "$out/verdict.txt"; echo "$name" >> "$out/confirmed.txt"; else echo "$name: not past the bar again, taken as noise" | tee -a "$out/verdict.txt"; fi
+done < "$out/candidates.txt"
+[ ! -s "$out/confirmed.txt" ]

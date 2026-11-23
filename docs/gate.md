@@ -2431,19 +2431,24 @@ adds is compared too; if the head's tests do not compile against the merge base 
 base has). It builds each side's test binary once and runs the two alternately six times (`-test.count 1`, `-benchmem`,
 `-test.benchtime 300ms`), so a drift in the runner's speed lands on both sides, and gives benchstat six samples of each.
 
-**The threshold: +25% on time/op or allocs/op, and p < 0.05.** The job fails for a benchmark that benchstat reports
-significantly different (its Mann-Whitney U test, alpha 0.05) and more than 25% worse in `sec/op` or `allocs/op`. B/op is
-shown but does not fail the job (it follows allocs/op). Both conditions are needed: on a shared runner a neighbour's load
-moves single samples by tens of percent, so a large delta that is not significant is noise and is ignored, and a
-significant delta of a few percent is real but too small to tell from a runner that is a little faster or slower between
-the two halves of the job, so it is shown and not failed. 25% is wide on purpose: the benchmarks are in microseconds to
-milliseconds, and the benchmarks that touch the file system (the cache and the cold ones) vary the most. Allocation
-counts do not depend on the runner at all, so an allocs/op regression is reliable evidence even at a smaller delta;
-tighten that threshold separately when the history shows it never flakes. The job's first weeks should tell whether 25%
-is right: lower it in the workflow (`THRESHOLD`) when the table shows the noise well under it, or make the job a release
-gate only after it has gone a while without a false failure. `THRESHOLD` is one value for every benchmark, so raising it
-for one that cries wolf would loosen the check for all of them: an exception for one benchmark is a change to
-`tools/cmp-bench.sh`, or the removal of that benchmark.
+**The threshold: +25% on time/op or allocs/op, p < 0.01, and again on a second measurement.** A benchmark is past the
+bar when benchstat reports it significantly different (its Mann-Whitney U test, alpha 0.01) and more than 25% worse in
+`sec/op` or `allocs/op`. B/op is shown but does not fail the job (it follows allocs/op). A benchmark past the bar is then
+measured again, alone, with twelve samples of each side instead of six, and the job fails only if it is past the bar
+again. The three conditions are there because of the runner: on a shared one a neighbour's load moves single samples by
+tens of percent or more, so a large delta that is not significant is noise and is ignored; a significant delta of a few
+percent is real but too small to tell from a runner that is a little faster or slower between the two halves of the job,
+so it is shown and not failed; and with about thirty comparisons a run, a bar at p < 0.05 fails by chance every few
+runs. The first run of this job on the pull request that added it, with the same product code on both sides and
+alpha 0.05, did exactly that (`Render/unchanged`, +43% at p = 0.04, a spread of 430% in the head's six samples); hence
+alpha 0.01 and the second measurement. 25% is wide on purpose: the benchmarks are in microseconds to milliseconds, and
+the benchmarks that touch the file system (the cache and the cold ones) vary the most. Allocation counts do not depend on
+the runner at all, so an allocs/op regression is reliable evidence even at a smaller delta; tighten that threshold
+separately when the history shows it never flakes. The job's first weeks should tell whether 25% is right: lower it in
+the workflow (`THRESHOLD`) when the table shows the noise well under it, or make the job a release gate only after it
+has gone a while without a false failure. `THRESHOLD` is one value for every benchmark, so raising it for one that
+cries wolf would loosen the check for all of them: an exception for one benchmark is a change to `tools/cmp-bench.sh`,
+or the removal of that benchmark.
 
 **What the noise looked like.** The first run of the job (this pull request's, where head and merge base have the same
 product code, so every difference is noise) on an `ubuntu-latest` runner (4 vCPU Xeon): the medians of the two sides

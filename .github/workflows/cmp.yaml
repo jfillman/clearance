@@ -235,8 +235,8 @@ jobs:
 
   # The plugin's benchmarks (W-34 P4; docs/gate.md, "Benchmarks"): the pull request's head against its merge base, on one
   # runner in one job, six samples of each run alternately (tools/cmp-bench.sh), compared with benchstat. It fails when a
-  # benchmark's time/op or allocs/op is more than THRESHOLD percent worse and benchstat finds that significant at
-  # p < 0.05. Shared runners are noisy, so the bar is wide (25%) and it is not a release gate: pull requests only, and
+  # benchmark's time/op or allocs/op is more than THRESHOLD percent worse, benchstat finds that significant at
+  # p < 0.01, and a second measurement of that benchmark alone finds it again. Shared runners are noisy, so the bar is wide (25%) and it is not a release gate: pull requests only, and
   # release.yaml's call of this workflow (a push event) skips it.
   cmp-bench:
     if: github.event_name == 'pull_request'
@@ -265,7 +265,7 @@ jobs:
           {
             echo "## clearance-cmp benchmarks, head against merge base"
             echo
-            echo "Threshold: +${THRESHOLD}% on time/op or allocs/op at p < 0.05 (docs/gate.md, Benchmarks)."
+            echo "Threshold: +${THRESHOLD}% on time/op or allocs/op at p < 0.01, confirmed by a second measurement (docs/gate.md, Benchmarks)."
             echo
             if [ -f "$RUNNER_TEMP/cmp-bench/verdict.txt" ]; then echo '```'; cat "$RUNNER_TEMP/cmp-bench/verdict.txt"; echo '```'; fi
             if [ -f "$RUNNER_TEMP/cmp-bench/benchstat.txt" ]; then echo '```'; cat "$RUNNER_TEMP/cmp-bench/benchstat.txt"; echo '```'; fi
