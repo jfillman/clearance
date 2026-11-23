@@ -1,0 +1,70 @@
+# Values for the official argo-cd Helm chart: the clearance-cmp sidecar on the repo-server (docs/install-argocd-plugin.md,
+# "With the official argo-cd Helm chart") and the optional metrics container ("Metrics and alerts"), merged into one
+# file. Add it to your own argo-cd values. Replace the placeholders: the core's URL, the chart allow list and the image
+# digests.
+#
+# CI installs this file, as it is, with the placeholders replaced, under a real Argo CD in a kind cluster for every
+# Argo CD version the guide lists as tested (the cmp-conformance job, .github/workflows/cmp.yaml,
+# tools/cmp-conformance.sh).
+repoServer:
+  extraContainers:
+    - name: clearance-cmp
+      image: ghcr.io/jfillman/clearance-cmp@sha256:<digest of the release you pin>
+      command: [/var/run/argocd/argocd-cmp-server]
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities: {drop: [ALL]}
+        seccompProfile: {type: RuntimeDefault}
+      env:
+        - {name: CLEARANCE_URL, value: "https://clearance.example.test"}
+        - {name: CLEARANCE_TOKEN_FILE, value: /var/run/secrets/tokens/clearance}
+        # The repositories a chart may be fetched from. Required: with none, every chart is refused.
+        - {name: CLEARANCE_CHART_REPOS, value: "https://git.example.test/platform/charts.git"}
+        # The PreSync wait Job's image: needed the first time a change is held for people.
+        - {name: CLEARANCE_WAIT_IMAGE, value: "ghcr.io/jfillman/clearance-wait@sha256:<digest>"}
+        - {name: CLEARANCE_CMP_CACHE_DIR, value: /tmp/clearance-cmp-cache}
+        # Metrics (optional): each run records into the store the metrics container serves.
+        - {name: CLEARANCE_CMP_METRICS_DIR, value: /var/run/clearance-cmp-metrics}
+      resources:
+        requests: {cpu: 50m, memory: 128Mi}
+        limits: {memory: 512Mi}
+      volumeMounts:
+        - {name: var-files, mountPath: /var/run/argocd}
+        - {name: plugins, mountPath: /home/argocd/cmp-server/plugins}
+        - {name: cmp-tmp, mountPath: /tmp}
+        - {name: clearance-token, mountPath: /var/run/secrets/tokens, readOnly: true}
+        - {name: cmp-metrics, mountPath: /var/run/clearance-cmp-metrics}
+    # Optional: serves the metrics store as Prometheus text on :9464 (/metrics). Leave it and the two metrics lines
+    # above out to run without metrics.
+    - name: clearance-cmp-metrics
+      image: ghcr.io/jfillman/clearance-cmp@sha256:<the same digest>
+      command: [/usr/local/bin/clearance-cmp, metrics]
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities: {drop: [ALL]}
+        seccompProfile: {type: RuntimeDefault}
+      env:
+        - {name: CLEARANCE_CMP_METRICS_DIR, value: /var/run/clearance-cmp-metrics}
+        - {name: CLEARANCE_CMP_METRICS_ADDR, value: ":9464"}
+      ports:
+        - {name: cmp-metrics, containerPort: 9464}
+      readinessProbe:
+        httpGet: {path: /healthz, port: cmp-metrics}
+      resources:
+        requests: {cpu: 5m, memory: 16Mi}
+        limits: {memory: 64Mi}
+      volumeMounts:
+        - {name: cmp-metrics, mountPath: /var/run/clearance-cmp-metrics, readOnly: true}
+  volumes:
+    - {name: cmp-tmp, emptyDir: {}}
+    - name: clearance-token
+      projected:
+        sources:
+          - serviceAccountToken: {audience: clearance, expirationSeconds: 3600, path: clearance}
+    - {name: cmp-metrics, emptyDir: {sizeLimit: 16Mi}}
