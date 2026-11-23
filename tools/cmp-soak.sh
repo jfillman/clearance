@@ -110,7 +110,7 @@ if command -v timeout >/dev/null; then
   killed=0
   for delay in 0.02 0.05 0.1 0.2 0.4; do
     code="$(fx_wrap=(timeout -s KILL "$delay"); fixture_render "$bin" "$cache" "$work/k.out" "$work/k.err" v0.0.3 "{\"injected\":\"killed-$delay\"}" "${opts[@]}")"
-    [ "$code" = 137 ] && killed=$((killed + 1))
+    case "$code" in 124 | 137) killed=$((killed + 1));; esac # GNU timeout exits 124 when it killed the command
   done
   sleep 2 # a step the killed plugin started finishes on its own; nothing waits for it
   running="$(steps_running)"; [ -z "$running" ] || bad "render steps still running after the SIGKILLs: $running"
