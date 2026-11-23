@@ -90,7 +90,7 @@ func (st *state) directory(pos int, s Source, root, appPath string) ([]byte, err
 		}
 		doc, err := manifestDocs(f.Name(), b)
 		if err != nil {
-			return fmt.Errorf("source %d: %w", pos, err)
+			return srcErrorf("%w", pos, err)
 		}
 		if len(doc) > 0 {
 			out.Write(doc)
@@ -99,7 +99,7 @@ func (st *state) directory(pos int, s Source, root, appPath string) ([]byte, err
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("source %d: failed to get potentially valid manifests: %w", pos, err)
+		return nil, srcErrorf("failed to get potentially valid manifests: %w", pos, err)
 	}
 	return out.Bytes(), nil
 }

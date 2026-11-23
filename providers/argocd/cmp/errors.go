@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net/url"
 	"os/exec"
 	"regexp"
@@ -12,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jfillman/clearance/client"
+	"github.com/jfillman/clearance/internal/argosrc"
 )
 
 // Error classes (hardening F4). Every error `generate` returns is a *CmpError of exactly one class, with a stable code,
@@ -187,30 +189,103 @@ func classifyRender(ctx context.Context, err error, lookup chartLookupResult, ge
 		return newErr(CodeFaultTool, "a render tool could not be started", err)
 	case errors.As(err, &xe) && xe.ProcessState != nil && !xe.Exited():
 		return newErr(CodeFaultTool, "a render tool was killed before it finished", err)
-	case strings.HasPrefix(msg, "refused: CLEARANCE_CHART_REPOS is not set"):
+	case isKind(err, kindNoRepos):
 		return newErr(CodeFaultConfig, "CLEARANCE_CHART_REPOS is not set on the sidecar: no chart may be fetched", err)
-	case strings.HasPrefix(msg, "refused:"):
+	case isKind(err, kindRefused):
 		return newErr(CodeRenderRefused, "a source or path the plugin refuses to read", err)
 	case errors.As(err, &pe) && !generic:
 		return newErr(CodeFaultInternal, "the plugin could not use its scratch files", err)
+	case isKind(err, kindChartFetch):
+		return classifyChartFetch(err, lookup)
+	case isKind(err, kindHelm):
+		return newErr(CodeRenderHelm, "helm template failed on the chart and values", err)
+	case isKind(err, kindKustomize):
+		return newErr(CodeRenderKustomize, "kustomize build failed", err)
+	case generic && argosrc.IsSources(err):
+		return newErr(CodeRenderSources, "the Application's sources do not render", err)
+	}
+	return classifyRenderByMessage(err, msg, generic, lookup)
+}
+
+func classifyChartFetch(err error, lookup chartLookupResult) *CmpError {
+	switch lookup {
+	case lookupResolved:
+		return newErr(CodeDepChartFetch, "the chart's tag resolved but its fetch failed", err)
+	case lookupUnreachable:
+		return newErr(CodeDepChartUnreachable, "git or the chart's host cannot be reached", err)
+	case lookupNoRef:
+		return newErr(CodeRenderFetch, "the chart's tag does not exist on its repository", err)
+	}
+	return newErr(CodeRenderFetch, "the chart cannot be fetched at its tag", err)
+}
+
+// renderKind is what a render-phase error is, stated where it is made (I-76). classifyRender reads it with errors.As
+// instead of guessing from the message's first words, so rewording a message cannot change its code.
+type renderKind int
+
+const (
+	kindRefused    renderKind = iota + 1 // a source, path or symlink the plugin refuses (CMP-RENDER-REFUSED)
+	kindNoRepos                          // CLEARANCE_CHART_REPOS is not set (CMP-FAULT-CONFIG)
+	kindChartFetch                       // the chart's fetch or its tag's resolution failed (the code depends on the lookup)
+	kindHelm                             // helm template failed (CMP-RENDER-HELM)
+	kindKustomize                        // kustomize build failed (CMP-RENDER-KUSTOMIZE)
+)
+
+// renderError carries a renderKind. Its message is the wrapped error's, unchanged.
+type renderError struct {
+	kind renderKind
+	err  error
+}
+
+func (e *renderError) Error() string { return e.err.Error() }
+func (e *renderError) Unwrap() error { return e.err }
+
+// renderErr marks err as a render error of kind.
+func renderErr(kind renderKind, err error) error { return &renderError{kind: kind, err: err} }
+
+// renderErrf is fmt.Errorf, marked as a render error of kind.
+func renderErrf(kind renderKind, format string, a ...any) error {
+	return renderErr(kind, fmt.Errorf(format, a...))
+}
+
+func isKind(err error, kind renderKind) bool {
+	var re *renderError
+	return errors.As(err, &re) && re.kind == kind
+}
+
+// unclassifiedLog reports an error that reached classification with no typed class: a debug line (log/slog, which
+// drops it unless the process turns debug on) naming the message. Replaceable by a test.
+var unclassifiedLog = func(how, msg string) {
+	slog.Debug("clearance: render error with no typed class", "classified_by", how, "message", msg)
+}
+
+// classifyRenderByMessage is the last resort: an error that carries no class is placed by its message's first words,
+// as before typed classes (I-76). Every error the plugin makes itself is typed where it is made (renderError,
+// argosrc.SourcesError), so reaching here means an error from a dependency or one added without a class; either way
+// the message is logged. What it cannot place is a fault (CMP-FAULT-INTERNAL).
+func classifyRenderByMessage(err error, msg string, generic bool, lookup chartLookupResult) *CmpError {
+	switch {
+	case strings.HasPrefix(msg, "refused: CLEARANCE_CHART_REPOS is not set"):
+		unclassifiedLog("message prefix", msg)
+		return newErr(CodeFaultConfig, "CLEARANCE_CHART_REPOS is not set on the sidecar: no chart may be fetched", err)
+	case strings.HasPrefix(msg, "refused:"):
+		unclassifiedLog("message prefix", msg)
+		return newErr(CodeRenderRefused, "a source or path the plugin refuses to read", err)
 	case strings.HasPrefix(msg, "fetch the chart at"), strings.HasPrefix(msg, "peel the chart tag"), strings.HasPrefix(msg, "the chart tag "):
-		switch lookup {
-		case lookupResolved:
-			return newErr(CodeDepChartFetch, "the chart's tag resolved but its fetch failed", err)
-		case lookupUnreachable:
-			return newErr(CodeDepChartUnreachable, "git or the chart's host cannot be reached", err)
-		case lookupNoRef:
-			return newErr(CodeRenderFetch, "the chart's tag does not exist on its repository", err)
-		}
-		return newErr(CodeRenderFetch, "the chart cannot be fetched at its tag", err)
+		unclassifiedLog("message prefix", msg)
+		return classifyChartFetch(err, lookup)
 	case strings.HasPrefix(msg, "helm template:"):
+		unclassifiedLog("message prefix", msg)
 		return newErr(CodeRenderHelm, "helm template failed on the chart and values", err)
 	case strings.HasPrefix(msg, "kustomize build:"):
+		unclassifiedLog("message prefix", msg)
 		return newErr(CodeRenderKustomize, "kustomize build failed", err)
 	case generic && (strings.HasPrefix(msg, "source ") || strings.Contains(msg, "unsupported by the Clearance plugin") ||
 		strings.HasPrefix(msg, "the sources") || strings.HasPrefix(msg, "the render") || strings.HasPrefix(msg, "the Application")):
+		unclassifiedLog("message prefix", msg)
 		return newErr(CodeRenderSources, "the Application's sources do not render", err)
 	}
+	unclassifiedLog("fallback", msg)
 	return newErr(CodeFaultInternal, "the plugin failed while rendering", err)
 }
 

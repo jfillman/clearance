@@ -91,10 +91,10 @@ func Render(ctx context.Context, o Options, req Request) (*Result, error) {
 		return nil, errors.New("argosrc: Options.Run and Options.Work are required")
 	}
 	if req.AppName == "" {
-		return nil, errors.New("the Application's name is required")
+		return nil, sourcesErr(errors.New("the Application's name is required"))
 	}
 	if len(req.Sources) == 0 {
-		return nil, errors.New("the Application has no source")
+		return nil, sourcesErr(errors.New("the Application has no source"))
 	}
 	st := &state{o: o, multi: len(req.Sources) > 1, refs: map[string]refTarget{}, cos: map[[2]string]checkout{}}
 	for i, s := range req.Sources {
@@ -102,7 +102,7 @@ func Render(ctx context.Context, o Options, req Request) (*Result, error) {
 			continue
 		}
 		if _, dup := st.refs["$"+s.Ref]; dup {
-			return nil, fmt.Errorf("source %d: ref %q is used by two sources", i+1, s.Ref)
+			return nil, srcErrorf("ref %q is used by two sources", i+1, s.Ref)
 		}
 		st.refs["$"+s.Ref] = refTarget{index: i + 1, src: s}
 	}
@@ -144,7 +144,7 @@ func Render(ctx context.Context, o Options, req Request) (*Result, error) {
 			}
 			p, err := sourcePath(co.dir, orDot(s.Path))
 			if err != nil {
-				return nil, fmt.Errorf("source %d: %w", pos, err)
+				return nil, srcErrorf("%w", pos, err)
 			}
 			root, appPath, revision = co.dir, p, co.commit
 			prov = Provenance{Position: pos, Repo: s.RepoURL, Requested: s.TargetRevision, Resolved: co.commit}
@@ -157,7 +157,7 @@ func Render(ctx context.Context, o Options, req Request) (*Result, error) {
 		}
 		typ, err := sourceType(s, appPath)
 		if err != nil {
-			return nil, fmt.Errorf("source %d: %w", pos, err)
+			return nil, srcErrorf("%w", pos, err)
 		}
 		prov.Type = typ
 		env := sourceEnv(req, s, revision)
@@ -265,7 +265,7 @@ func noDuplicates(manifests []byte) error {
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return fmt.Errorf("the render is not YAML: %w", err)
+			return sourcesErr(fmt.Errorf("the render is not YAML: %w", err))
 		}
 		m := &doc
 		if m.Kind == yaml.DocumentNode && len(m.Content) == 1 {
@@ -286,7 +286,7 @@ func noDuplicates(manifests []byte) error {
 	}
 	if len(dups) > 0 {
 		sort.Strings(dups)
-		return fmt.Errorf("the sources render the same object more than once: %s", strings.Join(dups, ", "))
+		return sourcesErr(fmt.Errorf("the sources render the same object more than once: %s", strings.Join(dups, ", ")))
 	}
 	return nil
 }

@@ -147,7 +147,7 @@ func IsUnsupported(err error) bool {
 func ParseSources(raw string) ([]Source, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return nil, errors.New("the sources parameter is empty")
+		return nil, sourcesErr(errors.New("the sources parameter is empty"))
 	}
 	dec := json.NewDecoder(bytes.NewReader([]byte(raw)))
 	dec.DisallowUnknownFields()
@@ -156,13 +156,34 @@ func ParseSources(raw string) ([]Source, error) {
 		if strings.Contains(err.Error(), "unknown field") {
 			return nil, unsupported(0, "an Application source field the plugin does not know", err.Error())
 		}
-		return nil, fmt.Errorf("the sources parameter is not a JSON array of Application sources: %w", err)
+		return nil, sourcesErr(fmt.Errorf("the sources parameter is not a JSON array of Application sources: %w", err))
 	}
 	if dec.More() {
-		return nil, errors.New("the sources parameter holds more than one JSON document")
+		return nil, sourcesErr(errors.New("the sources parameter holds more than one JSON document"))
 	}
 	if len(out) == 0 {
-		return nil, errors.New("the sources parameter lists no source")
+		return nil, sourcesErr(errors.New("the sources parameter lists no source"))
 	}
 	return out, nil
+}
+
+// SourcesError is an error about the Application's sources themselves: the list, a source's own settings, what the
+// sources render. The plugin reads it with errors.As to give the render the "sources do not render" code, instead of
+// guessing from the message (I-76). Its message is the wrapped error's, unchanged. An *UnsupportedError is one too.
+type SourcesError struct{ Err error }
+
+func (e *SourcesError) Error() string { return e.Err.Error() }
+func (e *SourcesError) Unwrap() error { return e.Err }
+
+func sourcesErr(err error) error { return &SourcesError{Err: err} }
+
+// srcErrorf is a SourcesError whose message is "source <i>: " followed by the formatted rest.
+func srcErrorf(format string, i int, a ...any) error {
+	return sourcesErr(fmt.Errorf("source %d: "+format, append([]any{i}, a...)...))
+}
+
+// IsSources is whether err (or one it wraps) is a SourcesError or an UnsupportedError.
+func IsSources(err error) bool {
+	var se *SourcesError
+	return errors.As(err, &se) || IsUnsupported(err)
 }

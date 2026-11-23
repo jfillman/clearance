@@ -11,6 +11,15 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ### Changed
 
+- **The Argo CD plugin's render errors carry their class and code from where they are made (I-76).** `classifyRender`
+  used to place a render error by the first words of its message and send any message it did not recognise to
+  `CMP-FAULT-INTERNAL`, a class that is eligible for last-known-good and counts toward the fault alert, so rewording a
+  message could silently change an error's class. The plugin's own refusals, helm and kustomize failures and chart
+  fetch failures are now a typed error (`renderError`), and `argosrc` marks every error about the Application's sources
+  (`SourcesError`), and `classifyRender` reads the type with `errors.As`. Matching on the message remains only as a last
+  resort, and logs a debug line (`log/slog`) naming the message when it is used. New tests drive each producer through
+  `Generate` and assert an explicit code, check that the fallback is still `CMP-FAULT-INTERNAL`, and fail when an
+  untyped error is made with one of the old prefixes. No code, class or message changes.
 - **The Argo CD plugin's image is tested on arm64, and the release tests the image it pushed (I-74).** The release
   publishes `clearance-cmp` for linux/amd64 and linux/arm64, but CI built and tested an amd64 image of its own, and the
   release then rebuilt the multi-arch image it pushes, so arm64 was never tested and the shipped image never was either.

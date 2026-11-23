@@ -33,7 +33,7 @@ func (st *state) helm(ctx context.Context, pos int, req Request, s Source, env E
 	}
 	kubeVersion, err := ParseKubeVersion(kubeVersion)
 	if err != nil {
-		return nil, fmt.Errorf("source %d: %w", pos, err)
+		return nil, srcErrorf("%w", pos, err)
 	}
 	apiVersions := req.APIVersions
 	if len(h.APIVersions) > 0 {
@@ -84,7 +84,7 @@ func (st *state) helm(ctx context.Context, pos int, req Request, s Source, env E
 		}
 	}
 	if inline, err := inlineValues(h); err != nil {
-		return nil, fmt.Errorf("source %d: %w", pos, err)
+		return nil, srcErrorf("%w", pos, err)
 	} else if len(inline) > 0 {
 		f, err := os.CreateTemp(st.o.Work, "values-*.yaml")
 		if err != nil {
@@ -141,7 +141,7 @@ func (st *state) helm(ctx context.Context, pos int, req Request, s Source, env E
 		out, err = st.o.Run(ctx, appPath, netEnv, "helm", args...)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("source %d: helm template: %w", pos, err)
+		return nil, srcErrorf("helm template: %w", pos, err)
 	}
 	return out, nil
 }
@@ -212,7 +212,7 @@ func (st *state) referenced(raw string) (refTarget, bool) {
 // checkout, the rest is resolved inside it and may not leave it.
 func (st *state) resolveRef(ctx context.Context, pos int, raw string, env Env, rt refTarget) (refRoot, resolved string, err error) {
 	if rt.src.Chart != "" {
-		return "", "", fmt.Errorf("source %d: source has a 'chart' field defined, but Helm charts are not supported for 'ref' sources", pos)
+		return "", "", srcErrorf("source has a 'chart' field defined, but Helm charts are not supported for 'ref' sources", pos)
 	}
 	co, err := st.git(ctx, rt.index, rt.src.RepoURL, rt.src.TargetRevision)
 	if err != nil {
@@ -222,7 +222,7 @@ func (st *state) resolveRef(ctx context.Context, pos int, raw string, env Env, r
 	parts[0] = ""
 	p, err := resolveValueFile(co.dir, co.dir, env.Subst(strings.Join(parts, "/")))
 	if err != nil {
-		return "", "", fmt.Errorf("source %d: error resolving value file path: %w", pos, err)
+		return "", "", srcErrorf("error resolving value file path: %w", pos, err)
 	}
 	return co.dir, p, nil
 }
@@ -242,14 +242,14 @@ func (st *state) valueFiles(ctx context.Context, pos int, s Source, h *Helm, env
 			v := strings.Split(raw, "/")[0]
 			if _, ok := st.refs[v]; !ok {
 				if len(st.refs) == 0 {
-					return nil, fmt.Errorf("source %d: source referenced %q, but no source has a 'ref' field defined", pos, v)
+					return nil, srcErrorf("source referenced %q, but no source has a 'ref' field defined", pos, v)
 				}
 				var keys []string
 				for k := range st.refs {
 					keys = append(keys, k)
 				}
 				sort.Strings(keys)
-				return nil, fmt.Errorf("source %d: source referenced %q, which is not one of the available sources (%s)", pos, v, strings.Join(keys, ", "))
+				return nil, srcErrorf("source referenced %q, which is not one of the available sources (%s)", pos, v, strings.Join(keys, ", "))
 			}
 		}
 	}
@@ -282,24 +282,24 @@ func (st *state) valueFiles(ctx context.Context, pos int, s Source, h *Helm, env
 			if IsUnsupported(err) {
 				return nil, unsupported(pos, "a remote value file URL", raw)
 			}
-			return nil, fmt.Errorf("source %d: error resolving value file path: %w", pos, err)
+			return nil, srcErrorf("error resolving value file path: %w", pos, err)
 		}
 		if isGlob(r.path) {
 			matches, err := doublestar.FilepathGlob(r.path)
 			if err != nil {
-				return nil, fmt.Errorf("source %d: error expanding glob pattern %q: %w", pos, raw, err)
+				return nil, srcErrorf("error expanding glob pattern %q: %w", pos, raw, err)
 			}
 			if len(matches) == 0 {
 				if h.IgnoreMissingValueFiles {
 					continue
 				}
-				return nil, fmt.Errorf("source %d: values file glob %q matched no files", pos, raw)
+				return nil, srcErrorf("values file glob %q matched no files", pos, raw)
 			}
 			for _, m := range matches {
 				real, err := filepath.EvalSymlinks(m)
 				rr, _ := filepath.EvalSymlinks(r.root)
 				if err != nil || (real != rr && !strings.HasPrefix(real, rr+string(os.PathSeparator))) {
-					return nil, fmt.Errorf("source %d: glob pattern %q matches a file outside the repository", pos, raw)
+					return nil, srcErrorf("glob pattern %q matches a file outside the repository", pos, raw)
 				}
 				if !explicit[m] {
 					add(m)
@@ -330,7 +330,7 @@ func (st *state) fileParameter(ctx context.Context, pos int, raw string, env Env
 	}
 	p, err := resolveValueFile(appPath, root, env.Subst(raw))
 	if err != nil {
-		return "", fmt.Errorf("source %d: error resolving helm value file path: %w", pos, err)
+		return "", srcErrorf("error resolving helm value file path: %w", pos, err)
 	}
 	return p, nil
 }

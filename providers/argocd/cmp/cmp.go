@@ -58,7 +58,7 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 	// Before anything is fetched: the chart comes only from where the platform says, by the platform's own spelling.
 	cfg, err = cfg.Canonical()
 	if err != nil {
-		if strings.HasPrefix(err.Error(), "refused:") {
+		if isKind(err, kindRefused) || isKind(err, kindNoRepos) {
 			return "", classifyRender(ctx, err, lookupNotAsked, cfg.Sources != "")
 		}
 		return "", classifyConfig(err) // the sources parameter, or a list entry (a sidecar setting)
