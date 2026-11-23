@@ -9,6 +9,13 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.56.0] - 2026-11-23
+
+**Upgrading from 0.55.x.** No setting is newly required; everything new is off or unset by default: the Argo CD agent's gate rule
+(`gateRule`, `--gate-rule-file`) and its exemption reporting, the core's `gate-exemption` exception kind (evidence schema revision
+8; older packets and statements still verify), the plugin's metrics (`CLEARANCE_CMP_METRICS_DIR`, `CLEARANCE_CMP_METRICS_ADDR`)
+and the previous wait-image pin (`waitJob.previousImage`). With default values the charts render as in 0.55.0.
+
 ### Added
 
 - **A previous wait-image pin for the Argo CD agent (I-59; `waitJob.previousImage`, `--wait-previous-image`, off by default).**
