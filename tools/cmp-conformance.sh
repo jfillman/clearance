@@ -18,7 +18,7 @@
 #     plugin cannot read, and a chart repository that is not on the allow list.
 # and asserts: each cleared Application syncs and is Healthy, with its objects stamped with the change; each failing
 # one shows its stable error code in its ComparisonError (a refusal, a plugin fault and a render error, each its own
-# class); `doctor` in the sidecar has no fail; the metrics container serves /metrics with those runs counted.
+# class); `doctor` in the sidecar has no fail and no warn outside a named allow list; the metrics container serves /metrics with those runs counted.
 #
 # Environment: KIND_CLUSTER (kind cluster name, default clearance), ARTIFACTS (a directory: the cluster's state and
 # every log are written there when a check fails), TIMEOUT (seconds all the Applications together are given to settle,
@@ -262,6 +262,21 @@ doctor="$(kubectl -n "$ns_argo" exec deploy/argocd-repo-server -c clearance-cmp 
 echo "$doctor" | sed 's/^/     doctor: /'
 [ "$code" = 0 ] && ok "doctor exits 0" || bad "doctor exit $code"
 echo "$doctor" | grep -q '^fail' && bad "doctor has a fail line" || ok "doctor has no fail line"
+# No warn either: the documented values must pass the plugin's own preflight. Only these checks may warn, each for a
+# reason of this test's own, never of the example's:
+#   netns     kind's nodes refuse the unshare a private network namespace needs under the RuntimeDefault seccomp profile
+#             (the netns hardening is optional and needs a Localhost profile; the guide's own sample output shows it)
+#   core-tls  the double serves the core over plain http inside the cluster; the example's own core URL is https
+allowed_warns="netns core-tls"
+echo "$doctor" | grep -Eq '^doctor: [0-9]+ ok, [0-9]+ warn, [0-9]+ fail$' || bad "doctor printed no summary line"
+unexpected=0
+for w in $(echo "$doctor" | awk '$1 == "warn" {print $2}'); do
+  case " $allowed_warns " in
+    *" $w "*) ok "doctor: warn $w is expected in this test" ;;
+    *) bad "doctor: unexpected warn $w (the documented values do not pass doctor)"; unexpected=1 ;;
+  esac
+done
+[ "$unexpected" = 0 ] && ok "doctor has no warn outside the allow list ($allowed_warns)"
 echo "$doctor" | grep -Eq '^ok +core-auth' && ok "doctor: the core accepted the projected token" || bad "doctor: core-auth is not ok"
 
 # ---- the Applications -----------------------------------------------------------------------------------------------

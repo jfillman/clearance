@@ -18,6 +18,14 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   plugin writes what it held and streams from then on. A failure inside those bounds (every refusal, render error and
   early fault the conformance job checks) still starts with its code line; a later one shows it after the lines
   already written. No setting is added and no default changes.
+- **The documented argo-cd values pass the plugin's own `doctor`.** `docs/examples/argo-cd-repo-server-values.yaml`,
+  the HA example and the install guide's snippets warned twice: 4 renders x 512Mi against a 512Mi sidecar limit, and a
+  world-readable (0644) token. The sidecar's memory limit is now 2560Mi (4 x 512Mi plus 512Mi for the plugin and the
+  cmp-server; the request is unchanged at 128Mi), and the token volume has `defaultMode: 0440` with the pod's
+  `fsGroup: 999` (the argo-cd chart's `global.securityContext`, merged with the chart's default). If you copied the
+  earlier values, make the same two changes. `tools/cmp-conformance.sh` now fails on any `doctor` warn except `netns`
+  (kind's nodes cannot give a private network namespace) and `core-tls` (the test's core double is plain http), each
+  allowed by its check name; the `cmp-ha` job checks the HA example's limit, token mode and fsGroup.
 
 ## [0.57.0] - 2026-11-23
 
