@@ -21,7 +21,8 @@
 # class); `doctor` in the sidecar has no fail; the metrics container serves /metrics with those runs counted.
 #
 # Environment: KIND_CLUSTER (kind cluster name, default clearance), ARTIFACTS (a directory: the cluster's state and
-# every log are written there when a check fails), TIMEOUT (seconds an Application is given to settle, default 300).
+# every log are written there when a check fails), TIMEOUT (seconds all the Applications together are given to settle,
+# default 300).
 set -uo pipefail
 
 image="${1:?usage: tools/cmp-conformance.sh IMAGE ARGO_CD_CHART_VERSION [ARGO_CD_VERSION]}"
@@ -208,9 +209,24 @@ helm repo add argo https://argoproj.github.io/argo-helm > /dev/null 2>&1
 helm repo update argo > /dev/null || die "cannot reach the argo-helm repository"
 # Only what Argo CD runs that this test does not use is turned off (dex, notifications); everything else is the
 # chart's default.
-helm install argocd argo/argo-cd --version "$chart_version" -n "$ns_argo" --create-namespace \
-  -f "$work/argocd-values.yaml" --set dex.enabled=false --set notifications.enabled=false \
-  --wait --timeout 8m > /dev/null || die "helm install of argo-cd $chart_version failed"
+chart_args=(argocd argo/argo-cd --version "$chart_version" -n "$ns_argo" -f "$work/argocd-values.yaml"
+  --set dex.enabled=false --set notifications.enabled=false)
+# Every image the chart runs is pulled into the kind node first, with retries: a public registry's rate limit (a 429
+# on the redis image) would otherwise leave a pod in ImagePullBackOff until helm's wait gives up. The pods then start
+# from the node's copy (the chart's pullPolicy is IfNotPresent). The image under test is not pulled: it is kind-loaded.
+node="$(kind get nodes --name "$cluster" | head -1)"
+images="$(helm template "${chart_args[@]}" | sed -n 's/^ *image: *"\{0,1\}\([^" ]*\)"\{0,1\} *$/\1/p' | sort -u | grep -vxF "$image")"
+[ -n "$images" ] || die "no image found in the argo-cd chart's render"
+for img in $images; do
+  for try in 1 2 3 4 5 6; do
+    docker exec "$node" crictl pull "$img" > /dev/null 2>&1 && break
+    [ "$try" = 6 ] && die "cannot pull $img into the kind node"
+    echo "     pull $img failed (try $try), retrying in $((try * 10))s"
+    sleep $((try * 10))
+  done
+  ok "pulled $img"
+done
+helm install "${chart_args[@]}" --create-namespace --wait --timeout 8m > /dev/null || die "helm install of argo-cd $chart_version failed"
 repo_image="$(kubectl -n "$ns_argo" get deploy argocd-repo-server -o jsonpath='{.spec.template.spec.containers[?(@.name=="repo-server")].image}')"
 echo "     repo-server image: $repo_image"
 if [ -n "$want_argocd" ]; then
@@ -285,11 +301,11 @@ conditions() { field "$1" '{range .status.conditions[*]}{.type}: {.message}{"\n"
 
 # A cleared render: synced, Healthy, and the objects carry the change the double cleared.
 cleared() { # APP CONFIGMAP GREETING
-  local a="$1" deadline=$((SECONDS + timeout)) sync health
+  local a="$1" sync health
   while :; do
     sync="$(field "$a" '{.status.sync.status}')"; health="$(field "$a" '{.status.health.status}')"
     [ "$sync" = Synced ] && [ "$health" = Healthy ] && break
-    [ "$SECONDS" -ge "$deadline" ] && { bad "$a: sync=$sync health=$health after ${timeout}s"; conditions "$a" | sed 's/^/     /'; return; }
+    [ "$SECONDS" -ge "$apps_deadline" ] && { bad "$a: sync=$sync health=$health when the Applications' ${timeout}s ran out"; conditions "$a" | sed 's/^/     /'; return; }
     sleep 3
   done
   ok "$a: Synced and Healthy ($((SECONDS - started))s)"
@@ -300,11 +316,11 @@ cleared() { # APP CONFIGMAP GREETING
 }
 # A failed render: its ComparisonError's message carries CODE, and no code of another class.
 refused() { # APP CODE OTHER_CLASSES_REGEX
-  local a="$1" deadline=$((SECONDS + timeout)) msg
+  local a="$1" msg
   while :; do
     msg="$(conditions "$a")"
     echo "$msg" | grep -q "$2" && break
-    [ "$SECONDS" -ge "$deadline" ] && { bad "$a: no condition carries $2 after ${timeout}s"; echo "$msg" | sed 's/^/     /'; return; }
+    [ "$SECONDS" -ge "$apps_deadline" ] && { bad "$a: no condition carries $2 when the Applications' ${timeout}s ran out"; echo "$msg" | sed 's/^/     /'; return; }
     sleep 3
   done
   echo "$msg" | sed 's/^/     /'
@@ -316,6 +332,8 @@ refused() { # APP CODE OTHER_CLASSES_REGEX
   kubectl get namespace "conf-$a" > /dev/null 2>&1 && bad "$a: its destination namespace was created" || ok "$a: nothing was applied"
 }
 
+# One deadline for every Application below, not one each: seven times TIMEOUT would outlast the job and lose the logs.
+apps_deadline=$((SECONDS + timeout))
 step "cleared renders"
 cleared helm helm-config from-a-helm-source
 cleared kustomize kz-config from-a-kustomize-source
