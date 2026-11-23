@@ -9,6 +9,16 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Fixed
+
+- **A plugin run that is killed leaves its warnings and progress on stderr again.** Since 0.57.0 the plugin held its
+  stderr until the run ended, so its failure's code line came first; a run killed before that (the kernel's OOM killer,
+  Argo CD's exec timeout) wrote nothing. A SIGTERM or SIGINT now writes what is held, then a line naming the signal,
+  and exits 128 plus its number. A SIGKILL cannot be caught, so the hold is also bounded: past 20 s or 64 KiB held, the
+  plugin writes what it held and streams from then on. A failure inside those bounds (every refusal, render error and
+  early fault the conformance job checks) still starts with its code line; a later one shows it after the lines
+  already written. No setting is added and no default changes.
+
 ## [0.57.0] - 2026-11-23
 
 **Upgrading.** No setting is newly required and no default changes. The cleared-tree cache now has a bound (4096

@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/jfillman/clearance/client"
@@ -330,10 +332,14 @@ func main() {
 		os.Exit(metricsMain(os.Args[2:], os.Getenv, os.Stderr))
 	}
 	start, stats := time.Now(), NewRunStats()
-	// The plugin's stderr is held until the run ends: a failure puts its "clearance-cmp: <code>: ..." line first, so the
-	// first line of Argo CD's ComparisonError from the plugin is the code, and the warnings and the summary follow it.
-	ps := &pluginStderr{out: os.Stderr}
+	// The plugin's stderr is held while the run is short: a failure puts its "clearance-cmp: <code>: ..." line first, so
+	// the first line of Argo CD's ComparisonError from the plugin is the code, and the warnings and the summary follow
+	// it. The hold is bounded (stderrHoldFor, stderrHoldMax) and a SIGTERM or SIGINT writes what is held before the
+	// process exits, so a run that is killed still leaves its warnings and progress on stderr.
+	ps := newPluginStderr(os.Stderr, stderrHoldFor, stderrHoldMax)
 	defer ps.Flush() // a panic still shows what was held
+	stopSignals := flushOnSignal(ps, os.Stderr, start)
+	defer stopSignals()
 	netnsWarn, fsWarn = ps, ps
 	// fail ends a run that failed before or after Generate: it is counted (CLEARANCE_CMP_METRICS_DIR is read on its own,
 	// so a sidecar setting that stops the plugin at start still shows as a fault) and the process exits.
@@ -386,30 +392,115 @@ func generateCounted(ctx context.Context, d Deps, cfg Config, start time.Time) (
 	return Generate(ctx, d, cfg, ".", os.Stdout)
 }
 
-// pluginStderr holds the plugin's stderr until the run ends. On success Flush writes it as it was; on a failure Fail
-// writes the "clearance-cmp: <code>: <summary>" line first and the held lines (warnings, the summary) after it.
+// The bounds of the stderr hold. A run that lasts longer than stderrHoldFor, or holds more than stderrHoldMax bytes,
+// writes what it held and streams from then on: a run that is then killed with SIGKILL (the kernel's OOM killer, or
+// Argo CD's exec timeout after its SIGTERM) has already shown its warnings and progress. Such a late failure's code line
+// comes after the lines streamed before it. The failures that end in a few seconds (a refusal, a render error, a
+// fault found before or at the first core call) keep their code line first. 20 s is well under the plugin's own 80 s
+// deadline and Argo CD's 90 s exec timeout, and far above a normal render; 64 KiB is far above a run's warnings and
+// summary (a few hundred bytes), and bounds what a run keeps in memory for its stderr.
+const (
+	stderrHoldFor = 20 * time.Second
+	stderrHoldMax = 64 << 10
+)
+
+// pluginStderr holds the plugin's stderr while the run is short. On success Flush writes it as it was; on a failure
+// Fail writes the "clearance-cmp: <code>: <summary>" line first and the held lines (warnings, the summary) after it.
+// Past its bounds (holdFor after it is made, or more than maxHeld bytes held) it writes what it held and streams: a
+// failure's code line then follows the lines already written. The zero value (no out aside) holds without bound.
 type pluginStderr struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-	out io.Writer
+	mu        sync.Mutex
+	buf       bytes.Buffer
+	out       io.Writer
+	maxHeld   int  // 0: no size bound
+	streaming bool // the hold ended: writes go straight to out
+	timer     *time.Timer
+}
+
+// newPluginStderr holds what is written to it for at most holdFor (0: no time bound) and maxHeld bytes (0: no size
+// bound).
+func newPluginStderr(out io.Writer, holdFor time.Duration, maxHeld int) *pluginStderr {
+	p := &pluginStderr{out: out, maxHeld: maxHeld}
+	if holdFor > 0 {
+		p.timer = time.AfterFunc(holdFor, p.Release)
+	}
+	return p
 }
 
 func (p *pluginStderr) Write(b []byte) (int, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.buf.Write(b)
+	if p.streaming {
+		return p.out.Write(b)
+	}
+	n, err := p.buf.Write(b)
+	if p.maxHeld > 0 && p.buf.Len() > p.maxHeld {
+		p.releaseLocked()
+	}
+	return n, err
 }
 
-// Flush writes what is held; it is safe to call again.
-func (p *pluginStderr) Flush() {
+// Release ends the hold: what is held is written, and later writes go straight through.
+func (p *pluginStderr) Release() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.releaseLocked()
+}
+
+func (p *pluginStderr) releaseLocked() {
+	p.streaming = true
 	p.out.Write(p.buf.Bytes())
 	p.buf.Reset()
 }
 
-// Fail writes the failure's code line, then what is held.
+// Flush writes what is held and ends the hold; it is safe to call again.
+func (p *pluginStderr) Flush() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.timer != nil {
+		p.timer.Stop()
+	}
+	p.releaseLocked()
+}
+
+// Fail writes the failure's code line, then what is held. Past the hold's bounds the lines already streamed come
+// before the code line.
 func (p *pluginStderr) Fail(ce error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.timer != nil {
+		p.timer.Stop()
+	}
 	fmt.Fprintln(p.out, "clearance-cmp:", ce)
-	p.Flush()
+	p.releaseLocked()
+}
+
+// flushOnSignal makes a SIGTERM or SIGINT (Argo CD's exec timeout, a pod being stopped) write what ps holds, then a line
+// naming the signal, before the process exits with 128 + the signal's number. A SIGKILL cannot be caught: the hold's
+// bounds cover it. The returned func stops the handler.
+func flushOnSignal(ps *pluginStderr, stderr io.Writer, start time.Time) (stop func()) {
+	sigc := make(chan os.Signal, 1)
+	signal.Notify(sigc, syscall.SIGTERM, syscall.SIGINT)
+	done := make(chan struct{})
+	go func() {
+		select {
+		case sig := <-sigc:
+			ps.Flush()
+			fmt.Fprintf(stderr, "clearance-cmp: WARNING stopped by %v after %s: the run did not finish\n", sig,
+				time.Since(start).Round(time.Millisecond))
+			code := 1
+			if s, ok := sig.(syscall.Signal); ok {
+				code = 128 + int(s)
+			}
+			os.Exit(code)
+		case <-done:
+		}
+	}()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			signal.Stop(sigc)
+			close(done)
+		})
+	}
 }

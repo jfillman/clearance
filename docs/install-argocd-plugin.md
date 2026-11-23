@@ -866,6 +866,14 @@ Argo CD shows the plugin's stderr as the Application's `ComparisonError` (`CMP p
 The message is `<code>: <one short line>`, then `hold: <url>` when a change was refused or held, then `detail: <the
 full message>`. A configuration error exits 2, anything else 1.
 
+The plugin holds its warnings and its run summary while a run is short, so a failure's code line comes first and the
+warnings follow it. The hold is bounded: a run that lasts longer than 20 s, or holds more than 64 KiB, writes what it
+held and streams from then on, so a run that is then killed (the kernel's OOM killer, or Argo CD's exec timeout) has
+already shown its warnings and progress. A failure after that point shows its code line after those lines; look for the
+first `clearance-cmp: <CODE>:` line rather than the first line. A SIGTERM or SIGINT writes what is held, then
+`clearance-cmp: WARNING stopped by <signal> after <time>: the run did not finish`, and exits 128 plus the signal's
+number. A SIGKILL cannot be caught: what was written before it is all there is.
+
 ### Error codes
 
 Each code is stable: it is never renamed or given another meaning. The class says whose problem it is and whether
