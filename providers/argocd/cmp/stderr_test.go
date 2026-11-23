@@ -63,10 +63,7 @@ func TestACleanFailureKeepsTheCodeLineFirst(t *testing.T) {
 func TestPastTheTimeBoundStderrStreams(t *testing.T) {
 	var out syncBuffer
 	ps := newPluginStderr(&out, 20*time.Millisecond, stderrHoldMax)
-	fmt.Fprintln(ps, "early")
-	if out.String() != "" {
-		t.Fatalf("written inside the hold: %q", out.String())
-	}
+	fmt.Fprintln(ps, "early") // held until the bound (TestACleanFailureKeepsTheCodeLineFirst checks the hold itself)
 	deadline := time.Now().Add(5 * time.Second)
 	for out.String() != "early\n" {
 		if time.Now().After(deadline) {
