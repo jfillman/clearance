@@ -9,6 +9,8 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.57.0] - 2026-11-23
+
 **Upgrading.** No setting is newly required and no default changes. The cleared-tree cache now has a bound (4096
 entries) and a render removes a killed run's stale scratch older than 10 minutes. An evicted tree entry is a call to the
 core on that tree's next render, or, while the core is unreachable, an outage hold instead of a served `allow-and-record`
