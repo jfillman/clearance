@@ -53,4 +53,6 @@ var Settings = []Setting{
 	{Name: EnvMaxTemp, Rule: RuleDefault, Default: "512Mi"},
 	{Name: EnvMaxRenders, Rule: RuleDefault, Default: "4"},
 	{Name: "CLEARANCE_CMP_LINK_BASE", Rule: RuleOptional},
+	{Name: MetricsDirEnv, Rule: RuleOptional},
+	{Name: MetricsAddrEnv, Rule: RuleOptional},
 }

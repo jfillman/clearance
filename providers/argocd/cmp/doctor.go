@@ -131,6 +131,7 @@ func Doctor(ctx context.Context, env DoctorEnv) []Check {
 	doctorNetns(env, add)
 	doctorFSSandbox(env, add)
 	doctorLimits(env, cfg, add)
+	doctorMetrics(env, add)
 	doctorSocket(env, add)
 	return out
 }
@@ -411,6 +412,51 @@ func doctorCache(cfg Config, add func(level, name, msg, fix string)) {
 		return
 	}
 	add(levelOK, name, dir+" is writable", "")
+}
+
+// doctorMetrics checks the metrics settings (metrics.go): off when CLEARANCE_CMP_METRICS_DIR is unset; otherwise the
+// directory must take a probe file, as each run's record needs, and a store already there must parse.
+func doctorMetrics(env DoctorEnv, add func(level, name, msg, fix string)) {
+	const name = "metrics"
+	dir, addr := strings.TrimSpace(env.Get(MetricsDirEnv)), strings.TrimSpace(env.Get(MetricsAddrEnv))
+	if addr != "" {
+		if _, _, err := net.SplitHostPort(addr); err != nil {
+			add(levelFail, name, fmt.Sprintf("%s=%q is not host:port (%v)", MetricsAddrEnv, addr, err), "set it to an address such as :9464, on the metrics container only")
+			return
+		}
+	}
+	if dir == "" {
+		if addr != "" {
+			add(levelFail, name, MetricsAddrEnv+" is set but "+MetricsDirEnv+" is not: the metrics server has no store to serve", "set "+MetricsDirEnv+" to the directory the plugin sidecar records into")
+			return
+		}
+		add(levelOK, name, "off: "+MetricsDirEnv+" is not set, runs record nothing (and nothing listens)", "")
+		return
+	}
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		add(levelFail, name, fmt.Sprintf("%s cannot be created (%v)", dir, errReason(err)), "mount a writable emptyDir there, shared with the metrics container")
+		return
+	}
+	f, err := os.CreateTemp(dir, ".doctor-probe-*")
+	if err != nil {
+		add(levelFail, name, fmt.Sprintf("%s is not writable (%v)", dir, errReason(err)), "mount a writable emptyDir there, owned by the sidecar's user (uid 999)")
+		return
+	}
+	_, werr := f.WriteString("clearance-cmp doctor probe\n")
+	cerr := f.Close()
+	if rerr := os.Remove(f.Name()); werr != nil || cerr != nil || rerr != nil {
+		add(levelFail, name, fmt.Sprintf("%s: the probe file could not be written or removed", dir), "check the volume is writable and has space")
+		return
+	}
+	if _, err := readStore(dir); err != nil {
+		add(levelWarn, name, fmt.Sprintf("%s is writable, but its store does not read (%v): the next run starts it again and counts a reset", dir, err), "nothing to do unless it keeps happening; then check nothing else writes "+MetricsStoreFile)
+		return
+	}
+	msg := "on: each run records into " + dir
+	if addr != "" {
+		msg += "; `clearance-cmp metrics` serves it on " + addr
+	}
+	add(levelOK, name, msg, "")
 }
 
 // doctorTools prints each tool's version; a missing tool fails.

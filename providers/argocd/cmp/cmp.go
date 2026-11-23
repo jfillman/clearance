@@ -29,6 +29,7 @@ type Deps struct {
 	Cache  Cache
 	Now    func() time.Time
 	Stderr io.Writer
+	Stats  *RunStats // the run's metrics (metrics.go); nil counts nothing
 }
 
 // Outcome is what `generate` decided.
@@ -149,6 +150,7 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 		return "", newErr(CodeRenderRevision, "the change cannot be registered for this revision", err)
 	}
 	ch, err := registerInTime(ctx, d.Core, req)
+	d.Stats.coreCall(err)
 	if err != nil {
 		if errors.Is(err, client.ErrCoreUnavailable) {
 			// The outage policy (docs/gate.md, C-6): a tree already cleared whose tier lets through while the core is
@@ -323,10 +325,20 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "doctor" { // the install preflight (doctor.go), not the plugin
 		os.Exit(doctorMain(os.Args[2:], os.Stdout, os.Stderr))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "metrics" { // the metrics server (metrics.go), not the plugin
+		os.Exit(metricsMain(os.Args[2:], os.Getenv, os.Stderr))
+	}
+	start, stats := time.Now(), NewRunStats()
+	// fail ends a run that failed before or after Generate: it is counted (CLEARANCE_CMP_METRICS_DIR is read on its own,
+	// so a sidecar setting that stops the plugin at start still shows as a fault) and the process exits.
+	fail := func(ce error, code int) {
+		fmt.Fprintln(os.Stderr, "clearance-cmp:", ce)
+		recordRunFromEnv(os.Getenv, Run{Version: pluginVersion, Err: ce, Duration: time.Since(start), Stats: stats}, os.Stderr)
+		os.Exit(code)
+	}
 	cfg, err := ParseConfig(os.Getenv)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "clearance-cmp:", classifyConfig(err))
-		os.Exit(2)
+		fail(classifyConfig(err), 2)
 	}
 	SetNetns(cfg.Netns)
 	SetFSSandbox(cfg.FSSandbox, cfg.TokenFile)
@@ -335,22 +347,34 @@ func main() {
 	}
 	core, err := newCore(cfg)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "clearance-cmp:", newErr(CodeFaultConfig, "the core client cannot be set up from the sidecar's settings", err))
-		os.Exit(2)
+		fail(newErr(CodeFaultConfig, "the core client cannot be set up from the sidecar's settings", err), 2)
 	}
 	if err := EnableReaping(); err != nil { // a descendant of a render step never outlives it, setsid or not (proc_linux.go)
-		fmt.Fprintln(os.Stderr, "clearance-cmp:", newErr(CodeFaultSandbox, "the render steps' processes cannot be contained", err))
-		os.Exit(2)
+		fail(newErr(CodeFaultSandbox, "the render steps' processes cannot be contained", err), 2)
 	}
-	d := Deps{Exec: OSExec, Run: OSRun, Core: core, Cache: Cache{Dir: cfg.CacheDir}, Now: time.Now, Stderr: os.Stderr}
+	d := Deps{Exec: OSExec, Run: OSRun, Core: core, Cache: Cache{Dir: cfg.CacheDir}, Now: time.Now, Stderr: os.Stderr, Stats: stats}
 	ctx, cancel := context.WithTimeout(context.Background(), PluginDeadline) // Argo CD kills a plugin at 90 s (ARGOCD_EXEC_TIMEOUT)
 	defer cancel()
-	_, err = Generate(ctx, d, cfg, ".", os.Stdout)
+	o, err := generateCounted(ctx, d, cfg, start)
 	if rerr := reapAll(); rerr != nil { // nothing a render step started outlives the plugin (proc_linux.go)
 		fmt.Fprintln(os.Stderr, "clearance-cmp: WARNING", rerr)
 	}
 	if err != nil { // a *CmpError: its code and short line come first
-		fmt.Fprintln(os.Stderr, "clearance-cmp:", err)
-		os.Exit(1)
+		cancel()
+		fail(err, 1)
 	}
+	recordRunFromEnv(os.Getenv, Run{Version: pluginVersion, Outcome: o, Duration: time.Since(start), Stats: stats}, os.Stderr)
+}
+
+// generateCounted is Generate for main: a panic outside the render phase (which renderTree already recovers as
+// CMP-FAULT-PANIC) is counted as that fault before the process dies of it, so the fault rate sees it.
+func generateCounted(ctx context.Context, d Deps, cfg Config, start time.Time) (Outcome, error) {
+	defer func() {
+		if p := recover(); p != nil {
+			recordRunFromEnv(os.Getenv, Run{Version: pluginVersion, Duration: time.Since(start), Stats: d.Stats,
+				Err: newErr(CodeFaultPanic, "the plugin panicked", fmt.Errorf("panic: %v", p))}, os.Stderr)
+			panic(p)
+		}
+	}()
+	return Generate(ctx, d, cfg, ".", os.Stdout)
 }

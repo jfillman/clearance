@@ -11,6 +11,24 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ### Added
 
+- **Metrics and alerts for the Argo CD plugin (W-34 F6; `providers/argocd/cmp`; off by default).** Each `generate` run
+  adds itself, as it ends, to a file-backed store in `CLEARANCE_CMP_METRICS_DIR` (`cmp-metrics.json`: an exclusive flock
+  serialises concurrent renders, and the write is a temporary file renamed over the store, so a run killed mid-write
+  leaves the store whole); `clearance-cmp metrics`, a small long-lived container beside the sidecar (same image, the
+  store mounted read-only, no token), serves it as Prometheus text on `CLEARANCE_CMP_METRICS_ADDR` (`/metrics`,
+  `/healthz`). Series: `clearance_cmp_renders_total{version,outcome}`, `clearance_cmp_render_errors_total{version,class,code}`
+  (the F4 classes and stable codes; a setting that stops the plugin at start and a panic count as faults),
+  `clearance_cmp_render_duration_seconds{version}` (histogram, 0.05 s to 80 s), `clearance_cmp_core_calls_total{version,result}`
+  (`ok`, `unavailable`, `error`), `clearance_cmp_last_run_timestamp_seconds`, `clearance_cmp_metrics_store_up` and
+  `clearance_cmp_metrics_store_resets_total`. Labels are a closed set: no token, URL, Application or message is recorded.
+  Recording waits at most 1 s for the lock and only warns on failure: a render's answer never depends on its metrics.
+  Both settings are optional (F8: unset records nothing, and `clearance-cmp metrics` refuses to start, so nothing
+  listens). `doctor` has a `metrics` check. docs/install-argocd-plugin.md, "Metrics and alerts": the sidecar and metrics
+  container, a PodMonitor, an example PrometheusRule (plugin fault rate, render error rate, core unreachable, p95 latency,
+  store down) and the canary gate (the canary's own `version` label, five queries to hold before promoting; the gate is
+  documented, not automated). The smoke test of the built image records a run and scrapes it.
+  **Upgrading:** nothing to do; with neither setting the plugin behaves as before.
+
 - **The platform's gate rule for the Argo CD agent (W-42; `providers/argocd/agent`, `charts/clearance-argocd-agent` `gateRule`; off by
   default).** A rule file (`--gate-rule-file`, rendered by the chart from `gateRule` into a read-only ConfigMap with a checksum that rolls
   the pod, and re-read every pass) selects Applications by project, destination-namespace glob and labels (AND inside an entry, OR across
