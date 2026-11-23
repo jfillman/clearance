@@ -603,11 +603,19 @@ spec:
           annotations:
             summary: "clearance-cmp {{ $labels.version }}: p95 render time is {{ $value | humanizeDuration }}"
         - alert: ClearanceCmpMetricsStoreDown
-          expr: max(clearance_cmp_metrics_store_up) == 0 or absent(clearance_cmp_metrics_store_up)
+          # Per pod: one replica's healthy store must not hide another's broken one.
+          expr: clearance_cmp_metrics_store_up == 0
           for: 15m
           labels: {severity: warning}
           annotations:
-            summary: "clearance-cmp metrics are not being served, or the store does not read"
+            summary: "clearance-cmp metrics store on {{ $labels.pod }} does not read"
+        - alert: ClearanceCmpMetricsNotScraped
+          # The PodMonitor's job is "<namespace>/<name>" by default; per target, and absent when no target is found.
+          expr: up{job="argocd/clearance-cmp"} == 0 or absent(up{job="argocd/clearance-cmp"})
+          for: 15m
+          labels: {severity: warning}
+          annotations:
+            summary: "clearance-cmp metrics are not being scraped (a metrics container is down, or none is found)"
 ```
 
 **Gating a canary on the alerts.** A release goes to the canary sidecar first (`clearance-canary`,
@@ -617,15 +625,19 @@ the default sidecar's. Before **Promote**, after the canary app was hard-refresh
 hard-refresh it more than once if it is quiet) and promote only when every one of these holds for `V`, the canary's
 version, and `D`, the default's:
 
-1. it rendered: `sum(increase(clearance_cmp_renders_total{version="V"}[1h])) >= 20` (a canary with no renders has not
-   passed);
-2. no plugin fault: `sum(increase(clearance_cmp_render_errors_total{version="V",class="fault"}[1h])) == 0`;
-3. no more render errors than the default, for the same apps: `clearance_cmp:render_error_ratio:rate10m{version="V"}`
-   at or below `{version="D"}` (an app that errors on both is not the release's doing);
-4. no slower: `clearance_cmp:duration_seconds:p95_10m{version="V"}` at most 1.5 times `{version="D"}`;
+1. it rendered: `sum(clearance_cmp_renders_total{version="V"}) >= 20` (a canary with no renders has not passed);
+2. no plugin fault: `sum(clearance_cmp_render_errors_total{version="V",class="fault"})` is 0 or has no series;
+3. no render error the canary's apps did not already have: `sum by (code) (clearance_cmp_render_errors_total{version="V",class="render"})`
+   is 0 or has no series, or every such error is one the same Application showed on `D` before it moved (its
+   ComparisonError in Argo CD). The series carry no Application, so the store cannot compare the same apps itself;
+4. no slower, as a fleet-level heuristic: `clearance_cmp:duration_seconds:p95_10m{version="V"}` at most 1.5 times
+   `{version="D"}` (the two sidecars render different apps, so read a gap here against what those apps are);
 5. none of the alerts above firing with `version="V"`.
 
-A query with no series (no fault was ever counted, so the ratio has no numerator) means zero, not a failure.
+Steps 1 to 3 read the **cumulative** counters, not `increase()`: a fresh version's series appear only with its first
+run (and an error series only with its first error), so `increase()` over the window would miss that first count. A
+version is fresh in the store when its canary starts, and the counters are per pod, so on a repo-server restart during
+the soak start the window again. A series that does not exist means zero, not a failure.
 
 Any failure is the **Roll back** step: remove the app from the canary and hard-refresh it. The gate is these queries
 read by the person promoting; nothing here blocks the promotion by itself. To automate it, run the five queries from

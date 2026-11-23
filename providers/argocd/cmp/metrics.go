@@ -337,6 +337,11 @@ func readStore(dir string) (*metricsStore, error) {
 	if st.Versions == nil {
 		st.Versions = map[string]*versionStats{}
 	}
+	for v, vs := range st.Versions {
+		if vs == nil { // "v": null decodes without an error; the store is not one this plugin wrote
+			return &metricsStore{Resets: st.Resets}, fmt.Errorf("%s has an empty entry for version %q", MetricsStoreFile, v)
+		}
+	}
 	return &st, nil
 }
 

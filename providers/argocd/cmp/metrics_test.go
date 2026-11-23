@@ -217,6 +217,18 @@ func TestAStrayTempFileOrABadStoreIsRecoveredFrom(t *testing.T) {
 	if e := scrape(t, dir); value(e, "clearance_cmp_metrics_store_resets_total") != 5 {
 		t.Fatal(e)
 	}
+	// Null version entries (they decode without an error) are a bad store too, never a panic at eviction.
+	nulls := `{"format":1,"versions":{"a":null,"b":null,"c":null,"d":null,"e":null,"f":null,"g":null,"h":null}}`
+	os.WriteFile(filepath.Join(dir, MetricsStoreFile), []byte(nulls), 0o644)
+	if e := scrape(t, dir); value(e, "clearance_cmp_metrics_store_up") != 0 {
+		t.Fatal(e)
+	}
+	if err := RecordRun(dir, Run{Version: "v2", Outcome: Held}, t0); err != nil {
+		t.Fatal(err)
+	}
+	if e := scrape(t, dir); value(e, `clearance_cmp_renders_total{version="v2",outcome="held"}`) != 1 || value(e, "clearance_cmp_metrics_store_up") != 1 {
+		t.Fatal(e)
+	}
 	// No store yet: up, and no series.
 	if e := scrape(t, t.TempDir()); value(e, "clearance_cmp_metrics_store_up") != 1 || strings.Contains(e, "{version=") {
 		t.Fatal(e)

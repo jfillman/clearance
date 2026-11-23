@@ -304,7 +304,10 @@ mout="$("$engine" run --rm $net_args --user 999:999 --read-only --cap-drop ALL -
   -e CLEARANCE_CMP_METRICS_DIR=/var/run/clearance-cmp-metrics -e CLEARANCE_CMP_METRICS_ADDR=127.0.0.1:9464 --entrypoint /bin/sh "$image" \
   -c '/usr/local/bin/clearance-cmp metrics & pid=$!; for i in 1 2 3 4 5 6 7 8 9 10; do wget -qO- http://127.0.0.1:9464/metrics && break; sleep 0.5; done; kill "$pid"' 2>&1)"
 echo "$mout" | grep -E '^clearance_cmp_(renders_total|metrics_store_up)' | sed 's/^/     metrics: /'
-echo "$mout" | grep -q '^clearance_cmp_renders_total{version="smoke",outcome="cleared"} 1$' && ok "the server serves the run, labelled with the image's version" || bad "the server did not serve the run: $mout"
+# The image's own build version (its OCI label, set from the same VERSION build argument as the binary's).
+want_version="$("$engine" image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$image" 2>/dev/null)"
+[ -n "$want_version" ] || want_version=dev
+echo "$mout" | grep -qF "clearance_cmp_renders_total{version=\"$want_version\",outcome=\"cleared\"} 1" && ok "the server serves the run, labelled with the image's version ($want_version)" || bad "the server did not serve the run as version $want_version: $mout"
 echo "$mout" | grep -q '^clearance_cmp_metrics_store_up 1$' && ok "the store reads (store_up 1)" || bad "store_up is not 1"
 # Off by default: no CLEARANCE_CMP_METRICS_ADDR, nothing listens and the command says so.
 # shellcheck disable=SC2086
