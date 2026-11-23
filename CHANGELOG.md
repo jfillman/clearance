@@ -9,6 +9,8 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.57.1] - 2026-11-23
+
 ### Fixed
 
 - **A plugin run that is killed leaves its warnings and progress on stderr again.** Since 0.57.0 the plugin held its
@@ -42,6 +44,15 @@ tree; with 4096 trees kept that is a tree last cleared thousands of trees ago.
   ends: a failure writes the code line first, then the held lines; a success writes them as before. No code or wording
   changes. `tools/cmp-conformance.sh` now asserts the code line comes first and no warning precedes it.
 
+- **The plugin's cleared-tree cache grew without bound (W-34 F7).** Every new tree a sidecar cleared added a file under
+  `CLEARANCE_CMP_CACHE_DIR` for the pod's whole life. It now keeps the newest 4096 (about 1 MiB), the oldest written
+  going first, pruned under a lock with the write. An evicted entry costs a call to the core on its tree's next render,
+  or, while the core is unreachable, an outage hold where the outage policy would have served it.
+- **A killed render's scratch stayed on the volume until the pod was replaced.** A run killed before its cleanup
+  (SIGKILL: Argo CD's exec timeout, an OOM kill) left its `clearance-render-*` directory, with the chart checkout and
+  the rendered manifests, on the `/tmp` emptyDir, which outlives the container. A later render now removes any such
+  directory (and `clearance-lookup-*`) older than 10 minutes; no live run is older than 80 s.
+
 ### Added
 
 - **A release runs the `go` and `chart` workflows on the tagged commit.** `release.yaml` calls them (`go-gates`,
@@ -74,17 +85,6 @@ tree; with 4096 trees kept that is a tree last cleared thousands of trees ago.
   rendered and checked against chart 10.3.2 in CI). Tests that a cold replica and a replica restarted mid-write emit
   the same manifests and that renders sharing one cache directory are safe (`providers/argocd/cmp/ha_test.go`).
   **Upgrading:** nothing to do; Clearance's charts and the plugin's defaults are unchanged.
-
-### Fixed
-
-- **The plugin's cleared-tree cache grew without bound (W-34 F7).** Every new tree a sidecar cleared added a file under
-  `CLEARANCE_CMP_CACHE_DIR` for the pod's whole life. It now keeps the newest 4096 (about 1 MiB), the oldest written
-  going first, pruned under a lock with the write. An evicted entry costs a call to the core on its tree's next render,
-  or, while the core is unreachable, an outage hold where the outage policy would have served it.
-- **A killed render's scratch stayed on the volume until the pod was replaced.** A run killed before its cleanup
-  (SIGKILL: Argo CD's exec timeout, an OOM kill) left its `clearance-render-*` directory, with the chart checkout and
-  the rendered manifests, on the `/tmp` emptyDir, which outlives the container. A later render now removes any such
-  directory (and `clearance-lookup-*`) older than 10 minutes; no live run is older than 80 s.
 
 ## [0.56.0] - 2026-11-23
 
