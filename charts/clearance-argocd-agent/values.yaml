@@ -52,6 +52,9 @@ grantAPI: clearance.hangar.io/v1
 # out-of-band on every held release. url empty: coreURL. hostAlias is ip=host[,host], empty when the waiter has none.
 waitJob:
   image: ""
+  # The previous wait image, also accepted for one release after image changes, so a held wait Job still running it is not
+  # reported as out-of-band. Set it to the admission policy exemption's previous image. Empty: only image is accepted.
+  previousImage: ""
   url: ""
   hostAlias: ""
   # The ConfigMap (key ca.crt) the wait Job mounts as its CA for an https core with a private CA; it must exist in every

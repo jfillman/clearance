@@ -253,3 +253,30 @@ func TestReplayTestAdmissionCases(t *testing.T) {
 		t.Fatalf("only %d cases replayed", n)
 	}
 }
+
+// I-59: with a previous wait-image pin the webhook exempts a Job on either image for one release; a third image and an
+// unset pin are unchanged.
+func TestWaitJobOnThePreviousImage(t *testing.T) {
+	const prevImage = "registry.invalid/clearance-wait@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	obj := func(img string) Object {
+		d := waitJob(func(_, _, c map[string]any) { c["image"] = img })
+		spec, err := json.Marshal(d["spec"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return Object{APIVersion: "batch/v1", Kind: "Job", Name: agent.WaitJobName,
+			Labels:      map[string]string{"clearance.hangar.io/injected": "wait"},
+			Annotations: map[string]string{"argocd.argoproj.io/hook": "PreSync"}, Spec: spec}
+	}
+	pins := replayPins
+	pins.PreviousImage = prevImage
+	if !pins.exempt(obj(waitImage)) || !pins.exempt(obj(prevImage)) {
+		t.Error("both pinned images must be exempt")
+	}
+	if pins.exempt(obj("registry.invalid/other@sha256:2222")) {
+		t.Error("a third image must not be exempt")
+	}
+	if replayPins.exempt(obj(prevImage)) {
+		t.Error("with no previous pin the previous image must not be exempt")
+	}
+}
