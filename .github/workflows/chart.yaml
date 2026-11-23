@@ -2,10 +2,12 @@ name: chart
 # charts/clearance: helm lint, render tests (tools/charttest) and kubeconform, then the install test on a fresh kind
 # cluster with no Airframe, Glidepath or Autopilot: a plain Postgres, the chart from this checkout, the image built
 # from this checkout, and a fake provider (tools/chart-install-test). release.yaml reruns the install test on the
-# published chart and image.
+# published chart and image. release.yaml also calls this workflow (workflow_call, `chart-gates`) on the tagged commit
+# before it builds anything.
 on:
   push:
   pull_request:
+  workflow_call:
 permissions:
   contents: read
 env:

@@ -2345,8 +2345,8 @@ Unit tests fake git, helm and the core and run one render at a time, so they can
 parameters or a long-lived sidecar do. `.github/workflows/cmp.yaml` runs six jobs on every push and pull request, and
 `release.yaml` calls the same workflow (`cmp-gates`) on the tagged commit before it builds anything: the core image and
 the provider images need it, and every chart, the install test and the GitHub Release come after those, so **a tag whose
-plugin fails one publishes nothing**. Main's other CI (the `go` and `chart` workflows) is still checked by hand before a
-tag is cut.
+plugin fails one publishes nothing**. Main's other CI (the `go` and `chart` workflows) is called the same way
+(`go-gates`, `chart-gates`), so a tag whose Go tests or chart checks fail publishes nothing either.
 
 | Job | What it runs | It fails when |
 | --- | --- | --- |

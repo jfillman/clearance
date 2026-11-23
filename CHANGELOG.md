@@ -16,6 +16,10 @@ tree; with 4096 trees kept that is a tree last cleared thousands of trees ago.
 
 ### Added
 
+- **A release runs the `go` and `chart` workflows on the tagged commit.** `release.yaml` calls them (`go-gates`,
+  `chart-gates`, through `workflow_call`) as required jobs beside `cmp-gates`: no image, chart or GitHub Release is
+  published unless the Go build and tests and the chart checks and install test pass on that commit. Before, they were
+  checked by hand on main before a tag was cut. Their push and pull-request runs are unchanged.
 - **Argo CD conformance of the plugin image (W-34 F3; `cmp-conformance` in `.github/workflows/cmp.yaml`).** On every
   push and pull request, and through `release.yaml`'s `cmp-gates` before any image is built, the built `clearance-cmp`
   image runs as the plugin sidecar of a real Argo CD in a kind cluster, installed with the official `argo-cd` chart and
