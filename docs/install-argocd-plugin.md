@@ -632,12 +632,18 @@ version, and `D`, the default's:
    ComparisonError in Argo CD). The series carry no Application, so the store cannot compare the same apps itself;
 4. no slower, as a fleet-level heuristic: `clearance_cmp:duration_seconds:p95_10m{version="V"}` at most 1.5 times
    `{version="D"}` (the two sidecars render different apps, so read a gap here against what those apps are);
-5. none of the alerts above firing with `version="V"`.
+5. none of the alerts above firing with `version="V"`, and `ClearanceCmpMetricsNotScraped` not firing: its `up`
+   series carry no `version` label, so the check above does not cover it, and a replica that is not scraped drops its
+   canary counts (its faults among them) out of steps 1 to 3 while the other replicas can still meet step 1.
 
 Steps 1 to 3 read the **cumulative** counters, not `increase()`: a fresh version's series appear only with its first
 run (and an error series only with its first error), so `increase()` over the window would miss that first count. A
-version is fresh in the store when its canary starts, and the counters are per pod, so on a repo-server restart during
-the soak start the window again. A series that does not exist means zero, not a failure.
+version is fresh in the store when its canary starts. The counters are per pod and a restarted pod's store starts
+empty, so **if any repo-server pod restarts during the soak, the soak starts again from fresh stores on every pod**:
+roll every repo-server pod (each gets a new emptyDir), hard-refresh the canary app, and start the window. Otherwise
+step 1 could pass on renders the other pods recorded before the restart, with none after it. A fault the canary
+showed before the restart (in Prometheus's history, `max_over_time(clearance_cmp_render_errors_total{version="V",class="fault"}[<soak>])`)
+still fails it. A series that does not exist means zero, not a failure.
 
 Any failure is the **Roll back** step: remove the app from the canary and hard-refresh it. The gate is these queries
 read by the person promoting; nothing here blocks the promotion by itself. To automate it, run the five queries from
