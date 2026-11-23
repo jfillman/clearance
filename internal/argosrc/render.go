@@ -84,7 +84,7 @@ func (st *state) git(ctx context.Context, pos int, repo, rev string) (checkout, 
 	}
 	var c checkout
 	if l, ok := st.o.local(repo, rev); ok {
-		dir, err := st.o.copyCheckout(pos, l)
+		dir, err := st.o.copyCheckout(ctx, pos, l)
 		if err != nil {
 			return checkout{}, err
 		}

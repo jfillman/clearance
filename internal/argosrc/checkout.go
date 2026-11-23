@@ -1,13 +1,13 @@
 package argosrc
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // Checkout is a repository already on disk at a known commit: the checkout Argo CD hands the plugin of the source that
@@ -21,11 +21,11 @@ type Checkout struct {
 	Dir            string // the repository's root on disk
 }
 
-// sameRevision is whether two requested revisions name the same thing as written; "" and HEAD are one. A branch and
+// sameRevision is whether two requested revisions are the same as written; only "" and HEAD are one. A branch and
 // the commit it is at are not: the plugin cannot tell that they agree without asking the remote.
 func sameRevision(a, b string) bool {
 	norm := func(s string) string {
-		if s = strings.TrimSpace(s); s == "" {
+		if s == "" {
 			return "HEAD"
 		}
 		return s
@@ -46,8 +46,8 @@ func (o Options) local(repo, rev string) (Checkout, bool) {
 // copyCheckout copies a Checkout into a new directory of the render's scratch and returns it: what fetchGit returns
 // for a fetch, with the same refusals (submodules, a link that leaves the repository) and the unpack bounds. The copy
 // is the render's own, so a step that writes into its tree (kustomize edit, helm dependency build) never writes into
-// Argo CD's checkout. A .git entry at the root is not copied.
-func (o Options) copyCheckout(i int, c Checkout) (string, error) {
+// Argo CD's checkout. A .git entry at the root is not copied. The copy stops when ctx is done.
+func (o Options) copyCheckout(ctx context.Context, i int, c Checkout) (string, error) {
 	src, err := filepath.EvalSymlinks(c.Dir)
 	if err != nil {
 		return "", srcErrorf("the Application's checkout: %w", i, err)
@@ -66,6 +66,9 @@ func (o Options) copyCheckout(i int, c Checkout) (string, error) {
 	var total int64
 	err = filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		rel, err := filepath.Rel(src, p)
@@ -103,7 +106,7 @@ func (o Options) copyCheckout(i int, c Checkout) (string, error) {
 			if info.Mode()&0o111 != 0 {
 				mode = 0o755
 			}
-			return copyFile(p, target, mode)
+			return copyFile(ctx, p, target, mode, info.Size())
 		default:
 			return fmt.Errorf("%s is a %s, which is refused", rel, t.Type())
 		}
@@ -120,7 +123,8 @@ func (o Options) copyCheckout(i int, c Checkout) (string, error) {
 	return dir, nil
 }
 
-func copyFile(from, to string, mode os.FileMode) error {
+// copyFile copies at most size bytes (what the walk counted), in chunks, stopping when ctx is done.
+func copyFile(ctx context.Context, from, to string, mode os.FileMode, size int64) error {
 	in, err := os.Open(from)
 	if err != nil {
 		return err
@@ -130,9 +134,20 @@ func copyFile(from, to string, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
+	r := io.LimitReader(in, size)
+	for {
+		if err := ctx.Err(); err != nil {
+			out.Close()
+			return err
+		}
+		n, err := io.CopyN(out, r, 1<<20)
+		if errors.Is(err, io.EOF) || (err == nil && n == 0) {
+			break
+		}
+		if err != nil {
+			out.Close()
+			return err
+		}
 	}
 	return out.Close()
 }

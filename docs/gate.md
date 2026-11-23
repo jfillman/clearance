@@ -2590,14 +2590,16 @@ of such a ref source resolves against the copy. So the Application's own reposit
 * the repository: the source's `repoURL` and `ARGOCD_APP_SOURCE_REPO_URL` normalise to the same one (`NormalizeRepo`:
   scheme and host case, a trailing `.git` or `/`, a default port; `https://` and `ssh://` are different repositories);
 * the revision: the source's `targetRevision` is the carrier's (`ARGOCD_APP_SOURCE_TARGET_REVISION`) as written, empty and
-  `HEAD` being one. A branch and the commit it is at do not match (the plugin cannot tell they agree without asking the
+  `HEAD` being one (no other normalising, whitespace included). A branch is a valid `targetRevision` when it is the
+  carrier's; a branch and the commit it is at do not match (the plugin cannot tell they agree without asking the
   remote). The switched Application's carrier copies its first git source's `targetRevision`, so its own ref source matches;
 * the commit: `ARGOCD_APP_REVISION` is a full commit, recorded as the source's resolved commit; the plugin's root is found
   from its working directory and `ARGOCD_APP_SOURCE_PATH`.
 
-Anything else (another revision of the same repository, another repository, a revision that is not a commit) is fetched
-as before, and fails as before when the repository is private. The copy keeps the fetch's refusals: a `.gitmodules`
-file, a link that leaves the repository, the unpack bounds; a `.git` at the root is not copied, and nothing is written
+Anything else (another revision of the same repository, another repository, an `ARGOCD_APP_REVISION` that is not a full
+commit) is fetched as before, and fails as before when the repository is private. The copy keeps the fetch's refusals: a `.gitmodules`
+file, a link that leaves the repository, the unpack bounds, and the render's scratch limit (`CLEARANCE_CMP_RENDER_MAX_TEMP`, measured after the copy too); it stops at
+the render's deadline; a `.git` at the root is not copied, and nothing is written
 into Argo CD's checkout. The log line marks such a source `(Argo CD's checkout)` and the provenance has `checkout: true`.
 Argo CD sends the plugin the whole repository unless the repo-server is told otherwise: with
 `ARGOCD_REPO_SERVER_PLUGIN_USE_MANIFEST_GENERATE_PATHS` or tar exclusions (`reposerver.plugin.tar.exclusions`), a value

@@ -155,3 +155,20 @@ func TestOwnCheckouts(t *testing.T) {
 		}
 	}
 }
+
+// The copy counts against the render's scratch limit even when no step runs after it (a Directory source).
+func TestTheCheckoutCopyIsBoundByTheScratchLimit(t *testing.T) {
+	e, _ := ownEnv(t, ".", "main")
+	big := make([]byte, 17<<20)
+	if err := os.WriteFile(filepath.Join(e.src, "big.bin"), big, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e.cfg.Sources = `[{"repoURL":"` + privGitops + `","targetRevision":"main","path":"hangar-prod","directory":{}}]`
+	e.cfg.Limits = DefaultLimits()
+	e.cfg.Limits.Temp = 16 << 20
+	_, _, err := e.generate(t)
+	var ce *CmpError
+	if !errors.As(err, &ce) || ce.Code != CodeRenderLimitTemp {
+		t.Fatalf("err %v", err)
+	}
+}

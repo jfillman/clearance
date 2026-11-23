@@ -101,7 +101,7 @@ func TestSameRevision(t *testing.T) {
 	for _, c := range []struct {
 		a, b string
 		want bool
-	}{{"", "HEAD", true}, {" main ", "main", true}, {"main", "Main", false}, {"main", ownCommit, false}, {"", "main", false}} {
+	}{{"", "HEAD", true}, {"main", "main", true}, {" main ", "main", false}, {"main", "Main", false}, {"main", ownCommit, false}, {"", "main", false}} {
 		if got := sameRevision(c.a, c.b); got != c.want {
 			t.Errorf("sameRevision(%q, %q) = %v", c.a, c.b, got)
 		}
@@ -129,7 +129,7 @@ func TestTheCheckoutCopyKeepsTheFetchRefusals(t *testing.T) {
 			co := ownCheckout(t)
 			setup(co)
 			o := Options{Run: (&recorder{fake: noCredential}).run, Work: t.TempDir()}
-			if _, err := o.copyCheckout(1, Checkout{RepoURL: ownRepo, TargetRevision: "main", Commit: ownCommit, Dir: co}); err == nil || !IsSources(err) {
+			if _, err := o.copyCheckout(context.Background(), 1, Checkout{RepoURL: ownRepo, TargetRevision: "main", Commit: ownCommit, Dir: co}); err == nil || !IsSources(err) {
 				t.Fatalf("err %v", err)
 			}
 		})
@@ -140,11 +140,21 @@ func TestTheCheckoutCopyKeepsTheFetchRefusals(t *testing.T) {
 		t.Fatal(err)
 	}
 	o := Options{Work: t.TempDir()}
-	dir, err := o.copyCheckout(1, Checkout{RepoURL: ownRepo, TargetRevision: "main", Commit: ownCommit, Dir: co})
+	dir, err := o.copyCheckout(context.Background(), 1, Checkout{RepoURL: ownRepo, TargetRevision: "main", Commit: ownCommit, Dir: co})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if b, err := os.ReadFile(filepath.Join(dir, "apps", "alias.yaml")); err != nil || string(b) != "color: violet\n" {
 		t.Fatalf("%q %v", b, err)
+	}
+}
+
+// A render whose deadline has passed stops copying.
+func TestTheCheckoutCopyStopsWhenTheRenderIsDone(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	o := Options{Work: t.TempDir()}
+	if _, err := o.copyCheckout(ctx, 1, Checkout{RepoURL: ownRepo, TargetRevision: "main", Commit: ownCommit, Dir: ownCheckout(t)}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err %v", err)
 	}
 }

@@ -88,7 +88,7 @@ func ParseConfig(get func(string) string) (Config, error) {
 	c := Config{
 		AppName: get("ARGOCD_APP_NAME"), Destination: get("ARGOCD_APP_NAMESPACE"), Revision: get("ARGOCD_APP_REVISION"),
 		SourceRepo: get("ARGOCD_APP_SOURCE_REPO_URL"), SourcePath: get("ARGOCD_APP_SOURCE_PATH"),
-		SourceRev: strings.TrimSpace(get("ARGOCD_APP_SOURCE_TARGET_REVISION")),
+		SourceRev: get("ARGOCD_APP_SOURCE_TARGET_REVISION"),
 		Project:   get("ARGOCD_APP_PROJECT_NAME"), KubeVersion: strings.TrimSpace(get("KUBE_VERSION")),
 		Sources: strings.TrimSpace(get("PARAM_SOURCES")), KustomizeBuildOptions: p("kustomizeBuildOptions"),
 		App: p("app"), Env: p("env"), Cluster: p("cluster"), ChartRepo: p("chartRepo"), ChartRev: p("chartRevision"),

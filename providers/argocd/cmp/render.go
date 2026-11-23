@@ -391,9 +391,22 @@ func RenderSources(ctx context.Context, run argosrc.Runner, cfg Config, srcDir s
 		return nil, err
 	}
 	defer os.RemoveAll(tmp)
-	res, err := argosrc.Render(ctx, argosrc.Options{Run: run, Work: tmp, Local: ownCheckouts(cfg, req.Sources, srcDir)}, req)
+	local := ownCheckouts(cfg, req.Sources, srcDir)
+	res, err := argosrc.Render(ctx, argosrc.Options{Run: run, Work: tmp, Local: local}, req)
 	if err != nil {
 		return nil, err
+	}
+	// A copy of Argo CD's checkout is written by the plugin itself, not by a step, so no step's scratch measurement
+	// may follow it (a Directory source runs none): measure the scratch here, before it is removed.
+	if b := budgetFrom(ctx); b != nil && len(local) > 0 {
+		n, err := dirSize(b.root)
+		if err != nil {
+			return nil, fmt.Errorf("the render's scratch could not be measured: %w", err)
+		}
+		if n > b.lim.Temp {
+			return nil, &LimitError{Limit: LimitTemp, Setting: EnvMaxTemp, Bound: FormatSize(b.lim.Temp), Step: "copy of Argo CD's checkout",
+				Detail: fmt.Sprintf("left the render's scratch directory at %s", FormatSize(n))}
+		}
 	}
 	return &Rendered{Manifests: res.Manifests, Generic: true, Sources: res.Sources, Release: argosrc.ReleaseIDFromValues(res.ValueDocs)}, nil
 }
