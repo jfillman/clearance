@@ -32,7 +32,7 @@ var (
 // everything else: a `file://`, `ext::` or local path is a read of the sidecar's own disk.
 func (o Options) checkGitURL(i int, repo string) error {
 	if repo == "" || strings.HasPrefix(repo, "-") {
-		return fmt.Errorf("source %d: the repository URL %q is not valid", i, repo)
+		return srcErrorf("the repository URL %q is not valid", i, repo)
 	}
 	if scpLikeRx.MatchString(repo) {
 		return nil
@@ -42,12 +42,12 @@ func (o Options) checkGitURL(i int, repo string) error {
 		case "https", "http", "ssh", "git":
 			return nil
 		}
-		return fmt.Errorf("source %d: the repository URL scheme %q is not allowed (https, http, ssh, git)", i, u.Scheme)
+		return srcErrorf("the repository URL scheme %q is not allowed (https, http, ssh, git)", i, u.Scheme)
 	}
 	if o.AllowLocalRepos {
 		return nil
 	}
-	return fmt.Errorf("source %d: the repository URL %q is not a remote URL", i, repo)
+	return srcErrorf("the repository URL %q is not a remote URL", i, repo)
 }
 
 // fetchGit checks out the source's repository at its target revision into a new directory (HEAD when none is given)
@@ -62,7 +62,7 @@ func (o Options) fetchGit(ctx context.Context, i int, repo, rev string) (dir, co
 		rev = "HEAD"
 	}
 	if !revisionRx.MatchString(rev) && rev != "HEAD" {
-		return "", "", fmt.Errorf("source %d: targetRevision %q is not a branch, tag or commit", i, rev)
+		return "", "", srcErrorf("targetRevision %q is not a branch, tag or commit", i, rev)
 	}
 	dir, err = os.MkdirTemp(o.Work, "git-")
 	if err != nil {
@@ -83,16 +83,16 @@ func (o Options) fetchGit(ctx context.Context, i int, repo, rev string) (dir, co
 			if a[len(a)-1] == rev && (strings.ContainsAny(rev, "*^~<>=| ") || strings.Contains(rev, ".x")) {
 				hint = " (a semver constraint is not an exact revision; the plugin pins a branch, a tag or a commit)"
 			}
-			return "", "", fmt.Errorf("source %d: fetch %s at %s: %w%s", i, redactURL(repo), rev, err, hint)
+			return "", "", srcErrorf("fetch %s at %s: %w%s", i, redactURL(repo), rev, err, hint)
 		}
 	}
 	out, err := o.Run(ctx, dir, env, "git", "rev-parse", "HEAD^{commit}")
 	if err != nil {
-		return "", "", fmt.Errorf("source %d: peel %s: %w", i, rev, err)
+		return "", "", srcErrorf("peel %s: %w", i, rev, err)
 	}
 	commit = strings.TrimSpace(string(out))
 	if !sha40Rx.MatchString(commit) {
-		return "", "", fmt.Errorf("source %d: %s peeled to %q, not a commit", i, rev, commit)
+		return "", "", srcErrorf("%s peeled to %q, not a commit", i, rev, commit)
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".gitmodules")); err == nil {
 		return "", "", unsupported(i, "git submodules", "the repository has a .gitmodules file")
@@ -101,7 +101,7 @@ func (o Options) fetchGit(ctx context.Context, i int, repo, rev string) (dir, co
 		return "", "", err
 	}
 	if err := checkSymlinks(dir); err != nil {
-		return "", "", fmt.Errorf("source %d: %w", i, err)
+		return "", "", srcErrorf("%w", i, err)
 	}
 	return dir, commit, nil
 }
@@ -142,7 +142,7 @@ func isOCIChartRepo(repo string) bool {
 // directory and the sha256 of the packaged chart, which is what a version names only by convention.
 func (o Options) fetchChart(ctx context.Context, i int, repo, chart, version string) (dir, digest string, err error) {
 	if !chartNmRx.MatchString(chart) || strings.Contains(chart, "..") {
-		return "", "", fmt.Errorf("source %d: chart name %q is not valid", i, chart)
+		return "", "", srcErrorf("chart name %q is not valid", i, chart)
 	}
 	if version != "" && !versionRx.MatchString(version) {
 		return "", "", unsupported(i, "a chart version constraint", fmt.Sprintf("targetRevision %q is not an exact chart version", version))
@@ -161,22 +161,22 @@ func (o Options) fetchChart(ctx context.Context, i int, repo, chart, version str
 	}
 	if oci {
 		if strings.HasPrefix(repo, "-") || strings.ContainsAny(repo, " \t\n") {
-			return "", "", fmt.Errorf("source %d: the registry %q is not valid", i, repo)
+			return "", "", srcErrorf("the registry %q is not valid", i, repo)
 		}
 		args = append(args, "oci://"+strings.TrimSuffix(repo, "/")+"/"+chart)
 	} else {
 		u, uerr := url.Parse(repo)
 		if uerr != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-			return "", "", fmt.Errorf("source %d: the chart repository %q is not an http(s) URL or an OCI registry", i, repo)
+			return "", "", srcErrorf("the chart repository %q is not an http(s) URL or an OCI registry", i, repo)
 		}
 		args = append(args, "--repo", repo, chart)
 	}
 	if _, err := o.Run(ctx, pull, o.helmEnv(), "helm", args...); err != nil {
-		return "", "", fmt.Errorf("source %d: pull chart %s %s from %s: %w", i, chart, version, redactURL(repo), err)
+		return "", "", srcErrorf("pull chart %s %s from %s: %w", i, chart, version, redactURL(repo), err)
 	}
 	ents, err := os.ReadDir(pull)
 	if err != nil || len(ents) != 1 {
-		return "", "", fmt.Errorf("source %d: helm pull left %d files, expected the one package", i, len(ents))
+		return "", "", srcErrorf("helm pull left %d files, expected the one package", i, len(ents))
 	}
 	tgz := filepath.Join(pull, ents[0].Name())
 	b, err := os.ReadFile(tgz)
@@ -190,18 +190,18 @@ func (o Options) fetchChart(ctx context.Context, i int, repo, chart, version str
 		return "", "", err
 	}
 	if err := untar(b, dir); err != nil {
-		return "", "", fmt.Errorf("source %d: unpack the chart: %w", i, err)
+		return "", "", srcErrorf("unpack the chart: %w", i, err)
 	}
 	subs, err := os.ReadDir(dir)
 	if err != nil || len(subs) != 1 || !subs[0].IsDir() {
-		return "", "", fmt.Errorf("source %d: the chart package does not hold exactly one directory", i)
+		return "", "", srcErrorf("the chart package does not hold exactly one directory", i)
 	}
 	if dir, err = filepath.EvalSymlinks(dir); err != nil {
 		return "", "", err
 	}
 	root := filepath.Join(dir, subs[0].Name())
 	if err := checkSymlinks(root); err != nil {
-		return "", "", fmt.Errorf("source %d: %w", i, err)
+		return "", "", srcErrorf("%w", i, err)
 	}
 	return root, digest, nil
 }

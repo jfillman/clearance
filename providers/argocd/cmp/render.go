@@ -305,7 +305,7 @@ func Render(ctx context.Context, run Exec, cfg Config, srcDir string) (*Rendered
 		chartRoot = filepath.Join(tmp, "chart")
 	}
 	if err := argosrc.CheckSymlinksIn(chart, chartRoot); err != nil {
-		return nil, fmt.Errorf("refused: the chart: %w", err)
+		return nil, renderErrf(kindRefused, "refused: the chart: %w", err)
 	}
 
 	args := []string{"template", cfg.AppName, chart, "--namespace", cfg.Destination}
@@ -313,7 +313,7 @@ func Render(ctx context.Context, run Exec, cfg Config, srcDir string) (*Rendered
 		p := filepath.Join(srcDir, filepath.FromSlash(f))
 		if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() { // a missing one is skipped (ignoreMissingValueFiles)
 			if real, err := filepath.EvalSymlinks(p); err != nil || !strings.HasPrefix(real+"/", realDir(srcDir)+"/") {
-				return nil, fmt.Errorf("refused: value file %s resolves outside the repository", f)
+				return nil, renderErrf(kindRefused, "refused: value file %s resolves outside the repository", f)
 			}
 			args = append(args, "-f", p)
 		}
@@ -327,17 +327,17 @@ func Render(ctx context.Context, run Exec, cfg Config, srcDir string) (*Rendered
 	}
 	helm, err := run(ctx, srcDir, "helm", args...)
 	if err != nil {
-		return nil, fmt.Errorf("helm template: %w", err)
+		return nil, renderErrf(kindHelm, "helm template: %w", err)
 	}
 	out.Manifests = helm
 	if cfg.KustomizeDir != "" {
 		if st, err := os.Stat(filepath.Join(srcDir, filepath.FromSlash(cfg.KustomizeDir))); err == nil && st.IsDir() {
 			if err := argosrc.CheckSymlinksIn(filepath.Join(srcDir, filepath.FromSlash(cfg.KustomizeDir)), srcDir); err != nil {
-				return nil, fmt.Errorf("refused: kustomize %s: %w", cfg.KustomizeDir, err)
+				return nil, renderErrf(kindRefused, "refused: kustomize %s: %w", cfg.KustomizeDir, err)
 			}
 			k, err := run(ctx, srcDir, "kustomize", "build", filepath.Join(srcDir, filepath.FromSlash(cfg.KustomizeDir)))
 			if err != nil {
-				return nil, fmt.Errorf("kustomize build: %w", err)
+				return nil, renderErrf(kindKustomize, "kustomize build: %w", err)
 			}
 			out.Manifests = append(append(append([]byte{}, helm...), []byte("\n---\n")...), k...)
 		}

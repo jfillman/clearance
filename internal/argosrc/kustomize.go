@@ -39,7 +39,7 @@ func (st *state) kustomize(ctx context.Context, pos int, req Request, s Source, 
 	edit := func(args ...string) error {
 		_, err := st.o.Run(ctx, appPath, netEnv, "kustomize", append([]string{"edit"}, args...)...)
 		if err != nil {
-			return fmt.Errorf("source %d: kustomize %s: %w", pos, strings.Join(args[:2], " "), err)
+			return srcErrorf("kustomize %s: %w", pos, strings.Join(args[:2], " "), err)
 		}
 		return nil
 	}
@@ -67,7 +67,7 @@ func (st *state) kustomize(ctx context.Context, pos int, req Request, s Source, 
 		for _, r := range k.Replicas {
 			n, err := replicaCount(r.Count)
 			if err != nil {
-				return nil, fmt.Errorf("source %d: %w", pos, err)
+				return nil, srcErrorf("%w", pos, err)
 			}
 			args = append(args, fmt.Sprintf("%s=%d", r.Name, n))
 		}
@@ -141,7 +141,7 @@ func (st *state) kustomize(ctx context.Context, pos int, req Request, s Source, 
 	args = append(args, buildOpts...)
 	out, err := st.o.Run(ctx, root, netEnv, "kustomize", args...)
 	if err != nil {
-		return nil, fmt.Errorf("source %d: kustomize build: %w", pos, err)
+		return nil, srcErrorf("kustomize build: %w", pos, err)
 	}
 	return out, nil
 }

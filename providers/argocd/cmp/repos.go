@@ -185,19 +185,19 @@ func (c Config) Canonical() (Config, error) {
 	for i, w := range want {
 		k, err := NormalizeRepo(w.repo, w.oci)
 		if err != nil {
-			return c, fmt.Errorf("refused: the %s %w; the plugin fetches only remote git repositories and chart registries the platform allows", w.what, err)
+			return c, renderErrf(kindRefused, "refused: the %s %w; the plugin fetches only remote git repositories and chart registries the platform allows", w.what, err)
 		}
 		if len(c.AllowedRepos) == 0 {
-			return c, fmt.Errorf("refused: CLEARANCE_CHART_REPOS is not set on the plugin sidecar, so no %s may be fetched (%s); the platform must list the repositories charts may come from", w.what, redact(w.repo))
+			return c, renderErrf(kindNoRepos, "refused: CLEARANCE_CHART_REPOS is not set on the plugin sidecar, so no %s may be fetched (%s); the platform must list the repositories charts may come from", w.what, redact(w.repo))
 		}
 		own, ok := set[k]
 		if !ok {
-			return c, fmt.Errorf("refused: the %s %s is not one of the repositories this cluster's platform allows (CLEARANCE_CHART_REPOS); an app's chart must come from the platform's chart repository", w.what, redact(w.repo))
+			return c, renderErrf(kindRefused, "refused: the %s %s is not one of the repositories this cluster's platform allows (CLEARANCE_CHART_REPOS); an app's chart must come from the platform's chart repository", w.what, redact(w.repo))
 		}
 		if w.oci { // argosrc reads an OCI registry as a URL with no scheme
 			own = own[len("oci://"):] // an oci:// entry (any case of the scheme): the checks below ran on it
 		} else if hasOCIScheme(own) {
-			return c, fmt.Errorf("refused: the %s %s is listed as an OCI registry but is not one", w.what, redact(w.repo))
+			return c, renderErrf(kindRefused, "refused: the %s %s is listed as an OCI registry but is not one", w.what, redact(w.repo))
 		}
 		canon[i] = own
 	}

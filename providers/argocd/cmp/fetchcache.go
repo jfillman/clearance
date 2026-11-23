@@ -155,15 +155,15 @@ func (c ChartCache) lockPath(repo, commit string) string {
 // cloneChart is the uncached fetch: a shallow clone at the pinned tag, and the commit it peels to.
 func cloneChart(ctx context.Context, run Exec, repo, rev, dest string) (string, error) {
 	if _, err := run(ctx, filepath.Dir(dest), "git", "clone", "--quiet", "--depth", "1", "--branch", rev, "--", repo, dest); err != nil {
-		return "", fmt.Errorf("fetch the chart at %s: %w", rev, err)
+		return "", renderErrf(kindChartFetch, "fetch the chart at %s: %w", rev, err)
 	}
 	sha, err := run(ctx, dest, "git", "rev-parse", "HEAD^{commit}")
 	if err != nil {
-		return "", fmt.Errorf("peel the chart tag: %w", err)
+		return "", renderErrf(kindChartFetch, "peel the chart tag: %w", err)
 	}
 	commit := strings.TrimSpace(string(sha))
 	if !sha40.MatchString(commit) {
-		return "", fmt.Errorf("the chart tag %s peeled to %q, not a commit", rev, commit)
+		return "", renderErrf(kindChartFetch, "the chart tag %s peeled to %q, not a commit", rev, commit)
 	}
 	return commit, nil
 }
