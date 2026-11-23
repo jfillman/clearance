@@ -634,16 +634,23 @@ version, and `D`, the default's:
    `{version="D"}` (the two sidecars render different apps, so read a gap here against what those apps are);
 5. none of the alerts above firing with `version="V"`, and `ClearanceCmpMetricsNotScraped` not firing: its `up`
    series carry no `version` label, so the check above does not cover it, and a replica that is not scraped drops its
-   canary counts (its faults among them) out of steps 1 to 3 while the other replicas can still meet step 1.
+   canary counts (its faults among them) out of steps 1 to 3 while the other replicas can still meet step 1. And
+   every replica is scraped: `count(up{job="argocd/clearance-cmp"} == 1)` equals the repo-server's ready replicas
+   (`kubectl -n argocd get deploy argocd-repo-server -o jsonpath='{.status.readyReplicas}'`, or
+   `kube_deployment_status_replicas_ready` from kube-state-metrics). A replica that target discovery misses has no
+   `up` series at all, so the alert cannot see it.
 
 Steps 1 to 3 read the **cumulative** counters, not `increase()`: a fresh version's series appear only with its first
 run (and an error series only with its first error), so `increase()` over the window would miss that first count. A
 version is fresh in the store when its canary starts. The counters are per pod and a restarted pod's store starts
 empty, so **if any repo-server pod restarts during the soak, the soak starts again from fresh stores on every pod**:
 roll every repo-server pod (each gets a new emptyDir), hard-refresh the canary app, and start the window. Otherwise
-step 1 could pass on renders the other pods recorded before the restart, with none after it. A fault the canary
-showed before the restart (in Prometheus's history, `max_over_time(clearance_cmp_render_errors_total{version="V",class="fault"}[<soak>])`)
-still fails it. A series that does not exist means zero, not a failure.
+step 1 could pass on renders the other pods recorded before the restart, with none after it. **Before** rolling the
+pods, check what the canary did so far: run steps 2 and 3 with a range from the canary's start to now, for example
+`sum(max_over_time(clearance_cmp_render_errors_total{version="V",class="fault"}[<time since the canary started>]))`
+(and the same for `class="render"`). A non-zero fault there fails the canary: roll back instead of restarting the soak.
+That result does not carry into the new soak's queries, so record it when you take it. A series that does not exist
+means zero, not a failure.
 
 Any failure is the **Roll back** step: remove the app from the canary and hard-refresh it. The gate is these queries
 read by the person promoting; nothing here blocks the promotion by itself. To automate it, run the five queries from
