@@ -12,6 +12,9 @@ func TestMain(m *testing.M) {
 	if dir := os.Getenv("CMP_TEST_METRICS_RECORD"); dir != "" { // a render process recording its run (metrics_test.go)
 		recordForTest(dir)
 	}
+	if os.Getenv("CMP_TEST_STDERR_SIGNAL") == "1" { // a plugin run killed mid-run (stderr_test.go)
+		stderrSignalChild()
+	}
 	switch os.Getenv("CMP_TEST_HOG") {
 	case "memory": // a step that keeps allocating: the Go runtime fails at the data-segment bound
 		var keep [][]byte

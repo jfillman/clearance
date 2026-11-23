@@ -30,7 +30,10 @@ repoServer:
         - {name: CLEARANCE_CMP_METRICS_DIR, value: /var/run/clearance-cmp-metrics}
       resources:
         requests: {cpu: 50m, memory: 128Mi}
-        limits: {memory: 512Mi}
+        # CLEARANCE_CMP_MAX_RENDERS (4) renders at once, each step bounded at CLEARANCE_CMP_RENDER_MAX_MEMORY (512Mi):
+        # 2Gi, plus 512Mi for the plugin processes and the cmp-server. A step's bound is address space the Go runtime
+        # reserves, not what it uses, so the request stays small; doctor's render-limits check wants this to fit.
+        limits: {memory: 2560Mi}
       volumeMounts:
         - {name: var-files, mountPath: /var/run/argocd}
         - {name: plugins, mountPath: /home/argocd/cmp-server/plugins}
@@ -67,4 +70,13 @@ repoServer:
       projected:
         sources:
           - serviceAccountToken: {audience: clearance, expirationSeconds: 3600, path: clearance}
+        # Not world-readable: the pod's fsGroup 999 (global.securityContext below) is the sidecar's (uid 999) group.
+        defaultMode: 0440
     - {name: cmp-metrics, emptyDir: {sizeLimit: 16Mi}}
+# The pod's fsGroup, so the token's group is the sidecar's and defaultMode 0440 above is readable by it alone. The chart
+# has no repo-server-only key for the pod's securityContext: this one applies to every Argo CD pod, where it adds the
+# supplementary group 999 and sets the group of the pod's volumes. Helm merges it with the chart's own default
+# (seccompProfile RuntimeDefault in recent charts).
+global:
+  securityContext:
+    fsGroup: 999

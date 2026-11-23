@@ -145,6 +145,10 @@ jobs:
           assert "emptyDir" in vols["cmp-tmp"], vols["cmp-tmp"]  # per pod: each replica's caches are its own
           env = {e["name"]: e.get("value") for e in cmp[0]["env"]}
           assert env["CLEARANCE_CMP_CACHE_DIR"].startswith("/tmp/"), env
+          # The values doctor checks (render-limits, token): 4 renders x 512Mi fit the limit; the token is not world-readable.
+          assert cmp[0]["resources"]["limits"]["memory"] == "2560Mi", cmp[0]["resources"]
+          assert vols["clearance-token"]["projected"]["defaultMode"] == 0o440, vols["clearance-token"]
+          assert pod["securityContext"]["fsGroup"] == 999, pod.get("securityContext")
           print("ok: 2 repo-server replicas, a PDB (minAvailable 1) selecting them, the clearance-cmp sidecar on a per-pod emptyDir")
           PY
       - name: a cold replica, a crashed one, and renders sharing one cache

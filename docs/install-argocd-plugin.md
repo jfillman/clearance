@@ -128,7 +128,8 @@ repoServer:
         - {name: CLEARANCE_CMP_CACHE_DIR, value: /tmp/clearance-cmp-cache}
       resources:
         requests: {cpu: 50m, memory: 128Mi}
-        limits: {memory: 512Mi}
+        # 4 renders at once x 512Mi per step, plus 512Mi for the plugin and the cmp-server (Render limits, below)
+        limits: {memory: 2560Mi}
       volumeMounts:
         - {name: var-files, mountPath: /var/run/argocd}
         - {name: plugins, mountPath: /home/argocd/cmp-server/plugins}
@@ -140,6 +141,12 @@ repoServer:
       projected:
         sources:
           - serviceAccountToken: {audience: clearance, expirationSeconds: 3600, path: clearance}
+        defaultMode: 0440 # readable by the sidecar's group (fsGroup 999, below), not by everyone
+# The pod's fsGroup (the chart has no repo-server-only key: this applies to every Argo CD pod and is merged with the
+# chart's own default): the token's group is then the sidecar's, so it reads a token that is not world-readable.
+global:
+  securityContext:
+    fsGroup: 999
 ```
 
 If the core is reached by a name your DNS does not serve, the chart's `global.hostAliases` adds the same entries to
@@ -192,7 +199,8 @@ spec:
             - {name: CLEARANCE_CMP_CACHE_DIR, value: /tmp/clearance-cmp-cache}
           resources:
             requests: {cpu: 50m, memory: 128Mi}
-            limits: {memory: 512Mi}
+            # 4 renders at once x 512Mi per step, plus 512Mi for the plugin and the cmp-server (Render limits, below)
+            limits: {memory: 2560Mi}
           volumeMounts:
             - {name: var-files, mountPath: /var/run/argocd}
             - {name: plugins, mountPath: /home/argocd/cmp-server/plugins}
@@ -204,6 +212,9 @@ spec:
           projected:
             sources:
               - serviceAccountToken: {audience: clearance, expirationSeconds: 3600, path: clearance}
+            defaultMode: 0440 # readable by the sidecar's group (fsGroup 999), not by everyone
+      securityContext:
+        fsGroup: 999 # the token's group is the sidecar's (uid 999)
 ```
 
 The repo-server pod's service account (`argocd/argocd-repo-server` in the stock manifests) is the principal the core
@@ -312,7 +323,7 @@ ok    helm           /usr/local/bin/helm v4.2.1
 ok    kustomize      /usr/local/bin/kustomize v5.8.1
 warn  netns          unavailable: renders run WITHOUT a private network namespace (...)  fix: optional hardening: ...
 ok    fs-sandbox     on: render steps can read only the system directories, their source and their own scratch; the token is out of their reach (Landlock, mode try)
-ok    render-limits  wall 30s per render (slot wait included), per step CPU 30s, memory 512Mi, stdout 32Mi; scratch 512Mi per render; 4 renders at once; fits the container's memory limit of 2.0 GiB
+ok    render-limits  wall 30s per render (slot wait included), per step CPU 30s, memory 512Mi, stdout 32Mi; scratch 512Mi per render; 4 renders at once; fits the container's memory limit of 2.5 GiB
 ok    metrics        off: CLEARANCE_CMP_METRICS_DIR is not set, runs record nothing (and nothing listens)
 ok    plugin-socket  /home/argocd/cmp-server/plugins exists (...)
 ok    cmp-server     /var/run/argocd/argocd-cmp-server is present
@@ -435,7 +446,8 @@ v5.8.1:
 | Renders at once | 4 | | Above the `reposerver.parallelism.limit` many installs set (2), so it never queues them; on an unlimited repo-server it stops a refresh storm from running every render at once. |
 
 `doctor`'s `render-limits` line prints the bounds in force and warns when `CLEARANCE_CMP_MAX_RENDERS` times
-`CLEARANCE_CMP_RENDER_MAX_MEMORY` is above the container's memory limit (with 4 x 512 MiB against a 512Mi limit it does). The data
+`CLEARANCE_CMP_RENDER_MAX_MEMORY` is above the container's memory limit (4 x 512 MiB is 2 GiB; the documented values set
+2560Mi, which leaves 512 MiB for the plugin itself and the cmp-server). The data
 segment counts address space the Go runtime reserves, well above what a step uses (96 MiB against 45 MB resident for the
 fixture), so this is a worst case: raise the container's limit, lower one of the two, or accept that a pathological step
 may meet the kernel's OOM killer (a `signal: killed` error) rather than the plugin's bound.
@@ -865,6 +877,14 @@ plugin), never an un-gated sync.
 Argo CD shows the plugin's stderr as the Application's `ComparisonError` (`CMP processing failed ... clearance-cmp: <message>`).
 The message is `<code>: <one short line>`, then `hold: <url>` when a change was refused or held, then `detail: <the
 full message>`. A configuration error exits 2, anything else 1.
+
+The plugin holds its warnings and its run summary while a run is short, so a failure's code line comes first and the
+warnings follow it. The hold is bounded: a run that lasts longer than 20 s, or holds more than 64 KiB, writes what it
+held and streams from then on, so a run that is then killed (the kernel's OOM killer, or Argo CD's exec timeout) has
+already shown its warnings and progress. A failure after that point shows its code line after those lines; look for the
+first `clearance-cmp: <CODE>:` line rather than the first line. A SIGTERM or SIGINT writes what is held, then
+`clearance-cmp: WARNING stopped by <signal> after <time>: the run did not finish`, and exits 128 plus the signal's
+number. A SIGKILL cannot be caught: what was written before it is all there is.
 
 ### Error codes
 
