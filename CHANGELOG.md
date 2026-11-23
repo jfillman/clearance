@@ -9,6 +9,20 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Changed
+
+- **The Argo CD plugin's image is tested on arm64, and the release tests the image it pushed (I-74).** The release
+  publishes `clearance-cmp` for linux/amd64 and linux/arm64, but CI built and tested an amd64 image of its own, and the
+  release then rebuilt the multi-arch image it pushes, so arm64 was never tested and the shipped image never was either.
+  `cmp-image-smoke` now has an arm64 leg and `cmp-conformance` an arm64 leg for Argo CD v3.6.2, both natively on
+  GitHub's hosted arm64 runner (`ubuntu-24.04-arm`), not under emulation, with the same assertions as on amd64 (the
+  Landlock checks included). In `release.yaml`, a new `cmp-published` job (`.github/workflows/cmp-published.yaml`) pulls
+  the pushed index's linux/amd64 and linux/arm64 images by digest, each on a runner of its architecture, checks the
+  platform and the version label, and runs `tools/cmp-smoke.sh` on each; the GitHub Release needs it. The image is
+  pushed before this runs, so a failure does not un-push it: it stops the GitHub Release (docs/gate.md, "The plugin's
+  release gates"). `cmp-published` can also be dispatched by hand against any pushed index. Every new leg checks that
+  its runner is the architecture it names (`tools/runner-arch.sh`). No plugin code changes.
+
 ## [0.57.1] - 2026-11-23
 
 ### Fixed
