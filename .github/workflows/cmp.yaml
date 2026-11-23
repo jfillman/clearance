@@ -17,6 +17,8 @@ env:
   # The kind release and node image chart.yaml's install test uses.
   KIND_VERSION: v0.33.0
   KIND_NODE_IMAGE: kindest/node:v1.35.8@sha256:07b2536e30b803ed61d1677a79df6115f798ce64c80f9e22f6ed45afd09323c0
+  # benchstat, pinned (go install verifies the module against the checksum database).
+  BENCHSTAT_VERSION: v0.0.0-20261117185222-4febdb082b2c
 jobs:
   # The built clearance-cmp image, run the way Argo CD runs the plugin (tools/cmp-smoke.sh; docs/gate.md, "The smoke
   # test of the built image"): cwd is the checkout, Argo CD's environment, uid 999, a read-only root, a tmpfs /tmp, a
@@ -229,4 +231,48 @@ jobs:
         with:
           name: cmp-conformance-${{ matrix.argocd }}-${{ matrix.arch }}
           path: ${{ runner.temp }}/cmp-conformance
+          if-no-files-found: warn
+
+  # The plugin's benchmarks (W-34 P4; docs/gate.md, "Benchmarks"): the pull request's head against its merge base, on one
+  # runner in one job, six samples of each run alternately (tools/cmp-bench.sh), compared with benchstat. It fails when a
+  # benchmark's time/op or allocs/op is more than THRESHOLD percent worse and benchstat finds that significant at
+  # p < 0.05. Shared runners are noisy, so the bar is wide (25%) and it is not a release gate: pull requests only, and
+  # release.yaml's call of this workflow (a push event) skips it.
+  cmp-bench:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      THRESHOLD: "25"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: install benchstat ${{ env.BENCHSTAT_VERSION }}
+        run: GOBIN="$RUNNER_TEMP/bin" go install "golang.org/x/perf/cmd/benchstat@${BENCHSTAT_VERSION}"
+      - name: benchmark the head and its merge base
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BENCHSTAT: ${{ runner.temp }}/bin/benchstat
+        run: tools/cmp-bench.sh "$BASE_SHA" "$RUNNER_TEMP/cmp-bench"
+      - name: the comparison, in the job summary
+        if: always()
+        run: |
+          {
+            echo "## clearance-cmp benchmarks, head against merge base"
+            echo
+            echo "Threshold: +${THRESHOLD}% on time/op or allocs/op at p < 0.05 (docs/gate.md, Benchmarks)."
+            echo
+            if [ -f "$RUNNER_TEMP/cmp-bench/verdict.txt" ]; then echo '```'; cat "$RUNNER_TEMP/cmp-bench/verdict.txt"; echo '```'; fi
+            if [ -f "$RUNNER_TEMP/cmp-bench/benchstat.txt" ]; then echo '```'; cat "$RUNNER_TEMP/cmp-bench/benchstat.txt"; echo '```'; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cmp-bench
+          path: ${{ runner.temp }}/cmp-bench
           if-no-files-found: warn
