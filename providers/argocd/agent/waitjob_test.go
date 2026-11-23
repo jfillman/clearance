@@ -163,3 +163,32 @@ func TestIsWaitJobWithTheOptionalCAMount(t *testing.T) {
 		}
 	}
 }
+
+// I-59: during a wait-image rollover a held Job may still run the previous image. With a previous pin either image is
+// expected; a third image is out-of-band; unset, the previous image is out-of-band as before.
+func TestIsWaitJobAcceptsThePreviousImageForOneRelease(t *testing.T) {
+	const prev = "ghcr.io/example/clearance-wait@sha256:def"
+	onImage := func(img string) ObjectDetail {
+		return waitObject(t, func(s map[string]any, _ *ObjectDetail) { ctrOf(s)["image"] = img })
+	}
+	pin := testPin
+	pin.PreviousImage = prev
+	if !isWaitJob(onImage(testPin.Image), pin) {
+		t.Error("the current image must be accepted with a previous pin set")
+	}
+	if !isWaitJob(onImage(prev), pin) {
+		t.Error("the previous image must be accepted")
+	}
+	if isWaitJob(onImage("ghcr.io/example/clearance-wait@sha256:999"), pin) {
+		t.Error("a third image must be out-of-band")
+	}
+	if isWaitJob(onImage(prev), testPin) {
+		t.Error("with no previous pin the previous image must still be out-of-band")
+	}
+	if isWaitJob(onImage(""), pin) {
+		t.Error("an empty image must not match an unset previous pin")
+	}
+	if !isWaitJob(waitObject(t, nil), testPin) {
+		t.Error("unset must behave as before")
+	}
+}

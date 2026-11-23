@@ -344,3 +344,24 @@ func TestTheAgentChartCAIsOptIn(t *testing.T) {
 		}
 	}
 }
+
+// I-59: waitJob.previousImage is opt-in. Unset, the render has no previous-image flag; set, the agent gets it.
+func TestTheAgentChartPreviousWaitImageIsOptIn(t *testing.T) {
+	off, err := helmAgent(t, "--set", "waitJob.image=registry.example.test/wait@sha256:00")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(off, "wait-previous-image") {
+		t.Error("previousImage unset but the render has the flag")
+	}
+	on, err := helmAgent(t, "--set", "waitJob.image=registry.example.test/wait@sha256:00",
+		"--set", "waitJob.previousImage=registry.example.test/wait@sha256:11")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{"--wait-image=registry.example.test/wait@sha256:00", "--wait-previous-image=registry.example.test/wait@sha256:11"} {
+		if !strings.Contains(on, s) {
+			t.Errorf("previousImage set but the render lacks %q", s)
+		}
+	}
+}

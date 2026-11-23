@@ -11,6 +11,13 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ### Added
 
+- **A previous wait-image pin for the Argo CD agent (I-59; `waitJob.previousImage`, `--wait-previous-image`, off by default).**
+  During a wait-image rollover a held wait Job still running the previous image was reported as an out-of-band
+  exception, which is false. The agent now accepts a wait Job on either `--wait-image` or the optional
+  `--wait-previous-image` (`CLEARANCE_WAIT_PREVIOUS_IMAGE`; chart value `waitJob.previousImage`), for the one release of
+  the rollover; any other image is still out-of-band. Set it to the previous image the admission policy's exemption
+  also accepts. docs/gate.md, wait Job settings. **Upgrading:** nothing to do; unset, the agent and the chart render
+  behave exactly as before.
 - **Metrics and alerts for the Argo CD plugin (W-34 F6; `providers/argocd/cmp`; off by default).** Each `generate` run
   adds itself, as it ends, to a file-backed store in `CLEARANCE_CMP_METRICS_DIR` (`cmp-metrics.json`: an exclusive flock
   serialises concurrent renders, and the write is a temporary file renamed over the store, so a run killed mid-write

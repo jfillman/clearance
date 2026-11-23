@@ -82,6 +82,9 @@ spec:
             {{- with .Values.waitJob.image }}
             - --wait-image={{ . }}
             {{- end }}
+            {{- with .Values.waitJob.previousImage }}
+            - --wait-previous-image={{ . }}
+            {{- end }}
             {{- with .Values.waitJob.url }}
             - --wait-url={{ . }}
             {{- end }}

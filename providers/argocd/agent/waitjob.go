@@ -12,9 +12,12 @@ const WaitJobName = "clearance-awaiting-approval"
 // WaitPin is what the gate's own PreSync wait Job must run: the same three values the admission policy's exemption
 // is rendered with. An empty Image is no exemption, so the Job is reported as any other unstamped object.
 type WaitPin struct {
-	Image     string // the pinned wait image, a digest reference
-	URL       string // the core URL the waiter polls
-	HostAlias string // "ip=host[,host]", empty when the waiter has no host alias
+	Image string // the pinned wait image, a digest reference
+	// PreviousImage is the image the pin had before its last change, accepted too for one release so a held wait Job
+	// still running it during a rollover is not reported as out-of-band; "" accepts the one image only.
+	PreviousImage string
+	URL           string // the core URL the waiter polls
+	HostAlias     string // "ip=host[,host]", empty when the waiter has no host alias
 	// CAConfigMap is the ConfigMap (key ca.crt) the waiter mounts at /etc/clearance-ca as its CA for an https core; "" is
 	// no such mount. The admission policy's exemption must carry the same optional volume and mount (apron renders it).
 	CAConfigMap string
@@ -84,7 +87,7 @@ func waitContainer(ctr map[string]any, pin WaitPin) bool {
 	if !only(ctr, "name", "image", "imagePullPolicy", "args", "env", "securityContext", "resources",
 		"terminationMessagePolicy", "terminationMessagePath", "volumeMounts") ||
 		!absentOr(ctr, "terminationMessagePath", "/dev/termination-log") || !absentOr(ctr, "imagePullPolicy", "IfNotPresent") ||
-		ctr["image"] != pin.Image ||
+		!(ctr["image"] == pin.Image || (pin.PreviousImage != "" && ctr["image"] == pin.PreviousImage)) ||
 		len(args) != 4 || args[0] != "--change" || args[2] != "--timeout" ||
 		!waitChangeID.MatchString(args[1]) || !waitTimeout.MatchString(args[3]) ||
 		!waitEnv(env, 0, "CLEARANCE_URL", pin.URL) || !waitEnv(env, 1, "CLEARANCE_TOKEN_FILE", "/var/run/secrets/tokens/clearance") ||
