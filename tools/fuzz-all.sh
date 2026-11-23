@@ -1,13 +1,21 @@
 #!/usr/bin/env bash
 # Runs every Go fuzz target in the module for $1 (default 10s) each, one target per `go test -fuzz` as Go requires.
 # Targets are found with `go test -list`, so a new Fuzz* function runs in CI without editing the workflow.
+#
+#   tools/fuzz-all.sh [FUZZTIME] [PACKAGE...]
+#
+# With packages, only their targets run (the cmp-fuzz job: the plugin's path and parameter handling, longer). FUZZ_EXCLUDE
+# is an extended regexp of import paths to leave out (the go job leaves out what cmp-fuzz runs).
 set -euo pipefail
 fuzztime="${1:-10s}"
+shift $(($# > 0 ? 1 : 0))
 # Minimizing a new interesting input may take up to Go's default 60s, past a short -fuzztime: the run then ends
 # "context deadline exceeded" with nothing found. Cap it; a crasher is still written (minimized as far as it got).
 minimize="${FUZZ_MINIMIZE_TIME:-5s}"
 count=0
-for pkg in $(go list ./...); do
+pkgs=$(go list "${@:-./...}")
+if [ -n "${FUZZ_EXCLUDE:-}" ]; then pkgs=$(grep -Ev "$FUZZ_EXCLUDE" <<<"$pkgs" || true); fi
+for pkg in $pkgs; do
   names=$(go test -list '^Fuzz' "$pkg" | grep -E '^Fuzz' | sort -u || true)
   for name in $names; do
     echo "== $pkg $name ($fuzztime)"

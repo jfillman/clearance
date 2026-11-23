@@ -56,7 +56,8 @@ plugin runs is fenced in:
 ## Outline
 
 1. [Prerequisites](#prerequisites)
-2. [The sidecar](#the-sidecar): Helm chart values, or a patch of the plain manifests
+2. [The sidecar](#the-sidecar): Helm chart values, or a patch of the plain manifests; [more than one
+   repo-server](#more-than-one-repo-server-ha-optional) for HA
 3. [Run `doctor` first](#run-doctor-first)
 4. [Every setting](#every-setting), [last-known-good](#last-known-good-optional-off-by-default), and
    [metrics and alerts](#metrics-and-alerts-optional-off-by-default)
@@ -213,6 +214,51 @@ namespace"). It needs a container seccomp profile that allows `unshare`/`clone` 
 (`RuntimeDefault` does not). Without it the default (`CLEARANCE_CMP_NETNS=try`) renders without the namespace and says so
 once. `doctor` reports which you have.
 
+### More than one repo-server (HA, optional)
+
+The plugin runs in every repo-server pod, so running the repo-server with more than one replica needs nothing from
+Clearance: each replica's sidecar renders on its own. A working example for the `argo-cd` chart (checked against chart
+10.3.2, Argo CD v3.5.0) is [`docs/examples/argo-cd-repo-server-ha-values.yaml`](examples/argo-cd-repo-server-ha-values.yaml):
+`repoServer.replicas: 2`, `repoServer.pdb` with `minAvailable: 1`, a preferred topology spread over nodes (a
+preference: see the file for requiring one replica per node),
+`terminationGracePeriodSeconds: 90`, and the sidecar exactly as above. It is opt in: add it to your own `argo-cd`
+values. Nothing in Clearance's charts or defaults changes, and a single repo-server keeps working as before.
+
+**What is shared and what is not.** Argo CD reaches the repo-server through its Service, so the requests for one
+Application can land on any ready replica. Every store of the plugin is on its own pod's `/tmp` emptyDir (or wherever
+`CLEARANCE_CMP_CACHE_DIR` and `CLEARANCE_CMP_METRICS_DIR` point), never shared between replicas:
+
+| Store | On a second replica (cold) | When the sidecar **container** restarts (the emptyDir stays) | When the **pod** is replaced (a new emptyDir) |
+|---|---|---|---|
+| **Chart fetch cache** (`charts/`) | misses: the replica clones the chart once, then hits | kept; a fetch the restart interrupted leaves a `.tmp-*` directory, removed by a later fetch that stores a chart once it is 10 minutes old; a dead process's file lock is released by the kernel | empty: one clone per chart commit again |
+| **Pre-render cache** (`renders/`) | misses: one full render per Application, then hits | kept; every entry is checked against its SHA-256 on read, and a torn or unreadable one is a miss | empty |
+| **Cleared tree** (`*.json`) | misses: one call to the core per tree (the core answers the same cleared change, so the stamps are the same); while the core is unreachable, a tree this replica has not cleared is an outage hold | kept (at most 4096 entries, the oldest written going first) | empty: while the core is unreachable, a tree this replica never cleared is an outage hold, not served |
+| **Last-known-good** (`lkg/`, off by default) | empty: a fault on this replica fails closed until it has cleared a render of those inputs itself | kept | empty: it covers faults within a pod's life only ([above](#last-known-good-optional-off-by-default)) |
+| **Metrics store** (`CLEARANCE_CMP_METRICS_DIR`, off by default) | its own counts; every replica is scraped and the rules sum across pods ([metrics](#metrics-and-alerts-optional-off-by-default)) | kept, counts continue | a counter reset, which `rate()` handles |
+| **Render scratch** (`clearance-render-*`, `clearance-lookup-*` under `/tmp`) | none | a run killed before its cleanup (SIGKILL: Argo CD's exec timeout, an OOM kill) leaves its scratch; a later render removes any older than 10 minutes | gone |
+| **Render slots** (`slots/`, `CLEARANCE_CMP_MAX_RENDERS`) | its own: the bound is per pod, so two replicas render up to twice as many at once (and call the core up to twice as often) | kept (lock files only) | empty |
+
+So a cold replica is **correct, only slower**: it emits byte for byte what a warm one does (the same render, the same
+change id from the core, the same stamps) and pays one clone per chart commit, one full render and one core call per
+Application on its first request. Argo CD's own manifest cache (in Redis) is shared by every replica, so a replica only
+renders what that cache does not already answer. Nothing a replica writes is read by another, so there is nothing to
+keep consistent between them; within one pod, concurrent renders share the caches under their locks (one fetch per
+chart commit, writes renamed into place).
+
+**Disruptions.** With the PDB a drain or a cluster upgrade evicts one replica at a time, and the other keeps rendering.
+A replica that is not ready receives no new requests. A render already running on the evicted pod either finishes or
+is killed with the pod; the 90 s grace period is there so the default 30 s does not cut off a run that may take up to
+the plugin's 80 s (whether the cmp-server waits for it after SIGTERM is Argo CD's behaviour, not tested here). A killed
+render leaves nothing that another replica reads: the Application shows a comparison error until its next refresh,
+which a ready replica answers. Size the emptyDir (or its `sizeLimit`) per pod, as for one replica
+([sizing the cache](#every-setting)): the bounds are per pod.
+
+**What CI checks.** The `cmp-ha` job (`.github/workflows/cmp.yaml`) renders the example with the `argo-cd` chart and
+checks the two replicas, the PDB selecting them, the grace period and the sidecar on a per-pod emptyDir, and runs the
+tests that a second replica with a cold cache and a replica restarted mid-write emit the same manifests, that renders
+sharing one cache directory are safe, that the tree cache is bounded and that a killed run's scratch is swept
+(`providers/argocd/cmp/ha_test.go`). A kind cluster running Argo CD with two repo-server replicas is not part of CI.
+
 ## Run `doctor` first
 
 `clearance-cmp doctor` checks the settings and everything the plugin needs from its pod, **before** any Application
@@ -310,7 +356,9 @@ the volume must fit the bound. The default is 512 MiB of charts plus the pre-ren
 disk; with one, set it above `CLEARANCE_CMP_CHART_CACHE_MAX_BYTES` with room to spare, or lower the bound. A full or
 read-only cache never fails a render (it clones for itself, as without the cache) but it stops giving hits, and an
 emptyDir that goes over its `sizeLimit` evicts the pod. `doctor` warns when the volume's free space is below the byte
-bound. The cache is lost whenever the pod restarts (an emptyDir); nothing depends on it.
+bound. The cache is lost when the pod is replaced (an emptyDir outlives a container restart, not the pod); nothing
+depends on it. With more than one repo-server replica each pod has its own cache and its own bounds
+([more than one repo-server](#more-than-one-repo-server-ha-optional)).
 
 **The rule for settings (F8).** No setting is required without a safe default, or a preflight refusal that names it:
 0.52.0 added `CLEARANCE_CHART_REPOS` with neither, and every chart behind a sidecar upgraded without it was refused.

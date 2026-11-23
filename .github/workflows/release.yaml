@@ -38,6 +38,16 @@ jobs:
           go run ./tools/pyclient -check
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+  # The Argo CD plugin's release gates (.github/workflows/cmp.yaml, W-34 F7): the smoke test of the built clearance-cmp
+  # image, the upgrade test against the previous release, the fuzz targets, the soak and the repo-server HA checks, on
+  # the tagged commit. No image is built or pushed until they pass (image and provider-images need them; every chart,
+  # the install test and the GitHub Release come after those), so a tag whose plugin fails one publishes nothing.
+  cmp-gates:
+    needs: check
+    permissions:
+      contents: read
+    uses: ./.github/workflows/cmp.yaml
+
   wheel:
     needs: check
     runs-on: ubuntu-latest
@@ -68,7 +78,7 @@ jobs:
   # signed keyless with this workflow's GitHub OIDC identity, and a standalone SPDX SBOM is attested and attached to
   # the GitHub Release.
   image:
-    needs: check
+    needs: [check, cmp-gates]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -131,7 +141,7 @@ jobs:
   # amd64 and arm64, SBOM and provenance on the index, the index signed keyless with this workflow's identity. Each
   # leg uploads its index digest as an artifact for the release notes.
   provider-images:
-    needs: check
+    needs: [check, cmp-gates]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -392,7 +402,7 @@ jobs:
         run: tools/chart-install-test/run.sh
 
   release:
-    needs: [check, wheel, image, chart, provider-images, observe-k8s-chart, agent-chart, observe-aws-chart, install-test]
+    needs: [check, cmp-gates, wheel, image, chart, provider-images, observe-k8s-chart, agent-chart, observe-aws-chart, install-test]
     runs-on: ubuntu-latest
     permissions:
       contents: write
