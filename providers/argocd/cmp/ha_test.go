@@ -238,10 +238,35 @@ func TestTheTreeCacheIsBounded(t *testing.T) {
 	if _, err := os.Stat(fresh); err != nil {
 		t.Error("a temporary file of a Put that may still be running was removed")
 	}
-	// Put itself prunes: a ninth entry under the real bound keeps everything.
-	c.Put("app", "dev", "c1", CacheEntry{ID: "ch", Tree: fmt.Sprintf("%064x", 99), ExpiresAt: time.Now().Add(time.Hour)})
-	if _, ok := c.Get("app", "dev", "c1", fmt.Sprintf("%064x", 99), time.Now()); !ok {
-		t.Fatal("the newest entry is not readable")
+}
+
+func TestPutPrunesTheTreeCacheAtItsBound(t *testing.T) {
+	c := Cache{Dir: t.TempDir()}
+	// A full cache, written directly: treeCacheMaxEntries entries, the first the oldest.
+	base := time.Now().Add(-2 * time.Hour)
+	oldest := ""
+	for i := 0; i < treeCacheMaxEntries; i++ {
+		p := c.path("app", "dev", "c1", fmt.Sprintf("%064x", i))
+		if err := os.WriteFile(p, []byte(`{}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		at := base.Add(time.Duration(i) * time.Millisecond)
+		os.Chtimes(p, at, at)
+		if i == 0 {
+			oldest = p
+		}
+	}
+	tree := fmt.Sprintf("%064x", treeCacheMaxEntries+1)
+	c.Put("app", "dev", "c1", CacheEntry{ID: "ch", Tree: tree, ExpiresAt: time.Now().Add(time.Hour)})
+	ents, _ := os.ReadDir(c.Dir)
+	if n := countJSON(ents); n != treeCacheMaxEntries {
+		t.Fatalf("%d tree entries after a Put into a full cache, want %d", n, treeCacheMaxEntries)
+	}
+	if _, err := os.Stat(oldest); err == nil {
+		t.Fatal("the oldest entry was kept")
+	}
+	if _, ok := c.Get("app", "dev", "c1", tree, time.Now()); !ok {
+		t.Fatal("the new entry was not kept")
 	}
 }
 

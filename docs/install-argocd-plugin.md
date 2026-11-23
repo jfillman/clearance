@@ -219,7 +219,8 @@ once. `doctor` reports which you have.
 The plugin runs in every repo-server pod, so running the repo-server with more than one replica needs nothing from
 Clearance: each replica's sidecar renders on its own. A working example for the `argo-cd` chart (checked against chart
 10.3.2, Argo CD v3.5.0) is [`docs/examples/argo-cd-repo-server-ha-values.yaml`](examples/argo-cd-repo-server-ha-values.yaml):
-`repoServer.replicas: 2`, `repoServer.pdb` with `minAvailable: 1`, a topology spread over nodes,
+`repoServer.replicas: 2`, `repoServer.pdb` with `minAvailable: 1`, a preferred topology spread over nodes (a
+preference: see the file for requiring one replica per node),
 `terminationGracePeriodSeconds: 90`, and the sidecar exactly as above. It is opt in: add it to your own `argo-cd`
 values. Nothing in Clearance's charts or defaults changes, and a single repo-server keeps working as before.
 

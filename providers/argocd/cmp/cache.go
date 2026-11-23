@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -63,12 +64,31 @@ func (c Cache) Put(app, env, cluster string, e CacheEntry) {
 	}
 	_, werr := tmp.Write(b)
 	cerr := tmp.Close()
-	if werr != nil || cerr != nil || os.Rename(tmp.Name(), c.path(app, env, cluster, e.Tree)) != nil {
+	if werr != nil || cerr != nil {
 		os.Remove(tmp.Name())
 		return
 	}
+	// The rename and the pruning are one step under the tree lock, so a prune never removes an entry another run has
+	// just rewritten (it would read the old time and remove the new entry). A lock that cannot be had in time (a
+	// prune takes milliseconds) still writes the entry and skips this Put's pruning: the next Put prunes.
+	ctx, cancel := context.WithTimeout(context.Background(), treeLockWait)
+	defer cancel()
+	unlock, lerr := lockFile(ctx, filepath.Join(c.Dir, treeLockFile))
+	if os.Rename(tmp.Name(), c.path(app, env, cluster, e.Tree)) != nil {
+		os.Remove(tmp.Name())
+	}
+	if lerr != nil {
+		return
+	}
+	defer unlock()
 	c.pruneTrees(treeCacheMaxEntries)
 }
+
+// treeLockFile serialises the tree cache's writes with its pruning; treeLockWait bounds how long a Put waits for it.
+const (
+	treeLockFile = ".lock-trees"
+	treeLockWait = time.Second
+)
 
 // pruneTrees keeps the newest maxEntries tree entries and clears temporary files an interrupted Put left (older than an
 // hour: a Put in flight is never older than the plugin's own deadline). Only the tree entries (64 hex characters and

@@ -13,7 +13,9 @@ repoServer:
     enabled: true
     # Voluntary disruptions (a drain, a cluster upgrade) take one replica at a time, never both.
     minAvailable: 1
-  # Spread the replicas over nodes, so one node's loss is not both.
+  # Prefer the replicas on different nodes. ScheduleAnyway is a preference: with no room on a second node both run on
+  # one, and that node's loss takes both. To require one replica per node (the second stays Pending without a free
+  # node), use whenUnsatisfiable: DoNotSchedule here, or a required podAntiAffinity on kubernetes.io/hostname.
   topologySpreadConstraints:
     - maxSkew: 1
       topologyKey: kubernetes.io/hostname

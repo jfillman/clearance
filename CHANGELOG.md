@@ -10,7 +10,9 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 ## [Unreleased]
 
 **Upgrading.** No setting is newly required and no default changes. The cleared-tree cache now has a bound (4096
-entries) and a render removes a killed run's stale scratch; both only remove what nothing reads.
+entries) and a render removes a killed run's stale scratch older than 10 minutes. An evicted tree entry is a call to the
+core on that tree's next render, or, while the core is unreachable, an outage hold instead of a served `allow-and-record`
+tree; with 4096 trees kept that is a tree last cleared thousands of trees ago.
 
 ### Added
 
@@ -35,7 +37,8 @@ entries) and a render removes a killed run's stale scratch; both only remove wha
 
 - **The plugin's cleared-tree cache grew without bound (W-34 F7).** Every new tree a sidecar cleared added a file under
   `CLEARANCE_CMP_CACHE_DIR` for the pod's whole life. It now keeps the newest 4096 (about 1 MiB), the oldest written
-  going first; losing one costs at most a call to the core.
+  going first, pruned under a lock with the write. An evicted entry costs a call to the core on its tree's next render,
+  or, while the core is unreachable, an outage hold where the outage policy would have served it.
 - **A killed render's scratch stayed on the volume until the pod was replaced.** A run killed before its cleanup
   (SIGKILL: Argo CD's exec timeout, an OOM kill) left its `clearance-render-*` directory, with the chart checkout and
   the rendered manifests, on the `/tmp` emptyDir, which outlives the container. A later render now removes any such
