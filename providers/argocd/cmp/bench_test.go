@@ -158,7 +158,7 @@ func BenchmarkRenderSourcesHelm(b *testing.B) {
 	cfg := genericConfig(b)
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		if _, err := RenderSources(context.Background(), g.run, cfg); err != nil {
+		if _, err := RenderSources(context.Background(), g.run, cfg, ""); err != nil {
 			b.Fatal(err)
 		}
 	}
