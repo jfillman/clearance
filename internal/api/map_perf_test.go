@@ -193,7 +193,7 @@ func TestMapReadsOnlyTheIndexedRecords(t *testing.T) {
 		t.Fatalf("the synthetic registry produced an empty map: %v", m)
 	}
 	rdr.Close()
-	want := []string{"clearance_evidence_gate", "clearance_evidence_obs_ts", "clearance_evidence_health", "clearance_evidence_health_core"}
+	want := []string{"clearance_evidence_gate", "clearance_evidence_obs_ts", "clearance_evidence_health_page", "clearance_evidence_health_core"}
 	var seq1 int64
 	var idx1 map[string]int64
 	for i := 0; i < 50; i++ { // the statistics reach the collector a moment after the statements finish

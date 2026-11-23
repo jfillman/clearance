@@ -9,6 +9,21 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Fixed
+
+- **`GET /v1/coverage` with no scope no longer reads every health record ever written (I-86).** The scope list
+  (`Store.Scopes`) was a `DISTINCT` over every health record before the window's end, and a statement's health before
+  its window (`Store.HealthBefore`) found each source's anchor with a window function over the scope's whole health
+  history; a statement's health pages walked that history too, testing each record's `ts`. A record is TOASTed, so each
+  read cost a fetch and a decompress per health record (about one a minute per source): on a lab with two weeks of
+  history the first two passed the 5 s statement timeout and every unscoped coverage read answered 503 `read failed`,
+  so clearance-slack's coverage alerts and the Backstage ingestor's coverage read failed. The scope list is now a skip
+  scan over the scope names with a `LIMIT 1` probe per scope, and `HealthBefore` a skip scan over the scope's sources,
+  one anchor probe each and a range from it; both read what they return. Two partial indexes, built by the core in the
+  background as the Map's are: `clearance_evidence_health_page` (scope, seq, ts) for the health pages and the Map's
+  health tail, and `clearance_evidence_health_src` (scope, source, seq, ts) for `HealthBefore`. Until they are built
+  the reads are as slow as before. The answers are unchanged. See docs/clearance-api.md, "Budget".
+
 ## [0.57.2] - 2026-11-23
 
 ### Added
