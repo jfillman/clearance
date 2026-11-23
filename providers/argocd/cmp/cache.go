@@ -69,18 +69,20 @@ func (c Cache) Put(app, env, cluster string, e CacheEntry) {
 		return
 	}
 	// The rename and the pruning are one step under the tree lock, so a prune never removes an entry another run has
-	// just rewritten (it would read the old time and remove the new entry). A lock that cannot be had in time (a
-	// prune takes milliseconds) still writes the entry and skips this Put's pruning: the next Put prunes.
+	// just rewritten (it would read the old time and remove the new entry). Without the lock in time (a prune takes
+	// milliseconds) the entry is not written at all: like any failed Put, that costs only a later call to the core.
 	ctx, cancel := context.WithTimeout(context.Background(), treeLockWait)
 	defer cancel()
-	unlock, lerr := lockFile(ctx, filepath.Join(c.Dir, treeLockFile))
-	if os.Rename(tmp.Name(), c.path(app, env, cluster, e.Tree)) != nil {
+	unlock, err := lockFile(ctx, filepath.Join(c.Dir, treeLockFile))
+	if err != nil {
 		os.Remove(tmp.Name())
-	}
-	if lerr != nil {
 		return
 	}
 	defer unlock()
+	if os.Rename(tmp.Name(), c.path(app, env, cluster, e.Tree)) != nil {
+		os.Remove(tmp.Name())
+		return
+	}
 	c.pruneTrees(treeCacheMaxEntries)
 }
 
