@@ -29,7 +29,7 @@ const (
 	chartSHA = "c7e846a1111111111111111111111111111111aa"
 )
 
-func read(t *testing.T, p string) []byte {
+func read(t testing.TB, p string) []byte {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(parity, p))
 	if err != nil {
@@ -141,7 +141,7 @@ type env struct {
 	err  bytes.Buffer
 }
 
-func newEnv(t *testing.T) *env {
+func newEnv(t testing.TB) *env {
 	e := &env{cfg: gateAPIConfig(), exec: &fakeExec{render: read(t, "head.yaml")}, core: &fakeCore{}, src: t.TempDir(), now: time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)}
 	e.cfg.ValuesJSON = string(read(t, "injected.json"))
 	e.d = Deps{Exec: e.exec.run, Core: e.core, Cache: Cache{Dir: t.TempDir()}, Now: func() time.Time { return e.now }, Stderr: &e.err}

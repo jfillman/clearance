@@ -2344,7 +2344,7 @@ checksums from the Dockerfile), so the tests that run the real binaries run, and
 ### The plugin's release gates (W-34 F7)
 
 Unit tests fake git, helm and the core and run one render at a time, so they cannot see what a real upgrade, hostile
-parameters or a long-lived sidecar do. `.github/workflows/cmp.yaml` runs six jobs on every push and pull request, and
+parameters or a long-lived sidecar do. `.github/workflows/cmp.yaml` runs six jobs on every push and pull request (and a seventh, [`cmp-bench`](#benchmarks-w-34-p4), on pull requests only), and
 `release.yaml` calls the same workflow (`cmp-gates`) on the tagged commit before it builds anything: the core image and
 the provider images need it, and every chart, the install test and the GitHub Release come after those, so **a tag whose
 plugin fails one publishes nothing**. Main's other CI (the `go` and `chart` workflows) is called the same way
@@ -2397,6 +2397,93 @@ now at most 4096, the oldest written going first), and a run killed before its c
 an OOM kill) left its render scratch on the `/tmp` emptyDir, which outlives the container, until the pod was replaced
 (now a later render removes any `clearance-render-*` or `clearance-lookup-*` directory older than 10 minutes, past any
 live run's 80 s).
+
+### Benchmarks (W-34 P4)
+
+`.github/workflows/cmp.yaml` has a seventh job, `cmp-bench`, that runs only on pull requests (`release.yaml`'s call of
+the workflow skips it, so it is **not a release gate**). It runs the plugin's benchmarks on the pull request's head and
+on its merge base, on the same runner in one job, and compares them with
+[benchstat](https://pkg.go.dev/golang.org/x/perf/cmd/benchstat) (pinned by version in the workflow). The comparison is
+in the job summary and uploaded as the `cmp-bench` artifact (the raw output of both sides, benchstat's table and csv,
+the verdict).
+
+| Benchmark | What it times |
+| --- | --- |
+| `BenchmarkGenerateWarm` | a whole run answered by the pre-render cache: `Canonical`, the tag lookup, the cache key, the cached entry and the stamped stream |
+| `BenchmarkGenerateCold` | a whole run that renders, from empty caches: a chart the fake clone writes, the recorded helm output, `Canonicalize`, the core's answer, the stamped stream |
+| `BenchmarkGenerateGeneric` | the same for the generic mode (`sources` parameter) |
+| `BenchmarkClearedTreeCacheLookup` | `Cache.Get`, the cleared-tree cache lookup every run makes before it asks the core |
+| `BenchmarkParseConfig`, `BenchmarkCanonical`, `BenchmarkCanonicalize` | the parameters read into a `Config`; the repository check before anything is fetched; the tree and per-object digests of a recorded render |
+| `BenchmarkRenderChartParameters`, `BenchmarkRenderKustomizeDir` | `Render` in the chart-parameter mode, without and with a kustomize directory |
+| `BenchmarkRenderSourcesHelm` | the generic mode's resolution of a Helm chart with `$ref` value files |
+| `BenchmarkRenderHelmSource`, `BenchmarkRenderKustomizeSource`, `BenchmarkRenderDirectorySource`, `BenchmarkParseSources` | `internal/argosrc`: one source of each type resolved, and the `sources` parameter parsed |
+| `BenchmarkRender` (cold, chart-cached, unchanged), `BenchmarkOSRunStep` | the existing ones: the chart cache's three cases, and one real process start |
+
+They use the parity fixtures and the fakes the unit tests use for git, helm, kustomize and the core, so there is no
+network and no tool process: what they time is the plugin's own work (parsing, hashing, the cache files, the stamping),
+and `BenchmarkOSRunStep` is the one that starts a process. They are in `bench_test.go` of each package; run them with
+`go test -run '^$' -bench . -benchmem ./providers/argocd/cmp ./internal/argosrc`, and compare two builds the way the job
+does with `tools/cmp-bench.sh BASE_REF OUT_DIR`.
+
+**How the comparison is made.** `tools/cmp-bench.sh` checks out the merge base in a worktree and copies the head's test
+files over it, so both sides run the same benchmark code and only the product code differs (a benchmark a pull request
+adds is compared too; if the head's tests do not compile against the merge base the job warns and compares only what the
+base has). It builds each side's test binary once and runs the two alternately six times (`-test.count 1`, `-benchmem`,
+`-test.benchtime 300ms`), so a drift in the runner's speed lands on both sides, and gives benchstat six samples of each.
+
+**The threshold: +25% on time/op or allocs/op, p < 0.01, and again on a second measurement.** A benchmark is past the
+bar when benchstat reports it significantly different (its Mann-Whitney U test, alpha 0.01) and more than 25% worse in
+`sec/op` or `allocs/op`. B/op is shown but does not fail the job (it follows allocs/op). A benchmark past the bar is then
+measured again, alone, with twelve samples of each side instead of six, and the job fails only if it is past the bar
+again. The three conditions are there because of the runner: on a shared one a neighbour's load moves single samples by
+tens of percent or more, so a large delta that is not significant is noise and is ignored; a significant delta of a few
+percent is real but too small to tell from a runner that is a little faster or slower between the two halves of the job,
+so it is shown and not failed; and with about thirty comparisons a run, a bar at p < 0.05 fails by chance every few
+runs. The first run of this job on the pull request that added it, with the same product code on both sides and
+alpha 0.05, did exactly that (`Render/unchanged`, +43% at p = 0.04, a spread of 430% in the head's six samples); hence
+alpha 0.01 and the second measurement. 25% is wide on purpose: the benchmarks are in microseconds to milliseconds, and
+the benchmarks that touch the file system (the cache and the cold ones) vary the most. Allocation counts do not depend on
+the runner at all, so an allocs/op regression is reliable evidence even at a smaller delta; tighten that threshold
+separately when the history shows it never flakes. The job's first weeks should tell whether 25% is right: lower it in
+the workflow (`THRESHOLD`) when the table shows the noise well under it, or make the job a release gate only after it
+has gone a while without a false failure. `THRESHOLD` is one value for every benchmark, so raising it for one that
+cries wolf would loosen the check for all of them: an exception for one benchmark is a change to `tools/cmp-bench.sh`,
+or the removal of that benchmark.
+
+**What the noise looked like.** Two runs of the job on `ubuntu-latest` runners (4 vCPU Xeon), on this pull request, where
+head and merge base have the same product code, so every difference between the two sides is noise. In both, the
+allocation counts of the two sides were identical, and the medians of the two sides differed by at most 6% on the
+benchmarks benchstat could compare. The spread within a side differed a great deal between the runs: in the first, up to
++-50% for the benchmarks that touch the file system (`RenderHelmSource`, `GenerateGeneric`, `RenderKustomizeDir`) and
++-87% in the worst case (one benchmark, `Render/unchanged`, passed the bar by chance there, which is why the job now has
+alpha 0.01 and the second measurement); in the later one, +-1% to +-12% for nearly all and +-31% for the worst two. The
+absolute times differ between runners as well: `ParseConfig` was 190 us on one and 378 us on the other. That is why a
+stored baseline would be useless and the job compares the two sides of one run. Six samples of a spread like the first
+run's cannot show a 25% difference as significant, which is the point of the bar, and it also means the job will not
+notice a real 25% regression of a file-system-bound benchmark until the change is bigger; the pure-CPU benchmarks and the
+allocation counts are the sharp ones.
+
+Baseline of the first run (`ubuntu-latest`, median of six, merge base side):
+
+| Benchmark | time/op | allocs/op |
+| --- | --- | --- |
+| `ParseConfig` | 190 us | 869 |
+| `Canonical` | 1.85 us | 12 |
+| `Canonicalize` | 1.36 ms | 8511 |
+| `ClearedTreeCacheLookup` | 7.7 us | 18 |
+| `GenerateWarm` | 166 us | 194 |
+| `GenerateCold` | 2.43 ms | 9757 |
+| `GenerateGeneric` | 2.74 ms | 11970 |
+| `RenderChartParameters` | 595 us | 426 |
+| `RenderKustomizeDir` | 630 us | 476 |
+| `RenderSourcesHelm` | 995 us | 2731 |
+| `RenderHelmSource` (argosrc) | 324 us | 457 |
+| `RenderKustomizeSource` (argosrc) | 206 us | 339 |
+| `RenderDirectorySource` (argosrc) | 310 us | 914 |
+| `ParseSources` (argosrc) | 4.8 us | 28 |
+| `OSRunStep` | 20.2 ms | 152 |
+
+These are for orientation, not limits: the job compares the two sides of each run and never reads a stored number.
 
 ### Parity with the Tekton check, and what is not yet the same
 

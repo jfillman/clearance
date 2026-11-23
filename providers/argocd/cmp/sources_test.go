@@ -31,7 +31,7 @@ func effective(env []string) map[string]string {
 }
 
 type genericRun struct {
-	t      *testing.T
+	t      testing.TB
 	calls  [][]string
 	repoOf map[string]string // checkout dir -> repository
 	render []byte
@@ -93,7 +93,7 @@ func (g *genericRun) run(_ context.Context, dir string, env []string, name strin
 	return nil, errors.New("unexpected " + name)
 }
 
-func genericConfig(t *testing.T) Config {
+func genericConfig(t testing.TB) Config {
 	injected := read(t, "injected.json")
 	var vals any
 	if err := json.Unmarshal(injected, &vals); err != nil {

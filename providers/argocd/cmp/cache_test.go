@@ -20,7 +20,7 @@ import (
 const chartSHA2 = "d8f957b2222222222222222222222222222222bb"
 
 // cachedEnv is newEnv with both caches on and a fake clone that writes a chart.
-func cachedEnv(t *testing.T) *env {
+func cachedEnv(t testing.TB) *env {
 	t.Helper()
 	e := newEnv(t)
 	e.cfg.ChartCache = ChartCache{Dir: filepath.Join(t.TempDir(), "charts"), MaxBytes: 1 << 30, MaxEntries: 8, Now: func() time.Time { return e.now }}
