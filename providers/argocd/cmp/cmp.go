@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jfillman/clearance/client"
@@ -329,10 +330,15 @@ func main() {
 		os.Exit(metricsMain(os.Args[2:], os.Getenv, os.Stderr))
 	}
 	start, stats := time.Now(), NewRunStats()
+	// The plugin's stderr is held until the run ends: a failure puts its "clearance-cmp: <code>: ..." line first, so the
+	// first line of Argo CD's ComparisonError from the plugin is the code, and the warnings and the summary follow it.
+	ps := &pluginStderr{out: os.Stderr}
+	defer ps.Flush() // a panic still shows what was held
+	netnsWarn, fsWarn = ps, ps
 	// fail ends a run that failed before or after Generate: it is counted (CLEARANCE_CMP_METRICS_DIR is read on its own,
 	// so a sidecar setting that stops the plugin at start still shows as a fault) and the process exits.
 	fail := func(ce error, code int) {
-		fmt.Fprintln(os.Stderr, "clearance-cmp:", ce)
+		ps.Fail(ce)
 		recordRunFromEnv(os.Getenv, Run{Version: pluginVersion, Err: ce, Duration: time.Since(start), Stats: stats}, os.Stderr)
 		os.Exit(code)
 	}
@@ -352,17 +358,18 @@ func main() {
 	if err := EnableReaping(); err != nil { // a descendant of a render step never outlives it, setsid or not (proc_linux.go)
 		fail(newErr(CodeFaultSandbox, "the render steps' processes cannot be contained", err), 2)
 	}
-	d := Deps{Exec: OSExec, Run: OSRun, Core: core, Cache: Cache{Dir: cfg.CacheDir}, Now: time.Now, Stderr: os.Stderr, Stats: stats}
+	d := Deps{Exec: OSExec, Run: OSRun, Core: core, Cache: Cache{Dir: cfg.CacheDir}, Now: time.Now, Stderr: ps, Stats: stats}
 	ctx, cancel := context.WithTimeout(context.Background(), PluginDeadline) // Argo CD kills a plugin at 90 s (ARGOCD_EXEC_TIMEOUT)
 	defer cancel()
 	o, err := generateCounted(ctx, d, cfg, start)
 	if rerr := reapAll(); rerr != nil { // nothing a render step started outlives the plugin (proc_linux.go)
-		fmt.Fprintln(os.Stderr, "clearance-cmp: WARNING", rerr)
+		fmt.Fprintln(ps, "clearance-cmp: WARNING", rerr)
 	}
 	if err != nil { // a *CmpError: its code and short line come first
 		cancel()
 		fail(err, 1)
 	}
+	ps.Flush()
 	recordRunFromEnv(os.Getenv, Run{Version: pluginVersion, Outcome: o, Duration: time.Since(start), Stats: stats}, os.Stderr)
 }
 
@@ -377,4 +384,32 @@ func generateCounted(ctx context.Context, d Deps, cfg Config, start time.Time) (
 		}
 	}()
 	return Generate(ctx, d, cfg, ".", os.Stdout)
+}
+
+// pluginStderr holds the plugin's stderr until the run ends. On success Flush writes it as it was; on a failure Fail
+// writes the "clearance-cmp: <code>: <summary>" line first and the held lines (warnings, the summary) after it.
+type pluginStderr struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+	out io.Writer
+}
+
+func (p *pluginStderr) Write(b []byte) (int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.buf.Write(b)
+}
+
+// Flush writes what is held; it is safe to call again.
+func (p *pluginStderr) Flush() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.out.Write(p.buf.Bytes())
+	p.buf.Reset()
+}
+
+// Fail writes the failure's code line, then what is held.
+func (p *pluginStderr) Fail(ce error) {
+	fmt.Fprintln(p.out, "clearance-cmp:", ce)
+	p.Flush()
 }

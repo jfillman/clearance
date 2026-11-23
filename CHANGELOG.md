@@ -14,6 +14,14 @@ entries) and a render removes a killed run's stale scratch older than 10 minutes
 core on that tree's next render, or, while the core is unreachable, an outage hold instead of a served `allow-and-record`
 tree; with 4096 trees kept that is a tree last cleared thousands of trees ago.
 
+### Fixed
+
+- **The plugin's stderr on a failure starts with the `clearance-cmp: <code>:` line.** The warnings (for example, no
+  private network namespace under `CLEARANCE_CMP_NETNS=try`) and the run's summary used to come first, so a
+  `ComparisonError` did not start with the code the install guide promises. The plugin now holds its stderr until the run
+  ends: a failure writes the code line first, then the held lines; a success writes them as before. No code or wording
+  changes. `tools/cmp-conformance.sh` now asserts the code line comes first and no warning precedes it.
+
 ### Added
 
 - **A release runs the `go` and `chart` workflows on the tagged commit.** `release.yaml` calls them (`go-gates`,

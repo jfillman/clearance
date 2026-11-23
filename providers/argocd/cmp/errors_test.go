@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -242,4 +243,60 @@ func TestEveryErrorCodeIsDocumented(t *testing.T) {
 			t.Errorf("the guide names %s, which the plugin does not have", m[1])
 		}
 	}
+}
+
+// The first line of the plugin's stderr on a failure is the code line, even with the network-namespace warning
+// already written: the warning and the run's summary come after it. On a success the held lines are written as they were.
+func TestTheCodeLineIsFirstOnStderrEvenWithAWarning(t *testing.T) {
+	reason := "DG-POLICY: clearance.yaml loosens the baseline"
+	cases := []struct {
+		name  string
+		setup func(e *env)
+		code  string
+	}{
+		{"refused", func(e *env) {
+			e.core.answer = &client.Change{ID: "ch-x", State: "denied", Tier: 3, DenyReason: &reason}
+		}, CodeRefusedDenied},
+		{"fault", func(e *env) { e.exec.fail = map[string]error{"helm": toolMissing} }, CodeFaultTool},
+		{"render", func(e *env) { e.exec.fail = map[string]error{"helm": errors.New("exit status 1: Error: boom")} }, CodeRenderHelm},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var real bytes.Buffer
+			ps := &pluginStderr{out: &real}
+			oldW := netnsWarn
+			netnsWarn = ps
+			ns.Lock()
+			ns.warned = false
+			warnOnceLocked(errors.New("injected: operation not permitted"))
+			ns.Unlock()
+			t.Cleanup(func() { netnsWarn = oldW; SetNetns("") })
+			e := newEnv(t)
+			e.d.Stderr = ps
+			c.setup(e)
+			_, _, err := e.generate(t)
+			ce := wantCode(t, err, c.code)
+			ps.Fail(ce)
+			out := real.String()
+			if !strings.HasPrefix(out, "clearance-cmp: "+c.code+": ") {
+				t.Fatalf("the first line is not the code line:\n%s", out)
+			}
+			if !strings.Contains(out, "WARNING render steps run WITHOUT a private network namespace") {
+				t.Fatalf("the warning is lost:\n%s", out)
+			}
+		})
+	}
+	t.Run("success", func(t *testing.T) {
+		var real bytes.Buffer
+		ps := &pluginStderr{out: &real}
+		ps.Write([]byte("clearance: WARNING x\n"))
+		if real.Len() != 0 {
+			t.Fatal("written before the run ended")
+		}
+		ps.Flush()
+		ps.Flush()
+		if real.String() != "clearance: WARNING x\n" {
+			t.Fatalf("%q", real.String())
+		}
+	})
 }
