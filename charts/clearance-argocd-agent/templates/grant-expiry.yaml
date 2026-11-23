@@ -141,6 +141,9 @@ spec:
             - --max-cache-age={{ $ge.maxCacheAge }}
             {{- with .Values.waitJob.image }}
             - --wait-image={{ . }}
+            {{- with $.Values.waitJob.previousImage }}
+            - --wait-previous-image={{ . }}
+            {{- end }}
             - --wait-url={{ $.Values.waitJob.url | default $.Values.coreURL }}
             {{- with $.Values.waitJob.previousURL }}
             - --wait-previous-url={{ . }}

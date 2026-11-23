@@ -1577,7 +1577,7 @@ webhook not enforcing. Sync waves are one fixed order and cannot reverse on the 
 | `grantExpiry.maxCacheAge` | `10m` | Not Ready (and refusing in enforce) after this long without word from the API server; one unit, above 330 s (a quiet watch's length) |
 | `grantExpiry.syncWaves` | `{certificate: "0", deployment: "1", webhook: "2"}` | Must ascend |
 | `grantExpiry.tls.*` | cert-manager, own CA | As the core's `tls.certManager.*`; or `existingSecret` and `caBundle` |
-| `waitJob.previousImage` | empty | The previous wait image, also accepted by the exception scan for one release after `waitJob.image` changes; a held wait Job still on it is not reported as out-of-band. Any other image still is. Empty: only `waitJob.image` |
+| `waitJob.previousImage` | empty | The previous wait image, also accepted by the exception scan and the webhook for one release after `waitJob.image` changes; a held wait Job still on it is not reported as out-of-band. Any other image still is. Empty: only `waitJob.image` |
 | `waitJob.previousURL` | empty | The previous core URL the policy's exemption admits for one release |
 | `ha.enabled` | `false` | Two agent replicas behind a leader Lease, a PDB, a spread |
 | `statusHeartbeat` | empty | Refresh `status.checkedAt` this often (e.g. `5m`); with alerts, one unit, positive and below `alerts.checkedAtStaleAfter` |
@@ -1585,8 +1585,8 @@ webhook not enforcing. Sync waves are one fixed order and cannot reverse on the 
 
 The webhook's flags (`/grant-expiry --help`): `--mode`, `--argocd-user`, `--skew`, `--grant-api`, `--listen` (`:8443`, POST `/validate`),
 `--probe-listen` (`:8080`: `/healthz`, `/readyz`, `/metrics`), `--tls-cert-file`, `--tls-key-file`, `--max-cache-age`, `--wait-image`,
-`--wait-url`, `--wait-previous-url`, `--wait-host-alias`, `--wait-ca-configmap`, `--shutdown-delay`. The agent's `--wait-previous-image`
-(`CLEARANCE_WAIT_PREVIOUS_IMAGE`, empty by default) is the one image beyond `--wait-image` its exception scan accepts. The agent's new flags: `--leader-elect`,
+`--wait-url`, `--wait-previous-url`, `--wait-previous-image`, `--wait-host-alias`, `--wait-ca-configmap`, `--shutdown-delay`. `--wait-previous-image`
+(`CLEARANCE_WAIT_PREVIOUS_IMAGE`, empty by default; the agent has it too, from the same `waitJob.previousImage`) is the one image beyond `--wait-image` the webhook's exemption and the agent's exception scan accept. The agent's new flags: `--leader-elect`,
 `--leader-lease`, `--leader-lease-duration`, `--leader-renew-deadline`, `--leader-retry-period`, `--identity` (`POD_NAME`),
 `--status-heartbeat`.
 

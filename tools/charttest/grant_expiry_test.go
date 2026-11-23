@@ -284,10 +284,11 @@ func TestTheWebhookTLSIsTheCoresScheme(t *testing.T) {
 // The wait Job's pins reach the webhook (it exempts the same Job the policy does), the previous URL included.
 func TestTheWebhookGetsTheWaitJobPins(t *testing.T) {
 	docs := agentDocs(t, append(geOn, "--set", "waitJob.image=registry.example.test/wait@sha256:00", "--set", "waitJob.previousURL=http://old.example.test",
+		"--set", "waitJob.previousImage=registry.example.test/wait@sha256:11",
 		"--set", "waitJob.caConfigMap=clearance-ca")...)
 	a := argsOf(geContainer(t, docs))
 	for _, want := range []string{"--wait-image=registry.example.test/wait@sha256:00", "--wait-url=https://clearance.example.test",
-		"--wait-previous-url=http://old.example.test", "--wait-ca-configmap=clearance-ca"} {
+		"--wait-previous-url=http://old.example.test", "--wait-previous-image=registry.example.test/wait@sha256:11", "--wait-ca-configmap=clearance-ca"} {
 		if !slices.Contains(a, want) {
 			t.Errorf("args lack %s: %v", want, a)
 		}
