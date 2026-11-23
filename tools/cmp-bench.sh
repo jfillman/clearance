@@ -132,7 +132,10 @@ while IFS= read -r name; do
   cat "$out/c-base.txt" >> "$out/confirm-base.txt"; cat "$out/c-head.txt" >> "$out/confirm-head.txt"
   set +e
   gate "$out/c-base.txt" "$out/c-head.txt" "$out/c.csv" "$out/c.txt" | tee -a "$out/verdict.txt"
+  rc="${PIPESTATUS[0]}"
   set -e
+  # A measurement that compared nothing is a failure, not noise.
+  if [ "$rc" != 0 ]; then echo "REGRESSION $name: the second measurement could not be compared (status $rc)" | tee -a "$out/verdict.txt"; echo "$name" >> "$out/confirmed.txt"; continue; fi
   cat "$out/c.txt" >> "$out/benchstat-confirm.txt"
   if [ -s "$out/flagged.txt" ]; then echo "REGRESSION $name: past the bar again" | tee -a "$out/verdict.txt"; echo "$name" >> "$out/confirmed.txt"; else echo "$name: not past the bar again, taken as noise" | tee -a "$out/verdict.txt"; fi
 done < "$out/candidates.txt"

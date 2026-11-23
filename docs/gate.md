@@ -2450,16 +2450,20 @@ has gone a while without a false failure. `THRESHOLD` is one value for every ben
 cries wolf would loosen the check for all of them: an exception for one benchmark is a change to `tools/cmp-bench.sh`,
 or the removal of that benchmark.
 
-**What the noise looked like.** The first run of the job (this pull request's, where head and merge base have the same
-product code, so every difference is noise) on an `ubuntu-latest` runner (4 vCPU Xeon): the medians of the two sides
-differed by at most 6% on the benchmarks benchstat could compare and the allocation counts were identical, but the
-spread within a side was wide for the ones that touch the file system, up to +-50% (`RenderHelmSource`, `GenerateGeneric`,
-`RenderKustomizeDir`) and +-87% in the worst case, against +-1% to +-17% for the pure-CPU ones (`ParseConfig`, `Canonical`,
-`Canonicalize`, `ClearedTreeCacheLookup`). Six samples of that spread cannot show a 25% difference as significant, which
-is the point of the bar, and it also means the job will not notice a real 25% regression of a file-system-bound benchmark
-until the change is bigger; the pure-CPU benchmarks and the allocation counts are the sharp ones.
+**What the noise looked like.** Two runs of the job on `ubuntu-latest` runners (4 vCPU Xeon), on this pull request, where
+head and merge base have the same product code, so every difference between the two sides is noise. In both, the
+allocation counts of the two sides were identical, and the medians of the two sides differed by at most 6% on the
+benchmarks benchstat could compare. The spread within a side differed a great deal between the runs: in the first, up to
++-50% for the benchmarks that touch the file system (`RenderHelmSource`, `GenerateGeneric`, `RenderKustomizeDir`) and
++-87% in the worst case (one benchmark, `Render/unchanged`, passed the bar by chance there, which is why the job now has
+alpha 0.01 and the second measurement); in the later one, +-1% to +-12% for nearly all and +-31% for the worst two. The
+absolute times differ between runners as well: `ParseConfig` was 190 us on one and 378 us on the other. That is why a
+stored baseline would be useless and the job compares the two sides of one run. Six samples of a spread like the first
+run's cannot show a 25% difference as significant, which is the point of the bar, and it also means the job will not
+notice a real 25% regression of a file-system-bound benchmark until the change is bigger; the pure-CPU benchmarks and the
+allocation counts are the sharp ones.
 
-Baseline of that run (`ubuntu-latest`, median of six, merge base side):
+Baseline of the first run (`ubuntu-latest`, median of six, merge base side):
 
 | Benchmark | time/op | allocs/op |
 | --- | --- | --- |
