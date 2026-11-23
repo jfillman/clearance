@@ -217,10 +217,13 @@ chart_args=(argocd argo/argo-cd --version "$chart_version" -n "$ns_argo" -f "$wo
 node="$(kind get nodes --name "$cluster" | head -1)"
 images="$(helm template "${chart_args[@]}" | sed -n 's/^ *image: *"\{0,1\}\([^" ]*\)"\{0,1\} *$/\1/p' | sort -u | grep -vxF "$image")"
 [ -n "$images" ] || die "no image found in the argo-cd chart's render"
+# Bounded: every pull 120 s at most, and all of them with their retries 6 minutes, so this, helm's 8 minutes and the
+# Applications' TIMEOUT fit in the job's 30 and leave time to collect the logs.
+pull_deadline=$((SECONDS + 360))
 for img in $images; do
   for try in 1 2 3 4 5 6; do
-    docker exec "$node" crictl pull "$img" > /dev/null 2>&1 && break
-    [ "$try" = 6 ] && die "cannot pull $img into the kind node"
+    timeout 120 docker exec "$node" crictl pull "$img" > /dev/null 2>&1 && break
+    { [ "$try" = 6 ] || [ $((SECONDS + try * 10)) -ge "$pull_deadline" ]; } && die "cannot pull $img into the kind node"
     echo "     pull $img failed (try $try), retrying in $((try * 10))s"
     sleep $((try * 10))
   done
