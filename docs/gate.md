@@ -2442,7 +2442,37 @@ counts do not depend on the runner at all, so an allocs/op regression is reliabl
 tighten that threshold separately when the history shows it never flakes. The job's first weeks should tell whether 25%
 is right: lower it in the workflow (`THRESHOLD`) when the table shows the noise well under it, raise it for a single
 benchmark that cries wolf, or make the job a release gate only after it has gone a while without a false failure.
-{OBSERVED}
+
+**What the noise looked like.** The first run of the job (this pull request's, where head and merge base have the same
+product code, so every difference is noise) on an `ubuntu-latest` runner (4 vCPU Xeon): the medians of the two sides
+differed by at most 6% on the benchmarks benchstat could compare and the allocation counts were identical, but the
+spread within a side was wide for the ones that touch the file system, up to +-50% (`RenderHelmSource`, `GenerateGeneric`,
+`RenderKustomizeDir`) and +-87% in the worst case, against +-1% to +-17% for the pure-CPU ones (`ParseConfig`, `Canonical`,
+`Canonicalize`, `ClearedTreeCacheLookup`). Six samples of that spread cannot show a 25% difference as significant, which
+is the point of the bar, and it also means the job will not notice a real 25% regression of a file-system-bound benchmark
+until the change is bigger; the pure-CPU benchmarks and the allocation counts are the sharp ones.
+
+Baseline of that run (`ubuntu-latest`, median of six, merge base side):
+
+| Benchmark | time/op | allocs/op |
+| --- | --- | --- |
+| `ParseConfig` | 190 us | 869 |
+| `Canonical` | 1.85 us | 12 |
+| `Canonicalize` | 1.36 ms | 8511 |
+| `ClearedTreeCacheLookup` | 7.7 us | 18 |
+| `GenerateWarm` | 166 us | 194 |
+| `GenerateCold` | 2.43 ms | 9757 |
+| `GenerateGeneric` | 2.74 ms | 11970 |
+| `RenderChartParameters` | 595 us | 426 |
+| `RenderKustomizeDir` | 630 us | 476 |
+| `RenderSourcesHelm` | 995 us | 2731 |
+| `RenderHelmSource` (argosrc) | 324 us | 457 |
+| `RenderKustomizeSource` (argosrc) | 206 us | 339 |
+| `RenderDirectorySource` (argosrc) | 310 us | 914 |
+| `ParseSources` (argosrc) | 4.8 us | 28 |
+| `OSRunStep` | 20.2 ms | 152 |
+
+These are for orientation, not limits: the job compares the two sides of each run and never reads a stored number.
 
 ### Parity with the Tekton check, and what is not yet the same
 
