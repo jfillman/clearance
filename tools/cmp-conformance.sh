@@ -310,6 +310,7 @@ refused() { # APP CODE OTHER_CLASSES_REGEX
   echo "$msg" | sed 's/^/     /'
   ok "$a: the Application's condition carries $2 ($((SECONDS - started))s)"
   echo "$msg" | grep -q '^ComparisonError: ' && ok "$a: as a ComparisonError" || bad "$a: the code is not in a ComparisonError"
+  echo "$msg" | grep -q "clearance-cmp: $2: " && ok "$a: in the plugin's \"clearance-cmp: <code>: <summary>\" line" || bad "$a: no \"clearance-cmp: $2: \" line"
   echo "$msg" | grep -Eq "$3" && bad "$a: the condition also carries another class's code" || ok "$a: and no code of another class"
   [ "$(field "$a" '{.status.sync.status}')" != Synced ] && ok "$a: not synced" || bad "$a: a failed render synced"
   kubectl get namespace "conf-$a" > /dev/null 2>&1 && bad "$a: its destination namespace was created" || ok "$a: nothing was applied"
