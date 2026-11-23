@@ -48,6 +48,22 @@ jobs:
       contents: read
     uses: ./.github/workflows/cmp.yaml
 
+  # Main's other CI, on the tagged commit, as required jobs the same way: the Go build, tests, vet, fuzzing and the
+  # other images and actions (.github/workflows/go.yaml), and the charts' lint, render tests, kubeconform and the install
+  # test of the chart and image built from this checkout (.github/workflows/chart.yaml). Before these, a red main was
+  # caught only by reading main's checks by hand before cutting the tag.
+  go-gates:
+    needs: check
+    permissions:
+      contents: read
+    uses: ./.github/workflows/go.yaml
+
+  chart-gates:
+    needs: check
+    permissions:
+      contents: read
+    uses: ./.github/workflows/chart.yaml
+
   wheel:
     needs: check
     runs-on: ubuntu-latest
@@ -78,7 +94,7 @@ jobs:
   # signed keyless with this workflow's GitHub OIDC identity, and a standalone SPDX SBOM is attested and attached to
   # the GitHub Release.
   image:
-    needs: [check, cmp-gates]
+    needs: [check, cmp-gates, go-gates, chart-gates]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -141,7 +157,7 @@ jobs:
   # amd64 and arm64, SBOM and provenance on the index, the index signed keyless with this workflow's identity. Each
   # leg uploads its index digest as an artifact for the release notes.
   provider-images:
-    needs: [check, cmp-gates]
+    needs: [check, cmp-gates, go-gates, chart-gates]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -402,7 +418,7 @@ jobs:
         run: tools/chart-install-test/run.sh
 
   release:
-    needs: [check, cmp-gates, wheel, image, chart, provider-images, observe-k8s-chart, agent-chart, observe-aws-chart, install-test]
+    needs: [check, cmp-gates, go-gates, chart-gates, wheel, image, chart, provider-images, observe-k8s-chart, agent-chart, observe-aws-chart, install-test]
     runs-on: ubuntu-latest
     permissions:
       contents: write

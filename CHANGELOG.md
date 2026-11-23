@@ -16,6 +16,20 @@ tree; with 4096 trees kept that is a tree last cleared thousands of trees ago.
 
 ### Added
 
+- **A release runs the `go` and `chart` workflows on the tagged commit.** `release.yaml` calls them (`go-gates`,
+  `chart-gates`, through `workflow_call`) as required jobs beside `cmp-gates`: no image, chart or GitHub Release is
+  published unless the Go build and tests and the chart checks and install test pass on that commit. Before, they were
+  checked by hand on main before a tag was cut. Their push and pull-request runs are unchanged.
+- **Argo CD conformance of the plugin image (W-34 F3; `cmp-conformance` in `.github/workflows/cmp.yaml`).** On every
+  push and pull request, and through `release.yaml`'s `cmp-gates` before any image is built, the built `clearance-cmp`
+  image runs as the plugin sidecar of a real Argo CD in a kind cluster, installed with the official `argo-cd` chart and
+  the new `docs/examples/argo-cd-repo-server-values.yaml` (the sidecar and the metrics container), under Argo CD
+  v3.4.6, v3.5.0, v3.5.7 and v3.6.2 (`tools/cmp-conformance.sh`). Helm, Kustomize and directory sources and the
+  chart-parameter mode must sync to Healthy; a denied change, an unreadable core answer and an unlisted chart repository
+  must each show their own code (`CMP-REFUSED-DENIED`, `CMP-FAULT-CORE-RESPONSE`, `CMP-RENDER-REFUSED`) in the
+  Application's `ComparisonError`; `doctor` must pass and `/metrics` must count the runs. Logs are an artifact on a
+  failure. The install guide's Prerequisites now name this tested range (Argo CD 3.4 to 3.6). The test double
+  (`tools/cmpsmoke`) gains `-deny`, `-garble`, `-token` and `-git-root` (off by default; the smoke test is unchanged).
 - **Release gates for the Argo CD plugin (W-34 F7; `.github/workflows/cmp.yaml`).** Five jobs on every push and pull
   request, and called by `release.yaml` (`cmp-gates`) on the tagged commit before any image is built, so a tag whose
   plugin fails one publishes nothing: `cmp-image-smoke` (moved from `go.yaml`, unchanged; it was not a release gate

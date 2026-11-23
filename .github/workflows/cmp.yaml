@@ -1,7 +1,7 @@
 name: cmp
-# The Argo CD plugin's (clearance-cmp, providers/argocd/cmp) release gates, W-34 F7 and F9: the smoke test of the built
-# image, the upgrade test against the previous release, the fuzz targets on path and parameter handling, the soak, and
-# the repo-server HA checks. Every push and pull request runs them, and release.yaml calls this workflow
+# The Argo CD plugin's (clearance-cmp, providers/argocd/cmp) release gates, W-34 F7, F9 and F3: the smoke test of the
+# built image, the upgrade test against the previous release, the fuzz targets on path and parameter handling, the soak,
+# the repo-server HA checks, and the conformance of the image under a real Argo CD of each tested version. Every push and pull request runs them, and release.yaml calls this workflow
 # (workflow_call) before it builds or pushes any image, so a tag whose plugin fails one of them publishes nothing
 # (docs/gate.md, "The plugin's release gates").
 on:
@@ -13,6 +13,10 @@ permissions:
   contents: read
 env:
   GO_VERSION: "1.26.11"
+  HELM_VERSION: v3.21.3
+  # The kind release and node image chart.yaml's install test uses.
+  KIND_VERSION: v0.33.0
+  KIND_NODE_IMAGE: kindest/node:v1.35.8@sha256:07b2536e30b803ed61d1677a79df6115f798ce64c80f9e22f6ed45afd09323c0
 jobs:
   # The built clearance-cmp image, run the way Argo CD runs the plugin (tools/cmp-smoke.sh; docs/gate.md, "The smoke
   # test of the built image"): cwd is the checkout, Argo CD's environment, uid 999, a read-only root, a tmpfs /tmp, a
@@ -112,7 +116,7 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
       - uses: azure/setup-helm@v4.3.0
         with:
-          version: v3.21.3
+          version: ${{ env.HELM_VERSION }}
       - run: pip install pyyaml
       - name: the documented HA values, rendered by the argo-cd chart (10.3.2, Argo CD v3.5.0)
         run: |
@@ -152,3 +156,52 @@ jobs:
             TestAKilledRunsScratchIsSweptByTheNextRender; do
             grep -E "^--- PASS: $t " "$RUNNER_TEMP/ha.log"
           done
+
+  # The built image as a Config Management Plugin sidecar of a real Argo CD (W-34 F3; tools/cmp-conformance.sh): a kind
+  # cluster, the official argo-cd chart with docs/examples/argo-cd-repo-server-values.yaml (the sidecar and the metrics
+  # container), the image `kind load`ed, and tools/cmpsmoke in the cluster as the core and the git host. Helm, Kustomize
+  # and plain directory sources and the chart-parameter mode sync and are Healthy; a denied change, a core answer the
+  # plugin cannot read and an unlisted chart repository each show their own error code in the Application's
+  # ComparisonError; doctor passes; /metrics counts the runs. One leg per Argo CD version the install guide lists as
+  # tested (docs/install-argocd-plugin.md, Prerequisites): keep the two in step. A leg takes well under 15 minutes, so
+  # this runs on every push and pull request like the other gates, not only on paths under providers/argocd/.
+  cmp-conformance:
+    name: cmp-conformance (Argo CD ${{ matrix.argocd }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {argocd: v3.6.2, chart: 10.18.2} # the current minor
+          - {argocd: v3.5.7, chart: 10.11.7} # the previous minor, its latest patch
+          - {argocd: v3.5.0, chart: 10.3.2}  # the release the image's tools and the parity suite are pinned to
+          - {argocd: v3.4.6, chart: 10.2.2}  # the oldest minor upstream still supports
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: azure/setup-helm@v4.3.0
+        with:
+          version: ${{ env.HELM_VERSION }}
+      - run: pip install pyyaml
+      # Built for the runner's architecture, loaded into kind, never pushed.
+      - run: docker build -f providers/argocd/cmp/Dockerfile --build-arg VERSION=conformance -t clearance-cmp:conformance .
+        env:
+          DOCKER_BUILDKIT: "1"
+      - uses: helm/kind-action@v1.15.0
+        with:
+          version: ${{ env.KIND_VERSION }}
+          node_image: ${{ env.KIND_NODE_IMAGE }}
+          cluster_name: clearance
+      - run: tools/cmp-conformance.sh clearance-cmp:conformance "${{ matrix.chart }}" "${{ matrix.argocd }}"
+        env:
+          KIND_CLUSTER: clearance
+          ARTIFACTS: ${{ runner.temp }}/cmp-conformance
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cmp-conformance-${{ matrix.argocd }}
+          path: ${{ runner.temp }}/cmp-conformance
+          if-no-files-found: warn

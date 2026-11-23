@@ -1,5 +1,9 @@
 name: go
-on: [push, pull_request]
+# release.yaml also calls this workflow (workflow_call, `go-gates`) on the tagged commit: no image is built until it passes.
+on:
+  push:
+  pull_request:
+  workflow_call:
 jobs:
   go:
     runs-on: ubuntu-latest
