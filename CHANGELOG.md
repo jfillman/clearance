@@ -9,6 +9,8 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.57.2] - 2026-11-23
+
 ### Added
 
 - **Benchmarks of the Argo CD plugin's hot paths, with a regression check on pull requests (W-34 P4).** New
