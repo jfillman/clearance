@@ -379,7 +379,9 @@ func SourcesRequest(cfg Config) (argosrc.Request, error) {
 }
 
 // RenderSources is the generic mode (G-ARGO-10b): render the Application's original sources as Argo CD would.
-func RenderSources(ctx context.Context, run argosrc.Runner, cfg Config) (*Rendered, error) {
+// srcDir is the checkout Argo CD handed the plugin (the carrier source's path in it); a source of the Application's
+// own repository at the carrier's revision is rendered from it (ownCheckouts), every other source is fetched.
+func RenderSources(ctx context.Context, run argosrc.Runner, cfg Config, srcDir string) (*Rendered, error) {
 	req, err := SourcesRequest(cfg)
 	if err != nil {
 		return nil, err
@@ -389,11 +391,85 @@ func RenderSources(ctx context.Context, run argosrc.Runner, cfg Config) (*Render
 		return nil, err
 	}
 	defer os.RemoveAll(tmp)
-	res, err := argosrc.Render(ctx, argosrc.Options{Run: run, Work: tmp}, req)
+	local := ownCheckouts(cfg, req.Sources, srcDir)
+	res, err := argosrc.Render(ctx, argosrc.Options{Run: run, Work: tmp, Local: local}, req)
 	if err != nil {
 		return nil, err
 	}
+	// A copy of Argo CD's checkout is written by the plugin itself, not by a step, so no step's scratch measurement
+	// may follow it (a Directory source runs none): measure the scratch here, before it is removed.
+	if b := budgetFrom(ctx); b != nil && len(local) > 0 {
+		n, err := dirSize(b.root)
+		if err != nil {
+			return nil, fmt.Errorf("the render's scratch could not be measured: %w", err)
+		}
+		if n > b.lim.Temp {
+			return nil, &LimitError{Limit: LimitTemp, Setting: EnvMaxTemp, Bound: FormatSize(b.lim.Temp), Step: "copy of Argo CD's checkout",
+				Detail: fmt.Sprintf("left the render's scratch directory at %s", FormatSize(n))}
+		}
+	}
 	return &Rendered{Manifests: res.Manifests, Generic: true, Sources: res.Sources, Release: argosrc.ReleaseIDFromValues(res.ValueDocs)}, nil
+}
+
+// ownCheckouts is the checkout Argo CD handed the plugin, offered to the generic renderer for every spelling of the
+// Application's own repository among the sources (NormalizeRepo: scheme and host case, a trailing ".git" or "/").
+// Argo CD checked that repository out at the carrier source's targetRevision (ARGOCD_APP_SOURCE_TARGET_REVISION),
+// resolved to ARGOCD_APP_REVISION, with its own repository credentials: the sidecar holds none, and the repository may
+// be private. The renderer uses it only for a source whose targetRevision is the carrier's as written; one at another
+// revision is fetched, as before. Nothing is offered when the revision is not a full commit or the repository's root
+// cannot be found from srcDir and ARGOCD_APP_SOURCE_PATH: the sources are then fetched, as before.
+func ownCheckouts(cfg Config, srcs []argosrc.Source, srcDir string) []argosrc.Checkout {
+	if cfg.SourceRepo == "" || !sha40.MatchString(cfg.Revision) {
+		return nil
+	}
+	own, err := NormalizeRepo(cfg.SourceRepo, false)
+	if err != nil {
+		return nil
+	}
+	root, ok := carrierRoot(srcDir, cfg.SourcePath)
+	if !ok {
+		return nil
+	}
+	var out []argosrc.Checkout
+	seen := map[string]bool{}
+	for _, s := range srcs {
+		if s.Chart != "" || seen[s.RepoURL] {
+			continue
+		}
+		if k, err := NormalizeRepo(s.RepoURL, false); err == nil && k == own {
+			seen[s.RepoURL] = true
+			out = append(out, argosrc.Checkout{RepoURL: s.RepoURL, TargetRevision: cfg.SourceRev, Commit: cfg.Revision, Dir: root})
+		}
+	}
+	return out
+}
+
+// carrierRoot is the repository's root given the plugin's working directory (Argo CD runs the plugin in the carrier
+// source's path within the checkout) and that path. A path that leaves the repository, or a working directory that
+// does not end in it, has no root.
+func carrierRoot(srcDir, sourcePath string) (string, bool) {
+	if srcDir == "" || !filepath.IsAbs(srcDir) {
+		return "", false
+	}
+	root := filepath.Clean(srcDir)
+	p := strings.Trim(filepath.ToSlash(strings.TrimSpace(sourcePath)), "/")
+	if p == "" || p == "." {
+		return root, true
+	}
+	parts := strings.Split(p, "/")
+	for i := len(parts) - 1; i >= 0; i-- {
+		switch parts[i] {
+		case "", ".":
+			continue
+		case "..":
+			return "", false
+		}
+		if filepath.Base(root) != parts[i] {
+			return "", false
+		}
+		root = filepath.Dir(root)
+	}
+	return root, true
 }
 
 // realDir is dir with its symlinks resolved ("\x00", which no path starts with, when that fails).

@@ -43,6 +43,17 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   release gates"). `cmp-published` can also be dispatched by hand against any pushed index. Every new leg checks that
   its runner is the architecture it names (`tools/runner-arch.sh`). No plugin code changes.
 
+### Fixed
+
+- **An Application switched to the plugin in sources mode renders when its own gitops repository is private (I-83).**
+  The plugin fetched every source itself, the Application's own repository included, and the sidecar holds no
+  credential, so a private gitops repository failed with `CMP-RENDER-SOURCES` ("could not read Username"). A git
+  source of the Application's own repository (`ARGOCD_APP_SOURCE_REPO_URL`, matched after normalising the URL) at the
+  carrier's revision (`ARGOCD_APP_SOURCE_TARGET_REVISION`, as written) is now rendered from a copy of the checkout Argo
+  CD hands the plugin, at `ARGOCD_APP_REVISION`, and its `$ref/` value files resolve against that copy. Another revision
+  or another repository is fetched as before, with the same refusals. No credential is added anywhere; every other
+  source must still be reachable without one. See docs/gate.md, "What it renders, and how".
+
 ## [0.57.1] - 2026-11-23
 
 ### Fixed

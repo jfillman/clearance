@@ -2581,6 +2581,31 @@ Each git source is fetched once at its target revision and the **peeled commit i
 chart by the digest of its package. The plugin logs them on stderr (`source 1 Helm <repo>@<commit>`) and the parity
 report carries them. They are not part of the tree digest: the tree is the objects, as for the Airframe chart.
 
+**The Application's own repository comes from Argo CD's checkout (I-83).** Argo CD hands the plugin a checkout of the
+source that carries it (the Application's gitops repository, at the carrier's `targetRevision`), fetched with Argo CD's
+own repository credentials, which the sidecar never sees. In sources mode a git source of that same repository at that
+same revision is rendered from a copy of that checkout in the render's scratch, not fetched, and a `$ref/` value file
+of such a ref source resolves against the copy. So the Application's own repository **may be private**. The match is:
+
+* the repository: the source's `repoURL` and `ARGOCD_APP_SOURCE_REPO_URL` normalise to the same one (`NormalizeRepo`:
+  scheme and host case, a trailing `.git` or `/`, a default port; `https://` and `ssh://` are different repositories);
+* the revision: the source's `targetRevision` is the carrier's (`ARGOCD_APP_SOURCE_TARGET_REVISION`) as written, empty and
+  `HEAD` being one (no other normalising, whitespace included). A branch is a valid `targetRevision` when it is the
+  carrier's; a branch and the commit it is at do not match (the plugin cannot tell they agree without asking the
+  remote). The switched Application's carrier copies its first git source's `targetRevision`, so its own ref source matches;
+* the commit: `ARGOCD_APP_REVISION` is a full commit, recorded as the source's resolved commit; the plugin's root is found
+  from its working directory and `ARGOCD_APP_SOURCE_PATH`.
+
+Anything else (another revision of the same repository, another repository, an `ARGOCD_APP_REVISION` that is not a full
+commit) is fetched as before, and fails as before when the repository is private. The copy keeps the fetch's refusals: a `.gitmodules`
+file, a link that leaves the repository, the unpack bounds, and the render's scratch limit (`CLEARANCE_CMP_RENDER_MAX_TEMP`, measured after the copy too); it stops at
+the render's deadline; a `.git` at the root is not copied, and nothing is written
+into Argo CD's checkout. The log line marks such a source `(Argo CD's checkout)` and the provenance has `checkout: true`.
+Argo CD sends the plugin the whole repository unless the repo-server is told otherwise: with
+`ARGOCD_REPO_SERVER_PLUGIN_USE_MANIFEST_GENERATE_PATHS` or tar exclusions (`reposerver.plugin.tar.exclusions`), a value
+file left out of the checkout is absent here too (and dropped with `ignoreMissingValueFiles`), so leave both unset for a
+switched Application.
+
 #### What fails closed
 
 An unsupported feature is an `UnsupportedError` naming the gap: the plugin exits 1 and Argo CD shows a
@@ -2598,7 +2623,7 @@ An unsupported feature is an `UnsupportedError` naming the gap: the plugin exits
 | git submodules; a symlink that leaves its repository | the checkout is not what Argo CD's is |
 | a chart dependency that `helm dependency build` cannot fetch here | the plugin holds no repository definitions or credentials |
 | a repository URL that is not `https`, `http`, `ssh`, `git` or scp-like (`file://`, `ext::`, a local path) | a read of the sidecar's own disk |
-| a private repository or registry | the sidecar has no credential (see the risks below); git or Helm fails and the error says so |
+| a private repository or registry, other than the Application's own repository at the carrier's revision (rendered from Argo CD's checkout, above) | the sidecar has no credential (see the risks below); git or Helm fails and the error says so |
 | a render the stamping reader will not read | see finding 4 below |
 
 **Kustomize build options are an allow list.** `kustomizeBuildOptions` is read from the Application, so the plugin
@@ -2706,9 +2731,10 @@ server-side apply, `ignoreDifferences`, pruning), and not the live objects, whos
   putting the resolved commits into the `sources` the agent writes (and re-writing them when they move). **Not built in 10c**: the
   agent takes the plugin source's repository and revision from the first git source (so a change there re-renders) and does not
   resolve commits, which needs the credential and egress below.
-* **No credential, and the network.** The sidecar holds no git or registry credential, and these repositories are
-  private. Generic mode needs a credential per call (mint, do not cache) and egress from the repo-server pod to the git
-  host, the chart repositories and the registry.
+* **No credential, and the network.** The sidecar holds no git or registry credential. The Application's own
+  repository at the carrier's revision needs none (it is rendered from Argo CD's checkout, above), and may be private;
+  every other source must be reachable without one. A private chart or `$ref` repository would need a credential per
+  call (mint, do not cache) and egress from the repo-server pod to the git host, the chart repositories and the registry.
 * **Tool versions.** They must follow Argo CD's (finding 1): move them together and re-run the parity suite, ideally as
   a drift check against the live Argo CD.
 * **The generic mode fetches every time.** The chart fetch cache and the pre-render cache serve the chart mode
@@ -2758,7 +2784,9 @@ into it); the core's and clearance-api's `NetworkPolicy` admit the agent and, fo
 `networkPolicy.api.from`); the core knows both callers (`providers` for the agent with its `principals`, `protection` and `kinds`,
 `verifiers` for the repo-server's service account, `feedReaders` for the agent); the agent's `environment` is set (the chart default is
 `prod`, which is what an unlabelled protected namespace is cleared as, wrong on a cluster that is not production); and a source the plugin
-renders is reachable without a credential, from a repository listed in the sidecar's `CLEARANCE_CHART_REPOS` or the Application's own first git source.
+renders, other than the Application's own repository at the carrier's revision (rendered from the checkout Argo CD hands the
+plugin, so it may be private), is reachable without a credential, from a repository listed in the sidecar's `CLEARANCE_CHART_REPOS`
+or the Application's own first git source.
 
 The agent's flags (each also an environment variable): `--optin` (`CLEARANCE_OPTIN`), `--optin-plugin-name`, `--optin-deny`,
 `--optin-namespaces` (the chart's `protectedNamespaces`), `--optin-interval` (30 s), `--optin-report-every` (5 min),

@@ -19,6 +19,9 @@ type Options struct {
 	Run             Runner
 	Work            string // a scratch directory the renderer may fill; the caller removes it
 	AllowLocalRepos bool   // tests only: a local path or file:// as a repository
+	// Local are repositories already checked out (checkout.go): a source naming one at its revision is copied from
+	// it, not fetched. The plugin gives the Application's own repository, from the checkout Argo CD hands it.
+	Local []Checkout
 }
 
 // Request is everything Argo CD knows about the Application besides its sources.
@@ -43,6 +46,7 @@ type Provenance struct {
 	Chart     string `json:"chart,omitempty"`
 	Requested string `json:"requested"`
 	Resolved  string `json:"resolved"`
+	Checkout  bool   `json:"checkout,omitempty"` // copied from a Checkout (Argo CD's own) rather than fetched
 }
 
 // Result is a render.
@@ -59,7 +63,10 @@ type refTarget struct {
 	src   Source
 }
 
-type checkout struct{ dir, commit string }
+type checkout struct {
+	dir, commit string
+	local       bool // copied from an Options.Local checkout
+}
 
 // state is one Render: the sources, the ref sources by name, and the git checkouts made so far (one per repository
 // and requested revision, so every use of a ref source sees the one commit).
@@ -75,11 +82,20 @@ func (st *state) git(ctx context.Context, pos int, repo, rev string) (checkout, 
 	if c, ok := st.cos[k]; ok {
 		return c, nil
 	}
-	dir, commit, err := st.o.fetchGit(ctx, pos, repo, rev)
-	if err != nil {
-		return checkout{}, err
+	var c checkout
+	if l, ok := st.o.local(repo, rev); ok {
+		dir, err := st.o.copyCheckout(ctx, pos, l)
+		if err != nil {
+			return checkout{}, err
+		}
+		c = checkout{dir, l.Commit, true}
+	} else {
+		dir, commit, err := st.o.fetchGit(ctx, pos, repo, rev)
+		if err != nil {
+			return checkout{}, err
+		}
+		c = checkout{dir: dir, commit: commit}
 	}
-	c := checkout{dir, commit}
 	st.cos[k] = c
 	return c, nil
 }
@@ -125,7 +141,7 @@ func Render(ctx context.Context, o Options, req Request) (*Result, error) {
 			if err != nil {
 				return nil, err
 			}
-			res.Sources = append(res.Sources, Provenance{Position: pos, Type: "Ref", Repo: s.RepoURL, Requested: s.TargetRevision, Resolved: co.commit})
+			res.Sources = append(res.Sources, Provenance{Position: pos, Type: "Ref", Repo: s.RepoURL, Requested: s.TargetRevision, Resolved: co.commit, Checkout: co.local})
 			continue
 		}
 		var root, appPath, revision string
@@ -147,7 +163,7 @@ func Render(ctx context.Context, o Options, req Request) (*Result, error) {
 				return nil, srcErrorf("%w", pos, err)
 			}
 			root, appPath, revision = co.dir, p, co.commit
-			prov = Provenance{Position: pos, Repo: s.RepoURL, Requested: s.TargetRevision, Resolved: co.commit}
+			prov = Provenance{Position: pos, Repo: s.RepoURL, Requested: s.TargetRevision, Resolved: co.commit, Checkout: co.local}
 		}
 		if _, err := os.Stat(filepath.Join(appPath, ".argocd-source.yaml")); err == nil {
 			return nil, unsupported(pos, ".argocd-source.yaml", "parameter overrides in the repository")

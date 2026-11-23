@@ -21,6 +21,7 @@ type Config struct {
 	Revision    string   // ARGOCD_APP_REVISION: the commit Argo syncs (the merge commit, not a PR head)
 	SourceRepo  string   // ARGOCD_APP_SOURCE_REPO_URL: the gitops repository (the plugin's own source)
 	SourcePath  string   // ARGOCD_APP_SOURCE_PATH
+	SourceRev   string   // ARGOCD_APP_SOURCE_TARGET_REVISION: the carrier source's targetRevision as written ("" is HEAD)
 	Project     string   // ARGOCD_APP_PROJECT_NAME
 	KubeVersion string   // KUBE_VERSION: the destination cluster's Kubernetes version (set by Argo CD for a plugin)
 	APIVersions []string // KUBE_API_VERSIONS: its API versions, comma separated in the environment
@@ -87,7 +88,8 @@ func ParseConfig(get func(string) string) (Config, error) {
 	c := Config{
 		AppName: get("ARGOCD_APP_NAME"), Destination: get("ARGOCD_APP_NAMESPACE"), Revision: get("ARGOCD_APP_REVISION"),
 		SourceRepo: get("ARGOCD_APP_SOURCE_REPO_URL"), SourcePath: get("ARGOCD_APP_SOURCE_PATH"),
-		Project: get("ARGOCD_APP_PROJECT_NAME"), KubeVersion: strings.TrimSpace(get("KUBE_VERSION")),
+		SourceRev: get("ARGOCD_APP_SOURCE_TARGET_REVISION"),
+		Project:   get("ARGOCD_APP_PROJECT_NAME"), KubeVersion: strings.TrimSpace(get("KUBE_VERSION")),
 		Sources: strings.TrimSpace(get("PARAM_SOURCES")), KustomizeBuildOptions: p("kustomizeBuildOptions"),
 		App: p("app"), Env: p("env"), Cluster: p("cluster"), ChartRepo: p("chartRepo"), ChartRev: p("chartRevision"),
 		ChartPath: p("chartPath"), ValuesJSON: p("valuesJson"), KustomizeDir: p("kustomizeDir"),

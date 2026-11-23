@@ -114,6 +114,9 @@ func Generate(ctx context.Context, d Deps, cfg Config, srcDir string, out io.Wri
 			what += " chart " + s.Chart
 		}
 		fmt.Fprintf(d.Stderr, ", source %d %s %s@%s", s.Position, s.Type, what, shortRes(s.Resolved))
+		if s.Checkout {
+			fmt.Fprint(d.Stderr, " (Argo CD's checkout)")
+		}
 	}
 	if r.ChartMerge != "" {
 		fmt.Fprintf(d.Stderr, ", chart %s@%s (%s), chart-cache=%s", cfg.ChartRepo, cfg.ChartRev, r.ChartMerge[:12], r.ChartFetch)
@@ -242,7 +245,7 @@ func renderTree(ctx context.Context, d Deps, cfg Config, srcDir string) (tree *T
 			if run == nil {
 				run = OSRun
 			}
-			return RenderSources(ctx, run, cfg)
+			return RenderSources(ctx, run, cfg, srcDir)
 		}
 		return Render(ctx, d.Exec, cfg, srcDir)
 	})
