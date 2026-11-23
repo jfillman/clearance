@@ -344,7 +344,13 @@ refused() { # APP CODE OTHER_CLASSES_REGEX
   echo "$msg" | sed 's/^/     /'
   ok "$a: the Application's condition carries $2 ($((SECONDS - started))s)"
   echo "$msg" | grep -q '^ComparisonError: ' && ok "$a: as a ComparisonError" || bad "$a: the code is not in a ComparisonError"
-  echo "$msg" | grep -q "clearance-cmp: $2: " && ok "$a: in the plugin's \"clearance-cmp: <code>: <summary>\" line" || bad "$a: no \"clearance-cmp: $2: \" line"
+  # Argo CD prefixes the plugin's stderr with its own text ("rpc error: ... plugin sidecar failed ..."); the plugin's part
+  # starts at the first "clearance-cmp:", which must be the code line, with no warning before it.
+  local first before
+  first="$(echo "$msg" | grep -o 'clearance-cmp: .*' | head -n 1)"
+  before="${msg%%clearance-cmp: *}"
+  case "$first" in "clearance-cmp: $2: "*) ok "$a: the plugin's first line is \"clearance-cmp: <code>: <summary>\"" ;; *) bad "$a: the first clearance-cmp: line is not the $2 line: $first" ;; esac
+  echo "$before" | grep -q 'WARNING' && bad "$a: a warning precedes the code line" || ok "$a: no warning before the code line"
   echo "$msg" | grep -Eq "$3" && bad "$a: the condition also carries another class's code" || ok "$a: and no code of another class"
   [ "$(field "$a" '{.status.sync.status}')" != Synced ] && ok "$a: not synced" || bad "$a: a failed render synced"
   kubectl get namespace "conf-$a" > /dev/null 2>&1 && bad "$a: its destination namespace was created" || ok "$a: nothing was applied"

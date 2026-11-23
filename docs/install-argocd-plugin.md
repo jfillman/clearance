@@ -11,8 +11,9 @@ this page is the install, the settings, the checks and the failure modes.
 
 **What it gives you, and the guardrails on it.**
 
-- **Every failure says what kind it is.** The first line of a `ComparisonError` is one short line starting with a stable
-  code: `CMP-FAULT-*` (the plugin failed), `CMP-DEP-*` (git or the chart host is unavailable), `CMP-RENDER-*` (the
+- **Every failure says what kind it is.** The plugin's part of a `ComparisonError` (what follows Argo CD's own
+  `rpc error: ... plugin sidecar failed` prefix) starts with one short line that begins with a stable
+  `clearance-cmp: <code>:` and is never preceded by a warning; warnings and the run's summary come after it. The code is one of `CMP-FAULT-*` (the plugin failed), `CMP-DEP-*` (git or the chart host is unavailable), `CMP-RENDER-*` (the
   Application's inputs do not render) or `CMP-REFUSED-*` (Clearance said no). A refusal of a change links to it on the
   next line (`hold: <url>`). The codes never change meaning: alert and search on them ([Error codes](#error-codes)).
 - **Last-known-good, off by default** (`CLEARANCE_CMP_LAST_KNOWN_GOOD=on`). A plugin fault or an unreachable chart host,
