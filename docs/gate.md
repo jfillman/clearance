@@ -2440,8 +2440,10 @@ the two halves of the job, so it is shown and not failed. 25% is wide on purpose
 milliseconds, and the benchmarks that touch the file system (the cache and the cold ones) vary the most. Allocation
 counts do not depend on the runner at all, so an allocs/op regression is reliable evidence even at a smaller delta;
 tighten that threshold separately when the history shows it never flakes. The job's first weeks should tell whether 25%
-is right: lower it in the workflow (`THRESHOLD`) when the table shows the noise well under it, raise it for a single
-benchmark that cries wolf, or make the job a release gate only after it has gone a while without a false failure.
+is right: lower it in the workflow (`THRESHOLD`) when the table shows the noise well under it, or make the job a release
+gate only after it has gone a while without a false failure. `THRESHOLD` is one value for every benchmark, so raising it
+for one that cries wolf would loosen the check for all of them: an exception for one benchmark is a change to
+`tools/cmp-bench.sh`, or the removal of that benchmark.
 
 **What the noise looked like.** The first run of the job (this pull request's, where head and merge base have the same
 product code, so every difference is noise) on an `ubuntu-latest` runner (4 vCPU Xeon): the medians of the two sides

@@ -80,9 +80,12 @@ done
 # benchstat prints a delta only where it finds one significant (p < 0.05), and "~" otherwise. The csv holds one table
 # per unit: a header row names the unit, then a row per benchmark (name, old, CI, new, CI, delta, p).
 awk -F, -v limit="$threshold" '
-  $1 == "" && ($2 == "sec/op" || $2 == "B/op" || $2 == "allocs/op") { unit = $2; next }
-  $1 == "" || $1 == "geomean" || $1 ~ /^(goos|goarch|pkg|cpu):/ || unit == "" { next }
-  $2 !~ /^[0-9.eE+-]+$/ { next }
+  # Every header row (an empty first cell) sets the unit, and a unit the check does not read (B/s, the throughput of a
+  # benchmark that calls SetBytes, where bigger is better) is "other", so its rows are never taken for a time.
+  $1 == "" { unit = ($2 == "sec/op" || $2 == "B/op" || $2 == "allocs/op") ? $2 : "other"; next }
+  $1 == "geomean" || $1 ~ /^(goos|goarch|pkg|cpu):/ || unit == "" || unit == "other" { next }
+  # A row counts only with a measurement on both sides (a benchmark one side lacks has an empty cell).
+  $2 !~ /^[0-9.eE+-]+$/ || $4 !~ /^[0-9.eE+-]+$/ { next }
   { seen[unit]++ }
   $6 ~ /^[+-][0-9.]+%$/ {
     d = substr($6, 1, length($6) - 1) + 0
