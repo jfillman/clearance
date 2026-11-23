@@ -1,0 +1,104 @@
+name: cmp-published
+# The smoke test of the PUBLISHED clearance-cmp image (I-74; docs/gate.md, "The plugin's release gates"). cmp.yaml's
+# cmp-image-smoke tests an image CI builds for itself and never pushes; release.yaml's provider-images then builds the
+# multi-arch index that is pushed. This workflow closes that gap: it takes the pushed index by digest, picks out the
+# linux/amd64 and the linux/arm64 image of that index, pulls each by its own digest on a runner of that architecture
+# (GitHub's hosted arm64 runner, natively, not under emulation), checks it is that architecture and carries the
+# release's version label, and runs tools/cmp-smoke.sh against it. release.yaml calls it once the image is pushed, and
+# its GitHub Release needs it: a failure here leaves the pushed image in the registry but publishes no Release.
+#
+# workflow_dispatch runs it by hand against any pushed index (a past release's, to check this workflow itself).
+on:
+  workflow_call:
+    inputs:
+      image:
+        description: the image repository, without a tag (ghcr.io/OWNER/clearance-cmp)
+        type: string
+        required: true
+      digest:
+        description: the pushed multi-arch index's digest (sha256:...)
+        type: string
+        required: true
+      version:
+        description: the org.opencontainers.image.version label each image must carry (the release tag)
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      image:
+        description: the image repository, without a tag (ghcr.io/OWNER/clearance-cmp)
+        type: string
+        required: true
+      digest:
+        description: the pushed multi-arch index's digest (sha256:...)
+        type: string
+        required: true
+      version:
+        description: the org.opencontainers.image.version label each image must carry (the release tag)
+        type: string
+        required: true
+permissions:
+  contents: read
+  packages: read
+env:
+  GO_VERSION: "1.26.11"
+jobs:
+  smoke:
+    name: cmp-published-smoke (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: amd64, runner: ubuntu-latest}
+          - {arch: arm64, runner: ubuntu-24.04-arm}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: the runner is ${{ matrix.arch }}
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: tools/runner-arch.sh "$ARCH"
+      - uses: docker/setup-buildx-action@v4.4.1
+      - uses: docker/login-action@v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: pull
+        name: pull the index's linux/${{ matrix.arch }} image by its digest
+        env:
+          IMAGE: ${{ inputs.image }}
+          DIGEST: ${{ inputs.digest }}
+          VERSION: ${{ inputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::not a digest: $DIGEST"; exit 1; }
+          [[ "$IMAGE" =~ ^[a-z0-9./_-]+$ ]] || { echo "::error::not an image repository: $IMAGE"; exit 1; }
+          raw="$(docker buildx imagetools inspect --raw "${IMAGE}@${DIGEST}")"
+          # Exactly one linux/ARCH image in the index (the attestation manifests are platform unknown/unknown).
+          sub="$(python3 -c '
+          import json, sys
+          d = json.loads(sys.stdin.read())
+          assert d.get("mediaType") in ("application/vnd.oci.image.index.v1+json", "application/vnd.docker.distribution.manifest.list.v2+json"), d.get("mediaType")
+          m = [x["digest"] for x in d["manifests"] if x.get("platform", {}).get("os") == "linux" and x["platform"].get("architecture") == sys.argv[1]]
+          assert len(m) == 1, ("want one linux/%s image in the index" % sys.argv[1], m)
+          print(m[0])
+          ' "$ARCH" <<<"$raw")"
+          [[ "$sub" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::the index's linux/$ARCH entry is not a digest: $sub"; exit 1; }
+          ref="${IMAGE}@${sub}"
+          docker pull "$ref"
+          platform="$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$ref")"
+          [ "$platform" = "linux/$ARCH" ] || { echo "::error::$ref is $platform, not linux/$ARCH"; exit 1; }
+          label="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$ref")"
+          [ "$label" = "$VERSION" ] || { echo "::error::$ref is labelled version '$label', not $VERSION"; exit 1; }
+          echo "index ${IMAGE}@${DIGEST}: linux/$ARCH is $sub, version $label"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+      - name: the smoke test, on the pulled image
+        env:
+          REF: ${{ steps.pull.outputs.ref }}
+        run: tools/cmp-smoke.sh "$REF"

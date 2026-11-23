@@ -2319,7 +2319,9 @@ one app while the default moves ahead.
 The unit tests fake git and helm and pass the plugin an absolute directory, so they cannot see how the plugin behaves
 as Argo CD runs it: 0.52.0 passed all of them and refused every value file on its first real run (I-38), because Argo CD
 runs `clearance-cmp` with the source directory `.`. CI therefore builds the image from `providers/argocd/cmp/Dockerfile`
-for the runner's architecture (never pushed) and runs `tools/cmp-smoke.sh IMAGE` (the `cmp-image-smoke` job in
+once per published architecture, each natively on a runner of that architecture (linux/amd64 on `ubuntu-latest`,
+linux/arm64 on GitHub's hosted `ubuntu-24.04-arm` runner; never pushed), and runs `tools/cmp-smoke.sh IMAGE` (the
+`cmp-image-smoke (amd64)` and `cmp-image-smoke (arm64)` legs of the `cmp-image-smoke` job in
 `.github/workflows/cmp.yaml`, which the release also runs: [the plugin's release gates](#the-plugins-release-gates-w-34-f7)). The script creates a gitops checkout on disk with real value files and a kustomize
 directory, a chart repository served by `git daemon` and listed in `CLEARANCE_CHART_REPOS`, and a fake core
 (`tools/cmpsmoke`) that answers the register call as cleared. It runs the image's `clearance-cmp` with the checkout as
@@ -2350,12 +2352,41 @@ plugin fails one publishes nothing**. Main's other CI (the `go` and `chart` work
 
 | Job | What it runs | It fails when |
 | --- | --- | --- |
-| `cmp-image-smoke` | the built image, as Argo CD runs it (`tools/cmp-smoke.sh`, [above](#the-smoke-test-of-the-built-image)) | any check of the smoke test fails |
+| `cmp-image-smoke` | the built image, as Argo CD runs it (`tools/cmp-smoke.sh`, [above](#the-smoke-test-of-the-built-image)), one leg per published architecture: amd64, and arm64 on the hosted arm64 runner | any check of the smoke test fails on either architecture, including the Landlock checks (`fs-sandbox=on`, and a sandboxed step refused the token with EACCES), which hold on arm64 exactly as on amd64 |
 | `cmp-upgrade` | the previous release's binary (the newest `v*` tag not on this commit, built from that tag) and this build's, on one cache directory and metrics store (`tools/cmp-upgrade.sh`) | the new binary fails on the old caches, emits other manifests than the old one, serves the old binary's pre-render entry (its key holds the plugin version), resets the metrics store, cannot serve the old last-known-good entry with the chart host down, or the old binary fails on what the new one wrote (rollback). A changed chart cache format is allowed (a miss, reported). `ALLOW_OUTPUT_CHANGE=1` makes a changed output a warning, for a release that changes it on purpose. |
 | `cmp-fuzz` | Go fuzzing, 30 s per target, of `safeRel`, `ParseConfig` (every `PARAM_*` a tenant writes, then `Canonical`, the cache keys and the sources parameter), the paths `Render` hands helm and kustomize on a checkout with links that leave it, `NormalizeRepo`, and argosrc's `resolveFileOrDirectory`, `resolveValueFile`, `sourcePath`, `checkBuildOptions` and `ParseSources` | any input panics, an absolute or `..` path is accepted, an accepted path leaves its repository, a chart comes from a repository the platform did not list, or a build option off the allow list is passed on |
 | `cmp-soak` | 200 renders of the fixtures by the real binary, each its own process, over three chart commits and four sets of values with a two-entry chart cache and the metrics server running throughout; then 8 renders at once five times, and renders killed with SIGKILL mid-run (`tools/cmp-soak.sh`); and 2000 in one process under the race detector (`TestSoakGenerateInProcess`) | a render fails or emits other bytes than the first render of the same inputs; a scratch directory, a temporary file or a render step's process is left; the chart or pre-render cache passes its bound, or the cache directory still grows once every input has been seen; the metrics server's open files or threads grow; goroutines or open files grow in one process; a killed run's scratch is not swept |
 | `cmp-ha` | the documented two-replica, PDB values for the `argo-cd` chart rendered by that chart, and the HA tests ([install guide](install-argocd-plugin.md#more-than-one-repo-server-ha-optional)) | the render is not two replicas with a PDB selecting them and the sidecar on a per-pod emptyDir, or a cold or restarted replica emits other manifests, or renders sharing one cache directory are not safe |
-| `cmp-conformance` (W-34 F3) | the built image as a Config Management Plugin sidecar of a real Argo CD, one leg per tested version (v3.4.6, v3.5.0, v3.5.7, v3.6.2), in a kind cluster: the official `argo-cd` chart with [`docs/examples/argo-cd-repo-server-values.yaml`](examples/argo-cd-repo-server-values.yaml) (the sidecar and the metrics container; only the placeholders replaced), the image `kind load`ed, and `tools/cmpsmoke` in the cluster as the core and as the git host (smart HTTP) of a gitops repository and a chart repository (`tools/cmp-conformance.sh`) | a Helm, a Kustomize or a plain directory source (the `sources` parameter) or the chart-parameter mode does not sync to Healthy with its objects stamped; a denied change does not show `CMP-REFUSED-DENIED` (with its `hold:` link), a core answer the plugin cannot read `CMP-FAULT-CORE-RESPONSE`, or a chart repository off the allow list `CMP-RENDER-REFUSED` in the Application's `ComparisonError`, or one shows another class's code or syncs; `doctor` in the sidecar has a fail; the metrics container does not serve those runs on `/metrics`. On a failure the cluster's state and every container's log are uploaded as an artifact. |
+| `cmp-conformance` (W-34 F3) | the built image as a Config Management Plugin sidecar of a real Argo CD, one leg per tested version (v3.4.6, v3.5.0, v3.5.7, v3.6.2) on amd64, and the current minor (v3.6.2) again on the hosted arm64 runner, in a kind cluster: the official `argo-cd` chart with [`docs/examples/argo-cd-repo-server-values.yaml`](examples/argo-cd-repo-server-values.yaml) (the sidecar and the metrics container; only the placeholders replaced), the image `kind load`ed, and `tools/cmpsmoke` in the cluster as the core and as the git host (smart HTTP) of a gitops repository and a chart repository (`tools/cmp-conformance.sh`) | a Helm, a Kustomize or a plain directory source (the `sources` parameter) or the chart-parameter mode does not sync to Healthy with its objects stamped; a denied change does not show `CMP-REFUSED-DENIED` (with its `hold:` link), a core answer the plugin cannot read `CMP-FAULT-CORE-RESPONSE`, or a chart repository off the allow list `CMP-RENDER-REFUSED` in the Application's `ComparisonError`, or one shows another class's code or syncs; `doctor` in the sidecar has a fail; the metrics container does not serve those runs on `/metrics`. On a failure the cluster's state and every container's log are uploaded as an artifact. |
+
+**Each architecture, natively.** The release publishes `clearance-cmp` for linux/amd64 and linux/arm64, and the parts
+of the plugin most sensitive to the architecture (the sandbox shim's Landlock and resource-limit system calls, the
+process-group and subreaper cleanup) only run for real in the built image. GitHub's hosted arm64 runners are free for
+public repositories, so the arm64 legs run on one (`ubuntu-24.04-arm`) rather than under QEMU: under user-mode
+emulation the Landlock and prctl calls are the emulator's, not the kernel's, and the sandbox checks would prove
+nothing. Every leg first checks that its runner is the architecture it names (`tools/runner-arch.sh`), and the smoke
+leg that the image it built is too. The other jobs (upgrade, fuzz, soak, HA) run the Go binary or Go tests, and stay on
+amd64.
+
+**The published image itself (I-74).** These gates test an image CI builds for the run and never pushes; the
+release's `provider-images` job then builds the multi-arch index that is pushed. So `release.yaml` tests what it
+pushed too: once `provider-images` has pushed `clearance-cmp`, the `cmp-published` job
+(`.github/workflows/cmp-published.yaml`) takes the pushed index's digest, picks out its linux/amd64 and linux/arm64
+images, pulls each by its own digest on a runner of that architecture, checks the image is that platform and carries
+the release's version label, and runs `tools/cmp-smoke.sh` on it (`cmp-published-smoke (amd64)` and
+`cmp-published-smoke (arm64)`). The `release` job, which publishes the GitHub Release, needs it. **The image is already
+in the registry when this runs, and a failure cannot un-push it: what a failure stops is the GitHub Release**, so the
+tag never becomes a release, its notes never list the digest, and the failure is in the release run for anyone who
+looks. The charts pushed in the same run (they need `provider-images`, not this job) stay pushed as well. Recover by
+fixing the cause and cutting the next patch version; deleting the failed tag's image and charts from the registry is a
+manual step for the maintainer. To run the check against any pushed index by hand (a past release's, to check the
+workflow itself), dispatch `cmp-published` with the image repository, the index digest and the version label.
+
+Building once, testing the per-arch images, then pushing those same bytes was the other way to close the gap. It was
+not taken: the push step would have to carry the index, its SBOM and provenance attestations and the keyless signature
+from a locally exported OCI layout to the registry without rebuilding, which is more moving parts than the build-and-push
+action it replaces, and it would still not test the registry round trip a user's pull goes through. Testing the pushed
+digest tests exactly what `docker pull` of the release returns.
 
 The upgrade and soak fixture (`tools/cmp-fixture.sh`) is a real git checkout with three value files and a kustomize
 directory, a chart repository with three tags served by `git daemon`, the fake core (`tools/cmpsmoke`) and the helm and

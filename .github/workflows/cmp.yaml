@@ -21,18 +21,33 @@ jobs:
   # The built clearance-cmp image, run the way Argo CD runs the plugin (tools/cmp-smoke.sh; docs/gate.md, "The smoke
   # test of the built image"): cwd is the checkout, Argo CD's environment, uid 999, a read-only root, a tmpfs /tmp, a
   # chart served over git://, and a fake core that answers "cleared". 0.52.0 passed every unit test and failed this.
+  # One leg per architecture the release publishes (I-74): the arm64 leg runs on GitHub's hosted arm64 runner, natively,
+  # so the shim, the Landlock sandbox and the process cleanup run on a real arm64 kernel, not under emulation. The
+  # release smoke-tests the pushed image of each architecture as well (cmp-published.yaml).
   cmp-image-smoke:
-    runs-on: ubuntu-latest
+    name: cmp-image-smoke (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: amd64, runner: ubuntu-latest}
+          - {arch: arm64, runner: ubuntu-24.04-arm}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
+      - name: the runner is ${{ matrix.arch }}
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: tools/runner-arch.sh "$ARCH"
       # Built for the runner's architecture, loaded into the local daemon, never pushed.
       - run: docker build -f providers/argocd/cmp/Dockerfile --build-arg VERSION=smoke -t clearance-cmp:smoke .
         env:
           DOCKER_BUILDKIT: "1"
+      - run: test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' clearance-cmp:smoke)" = "linux/${{ matrix.arch }}"
       - run: tools/cmp-smoke.sh clearance-cmp:smoke
 
   # The previous release's binary (the newest v* tag that is not this commit's) and this build's, on one cache directory
@@ -168,24 +183,30 @@ jobs:
   # plugin cannot read and an unlisted chart repository each show their own error code in the Application's
   # ComparisonError; doctor passes; /metrics counts the runs. One leg per Argo CD version the install guide lists as
   # tested (docs/install-argocd-plugin.md, Prerequisites): keep the two in step. A leg takes well under 15 minutes, so
-  # this runs on every push and pull request like the other gates, not only on paths under providers/argocd/.
+  # this runs on every push and pull request like the other gates, not only on paths under providers/argocd/. The
+  # current minor also runs on the hosted arm64 runner (I-74): kind, its node image and Argo CD's images are multi-arch.
   cmp-conformance:
-    name: cmp-conformance (Argo CD ${{ matrix.argocd }})
-    runs-on: ubuntu-latest
+    name: cmp-conformance (Argo CD ${{ matrix.argocd }}${{ matrix.arch == 'arm64' && ', arm64' || '' }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
-          - {argocd: v3.6.2, chart: 10.18.2} # the current minor
-          - {argocd: v3.5.7, chart: 10.11.7} # the previous minor, its latest patch
-          - {argocd: v3.5.0, chart: 10.3.2}  # the release the image's tools and the parity suite are pinned to
-          - {argocd: v3.4.6, chart: 10.2.2}  # the oldest minor upstream still supports
+          - {argocd: v3.6.2, chart: 10.18.2, arch: amd64, runner: ubuntu-latest} # the current minor
+          - {argocd: v3.6.2, chart: 10.18.2, arch: arm64, runner: ubuntu-24.04-arm} # the current minor, on arm64
+          - {argocd: v3.5.7, chart: 10.11.7, arch: amd64, runner: ubuntu-latest} # the previous minor, its latest patch
+          - {argocd: v3.5.0, chart: 10.3.2, arch: amd64, runner: ubuntu-latest}  # the release the image's tools and the parity suite are pinned to
+          - {argocd: v3.4.6, chart: 10.2.2, arch: amd64, runner: ubuntu-latest}  # the oldest minor upstream still supports
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
+      - name: the runner is ${{ matrix.arch }}
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: tools/runner-arch.sh "$ARCH"
       - uses: azure/setup-helm@v4.3.0
         with:
           version: ${{ env.HELM_VERSION }}
@@ -206,6 +227,6 @@ jobs:
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: cmp-conformance-${{ matrix.argocd }}
+          name: cmp-conformance-${{ matrix.argocd }}-${{ matrix.arch }}
           path: ${{ runner.temp }}/cmp-conformance
           if-no-files-found: warn
