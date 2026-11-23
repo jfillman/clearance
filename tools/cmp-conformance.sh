@@ -220,14 +220,29 @@ images="$(helm template "${chart_args[@]}" | sed -n 's/^ *image: *"\{0,1\}\([^" 
 # Bounded: every pull 120 s at most, and all of them with their retries 6 minutes, so this, helm's 8 minutes and the
 # Applications' TIMEOUT fit in the job's 30 and leave time to collect the logs.
 pull_deadline=$((SECONDS + 360))
-for img in $images; do
-  for try in 1 2 3 4 5 6; do
-    timeout 120 docker exec "$node" crictl pull "$img" > /dev/null 2>&1 && break
-    { [ "$try" = 6 ] || [ $((SECONDS + try * 10)) -ge "$pull_deadline" ]; } && die "cannot pull $img into the kind node"
-    echo "     pull $img failed (try $try), retrying in $((try * 10))s"
+pull() { # IMAGE: up to 4 tries, inside the deadline
+  local try
+  for try in 1 2 3 4; do
+    timeout 120 docker exec "$node" crictl pull "$1" > /dev/null 2>&1 && return 0
+    { [ "$try" = 4 ] || [ $((SECONDS + try * 10)) -ge "$pull_deadline" ]; } && return 1
+    echo "     pull $1 failed (try $try), retrying in $((try * 10))s"
     sleep $((try * 10))
   done
-  ok "pulled $img"
+}
+for img in $images; do
+  if pull "$img"; then ok "pulled $img"; continue; fi
+  # The AWS mirror of a Docker Official Image (the chart's redis) answers anonymous runners with 429s for minutes at a
+  # time. The same image is on Docker Hub under the same name and tag: pull it there and tag it in the node as the
+  # chart names it, so the chart's values stay as they are. Only a tag (not a digest) can be re-tagged this way.
+  rest=""
+  case "$img" in
+    ecr-public.aws.com/docker/library/*) rest="${img#ecr-public.aws.com/docker/library/}";;
+    public.ecr.aws/docker/library/*) rest="${img#public.ecr.aws/docker/library/}";;
+  esac
+  case "$rest" in ""|*@*) die "cannot pull $img into the kind node";; esac
+  pull "docker.io/library/$rest" || die "cannot pull $img, nor docker.io/library/$rest, into the kind node"
+  docker exec "$node" ctr -n k8s.io images tag --force "docker.io/library/$rest" "$img" > /dev/null || die "cannot tag docker.io/library/$rest as $img"
+  ok "pulled $img (from its Docker Hub copy, docker.io/library/$rest)"
 done
 helm install "${chart_args[@]}" --create-namespace --wait --timeout 8m > /dev/null || die "helm install of argo-cd $chart_version failed"
 repo_image="$(kubectl -n "$ns_argo" get deploy argocd-repo-server -o jsonpath='{.spec.template.spec.containers[?(@.name=="repo-server")].image}')"
