@@ -9,6 +9,8 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.57.3] - 2026-11-23
+
 ### Fixed
 
 - **`GET /v1/coverage` with no scope no longer reads every health record ever written (I-86).** The scope list
