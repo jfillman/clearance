@@ -365,3 +365,62 @@ func TestFinalizedDeleteDoesNotTakeALaterWriteToTheRecreate(t *testing.T) {
 		}
 	}
 }
+
+// A JSON Patch's audit event carries an array as its requestObject: it is still read (gap accounting and assessment),
+// as it was before the collector looked at requestObject at all.
+func TestJSONPatchRequestObjectIsStillRead(t *testing.T) {
+	r := newRig(t)
+	r.c.cache.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "1", map[string]any{"v": "0"}), t0.Add(-time.Hour), true)
+	ch, _ := r.c.cache.Put("ConfigMap", "MODIFIED", configMap("shop", "web-config", "2", map[string]any{"v": "1"}), t0, false)
+	r.c.gaps.Watched(ch)
+	r.push(auditEv(human, "kubectl/v1.36.0", "patch", "configmaps", "shop", "web-config", 200,
+		map[string]any{"requestObject": []any{map[string]any{"op": "replace", "path": "/data/v", "value": "1"}},
+			"responseObject": configMap("shop", "web-config", "2", map[string]any{"v": "1"})}))
+	r.drain()
+	if got := r.c.gaps.Expired(t0.Add(time.Hour), 0); len(got) != 0 {
+		t.Fatalf("a JSON Patch's audit event was dropped: gaps %+v", got)
+	}
+}
+
+// A Metadata-level update to the recreated object inside the skew of the deletion (no response object, no version) is
+// not taken by the finalized delete: a create of the same name came before it. In every arrival order the garbage
+// collector's patch ends the delete and the update keeps its own change.
+func TestFinalizedDeleteDoesNotTakeAMetadataWriteToTheRecreateInsideTheSkew(t *testing.T) {
+	yes := true
+	type step func(g *Gaps, c *Cache)
+	ms := func(d int) time.Time { return t0.Add(time.Second + time.Duration(d)*time.Millisecond) }
+	del := func(g *Gaps, c *Cache) { g.Watched(finalizedDelete(c, "13", ms(0))) }
+	addW := func(g *Gaps, c *Cache) {
+		ch, _ := c.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "14", map[string]any{"v": "1"}), ms(100), false)
+		g.Watched(ch)
+	}
+	createA := func(g *Gaps, c *Cache) {
+		g.AuditedVerb("ConfigMap", "shop", "web-config", "", "create", ms(100), ms(500))
+	}
+	updA := func(g *Gaps, c *Cache) {
+		g.AuditedVerb("ConfigMap", "shop", "web-config", "", "update", ms(200), ms(600))
+	}
+	gcA := func(g *Gaps, c *Cache) {
+		g.AuditedWrite("ConfigMap", "shop", "web-config", "12", "patch", &yes, ms(-10), ms(700))
+	}
+	modW := func(g *Gaps, c *Cache) {
+		ch, _ := c.Put("ConfigMap", "MODIFIED", configMap("shop", "web-config", "15", map[string]any{"v": "2"}), ms(200), false)
+		g.Watched(ch)
+	}
+	for name, order := range map[string][]step{
+		"watch first":           {del, addW, createA, updA, gcA, modW},
+		"audits first":          {createA, updA, gcA, del, addW, modW},
+		"delete, audits, rest":  {del, createA, updA, gcA, addW, modW},
+		"update watch, then gc": {del, createA, updA, addW, modW, gcA},
+	} {
+		g := NewGaps(3 * time.Minute)
+		c := testCache()
+		c.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "10", map[string]any{"v": "1"}), t0, true)
+		for _, f := range order {
+			f(g, c)
+		}
+		if got := g.Expired(t0.Add(10*time.Minute), 0); len(got) != 0 {
+			t.Fatalf("%s: gaps %+v", name, got)
+		}
+	}
+}

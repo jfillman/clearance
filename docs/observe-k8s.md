@@ -275,8 +275,8 @@ does to end a foreground deletion, and the API server then removed it) is matche
 `resourceVersion` is the deletion's, and the audit event of the write that ended it carries the version that write left.
 Matched by version, every foreground deletion (an Argo CD hook's delete policy, for one) was an audit gap. Only an
 update or patch matches it, whose response object (when the event has one) still carries `deletionTimestamp`, from at
-most 30 s before the deletion to 2 s after it; a create, or a later write to an object recreated under the same name, is
-left for its own watch change. An exact `resourceVersion` match is tried before a time match. A `dryRun=All` write (in
+most 30 s before the deletion to 2 s after it, and not from after a create of the same name; a create, or a later write
+to an object recreated under the same name (even a Metadata one inside the 2 s), is left for its own watch change. An exact `resourceVersion` match is tried before a time match. A `dryRun=All` write (in
 the query, or in a DELETE's `DeleteOptions` body) persisted nothing and accounts for no watch change. Past `--gap-grace` (3 min) plus the age of the oldest event still in
 the queue it is an **audit gap**: an observation (source level `watch`, actor `unknown (no audit event)`, before and after)
 and a not-attributed `audit-gap` assessment, and the feed is degraded for 15 minutes (the core writes the

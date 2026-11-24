@@ -22,6 +22,7 @@ type Gaps struct {
 
 	mu       sync.Mutex
 	pending  []*pend
+	created  map[cacheKey]time.Time // the newest create of each object, from its audit event or its watch change
 	audits   []auditSeen
 	matched  int
 	reported int
@@ -54,6 +55,9 @@ func (g *Gaps) Watched(ch Change) {
 	k := cacheKey{ch.Kind, ch.Namespace, ch.Name}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if ch.Created {
+		g.sawCreate(k, ch.At)
+	}
 	for i, a := range g.audits { // the audit event came first
 		if a.key == k && g.same(a, ch.RV, ch.At, ch.Finalized) {
 			g.audits = append(g.audits[:i], g.audits[i+1:]...)
@@ -77,12 +81,34 @@ const finalizeSkew = 2 * time.Second
 // whose response object (when the event has one) still carries deletionTimestamp, from at most Match before the
 // deletion to finalizeSkew after it. A later write to the object an Argo CD hook recreates under the same name has an
 // unmarked response object, or is too late, so it is left for its own watch change, whichever arrives first.
+//
+// A write from after a create of the same name is a write to the recreated object, not the one that ended the delete
+// (that write came before the deletion, and so before any recreate). This is what tells a Metadata-level write (no
+// response object to read deletionTimestamp from) to the recreate inside the skew from the garbage collector's patch,
+// in either arrival order: the create's audit event is read before the later write's (one API server's audit stream is
+// in order), and the watch's ADDED counts too. The caller holds g.mu.
 func (g *Gaps) canEnd(a auditSeen, watchAt time.Time) bool {
 	if !endsDelete(a.verb) || (a.marked != nil && !*a.marked) {
 		return false
 	}
 	d := watchAt.Sub(a.at)
-	return d >= -finalizeSkew && d <= g.Match
+	if d < -finalizeSkew || d > g.Match {
+		return false
+	}
+	if c, ok := g.created[a.key]; ok && !c.Before(watchAt.Add(-finalizeSkew)) && !a.at.Before(c) {
+		return false // a write to the object recreated after the deletion
+	}
+	return true
+}
+
+// sawCreate notes a create of the object at `at`. The caller holds g.mu.
+func (g *Gaps) sawCreate(k cacheKey, at time.Time) {
+	if g.created == nil {
+		g.created = map[cacheKey]time.Time{}
+	}
+	if c, ok := g.created[k]; !ok || at.After(c) {
+		g.created[k] = at
+	}
 }
 
 func (g *Gaps) same(a auditSeen, watchRV string, watchAt time.Time, finalized bool) bool {
@@ -117,6 +143,9 @@ func (g *Gaps) AuditedWrite(kind, ns, name, rv, verb string, marked *bool, at, n
 	a := auditSeen{k, rv, verb, marked, at, now}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if verb == "create" {
+		g.sawCreate(k, at)
+	}
 	for _, byTime := range []bool{false, true} {
 		for i, p := range g.pending {
 			if p.key != k || p.Finalized != byTime {
@@ -159,6 +188,11 @@ func (g *Gaps) Expired(now time.Time, lag time.Duration) []Change {
 		}
 	}
 	g.audits = ak
+	for k, c := range g.created {
+		if now.Sub(c) > limit+g.Match {
+			delete(g.created, k)
+		}
+	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].At.Before(out[j].At) })
 	g.reported += len(out)
 	return out

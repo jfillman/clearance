@@ -263,11 +263,9 @@ type auditEvent struct {
 			DeletionTimestamp string `json:"deletionTimestamp"`
 		} `json:"metadata"`
 	} `json:"responseObject"`
-	// RequestObject: only what dryRunAll reads (a DELETE's DeleteOptions body).
-	RequestObject struct {
-		Kind   string   `json:"kind"`
-		DryRun []string `json:"dryRun"`
-	} `json:"requestObject"`
+	// RequestObject is kept raw: it is any request body (a JSON Patch is an array). dryRunAll decodes a DELETE's
+	// DeleteOptions from it.
+	RequestObject json.RawMessage `json:"requestObject"`
 }
 
 func (e *auditEvent) time(def time.Time) time.Time {
@@ -281,9 +279,15 @@ func (e *auditEvent) time(def time.Time) time.Time {
 // watch can see, and must not account for a change that one did see. A dryRun parameter with no value persists.
 // A DELETE may carry it in its DeleteOptions body instead of the query (the event's requestObject, at Request level and above).
 func (e *auditEvent) dryRunAll() bool {
-	opts := e.RequestObject.DryRun
-	if e.RequestObject.Kind != "DeleteOptions" {
-		opts = nil
+	var opts []string
+	if e.Verb == "delete" && len(e.RequestObject) > 0 {
+		var o struct {
+			Kind   string   `json:"kind"`
+			DryRun []string `json:"dryRun"`
+		}
+		if json.Unmarshal(e.RequestObject, &o) == nil && o.Kind == "DeleteOptions" {
+			opts = o.DryRun
+		}
 	}
 	if u, err := url.Parse(e.RequestURI); err == nil {
 		opts = append(opts, u.Query()["dryRun"]...)
