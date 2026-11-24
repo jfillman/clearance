@@ -445,3 +445,39 @@ func TestAWriteBetweenTheCreatesAuditAndWatchTimesIsTheRecreates(t *testing.T) {
 		t.Fatalf("gaps %+v", got)
 	}
 }
+
+// A short-lived object: created, delete requested and finalized within a second or two. Its own create is not a recreate
+// (it came before the delete request), so the patch that ended the delete still matches, in both arrival orders, with
+// the delete request audited and with only the object's deletionTimestamp to go by.
+func TestAShortLivedObjectsOwnCreateIsNotARecreate(t *testing.T) {
+	yes := true
+	ms := func(d int) time.Time { return t0.Add(time.Duration(d) * time.Millisecond) }
+	for _, deleteAudited := range []bool{true, false} {
+		for _, auditFirst := range []bool{true, false} {
+			g := NewGaps(3 * time.Minute)
+			c := testCache()
+			add, _ := c.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "10", map[string]any{"v": "1"}), ms(0), false)
+			g.Watched(add)
+			g.AuditedVerb("ConfigMap", "shop", "web-config", "10", "create", ms(0), ms(50))
+			if deleteAudited {
+				g.AuditedVerb("ConfigMap", "shop", "web-config", "", "delete", ms(500), ms(550))
+			}
+			o := configMap("shop", "web-config", "13", map[string]any{"v": "1"})
+			o["metadata"].(map[string]any)["deletionTimestamp"] = t0.Format(time.RFC3339) // whole seconds: 0.5s floors to 0
+			del, _ := c.Put("ConfigMap", "DELETED", o, ms(1000), false)
+			patch := func() {
+				g.AuditedWrite("ConfigMap", "shop", "web-config", "12", "patch", &yes, ms(900), ms(1100))
+			}
+			if auditFirst {
+				patch()
+				g.Watched(del)
+			} else {
+				g.Watched(del)
+				patch()
+			}
+			if got := g.Expired(t0.Add(10*time.Minute), 0); len(got) != 0 {
+				t.Fatalf("delete audited %v, audit first %v: gaps %+v", deleteAudited, auditFirst, got)
+			}
+		}
+	}
+}
