@@ -307,12 +307,61 @@ func TestDryRunAllUpdateDoesNotAccountForAFinalizedDelete(t *testing.T) {
 		r := newRig(t)
 		r.c.cache.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "10", map[string]any{"v": "1"}), t0.Add(-time.Hour), true)
 		r.c.gaps.Watched(finalizedDelete(r.c.cache, "13", t0))
+		resp := configMap("shop", "web-config", "12", map[string]any{"v": "1"}) // the write that took the last finalizer off
+		resp["metadata"].(map[string]any)["deletionTimestamp"] = "2026-11-01T00:00:00Z"
 		r.push(auditEv(human, "kubectl/v1.36.0", "update", "configmaps", "shop", "web-config", 200,
-			map[string]any{"requestURI": tc.uri, "responseObject": configMap("shop", "web-config", "12", map[string]any{"v": "1"})}))
+			map[string]any{"requestURI": tc.uri, "responseObject": resp}))
 		r.drain()
 		got := r.c.gaps.Expired(t0.Add(time.Hour), 0)
 		if (len(got) == 1) != tc.gap || len(got) > 1 {
 			t.Fatalf("%s: gaps %+v, want a gap: %v", tc.uri, got, tc.gap)
+		}
+	}
+}
+
+// A DELETE can ask for dryRun=All in its DeleteOptions body rather than the query: it persisted nothing either, and does
+// not account for a change the watch saw (here a plain delete matched by time, as a Metadata event is).
+func TestDryRunAllInADeleteBodyAccountsForNothing(t *testing.T) {
+	for _, dry := range []bool{true, false} {
+		r := newRig(t)
+		r.c.cache.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "10", map[string]any{"v": "1"}), t0.Add(-time.Hour), true)
+		del, _ := r.c.cache.Put("ConfigMap", "DELETED", configMap("shop", "web-config", "11", map[string]any{"v": "1"}), t0, false)
+		r.c.gaps.Watched(del)
+		body := map[string]any{"kind": "DeleteOptions", "apiVersion": "meta.k8s.io/v1"}
+		if dry {
+			body["dryRun"] = []any{"All"}
+		}
+		ev := auditEv(human, "kubectl/v1.36.0", "delete", "configmaps", "shop", "web-config", 200,
+			map[string]any{"level": "Request", "requestURI": "/api/v1/namespaces/shop/configmaps/web-config", "requestObject": body})
+		r.push(ev)
+		r.drain()
+		if got := r.c.gaps.Expired(t0.Add(time.Hour), 0); (len(got) == 1) != dry {
+			t.Fatalf("dryRun body %v: gaps %+v", dry, got)
+		}
+	}
+}
+
+// After a same-name recreate, a write to the new object whose audit event arrives before its watch change is not taken
+// by the finalized delete: its response object is not marked for deletion, and it is too late besides. The write that
+// ended the delete is matched to it, and the later write to its own change, in every arrival order.
+func TestFinalizedDeleteDoesNotTakeALaterWriteToTheRecreate(t *testing.T) {
+	no, yes := false, true
+	for _, marked := range []*bool{&no, nil} { // RequestResponse (unmarked response) and Metadata (no response)
+		g := NewGaps(3 * time.Minute)
+		c := testCache()
+		c.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "10", map[string]any{"v": "1"}), t0, true)
+		g.Watched(finalizedDelete(c, "13", t0.Add(time.Second)))
+		add, _ := c.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "14", map[string]any{"v": "1"}), t0.Add(5*time.Second), false)
+		g.Watched(add)
+		g.AuditedWrite("ConfigMap", "shop", "web-config", "14", "create", &no, t0.Add(5*time.Second), t0.Add(6*time.Second))
+		// the new object's update, audited before the watch shows it
+		g.AuditedWrite("ConfigMap", "shop", "web-config", "15", "update", marked, t0.Add(8*time.Second), t0.Add(9*time.Second))
+		// the garbage collector's patch that ended the delete, read late
+		g.AuditedWrite("ConfigMap", "shop", "web-config", "12", "patch", &yes, t0.Add(time.Second), t0.Add(10*time.Second))
+		mod, _ := c.Put("ConfigMap", "MODIFIED", configMap("shop", "web-config", "15", map[string]any{"v": "2"}), t0.Add(8*time.Second), false)
+		g.Watched(mod)
+		if got := g.Expired(t0.Add(10*time.Minute), 0); len(got) != 0 {
+			t.Fatalf("marked %v: gaps %+v", marked, got)
 		}
 	}
 }

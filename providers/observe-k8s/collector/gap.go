@@ -33,11 +33,12 @@ type pend struct {
 }
 
 type auditSeen struct {
-	key  cacheKey
-	rv   string
-	verb string
-	at   time.Time
-	got  time.Time // when the collector read it
+	key    cacheKey
+	rv     string
+	verb   string
+	marked *bool // the response object carries deletionTimestamp; nil: the event has no response object (Metadata)
+	at     time.Time
+	got    time.Time // when the collector read it
 }
 
 // NewGaps builds a tracker.
@@ -54,7 +55,7 @@ func (g *Gaps) Watched(ch Change) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	for i, a := range g.audits { // the audit event came first
-		if a.key == k && g.same(a.rv, a.verb, a.at, ch.RV, ch.At, ch.Finalized) {
+		if a.key == k && g.same(a, ch.RV, ch.At, ch.Finalized) {
 			g.audits = append(g.audits[:i], g.audits[i+1:]...)
 			g.matched++
 			return
@@ -68,14 +69,30 @@ func (g *Gaps) Watched(ch Change) {
 // CD hook recreates under the same name a moment later, and leave that create to be reported as a gap.
 func endsDelete(verb string) bool { return verb == "update" || verb == "patch" }
 
-func (g *Gaps) same(auditRV, auditVerb string, auditAt time.Time, watchRV string, watchAt time.Time, finalized bool) bool {
-	if finalized && !endsDelete(auditVerb) {
-		return false // only an update or patch can have ended it, whatever versions the two carry
+// finalizeSkew is how far an audit event's time may trail the watch's sight of the deletion it ended: the write that
+// removed the last finalizer completes before (or as) the API server deletes the object, never seconds after it.
+const finalizeSkew = 2 * time.Second
+
+// canEnd: the audit event can be the write that ended a finalized delete the watch saw at watchAt. An update or patch,
+// whose response object (when the event has one) still carries deletionTimestamp, from at most Match before the
+// deletion to finalizeSkew after it. A later write to the object an Argo CD hook recreates under the same name has an
+// unmarked response object, or is too late, so it is left for its own watch change, whichever arrives first.
+func (g *Gaps) canEnd(a auditSeen, watchAt time.Time) bool {
+	if !endsDelete(a.verb) || (a.marked != nil && !*a.marked) {
+		return false
 	}
-	if auditRV != "" && watchRV != "" && !finalized {
-		return auditRV == watchRV
+	d := watchAt.Sub(a.at)
+	return d >= -finalizeSkew && d <= g.Match
+}
+
+func (g *Gaps) same(a auditSeen, watchRV string, watchAt time.Time, finalized bool) bool {
+	if finalized {
+		return g.canEnd(a, watchAt) // whatever versions the two carry
 	}
-	d := watchAt.Sub(auditAt)
+	if a.rv != "" && watchRV != "" {
+		return a.rv == watchRV
+	}
+	d := watchAt.Sub(a.at)
 	if d < 0 {
 		d = -d
 	}
@@ -84,28 +101,35 @@ func (g *Gaps) same(auditRV, auditVerb string, auditAt time.Time, watchRV string
 
 // Audited records an audit write event for an object: it accounts for the oldest watch change it can be.
 func (g *Gaps) Audited(kind, ns, name, rv string, at, now time.Time) {
-	g.AuditedVerb(kind, ns, name, rv, "", at, now)
+	g.AuditedWrite(kind, ns, name, rv, "", nil, at, now)
 }
 
-// AuditedVerb is Audited with the write's verb, which says whether it can have ended a finalized delete. A change it
-// matches by resourceVersion is preferred to a finalized delete it matches only by time.
+// AuditedVerb is Audited with the write's verb and no response object (a Metadata event).
 func (g *Gaps) AuditedVerb(kind, ns, name, rv, verb string, at, now time.Time) {
+	g.AuditedWrite(kind, ns, name, rv, verb, nil, at, now)
+}
+
+// AuditedWrite is Audited with the write's verb and whether its response object carries deletionTimestamp (nil: the
+// event has none), which say whether it can have ended a finalized delete. A change it matches by resourceVersion is
+// preferred to a finalized delete it matches only by time.
+func (g *Gaps) AuditedWrite(kind, ns, name, rv, verb string, marked *bool, at, now time.Time) {
 	k := cacheKey{kind, ns, name}
+	a := auditSeen{k, rv, verb, marked, at, now}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	for _, byTime := range []bool{false, true} {
 		for i, p := range g.pending {
-			if p.key != k || (p.Finalized && endsDelete(verb)) != byTime {
+			if p.key != k || p.Finalized != byTime {
 				continue
 			}
-			if g.same(rv, verb, at, p.RV, p.At, p.Finalized) {
+			if g.same(a, p.RV, p.At, p.Finalized) {
 				g.pending = append(g.pending[:i], g.pending[i+1:]...)
 				g.matched++
 				return
 			}
 		}
 	}
-	g.audits = append(g.audits, auditSeen{k, rv, verb, at, now})
+	g.audits = append(g.audits, a)
 	if len(g.audits) > 4096 {
 		g.audits = g.audits[len(g.audits)-2048:]
 	}

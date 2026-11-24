@@ -259,9 +259,15 @@ type auditEvent struct {
 	ResponseObject struct {
 		Kind     string `json:"kind"`
 		Metadata struct {
-			ResourceVersion string `json:"resourceVersion"`
+			ResourceVersion   string `json:"resourceVersion"`
+			DeletionTimestamp string `json:"deletionTimestamp"`
 		} `json:"metadata"`
 	} `json:"responseObject"`
+	// RequestObject: only what dryRunAll reads (a DELETE's DeleteOptions body).
+	RequestObject struct {
+		Kind   string   `json:"kind"`
+		DryRun []string `json:"dryRun"`
+	} `json:"requestObject"`
 }
 
 func (e *auditEvent) time(def time.Time) time.Time {
@@ -273,17 +279,30 @@ func (e *auditEvent) time(def time.Time) time.Time {
 
 // dryRunAll: the request asked for dryRun=All, so it was validated and admitted and never persisted. It changed nothing a
 // watch can see, and must not account for a change that one did see. A dryRun parameter with no value persists.
+// A DELETE may carry it in its DeleteOptions body instead of the query (the event's requestObject, at Request level and above).
 func (e *auditEvent) dryRunAll() bool {
-	u, err := url.Parse(e.RequestURI)
-	if err != nil {
-		return false
+	opts := e.RequestObject.DryRun
+	if e.RequestObject.Kind != "DeleteOptions" {
+		opts = nil
 	}
-	for _, v := range u.Query()["dryRun"] {
+	if u, err := url.Parse(e.RequestURI); err == nil {
+		opts = append(opts, u.Query()["dryRun"]...)
+	}
+	for _, v := range opts {
 		if v == "All" {
 			return true
 		}
 	}
 	return false
+}
+
+// marked: whether the response object carries deletionTimestamp, nil when the event has no response object (Metadata).
+func (e *auditEvent) marked() *bool {
+	if e.ResponseObject.Kind == "" && e.ResponseObject.Metadata.ResourceVersion == "" {
+		return nil
+	}
+	m := e.ResponseObject.Metadata.DeletionTimestamp != ""
+	return &m
 }
 
 func (e *auditEvent) write() bool {
@@ -416,7 +435,7 @@ func (c *Collector) handle(payload []byte, at time.Time, b *batch) {
 	if ev.write() && ev.ObjectRef.Resource != "" {
 		kind = c.kindOf(ev.ObjectRef.Resource)
 		if !ev.dryRunAll() {
-			c.gaps.AuditedVerb(kind, ev.ObjectRef.Namespace, ev.ObjectRef.Name, ev.ResponseObject.Metadata.ResourceVersion, ev.Verb, when, c.cfg.Now())
+			c.gaps.AuditedWrite(kind, ev.ObjectRef.Namespace, ev.ObjectRef.Name, ev.ResponseObject.Metadata.ResourceVersion, ev.Verb, ev.marked(), when, c.cfg.Now())
 		}
 	}
 	raw := pipeline.RawEvent{Provider: pipeline.Kubernetes, Scope: c.cfg.Cluster, Raw: payload}

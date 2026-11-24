@@ -31,8 +31,10 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   tracker matched the two by version, never matched them, and after `--gap-grace` reported "a change was seen on the
   watch stream and never audited" and degraded the `k8s-audit-webhook` feed, on every sync of an Application with such
   hooks. A delete whose object carries `deletionTimestamp` (`Change.Finalized`) is now matched to an audit write of the
-  same object within 30 s by time, only an update or patch (never a create: an Argo CD hook recreates its object
-  under the same name seconds later), and an exact-version match is preferred; a plain delete is still matched by version. See
+  same object by time, only an update or patch whose response (if any) is still marked for deletion, from 30 s before
+  to 2 s after the deletion (never a create, or a later write to the object an Argo CD hook recreates under the same
+  name), and an exact-version match is tried first; a plain delete is still matched by version. A `dryRun=All` write
+  (query or DeleteOptions body) no longer accounts for any watch change. See
   docs/observe-k8s.md, "Gaps and the watch cache".
 
 ## [0.57.2] - 2026-11-23
