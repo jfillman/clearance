@@ -79,7 +79,8 @@ func TestCoveragePagesAreIndexRangeScansAndLossless(t *testing.T) {
 	aud := &Viewer{Role: RoleAuditor}
 	since, until := "2026-11-01T00:08:20Z", "2026-11-01T00:25:00Z" // seq 3000 up to 9000: the middle of the chain
 
-	for _, kind := range []string{evidence.KindObservation, evidence.KindAssessment} {
+	for kind, index := range map[string]string{evidence.KindObservation: "clearance_evidence_obs_page", evidence.KindAssessment: "clearance_evidence_obs_page",
+		evidence.KindHealth: "clearance_evidence_health_page"} {
 		f := EvidenceFilter{Scope: "scope-a", Outcomes: OutcomesInclude, Slim: true, Tools: []string{kind}, Since: since, Until: until}
 		// every record of the kind in the window, as the raw table says it
 		var want []int64
@@ -133,8 +134,8 @@ func TestCoveragePagesAreIndexRangeScansAndLossless(t *testing.T) {
 			if slices.Contains(types, "Sort") || slices.Contains(types, "Incremental Sort") {
 				t.Errorf("%s page: the plan sorts: %s", kind, plan)
 			}
-			if !slices.Contains(idx, "clearance_evidence_obs_page") {
-				t.Errorf("%s page: not read from clearance_evidence_obs_page (%v): %s", kind, idx, plan)
+			if !slices.Contains(idx, index) {
+				t.Errorf("%s page: not read from %s (%v): %s", kind, index, idx, plan)
 			}
 		}
 	}

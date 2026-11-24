@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -24,6 +25,10 @@ import (
 // of its task: the person who opened it, and every session spawned under it shares its task and its principal.
 type PG struct {
 	R *pg.Reader
+
+	// healthSrc: clearance_evidence_health_src was seen valid. The core builds it in the background after a start that
+	// adds it; until then HealthBefore keeps its one-pass statement (see there). Once valid it stays valid.
+	healthSrc atomic.Bool
 }
 
 var _ Store = (*PG)(nil)
@@ -117,14 +122,18 @@ func (b *q) evidenceFilter(f EvidenceFilter) {
 // from this list's literals): the kinds a coverage statement pages through.
 var pagedTools = []string{evidence.KindObservation, evidence.KindAssessment, evidence.KindResolution, evidence.KindVerification, evidence.KindAuditGap}
 
-// toolPredicate is the tool condition of a read. When every tool is one of pagedTools it is spelled with literals
+// literalTools are the kinds toolPredicate spells as literals: pagedTools, and the health kind, whose pages read
+// clearance_evidence_health_page (store/pg MapIndexes).
+var literalTools = append(append([]string{}, pagedTools...), evidence.KindHealth)
+
+// toolPredicate is the tool condition of a read. When every tool is one of literalTools it is spelled with literals
 // (tool = 'x', or tool IN ('x', 'y')): the planner proves a partial index from a literal predicate and matches an equality on
 // the index's tool column only from a literal; tool = ANY($n) does neither, so the read fell back to the (scope, ts)
-// index and sorted. The literals come from pagedTools, never from the request. Any other tool is an ANY($n) bind.
+// index and sorted. The literals come from literalTools, never from the request. Any other tool is an ANY($n) bind.
 func toolPredicate(tools []string, b *q) string {
 	lits := make([]string, 0, len(tools))
 	for _, t := range tools {
-		if !in(pagedTools, t) {
+		if !in(literalTools, t) {
 			return "e.record->>'tool' = ANY(" + b.arg(tools) + ")"
 		}
 		lits = append(lits, "'"+t+"'")
@@ -199,16 +208,26 @@ func evidenceSQL(f EvidenceFilter, v *Viewer, limit int, after *int64) (string, 
 // planner proves a query against a partial index only from a literal predicate (tool = ANY($n) never matches it).
 const observedTools = "e.record->>'tool' IN ('observation', 'assessment', 'resolution', 'observation.health', 'observation.audit-gap')"
 
-// Scopes reads the distinct scope names on the index's predicate; no record leaves the database.
+// withRecursive turns evidenceScope's WITH prefix ("" or "WITH opened AS ... ") into the head of a WITH RECURSIVE list
+// that more CTEs follow.
+func withRecursive(with string) string {
+	if with == "" {
+		return "WITH RECURSIVE "
+	}
+	return "WITH RECURSIVE " + strings.TrimRight(strings.TrimPrefix(with, "WITH "), " ") + ", "
+}
+
+// Scopes reads the scope names with an observation or audit gap in [since, until) or a health record before until. It
+// never reads the scopes' records: a skip scan over clearance_evidence_observed (scope, seq) walks the distinct names,
+// one index probe each, and each name is kept by up to three LIMIT 1 probes on the partial indexes (a health record
+// before until, then an observation or an audit gap in the window), each of which stops at its first match; the cheap
+// and usual one, health, is first. The probes name no other kind: an IN list of the observed kinds let the planner pick
+// clearance_evidence_observed and walk the scope's every record looking for an audit gap. A DISTINCT over the matching records read every health record ever written before until (the whole
+// health history of every scope, about one record a minute per source, each a TOAST fetch): on a lab's two weeks of
+// history that passed the statement timeout, and every unscoped GET /v1/coverage failed with 503.
 func (s *PG) Scopes(ctx context.Context, v *Viewer, since, until string, limit int) ([]string, error) {
-	b := &q{}
-	with := b.evidenceScope(v)
-	b.add(observedTools)
-	b.add("e.record->>'scope' IS NOT NULL")
-	b.add("((e.record->>'tool' IN ('observation', 'observation.audit-gap') AND e.record->>'ts' >= " + b.arg(since) +
-		" AND e.record->>'ts' < " + b.arg(until) + ") OR (e.record->>'tool' = 'observation.health' AND e.record->>'ts' < " + b.arg(until) + "))")
-	rows, done, err := s.R.Query(ctx, with+`SELECT DISTINCT (e.record->>'scope') COLLATE "C" AS scope FROM clearance_evidence e WHERE `+b.sql()+
-		` ORDER BY scope LIMIT `+b.arg(limit), b.args...)
+	sql, args := scopesSQL(v, since, until, limit)
+	rows, done, err := s.R.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -225,9 +244,72 @@ func (s *PG) Scopes(ctx context.Context, v *Viewer, since, until string, limit i
 	return out, rows.Err()
 }
 
-// HealthBefore is one pass over the scope's health records before `before`, on the partial index (scope, seq): the
-// per-source anchor (a window function) is the newest record the collector wrote as healthy, and only the records from it on are returned.
+// scopesSQL is the statement of Scopes.
+func scopesSQL(v *Viewer, since, until string, limit int) (string, []any) {
+	b := &q{}
+	with := b.evidenceScope(v)
+	vis := b.sql() // the viewer's condition ("TRUE" for an auditor), inside each probe
+	sn, un := b.arg(since), b.arg(until)
+	next := "SELECT e.record->>'scope' FROM clearance_evidence e WHERE " + observedTools + " AND e.record->>'scope' "
+	probe := func(cond string) string {
+		return "(SELECT true FROM clearance_evidence e WHERE e.record->>'scope' = c.scope AND " + vis +
+			" AND " + cond + " LIMIT 1)"
+	}
+	inWindow := " AND e.record->>'ts' >= " + sn + " AND e.record->>'ts' < " + un
+	sql := withRecursive(with) + "c(scope) AS ((" + next + "IS NOT NULL ORDER BY 1 LIMIT 1) UNION ALL " +
+		"SELECT (" + next + "> c.scope ORDER BY 1 LIMIT 1) FROM c WHERE c.scope IS NOT NULL) " +
+		`SELECT c.scope COLLATE "C" AS scope FROM c WHERE c.scope IS NOT NULL AND (` +
+		probe("e.record->>'tool' = 'observation.health' AND e.record->>'ts' < "+un) + " OR " +
+		probe("e.record->>'tool' = 'observation'"+inWindow) + " OR " +
+		probe("e.record->>'tool' = 'observation.audit-gap'"+inWindow) +
+		") ORDER BY scope LIMIT " + b.arg(limit)
+	return sql, b.args
+}
+
+// HealthBefore is the scope's health records before `before`, per source from the newest record the collector wrote as
+// healthy (its anchor; every record of a source with none), in seq order. Per source: the sources are a skip scan over
+// clearance_evidence_health_src (scope, source), the anchor is one backward probe of clearance_evidence_health_ok, and the
+// records are a range of clearance_evidence_health_src from the anchor's seq, ts tested on the index tuple. So it reads the
+// records it returns and the anchors, not the history before them. (A window function over the scope's whole health
+// history found the same anchors, and read every record to do it: it passed the statement timeout on two weeks of a lab.)
+// The anchor is proved against clearance_evidence_health_ok's predicate, so the core's provider name is a literal here.
+//
+// Until the core has built clearance_evidence_health_src, each step of the source skip scan would walk the scope's
+// health history, once per source; the one-pass statement (healthBeforeOnePassSQL) walks it once. So the per-source
+// statement is used only once the index is valid (pg_index.indisvalid, the build's own readiness), checked per call
+// until it is, then remembered.
 func (s *PG) HealthBefore(ctx context.Context, v *Viewer, scope, before string) ([]Record, error) {
+	if !s.healthSrcReady(ctx) {
+		sql, args := healthBeforeOnePassSQL(v, scope, before)
+		return s.records(ctx, sql, args)
+	}
+	sql, args := healthBeforeSQL(v, scope, before)
+	return s.records(ctx, sql, args)
+}
+
+// HealthSrcIndex is the index HealthBefore's per-source statement reads (store/pg MapIndexes).
+const HealthSrcIndex = "clearance_evidence_health_src"
+
+func (s *PG) healthSrcReady(ctx context.Context) bool {
+	if s.healthSrc.Load() {
+		return true
+	}
+	rows, done, err := s.R.Query(ctx, "SELECT COALESCE((SELECT i.indisvalid FROM pg_index i WHERE i.indexrelid = to_regclass($1)), false)", HealthSrcIndex)
+	if err != nil {
+		return false
+	}
+	defer done()
+	defer rows.Close()
+	var ok bool
+	if rows.Next() && rows.Scan(&ok) == nil && ok {
+		s.healthSrc.Store(true)
+	}
+	return ok
+}
+
+// healthBeforeOnePassSQL is HealthBefore before clearance_evidence_health_src exists: one pass over the scope's health
+// records before `before` on clearance_evidence_health, the per-source anchor found by a window function.
+func healthBeforeOnePassSQL(v *Viewer, scope, before string) (string, []any) {
 	b := &q{}
 	with := b.evidenceScope(v)
 	b.add(observedTools)
@@ -244,7 +326,31 @@ func (s *PG) HealthBefore(ctx context.Context, v *Viewer, scope, before string) 
 	} else {
 		with = strings.TrimRight(with, " ") + ", "
 	}
-	return s.records(ctx, with+pre+"SELECT h.record::text, h.assurance FROM h WHERE h.seq >= COALESCE(h.aseq, -1) ORDER BY h.seq", b.args)
+	return with + pre + "SELECT h.record::text, h.assurance FROM h WHERE h.seq >= COALESCE(h.aseq, -1) ORDER BY h.seq", b.args
+}
+
+// healthBeforeSQL is the statement of HealthBefore.
+func healthBeforeSQL(v *Viewer, scope, before string) (string, []any) {
+	b := &q{}
+	with := b.evidenceScope(v)
+	vis := b.sql()
+	health := "e.record->>'tool' = 'observation.health' AND e.record->>'scope' = " + b.arg(scope)
+	bf := b.arg(before)
+	cn := "'" + strings.ReplaceAll(evidence.CoreProviderName, "'", "''") + "'"
+	src := "COALESCE(e.record->'source'->>'name', '')"
+	sql := withRecursive(with) +
+		"src(name) AS ((SELECT " + src + " FROM clearance_evidence e WHERE " + health + " ORDER BY 1 LIMIT 1) UNION ALL " +
+		"SELECT (SELECT " + src + " FROM clearance_evidence e WHERE " + health + " AND " + src + " > src.name ORDER BY 1 LIMIT 1) " +
+		"FROM src WHERE src.name IS NOT NULL), " +
+		"an AS MATERIALIZED (SELECT src.name, COALESCE((SELECT e.seq FROM clearance_evidence e WHERE " + health +
+		" AND COALESCE(e.record->'provider'->>'name', '') <> " + cn + " AND e.record->'health'->>'state' = 'healthy' AND " +
+		src + " = src.name AND e.record->>'ts' < " + bf + " AND " + vis + " ORDER BY e.seq DESC LIMIT 1), -1) AS aseq " +
+		"FROM src WHERE src.name IS NOT NULL) " +
+		// ORDER BY inside the lateral keeps it a subquery the planner cannot pull up: a parameterised range scan per source,
+		// not a hash join over the scope's whole health history.
+		"SELECT r.record::text, r.assurance FROM an CROSS JOIN LATERAL (SELECT e.seq, e.record, e.assurance FROM clearance_evidence e WHERE " +
+		health + " AND " + src + " = an.name AND e.seq >= an.aseq AND e.record->>'ts' < " + bf + " AND " + vis + " ORDER BY e.seq) r ORDER BY r.seq"
+	return sql, b.args
 }
 
 func (s *PG) EvidenceOne(ctx context.Context, seq int64, v *Viewer) (Record, error) {
