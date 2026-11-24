@@ -38,9 +38,38 @@ type Change struct {
 	RV                    string
 	At                    time.Time
 	Created, Deleted      bool
+	// Finalized: a delete the API server completed itself, when a write removed the last finalizer of an object already
+	// marked for deletion (the DELETED object carries metadata.deletionTimestamp). No request deleted it: the write that
+	// removed the finalizer did, and its audit event carries the resourceVersion that write left, not the deletion's.
+	Finalized bool
+	// MarkedAt: a finalized delete's metadata.deletionTimestamp (when the delete was requested; whole seconds).
+	MarkedAt time.Time
+	// UID is the object's metadata.uid: a recreate under the same name has another.
+	UID string
 	// Desired: the desired state changed (a create, a delete, or a different canonical hash); a status write is not.
 	Desired       bool
 	Before, After map[string]any
+}
+
+func uidOf(o map[string]any) string {
+	m, _ := o["metadata"].(map[string]any)
+	u, _ := m["uid"].(string)
+	return u
+}
+
+// deletionTime is the object's metadata.deletionTimestamp, zero when it has none or it does not parse.
+func deletionTime(o map[string]any) time.Time {
+	m, _ := o["metadata"].(map[string]any)
+	ts, _ := m["deletionTimestamp"].(string)
+	t, _ := time.Parse(time.RFC3339, ts)
+	return t
+}
+
+// deletionMarked: the object carries metadata.deletionTimestamp.
+func deletionMarked(o map[string]any) bool {
+	m, _ := o["metadata"].(map[string]any)
+	ts, _ := m["deletionTimestamp"].(string)
+	return ts != ""
 }
 
 func metaOf(o map[string]any) (ns, name, rv string) {
@@ -63,13 +92,17 @@ func (c *Cache) Put(kind, typ string, obj map[string]any, at time.Time, initial 
 	defer c.mu.Unlock()
 	h := c.hash(obj)
 	vs := c.objs[k]
-	ch := Change{Kind: kind, Namespace: ns, Name: name, RV: rv, At: at, After: obj}
+	ch := Change{Kind: kind, Namespace: ns, Name: name, RV: rv, At: at, After: obj, UID: uidOf(obj)}
 	if len(vs) > 0 {
 		ch.Before = vs[len(vs)-1].obj
 	}
 	switch {
 	case typ == "DELETED":
 		ch.Deleted, ch.Desired = true, true
+		ch.Finalized = deletionMarked(obj)
+		if ch.Finalized {
+			ch.MarkedAt = deletionTime(obj)
+		}
 		ch.After = nil
 		if len(vs) > 0 {
 			ch.Before = vs[len(vs)-1].obj

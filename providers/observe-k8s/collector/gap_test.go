@@ -102,6 +102,94 @@ func TestGapsBothArrivalOrders(t *testing.T) {
 	}
 }
 
+// A foreground deletion ends when a write (the garbage collector's) removes the last finalizer: the API server then deletes
+// the object, and the DELETED event's resourceVersion is the deletion's, which no audit event carries. It is matched to
+// the write that ended it by time, in either order; a plain delete is still matched by version only.
+func TestFinalizedDeleteIsMatchedToTheWriteThatEndedIt(t *testing.T) {
+	marked := func(rv string) map[string]any {
+		o := configMap("shop", "web-config", rv, map[string]any{"v": "1"})
+		md := o["metadata"].(map[string]any)
+		md["deletionTimestamp"], md["finalizers"] = "2026-11-01T00:00:00Z", []any{"foregroundDeletion"}
+		return o
+	}
+	for _, auditFirst := range []bool{false, true} {
+		g := NewGaps(3 * time.Minute)
+		c := testCache()
+		c.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "10", map[string]any{"v": "1"}), t0, true)
+		// the delete request marks it (rv 11) and is audited at that version
+		g.Audited("ConfigMap", "shop", "web-config", "11", t0, t0.Add(time.Second))
+		if ch, ok := c.Put("ConfigMap", "MODIFIED", marked("11"), t0, false); ok {
+			g.Watched(ch)
+		}
+		// the garbage collector's patch removes the finalizer; its audit event reports rv 12, the deletion is rv 13
+		del, ok := c.Put("ConfigMap", "DELETED", marked("13"), t0.Add(2*time.Second), false)
+		if !ok || !del.Deleted || !del.Finalized {
+			t.Fatalf("a delete of a marked object is finalized: %+v", del)
+		}
+		if auditFirst {
+			g.AuditedVerb("ConfigMap", "shop", "web-config", "12", "patch", t0.Add(2*time.Second), t0.Add(2*time.Second))
+			g.Watched(del)
+		} else {
+			g.Watched(del)
+			g.AuditedVerb("ConfigMap", "shop", "web-config", "12", "patch", t0.Add(2*time.Second), t0.Add(6*time.Second))
+		}
+		if got := g.Expired(t0.Add(10*time.Minute), 0); len(got) != 0 {
+			t.Fatalf("audit first %v: a finalized delete reported as a gap: %+v", auditFirst, got)
+		}
+	}
+
+	// a plain delete (no deletionTimestamp) is not finalized and still needs its own version
+	g := NewGaps(3 * time.Minute)
+	c := testCache()
+	c.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "20", map[string]any{"v": "1"}), t0, true)
+	del, _ := c.Put("ConfigMap", "DELETED", configMap("shop", "web-config", "21", map[string]any{"v": "1"}), t0, false)
+	if del.Finalized {
+		t.Fatalf("a plain delete is not finalized: %+v", del)
+	}
+	g.Watched(del)
+	g.Audited("ConfigMap", "shop", "web-config", "99", t0, t0.Add(time.Second)) // a write at another version
+	if got := g.Expired(t0.Add(10*time.Minute), 0); len(got) != 1 || got[0].RV != "21" {
+		t.Fatalf("a plain delete with no audit event at its version is a gap: %+v", got)
+	}
+	// and a finalized delete with no audited write near it is still a gap
+	g = NewGaps(3 * time.Minute)
+	c = testCache()
+	c.Put("ConfigMap", "ADDED", marked("30"), t0, true)
+	del, _ = c.Put("ConfigMap", "DELETED", marked("31"), t0, false)
+	g.Watched(del)
+	g.AuditedVerb("ConfigMap", "shop", "web-config", "29", "patch", t0.Add(-5*time.Minute), t0.Add(time.Second)) // long before it
+	if got := g.Expired(t0.Add(10*time.Minute), 0); len(got) != 1 || !got[0].Finalized {
+		t.Fatalf("a finalized delete with no audited write within Match is a gap: %+v", got)
+	}
+}
+
+// An Argo CD hook deletes its object (foreground) and creates it again under the same name seconds later. The create's
+// audit event may arrive before the finalizer write's: the finalized delete must not take it, in either arrival order.
+func TestFinalizedDeleteDoesNotTakeTheRecreatesAudit(t *testing.T) {
+	marked := map[string]any{"name": "web-config", "namespace": "shop", "resourceVersion": "13", "uid": "u1",
+		"deletionTimestamp": "2026-11-01T00:00:00Z"}
+	for _, watchFirst := range []bool{true, false} {
+		g := NewGaps(3 * time.Minute)
+		c := testCache()
+		c.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "10", map[string]any{"v": "1"}), t0, true)
+		del, _ := c.Put("ConfigMap", "DELETED", map[string]any{"metadata": marked, "data": map[string]any{"v": "1"}}, t0.Add(time.Second), false)
+		add, _ := c.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "14", map[string]any{"v": "1"}), t0.Add(2*time.Second), false)
+		if watchFirst {
+			g.Watched(del)
+			g.Watched(add)
+		}
+		g.AuditedVerb("ConfigMap", "shop", "web-config", "14", "create", t0.Add(2*time.Second), t0.Add(3*time.Second))
+		g.AuditedVerb("ConfigMap", "shop", "web-config", "12", "patch", t0.Add(time.Second), t0.Add(4*time.Second))
+		if !watchFirst {
+			g.Watched(del)
+			g.Watched(add)
+		}
+		if got := g.Expired(t0.Add(10*time.Minute), 0); len(got) != 0 {
+			t.Fatalf("watch first %v: gaps %+v", watchFirst, got)
+		}
+	}
+}
+
 // The collector turns an unaudited change into an observation and a not-attributed audit-gap assessment, and degrades
 // the feed (the core writes the observation.audit-gap record from the degraded health record).
 func TestUnauditedChangeBecomesAnAuditGapRecord(t *testing.T) {
@@ -168,5 +256,257 @@ func TestAuditEventInTheQueueAccountsForTheWatchChange(t *testing.T) {
 	}
 	if got := r.c.gaps.Expired(t0.Add(time.Hour), 0); len(got) != 0 {
 		t.Fatalf("a reported change became a gap: %v", got)
+	}
+}
+
+// finalizedDelete is a DELETED change of a ConfigMap already marked for deletion, seen at `at`.
+func finalizedDelete(c *Cache, rv string, at time.Time) Change {
+	o := configMap("shop", "web-config", rv, map[string]any{"v": "1"})
+	o["metadata"].(map[string]any)["deletionTimestamp"] = "2026-11-01T00:00:00Z"
+	ch, _ := c.Put("ConfigMap", "DELETED", o, at, false)
+	return ch
+}
+
+// A create recorded at Metadata (no response object, so no resourceVersion) is never what ended a finalized delete:
+// it accounts for the recreate, and the delete waits for an update or patch, in either arrival order.
+func TestFinalizedDeleteNeverTakesACreateWithoutAVersion(t *testing.T) {
+	for _, auditFirst := range []bool{false, true} {
+		g := NewGaps(3 * time.Minute)
+		c := testCache()
+		c.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "10", map[string]any{"v": "1"}), t0, true)
+		del := finalizedDelete(c, "13", t0.Add(time.Second))
+		add, _ := c.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "14", map[string]any{"v": "1"}), t0.Add(2*time.Second), false)
+		if !auditFirst {
+			g.Watched(del)
+			g.Watched(add)
+		}
+		g.AuditedVerb("ConfigMap", "shop", "web-config", "", "create", t0.Add(2*time.Second), t0.Add(3*time.Second))
+		if auditFirst {
+			g.Watched(del)
+			g.Watched(add)
+		}
+		got := g.Expired(t0.Add(10*time.Minute), 0)
+		if len(got) != 1 || !got[0].Finalized || got[0].RV != "13" {
+			t.Fatalf("audit first %v: want only the finalized delete as a gap (no write ended it), got %+v", auditFirst, got)
+		}
+	}
+}
+
+// A dryRun=All update was never persisted and ended nothing: it does not account for a finalized delete inside its
+// window, so the delete stays a gap. A dryRun parameter with no value persists and still counts.
+func TestDryRunAllUpdateDoesNotAccountForAFinalizedDelete(t *testing.T) {
+	for _, tc := range []struct {
+		uri string
+		gap bool
+	}{
+		{"/api/v1/namespaces/shop/configmaps/web-config?dryRun=All", true},
+		{"/api/v1/namespaces/shop/configmaps/web-config?fieldManager=x&dryRun=All", true},
+		{"/api/v1/namespaces/shop/configmaps/web-config?dryRun", false},
+		{"/api/v1/namespaces/shop/configmaps/web-config", false},
+	} {
+		r := newRig(t)
+		r.c.cache.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "10", map[string]any{"v": "1"}), t0.Add(-time.Hour), true)
+		r.c.gaps.Watched(finalizedDelete(r.c.cache, "13", t0))
+		resp := configMap("shop", "web-config", "12", map[string]any{"v": "1"}) // the write that took the last finalizer off
+		resp["metadata"].(map[string]any)["deletionTimestamp"] = "2026-11-01T00:00:00Z"
+		r.push(auditEv(human, "kubectl/v1.36.0", "update", "configmaps", "shop", "web-config", 200,
+			map[string]any{"requestURI": tc.uri, "responseObject": resp}))
+		r.drain()
+		got := r.c.gaps.Expired(t0.Add(time.Hour), 0)
+		if (len(got) == 1) != tc.gap || len(got) > 1 {
+			t.Fatalf("%s: gaps %+v, want a gap: %v", tc.uri, got, tc.gap)
+		}
+	}
+}
+
+// A DELETE can ask for dryRun=All in its DeleteOptions body rather than the query: it persisted nothing either, and does
+// not account for a change the watch saw (here a plain delete matched by time, as a Metadata event is).
+func TestDryRunAllInADeleteBodyAccountsForNothing(t *testing.T) {
+	for _, dry := range []bool{true, false} {
+		r := newRig(t)
+		r.c.cache.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "10", map[string]any{"v": "1"}), t0.Add(-time.Hour), true)
+		del, _ := r.c.cache.Put("ConfigMap", "DELETED", configMap("shop", "web-config", "11", map[string]any{"v": "1"}), t0, false)
+		r.c.gaps.Watched(del)
+		body := map[string]any{"kind": "DeleteOptions", "apiVersion": "meta.k8s.io/v1"}
+		if dry {
+			body["dryRun"] = []any{"All"}
+		}
+		ev := auditEv(human, "kubectl/v1.36.0", "delete", "configmaps", "shop", "web-config", 200,
+			map[string]any{"level": "Request", "requestURI": "/api/v1/namespaces/shop/configmaps/web-config", "requestObject": body})
+		r.push(ev)
+		r.drain()
+		if got := r.c.gaps.Expired(t0.Add(time.Hour), 0); (len(got) == 1) != dry {
+			t.Fatalf("dryRun body %v: gaps %+v", dry, got)
+		}
+	}
+}
+
+// After a same-name recreate, a write to the new object whose audit event arrives before its watch change is not taken
+// by the finalized delete: its response object is not marked for deletion, and it is too late besides. The write that
+// ended the delete is matched to it, and the later write to its own change, in every arrival order.
+func TestFinalizedDeleteDoesNotTakeALaterWriteToTheRecreate(t *testing.T) {
+	no, yes := false, true
+	for _, marked := range []*bool{&no, nil} { // RequestResponse (unmarked response) and Metadata (no response)
+		g := NewGaps(3 * time.Minute)
+		c := testCache()
+		c.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "10", map[string]any{"v": "1"}), t0, true)
+		g.Watched(finalizedDelete(c, "13", t0.Add(time.Second)))
+		add, _ := c.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "14", map[string]any{"v": "1"}), t0.Add(5*time.Second), false)
+		g.Watched(add)
+		g.AuditedWrite("ConfigMap", "shop", "web-config", "14", "create", &no, t0.Add(5*time.Second), t0.Add(6*time.Second))
+		// the new object's update, audited before the watch shows it
+		g.AuditedWrite("ConfigMap", "shop", "web-config", "15", "update", marked, t0.Add(8*time.Second), t0.Add(9*time.Second))
+		// the garbage collector's patch that ended the delete, read late
+		g.AuditedWrite("ConfigMap", "shop", "web-config", "12", "patch", &yes, t0.Add(time.Second), t0.Add(10*time.Second))
+		mod, _ := c.Put("ConfigMap", "MODIFIED", configMap("shop", "web-config", "15", map[string]any{"v": "2"}), t0.Add(8*time.Second), false)
+		g.Watched(mod)
+		if got := g.Expired(t0.Add(10*time.Minute), 0); len(got) != 0 {
+			t.Fatalf("marked %v: gaps %+v", marked, got)
+		}
+	}
+}
+
+// A JSON Patch's audit event carries an array as its requestObject: it is still read (gap accounting and assessment),
+// as it was before the collector looked at requestObject at all.
+func TestJSONPatchRequestObjectIsStillRead(t *testing.T) {
+	r := newRig(t)
+	r.c.cache.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "1", map[string]any{"v": "0"}), t0.Add(-time.Hour), true)
+	ch, _ := r.c.cache.Put("ConfigMap", "MODIFIED", configMap("shop", "web-config", "2", map[string]any{"v": "1"}), t0, false)
+	r.c.gaps.Watched(ch)
+	r.push(auditEv(human, "kubectl/v1.36.0", "patch", "configmaps", "shop", "web-config", 200,
+		map[string]any{"requestObject": []any{map[string]any{"op": "replace", "path": "/data/v", "value": "1"}},
+			"responseObject": configMap("shop", "web-config", "2", map[string]any{"v": "1"})}))
+	r.drain()
+	if got := r.c.gaps.Expired(t0.Add(time.Hour), 0); len(got) != 0 {
+		t.Fatalf("a JSON Patch's audit event was dropped: gaps %+v", got)
+	}
+}
+
+// A Metadata-level update to the recreated object inside the skew of the deletion (no response object, no version) is
+// not taken by the finalized delete: a create of the same name came before it. In every arrival order the garbage
+// collector's patch ends the delete and the update keeps its own change.
+func TestFinalizedDeleteDoesNotTakeAMetadataWriteToTheRecreateInsideTheSkew(t *testing.T) {
+	yes := true
+	type step func(g *Gaps, c *Cache)
+	ms := func(d int) time.Time { return t0.Add(time.Second + time.Duration(d)*time.Millisecond) }
+	del := func(g *Gaps, c *Cache) { g.Watched(finalizedDelete(c, "13", ms(0))) }
+	addW := func(g *Gaps, c *Cache) {
+		ch, _ := c.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "14", map[string]any{"v": "1"}), ms(100), false)
+		g.Watched(ch)
+	}
+	createA := func(g *Gaps, c *Cache) {
+		g.AuditedVerb("ConfigMap", "shop", "web-config", "", "create", ms(100), ms(500))
+	}
+	updA := func(g *Gaps, c *Cache) {
+		g.AuditedVerb("ConfigMap", "shop", "web-config", "", "update", ms(200), ms(600))
+	}
+	gcA := func(g *Gaps, c *Cache) {
+		g.AuditedWrite("ConfigMap", "shop", "web-config", "12", "patch", &yes, ms(-10), ms(700))
+	}
+	modW := func(g *Gaps, c *Cache) {
+		ch, _ := c.Put("ConfigMap", "MODIFIED", configMap("shop", "web-config", "15", map[string]any{"v": "2"}), ms(200), false)
+		g.Watched(ch)
+	}
+	for name, order := range map[string][]step{
+		"watch first":           {del, addW, createA, updA, gcA, modW},
+		"audits first":          {createA, updA, gcA, del, addW, modW},
+		"delete, audits, rest":  {del, createA, updA, gcA, addW, modW},
+		"update watch, then gc": {del, createA, updA, addW, modW, gcA},
+	} {
+		g := NewGaps(3 * time.Minute)
+		c := testCache()
+		c.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "10", map[string]any{"v": "1"}), t0, true)
+		for _, f := range order {
+			f(g, c)
+		}
+		if got := g.Expired(t0.Add(10*time.Minute), 0); len(got) != 0 {
+			t.Fatalf("%s: gaps %+v", name, got)
+		}
+	}
+}
+
+// The create's audit time and its watch time differ (the API server's clock at the write, the collector's when it saw
+// it): a Metadata update stamped between the two, read after the watch's ADDED, is still a write to the recreate.
+func TestAWriteBetweenTheCreatesAuditAndWatchTimesIsTheRecreates(t *testing.T) {
+	yes := true
+	ms := func(d int) time.Time { return t0.Add(time.Duration(d) * time.Millisecond) }
+	g := NewGaps(3 * time.Minute)
+	c := testCache()
+	c.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "10", map[string]any{"v": "1"}), t0, true)
+	g.Watched(finalizedDelete(c, "13", ms(1000)))
+	g.AuditedVerb("ConfigMap", "shop", "web-config", "", "create", ms(1100), ms(1150))
+	add, _ := c.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "14", map[string]any{"v": "1"}), ms(1300), false)
+	g.Watched(add)
+	g.AuditedVerb("ConfigMap", "shop", "web-config", "", "update", ms(1200), ms(1400))
+	g.AuditedWrite("ConfigMap", "shop", "web-config", "12", "patch", &yes, ms(990), ms(1500))
+	mod, _ := c.Put("ConfigMap", "MODIFIED", configMap("shop", "web-config", "15", map[string]any{"v": "2"}), ms(1600), false)
+	g.Watched(mod)
+	if got := g.Expired(t0.Add(10*time.Minute), 0); len(got) != 0 {
+		t.Fatalf("gaps %+v", got)
+	}
+}
+
+// A short-lived object: created, delete requested and finalized within a second or two. Its own create is not a recreate
+// (it came before the delete request), so the patch that ended the delete still matches, in both arrival orders, with
+// the delete request audited and with only the object's deletionTimestamp to go by.
+func TestAShortLivedObjectsOwnCreateIsNotARecreate(t *testing.T) {
+	yes := true
+	ms := func(d int) time.Time { return t0.Add(time.Duration(d) * time.Millisecond) }
+	for _, deleteAudited := range []bool{true, false} {
+		for _, auditFirst := range []bool{true, false} {
+			g := NewGaps(3 * time.Minute)
+			c := testCache()
+			add, _ := c.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "10", map[string]any{"v": "1"}), ms(0), false)
+			g.Watched(add)
+			g.AuditedVerb("ConfigMap", "shop", "web-config", "10", "create", ms(0), ms(50))
+			if deleteAudited {
+				g.AuditedVerb("ConfigMap", "shop", "web-config", "", "delete", ms(500), ms(550))
+			}
+			o := configMap("shop", "web-config", "13", map[string]any{"v": "1"})
+			o["metadata"].(map[string]any)["deletionTimestamp"] = t0.Format(time.RFC3339) // whole seconds: 0.5s floors to 0
+			del, _ := c.Put("ConfigMap", "DELETED", o, ms(1000), false)
+			patch := func() {
+				g.AuditedWrite("ConfigMap", "shop", "web-config", "12", "patch", &yes, ms(900), ms(1100))
+			}
+			if auditFirst {
+				patch()
+				g.Watched(del)
+			} else {
+				g.Watched(del)
+				patch()
+			}
+			if got := g.Expired(t0.Add(10*time.Minute), 0); len(got) != 0 {
+				t.Fatalf("delete audited %v, audit first %v: gaps %+v", deleteAudited, auditFirst, got)
+			}
+		}
+	}
+}
+
+// The watch's ADDED of the deleted object itself can reach the collector after its delete was requested: it is the same
+// object (its uid), not a recreate, so the patch that ended the delete still matches, in both arrival orders.
+func TestALateAddedOfTheDeletedObjectIsNotARecreate(t *testing.T) {
+	yes := true
+	ms := func(d int) time.Time { return t0.Add(time.Duration(d) * time.Millisecond) }
+	for _, auditFirst := range []bool{true, false} {
+		g := NewGaps(3 * time.Minute)
+		c := testCache()
+		g.AuditedVerb("ConfigMap", "shop", "web-config", "10", "create", ms(0), ms(50))
+		g.AuditedVerb("ConfigMap", "shop", "web-config", "", "delete", ms(500), ms(550))
+		add, _ := c.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "10", map[string]any{"v": "1"}), ms(600), false)
+		g.Watched(add)
+		o := configMap("shop", "web-config", "13", map[string]any{"v": "1"}) // the same uid as the ADDED
+		o["metadata"].(map[string]any)["deletionTimestamp"] = t0.Format(time.RFC3339)
+		del, _ := c.Put("ConfigMap", "DELETED", o, ms(1000), false)
+		patch := func() { g.AuditedWrite("ConfigMap", "shop", "web-config", "12", "patch", &yes, ms(900), ms(1100)) }
+		if auditFirst {
+			patch()
+			g.Watched(del)
+		} else {
+			g.Watched(del)
+			patch()
+		}
+		if got := g.Expired(t0.Add(10*time.Minute), 0); len(got) != 0 {
+			t.Fatalf("audit first %v: gaps %+v", auditFirst, got)
+		}
 	}
 }

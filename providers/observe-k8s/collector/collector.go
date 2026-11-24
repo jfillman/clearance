@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -241,6 +242,7 @@ func New(cfg Config, d Deps) (*Collector, error) {
 type auditEvent struct {
 	AuditID        string `json:"auditID"`
 	Level          string `json:"level"`
+	RequestURI     string `json:"requestURI"`
 	Stage          string `json:"stage"`
 	Verb           string `json:"verb"`
 	StageTimestamp string `json:"stageTimestamp"`
@@ -257,9 +259,13 @@ type auditEvent struct {
 	ResponseObject struct {
 		Kind     string `json:"kind"`
 		Metadata struct {
-			ResourceVersion string `json:"resourceVersion"`
+			ResourceVersion   string `json:"resourceVersion"`
+			DeletionTimestamp string `json:"deletionTimestamp"`
 		} `json:"metadata"`
 	} `json:"responseObject"`
+	// RequestObject is kept raw: it is any request body (a JSON Patch is an array). dryRunAll decodes a DELETE's
+	// DeleteOptions from it.
+	RequestObject json.RawMessage `json:"requestObject"`
 }
 
 func (e *auditEvent) time(def time.Time) time.Time {
@@ -267,6 +273,40 @@ func (e *auditEvent) time(def time.Time) time.Time {
 		return t.UTC()
 	}
 	return def
+}
+
+// dryRunAll: the request asked for dryRun=All, so it was validated and admitted and never persisted. It changed nothing a
+// watch can see, and must not account for a change that one did see. A dryRun parameter with no value persists.
+// A DELETE may carry it in its DeleteOptions body instead of the query (the event's requestObject, at Request level and above).
+func (e *auditEvent) dryRunAll() bool {
+	var opts []string
+	if e.Verb == "delete" && len(e.RequestObject) > 0 {
+		var o struct {
+			Kind   string   `json:"kind"`
+			DryRun []string `json:"dryRun"`
+		}
+		if json.Unmarshal(e.RequestObject, &o) == nil && o.Kind == "DeleteOptions" {
+			opts = o.DryRun
+		}
+	}
+	if u, err := url.Parse(e.RequestURI); err == nil {
+		opts = append(opts, u.Query()["dryRun"]...)
+	}
+	for _, v := range opts {
+		if v == "All" {
+			return true
+		}
+	}
+	return false
+}
+
+// marked: whether the response object carries deletionTimestamp, nil when the event has no response object (Metadata).
+func (e *auditEvent) marked() *bool {
+	if e.ResponseObject.Kind == "" && e.ResponseObject.Metadata.ResourceVersion == "" {
+		return nil
+	}
+	m := e.ResponseObject.Metadata.DeletionTimestamp != ""
+	return &m
 }
 
 func (e *auditEvent) write() bool {
@@ -398,7 +438,9 @@ func (c *Collector) handle(payload []byte, at time.Time, b *batch) {
 	kind := ""
 	if ev.write() && ev.ObjectRef.Resource != "" {
 		kind = c.kindOf(ev.ObjectRef.Resource)
-		c.gaps.Audited(kind, ev.ObjectRef.Namespace, ev.ObjectRef.Name, ev.ResponseObject.Metadata.ResourceVersion, when, c.cfg.Now())
+		if !ev.dryRunAll() {
+			c.gaps.AuditedWrite(kind, ev.ObjectRef.Namespace, ev.ObjectRef.Name, ev.ResponseObject.Metadata.ResourceVersion, ev.Verb, ev.marked(), when, c.cfg.Now())
+		}
 	}
 	raw := pipeline.RawEvent{Provider: pipeline.Kubernetes, Scope: c.cfg.Cluster, Raw: payload}
 	if kind != "" && ev.ObjectRef.Resource != "secrets" {

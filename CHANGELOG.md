@@ -24,6 +24,18 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   health tail, and `clearance_evidence_health_src` (scope, source, seq, ts) for `HealthBefore`. Until they are built
   `Scopes` is fast regardless and `HealthBefore` keeps its one-pass statement (as slow as before) until
   `clearance_evidence_health_src` is valid, then switches. The answers are unchanged. See docs/clearance-api.md, "Budget".
+- **observe-k8s no longer reports a foreground deletion as an audit gap (I-86).** When a write removes the last
+  finalizer of an object already marked for deletion (the garbage collector ending a foreground deletion, as an Argo CD
+  hook's delete policy asks for), the API server deletes the object itself: the watch's `DELETED` event carries the
+  deletion's `resourceVersion`, and the finalizer write's audit event carries the version that write left. The gap
+  tracker matched the two by version, never matched them, and after `--gap-grace` reported "a change was seen on the
+  watch stream and never audited" and degraded the `k8s-audit-webhook` feed, on every sync of an Application with such
+  hooks. A delete whose object carries `deletionTimestamp` (`Change.Finalized`) is now matched to an audit write of the
+  same object by time, only an update or patch whose response (if any) is still marked for deletion, from 30 s before
+  to 2 s after the deletion (never a create, or a later write to the object an Argo CD hook recreates under the same
+  name), and an exact-version match is tried first; a plain delete is still matched by version. A `dryRun=All` write
+  (query or DeleteOptions body) no longer accounts for any watch change. See
+  docs/observe-k8s.md, "Gaps and the watch cache".
 
 ## [0.57.2] - 2026-11-23
 

@@ -269,7 +269,15 @@ detection. A deployment that wants them back adds the resource to `watch.resourc
 of each object: with the `resourceVersion` of the audit event's response object the object before is exact; without one
 (a Metadata event) it is the second newest if the newest was seen at about the event's time. A watch change to *desired
 state* (canonical hash differs; a status write does not count) waits for an audit event for the same object (by
-`resourceVersion`, else within 30 s), in either order. Past `--gap-grace` (3 min) plus the age of the oldest event still in
+`resourceVersion`, else within 30 s), in either order. A **finalized delete** (the `DELETED` object carries
+`deletionTimestamp`: a write removed the last finalizer of an object already marked for deletion, as the garbage collector
+does to end a foreground deletion, and the API server then removed it) is matched within 30 s by time alone: its
+`resourceVersion` is the deletion's, and the audit event of the write that ended it carries the version that write left.
+Matched by version, every foreground deletion (an Argo CD hook's delete policy, for one) was an audit gap. Only an
+update or patch matches it, whose response object (when the event has one) still carries `deletionTimestamp`, from at
+most 30 s before the deletion to 2 s after it, and not from after a create of the same name; a create, or a later write
+to an object recreated under the same name (even a Metadata one inside the 2 s), is left for its own watch change. An exact `resourceVersion` match is tried before a time match. A `dryRun=All` write (in
+the query, or in a DELETE's `DeleteOptions` body) persisted nothing and accounts for no watch change. Past `--gap-grace` (3 min) plus the age of the oldest event still in
 the queue it is an **audit gap**: an observation (source level `watch`, actor `unknown (no audit event)`, before and after)
 and a not-attributed `audit-gap` assessment, and the feed is degraded for 15 minutes (the core writes the
 `observation.audit-gap` record when a health record goes from healthy to degraded). A change while the collector was
