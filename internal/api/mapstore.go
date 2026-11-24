@@ -165,7 +165,7 @@ const healthTail = 500
 
 // HealthBeforeScopes is HealthBefore for many scopes in one pass: per scope and source, the health records before
 // `before` from the last one the collector wrote as healthy through the newest. One statement, two parts:
-//   - the newest healthTail health records of each scope (clearance_evidence_health, backwards from `before`), from the
+//   - the newest healthTail health records of each scope (clearance_evidence_health_page, backwards from `before`), from the
 //     newest healthy collector record among them (or all of them, when there is none);
 //   - every health record the core wrote (a flip: monitoring forced blind or degraded) after the newest healthy collector
 //     record of its source, however old (clearance_evidence_health_core and clearance_evidence_health_ok). A flip holds

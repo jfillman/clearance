@@ -38,6 +38,15 @@ var MapIndexes = []struct{ Name, DDL string }{
 	// that the page does not return. obs_ts holds both kinds together by ts, so a page read every row of the window and sorted.
 	{"clearance_evidence_obs_page", `CREATE INDEX CONCURRENTLY IF NOT EXISTS clearance_evidence_obs_page ON clearance_evidence ((record->>'scope'), (record->>'tool'), seq, (record->>'ts'))
   WHERE record->>'tool' IN ('observation', 'assessment', 'resolution', 'observation.verification', 'observation.audit-gap')`},
+	// The coverage statement's health pages (api.PG.Evidence with Slim, tool observation.health): obs_page's shape for the
+	// health kind. clearance_evidence_health is (scope, seq) with ts in the record, so a window's page walked the scope's
+	// whole health history backwards, fetching and decompressing every record to test its ts; here ts is on the index tuple.
+	{"clearance_evidence_health_page", `CREATE INDEX CONCURRENTLY IF NOT EXISTS clearance_evidence_health_page ON clearance_evidence ((record->>'scope'), seq, (record->>'ts'))
+  WHERE record->>'tool' = 'observation.health'`},
+	// api.PG.HealthBefore: a scope's health sources (a skip scan over (scope, source)) and each source's records from its
+	// anchor on (a range on seq, ts filtered on the index tuple), with no record read that the answer does not return.
+	{"clearance_evidence_health_src", `CREATE INDEX CONCURRENTLY IF NOT EXISTS clearance_evidence_health_src ON clearance_evidence ((record->>'scope'), (COALESCE(record->'source'->>'name', '')), seq, (record->>'ts'))
+  WHERE record->>'tool' = 'observation.health'`},
 }
 
 // indexBuildTimeout bounds one index build (its own bound, not the statement timeout).
