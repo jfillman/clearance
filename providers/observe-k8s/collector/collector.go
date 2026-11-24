@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -241,6 +242,7 @@ func New(cfg Config, d Deps) (*Collector, error) {
 type auditEvent struct {
 	AuditID        string `json:"auditID"`
 	Level          string `json:"level"`
+	RequestURI     string `json:"requestURI"`
 	Stage          string `json:"stage"`
 	Verb           string `json:"verb"`
 	StageTimestamp string `json:"stageTimestamp"`
@@ -267,6 +269,21 @@ func (e *auditEvent) time(def time.Time) time.Time {
 		return t.UTC()
 	}
 	return def
+}
+
+// dryRunAll: the request asked for dryRun=All, so it was validated and admitted and never persisted. It changed nothing a
+// watch can see, and must not account for a change that one did see. A dryRun parameter with no value persists.
+func (e *auditEvent) dryRunAll() bool {
+	u, err := url.Parse(e.RequestURI)
+	if err != nil {
+		return false
+	}
+	for _, v := range u.Query()["dryRun"] {
+		if v == "All" {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *auditEvent) write() bool {
@@ -398,7 +415,9 @@ func (c *Collector) handle(payload []byte, at time.Time, b *batch) {
 	kind := ""
 	if ev.write() && ev.ObjectRef.Resource != "" {
 		kind = c.kindOf(ev.ObjectRef.Resource)
-		c.gaps.AuditedVerb(kind, ev.ObjectRef.Namespace, ev.ObjectRef.Name, ev.ResponseObject.Metadata.ResourceVersion, ev.Verb, when, c.cfg.Now())
+		if !ev.dryRunAll() {
+			c.gaps.AuditedVerb(kind, ev.ObjectRef.Namespace, ev.ObjectRef.Name, ev.ResponseObject.Metadata.ResourceVersion, ev.Verb, when, c.cfg.Now())
+		}
 	}
 	raw := pipeline.RawEvent{Provider: pipeline.Kubernetes, Scope: c.cfg.Cluster, Raw: payload}
 	if kind != "" && ev.ObjectRef.Resource != "secrets" {

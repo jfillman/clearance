@@ -258,3 +258,61 @@ func TestAuditEventInTheQueueAccountsForTheWatchChange(t *testing.T) {
 		t.Fatalf("a reported change became a gap: %v", got)
 	}
 }
+
+// finalizedDelete is a DELETED change of a ConfigMap already marked for deletion, seen at `at`.
+func finalizedDelete(c *Cache, rv string, at time.Time) Change {
+	o := configMap("shop", "web-config", rv, map[string]any{"v": "1"})
+	o["metadata"].(map[string]any)["deletionTimestamp"] = "2026-11-01T00:00:00Z"
+	ch, _ := c.Put("ConfigMap", "DELETED", o, at, false)
+	return ch
+}
+
+// A create recorded at Metadata (no response object, so no resourceVersion) is never what ended a finalized delete:
+// it accounts for the recreate, and the delete waits for an update or patch, in either arrival order.
+func TestFinalizedDeleteNeverTakesACreateWithoutAVersion(t *testing.T) {
+	for _, auditFirst := range []bool{false, true} {
+		g := NewGaps(3 * time.Minute)
+		c := testCache()
+		c.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "10", map[string]any{"v": "1"}), t0, true)
+		del := finalizedDelete(c, "13", t0.Add(time.Second))
+		add, _ := c.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "14", map[string]any{"v": "1"}), t0.Add(2*time.Second), false)
+		if !auditFirst {
+			g.Watched(del)
+			g.Watched(add)
+		}
+		g.AuditedVerb("ConfigMap", "shop", "web-config", "", "create", t0.Add(2*time.Second), t0.Add(3*time.Second))
+		if auditFirst {
+			g.Watched(del)
+			g.Watched(add)
+		}
+		got := g.Expired(t0.Add(10*time.Minute), 0)
+		if len(got) != 1 || !got[0].Finalized || got[0].RV != "13" {
+			t.Fatalf("audit first %v: want only the finalized delete as a gap (no write ended it), got %+v", auditFirst, got)
+		}
+	}
+}
+
+// A dryRun=All update was never persisted and ended nothing: it does not account for a finalized delete inside its
+// window, so the delete stays a gap. A dryRun parameter with no value persists and still counts.
+func TestDryRunAllUpdateDoesNotAccountForAFinalizedDelete(t *testing.T) {
+	for _, tc := range []struct {
+		uri string
+		gap bool
+	}{
+		{"/api/v1/namespaces/shop/configmaps/web-config?dryRun=All", true},
+		{"/api/v1/namespaces/shop/configmaps/web-config?fieldManager=x&dryRun=All", true},
+		{"/api/v1/namespaces/shop/configmaps/web-config?dryRun", false},
+		{"/api/v1/namespaces/shop/configmaps/web-config", false},
+	} {
+		r := newRig(t)
+		r.c.cache.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "10", map[string]any{"v": "1"}), t0.Add(-time.Hour), true)
+		r.c.gaps.Watched(finalizedDelete(r.c.cache, "13", t0))
+		r.push(auditEv(human, "kubectl/v1.36.0", "update", "configmaps", "shop", "web-config", 200,
+			map[string]any{"requestURI": tc.uri, "responseObject": configMap("shop", "web-config", "12", map[string]any{"v": "1"})}))
+		r.drain()
+		got := r.c.gaps.Expired(t0.Add(time.Hour), 0)
+		if (len(got) == 1) != tc.gap || len(got) > 1 {
+			t.Fatalf("%s: gaps %+v, want a gap: %v", tc.uri, got, tc.gap)
+		}
+	}
+}

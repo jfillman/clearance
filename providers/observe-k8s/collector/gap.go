@@ -69,8 +69,10 @@ func (g *Gaps) Watched(ch Change) {
 func endsDelete(verb string) bool { return verb == "update" || verb == "patch" }
 
 func (g *Gaps) same(auditRV, auditVerb string, auditAt time.Time, watchRV string, watchAt time.Time, finalized bool) bool {
-	loose := finalized && endsDelete(auditVerb)
-	if auditRV != "" && watchRV != "" && !loose {
+	if finalized && !endsDelete(auditVerb) {
+		return false // only an update or patch can have ended it, whatever versions the two carry
+	}
+	if auditRV != "" && watchRV != "" && !finalized {
 		return auditRV == watchRV
 	}
 	d := watchAt.Sub(auditAt)
