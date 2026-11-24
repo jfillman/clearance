@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="1024" height="1024" role="img" aria-labelledby="t">
+  <title id="t">Clearance</title>
+  <!-- Slack app icon: full-bleed square ground (Slack rounds the corners itself; transparent corners show Slack's
+       own background), and the mark scaled up 15% about its centre so it fills Slack's small avatar sizes. -->
+  <rect width="512" height="512" fill="#14181D"/>
+  <g transform="translate(256 256) scale(1.15) translate(-239 -256)">
+    <path d="M352 140 A160 160 0 1 0 352 372" fill="none" stroke="#E8A33D" stroke-width="44" stroke-linecap="round"/>
+    <path d="M168 266 L230 326 L398 198" fill="none" stroke="#6FB2D9" stroke-width="44" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>
