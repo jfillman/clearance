@@ -127,11 +127,11 @@ func TestFinalizedDeleteIsMatchedToTheWriteThatEndedIt(t *testing.T) {
 			t.Fatalf("a delete of a marked object is finalized: %+v", del)
 		}
 		if auditFirst {
-			g.Audited("ConfigMap", "shop", "web-config", "12", t0.Add(2*time.Second), t0.Add(2*time.Second))
+			g.AuditedVerb("ConfigMap", "shop", "web-config", "12", "patch", t0.Add(2*time.Second), t0.Add(2*time.Second))
 			g.Watched(del)
 		} else {
 			g.Watched(del)
-			g.Audited("ConfigMap", "shop", "web-config", "12", t0.Add(2*time.Second), t0.Add(6*time.Second))
+			g.AuditedVerb("ConfigMap", "shop", "web-config", "12", "patch", t0.Add(2*time.Second), t0.Add(6*time.Second))
 		}
 		if got := g.Expired(t0.Add(10*time.Minute), 0); len(got) != 0 {
 			t.Fatalf("audit first %v: a finalized delete reported as a gap: %+v", auditFirst, got)
@@ -157,9 +157,36 @@ func TestFinalizedDeleteIsMatchedToTheWriteThatEndedIt(t *testing.T) {
 	c.Put("ConfigMap", "ADDED", marked("30"), t0, true)
 	del, _ = c.Put("ConfigMap", "DELETED", marked("31"), t0, false)
 	g.Watched(del)
-	g.Audited("ConfigMap", "shop", "web-config", "29", t0.Add(-5*time.Minute), t0.Add(time.Second)) // long before it
+	g.AuditedVerb("ConfigMap", "shop", "web-config", "29", "patch", t0.Add(-5*time.Minute), t0.Add(time.Second)) // long before it
 	if got := g.Expired(t0.Add(10*time.Minute), 0); len(got) != 1 || !got[0].Finalized {
 		t.Fatalf("a finalized delete with no audited write within Match is a gap: %+v", got)
+	}
+}
+
+// An Argo CD hook deletes its object (foreground) and creates it again under the same name seconds later. The create's
+// audit event may arrive before the finalizer write's: the finalized delete must not take it, in either arrival order.
+func TestFinalizedDeleteDoesNotTakeTheRecreatesAudit(t *testing.T) {
+	marked := map[string]any{"name": "web-config", "namespace": "shop", "resourceVersion": "13", "uid": "u1",
+		"deletionTimestamp": "2026-11-01T00:00:00Z"}
+	for _, watchFirst := range []bool{true, false} {
+		g := NewGaps(3 * time.Minute)
+		c := testCache()
+		c.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "10", map[string]any{"v": "1"}), t0, true)
+		del, _ := c.Put("ConfigMap", "DELETED", map[string]any{"metadata": marked, "data": map[string]any{"v": "1"}}, t0.Add(time.Second), false)
+		add, _ := c.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "14", map[string]any{"v": "1"}), t0.Add(2*time.Second), false)
+		if watchFirst {
+			g.Watched(del)
+			g.Watched(add)
+		}
+		g.AuditedVerb("ConfigMap", "shop", "web-config", "14", "create", t0.Add(2*time.Second), t0.Add(3*time.Second))
+		g.AuditedVerb("ConfigMap", "shop", "web-config", "12", "patch", t0.Add(time.Second), t0.Add(4*time.Second))
+		if !watchFirst {
+			g.Watched(del)
+			g.Watched(add)
+		}
+		if got := g.Expired(t0.Add(10*time.Minute), 0); len(got) != 0 {
+			t.Fatalf("watch first %v: gaps %+v", watchFirst, got)
+		}
 	}
 }
 

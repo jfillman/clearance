@@ -13,7 +13,7 @@ import (
 // (plus however far behind the queue is) is a gap.
 //
 // A finalized delete (Change.Finalized: the API server removed an object once a write took its last finalizer away,
-// as the garbage collector does to end a foreground deletion) is matched by time alone. Its resourceVersion is the
+// as the garbage collector does to end a foreground deletion) is matched by time alone, to an update or patch. Its resourceVersion is the
 // deletion's, and no audit event carries that one: the write that ended it reports the version it read. Matched by
 // version, every foreground deletion (an Argo CD hook's delete policy, for one) was reported as a change nobody audited.
 type Gaps struct {
@@ -33,10 +33,11 @@ type pend struct {
 }
 
 type auditSeen struct {
-	key cacheKey
-	rv  string
-	at  time.Time
-	got time.Time // when the collector read it
+	key  cacheKey
+	rv   string
+	verb string
+	at   time.Time
+	got  time.Time // when the collector read it
 }
 
 // NewGaps builds a tracker.
@@ -53,7 +54,7 @@ func (g *Gaps) Watched(ch Change) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	for i, a := range g.audits { // the audit event came first
-		if a.key == k && g.same(a.rv, a.at, ch.RV, ch.At, ch.Finalized) {
+		if a.key == k && g.same(a.rv, a.verb, a.at, ch.RV, ch.At, ch.Finalized) {
 			g.audits = append(g.audits[:i], g.audits[i+1:]...)
 			g.matched++
 			return
@@ -62,8 +63,14 @@ func (g *Gaps) Watched(ch Change) {
 	g.pending = append(g.pending, &pend{ch, k})
 }
 
-func (g *Gaps) same(auditRV string, auditAt time.Time, watchRV string, watchAt time.Time, finalized bool) bool {
-	if auditRV != "" && watchRV != "" && !finalized {
+// endsDelete: a write of this verb can remove an object's last finalizer, and so end a deletion (Change.Finalized).
+// A create cannot: matched by time alone, a finalized delete would otherwise take the audit event of the object an Argo
+// CD hook recreates under the same name a moment later, and leave that create to be reported as a gap.
+func endsDelete(verb string) bool { return verb == "update" || verb == "patch" }
+
+func (g *Gaps) same(auditRV, auditVerb string, auditAt time.Time, watchRV string, watchAt time.Time, finalized bool) bool {
+	loose := finalized && endsDelete(auditVerb)
+	if auditRV != "" && watchRV != "" && !loose {
 		return auditRV == watchRV
 	}
 	d := watchAt.Sub(auditAt)
@@ -75,17 +82,28 @@ func (g *Gaps) same(auditRV string, auditAt time.Time, watchRV string, watchAt t
 
 // Audited records an audit write event for an object: it accounts for the oldest watch change it can be.
 func (g *Gaps) Audited(kind, ns, name, rv string, at, now time.Time) {
+	g.AuditedVerb(kind, ns, name, rv, "", at, now)
+}
+
+// AuditedVerb is Audited with the write's verb, which says whether it can have ended a finalized delete. A change it
+// matches by resourceVersion is preferred to a finalized delete it matches only by time.
+func (g *Gaps) AuditedVerb(kind, ns, name, rv, verb string, at, now time.Time) {
 	k := cacheKey{kind, ns, name}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	for i, p := range g.pending {
-		if p.key == k && g.same(rv, at, p.RV, p.At, p.Finalized) {
-			g.pending = append(g.pending[:i], g.pending[i+1:]...)
-			g.matched++
-			return
+	for _, byTime := range []bool{false, true} {
+		for i, p := range g.pending {
+			if p.key != k || (p.Finalized && endsDelete(verb)) != byTime {
+				continue
+			}
+			if g.same(rv, verb, at, p.RV, p.At, p.Finalized) {
+				g.pending = append(g.pending[:i], g.pending[i+1:]...)
+				g.matched++
+				return
+			}
 		}
 	}
-	g.audits = append(g.audits, auditSeen{k, rv, at, now})
+	g.audits = append(g.audits, auditSeen{k, rv, verb, at, now})
 	if len(g.audits) > 4096 {
 		g.audits = g.audits[len(g.audits)-2048:]
 	}

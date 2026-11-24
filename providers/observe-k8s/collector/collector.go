@@ -398,7 +398,7 @@ func (c *Collector) handle(payload []byte, at time.Time, b *batch) {
 	kind := ""
 	if ev.write() && ev.ObjectRef.Resource != "" {
 		kind = c.kindOf(ev.ObjectRef.Resource)
-		c.gaps.Audited(kind, ev.ObjectRef.Namespace, ev.ObjectRef.Name, ev.ResponseObject.Metadata.ResourceVersion, when, c.cfg.Now())
+		c.gaps.AuditedVerb(kind, ev.ObjectRef.Namespace, ev.ObjectRef.Name, ev.ResponseObject.Metadata.ResourceVersion, ev.Verb, when, c.cfg.Now())
 	}
 	raw := pipeline.RawEvent{Provider: pipeline.Kubernetes, Scope: c.cfg.Cluster, Raw: payload}
 	if kind != "" && ev.ObjectRef.Resource != "secrets" {
