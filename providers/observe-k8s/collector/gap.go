@@ -22,8 +22,8 @@ type Gaps struct {
 
 	mu       sync.Mutex
 	pending  []*pend
-	created  map[cacheKey][]time.Time // each object's recent creates, from their audit events and watch changes, both kept
-	deletes  map[cacheKey][]time.Time // each object's recent delete requests (audit events)
+	created  map[cacheKey][]seenCreate // each object's recent creates, from their audit events and watch changes, both kept
+	deletes  map[cacheKey][]time.Time  // each object's recent delete requests (audit events)
 	audits   []auditSeen
 	matched  int
 	reported int
@@ -57,7 +57,7 @@ func (g *Gaps) Watched(ch Change) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if ch.Created {
-		g.sawCreate(k, ch.At)
+		g.sawCreate(k, ch.At, ch.UID)
 	}
 	for i, a := range g.audits { // the audit event came first
 		if a.key == k && g.same(a, ch) {
@@ -90,7 +90,8 @@ const finalizeSkew = 2 * time.Second
 // in order), and the watch's ADDED counts too, each at its own time. The caller holds g.mu.
 //
 // A recreate is a create after the delete was requested: the deleted object's own create came before its delete
-// request, however short-lived it was. The request's time is its delete audit event's (the newest one no later than the
+// request, however short-lived it was, and the watch's ADDED of the deleted object itself (its uid) is never one,
+// however late the collector saw it. The request's time is its delete audit event's (the newest one no later than the
 // deletion), else the object's deletionTimestamp rounded up to the next second (it is kept in whole seconds), and never
 // earlier than finalizeSkew before the deletion.
 func (g *Gaps) canEnd(a auditSeen, ch Change) bool {
@@ -115,21 +116,30 @@ func (g *Gaps) canEnd(a auditSeen, ch Change) bool {
 		lo = requested
 	}
 	for _, c := range g.created[a.key] {
-		if c.After(lo) && !a.at.Before(c) {
+		if c.uid != "" && c.uid == ch.UID {
+			continue // the watch's ADDED of the deleted object itself, however late the collector saw it
+		}
+		if c.at.After(lo) && !a.at.Before(c.at) {
 			return false // a write to the object recreated after the deletion
 		}
 	}
 	return true
 }
 
+// seenCreate is one create: its time, and the object's uid when the watch saw it (an audit event's create has none).
+type seenCreate struct {
+	at  time.Time
+	uid string
+}
+
 // sawCreate notes a create of the object at `at`. Every time is kept, not the newest: the audit event's time (the API
 // server's) and the watch's (when the collector saw it) of one create differ, and a write between the two must still be
 // told from the write that ended the delete. The caller holds g.mu.
-func (g *Gaps) sawCreate(k cacheKey, at time.Time) {
+func (g *Gaps) sawCreate(k cacheKey, at time.Time, uid string) {
 	if g.created == nil {
-		g.created = map[cacheKey][]time.Time{}
+		g.created = map[cacheKey][]seenCreate{}
 	}
-	g.created[k] = append(g.created[k], at)
+	g.created[k] = append(g.created[k], seenCreate{at, uid})
 }
 
 // sawDelete notes a delete request for the object at `at`. The caller holds g.mu.
@@ -174,7 +184,7 @@ func (g *Gaps) AuditedWrite(kind, ns, name, rv, verb string, marked *bool, at, n
 	defer g.mu.Unlock()
 	switch verb {
 	case "create":
-		g.sawCreate(k, at)
+		g.sawCreate(k, at, "")
 	case "delete":
 		g.sawDelete(k, at)
 	}
@@ -220,7 +230,20 @@ func (g *Gaps) Expired(now time.Time, lag time.Duration) []Change {
 		}
 	}
 	g.audits = ak
-	for _, m := range []map[cacheKey][]time.Time{g.created, g.deletes} {
+	for k, cs := range g.created {
+		keep := cs[:0]
+		for _, c := range cs {
+			if now.Sub(c.at) <= limit+g.Match {
+				keep = append(keep, c)
+			}
+		}
+		if len(keep) == 0 {
+			delete(g.created, k)
+		} else {
+			g.created[k] = keep
+		}
+	}
+	for _, m := range []map[cacheKey][]time.Time{g.deletes} {
 		for k, ts := range m {
 			keep := ts[:0]
 			for _, t := range ts {

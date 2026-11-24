@@ -481,3 +481,32 @@ func TestAShortLivedObjectsOwnCreateIsNotARecreate(t *testing.T) {
 		}
 	}
 }
+
+// The watch's ADDED of the deleted object itself can reach the collector after its delete was requested: it is the same
+// object (its uid), not a recreate, so the patch that ended the delete still matches, in both arrival orders.
+func TestALateAddedOfTheDeletedObjectIsNotARecreate(t *testing.T) {
+	yes := true
+	ms := func(d int) time.Time { return t0.Add(time.Duration(d) * time.Millisecond) }
+	for _, auditFirst := range []bool{true, false} {
+		g := NewGaps(3 * time.Minute)
+		c := testCache()
+		g.AuditedVerb("ConfigMap", "shop", "web-config", "10", "create", ms(0), ms(50))
+		g.AuditedVerb("ConfigMap", "shop", "web-config", "", "delete", ms(500), ms(550))
+		add, _ := c.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "10", map[string]any{"v": "1"}), ms(600), false)
+		g.Watched(add)
+		o := configMap("shop", "web-config", "13", map[string]any{"v": "1"}) // the same uid as the ADDED
+		o["metadata"].(map[string]any)["deletionTimestamp"] = t0.Format(time.RFC3339)
+		del, _ := c.Put("ConfigMap", "DELETED", o, ms(1000), false)
+		patch := func() { g.AuditedWrite("ConfigMap", "shop", "web-config", "12", "patch", &yes, ms(900), ms(1100)) }
+		if auditFirst {
+			patch()
+			g.Watched(del)
+		} else {
+			g.Watched(del)
+			patch()
+		}
+		if got := g.Expired(t0.Add(10*time.Minute), 0); len(got) != 0 {
+			t.Fatalf("audit first %v: gaps %+v", auditFirst, got)
+		}
+	}
+}

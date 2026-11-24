@@ -44,9 +44,17 @@ type Change struct {
 	Finalized bool
 	// MarkedAt: a finalized delete's metadata.deletionTimestamp (when the delete was requested; whole seconds).
 	MarkedAt time.Time
+	// UID is the object's metadata.uid: a recreate under the same name has another.
+	UID string
 	// Desired: the desired state changed (a create, a delete, or a different canonical hash); a status write is not.
 	Desired       bool
 	Before, After map[string]any
+}
+
+func uidOf(o map[string]any) string {
+	m, _ := o["metadata"].(map[string]any)
+	u, _ := m["uid"].(string)
+	return u
 }
 
 // deletionTime is the object's metadata.deletionTimestamp, zero when it has none or it does not parse.
@@ -84,7 +92,7 @@ func (c *Cache) Put(kind, typ string, obj map[string]any, at time.Time, initial 
 	defer c.mu.Unlock()
 	h := c.hash(obj)
 	vs := c.objs[k]
-	ch := Change{Kind: kind, Namespace: ns, Name: name, RV: rv, At: at, After: obj}
+	ch := Change{Kind: kind, Namespace: ns, Name: name, RV: rv, At: at, After: obj, UID: uidOf(obj)}
 	if len(vs) > 0 {
 		ch.Before = vs[len(vs)-1].obj
 	}
