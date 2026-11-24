@@ -4,7 +4,7 @@
 |---|---|
 | `clearance-logo.svg` | the source |
 | `clearance-logo-512.png` | the GitHub App's logo (Settings > Display information; GitHub wants a square image under 1 MB) |
-| `clearance-slack-icon.svg` | the source of the Slack app icon: a full-bleed square, because Slack rounds the corners itself, so transparent corners would show Slack's background; the mark is 15% larger |
+| `clearance-slack-icon.svg` | the source of the Slack app icon: Hangar's Clearance mark (a check over the hold-short lines, in the instrument dial; hangar `brand/marks/clearance-tile.svg`) on a full-bleed square, because Slack rounds the corners itself, so transparent corners would show Slack's background |
 | `clearance-slack-icon-1024.png` | the Slack app icon upload (Slack wants a square, 512-2000 px) |
 
 An amber `C`, a gauge arc open to the right, and a sky-blue check passing through the opening: a change that was
