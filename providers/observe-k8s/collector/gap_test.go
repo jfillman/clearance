@@ -424,3 +424,24 @@ func TestFinalizedDeleteDoesNotTakeAMetadataWriteToTheRecreateInsideTheSkew(t *t
 		}
 	}
 }
+
+// The create's audit time and its watch time differ (the API server's clock at the write, the collector's when it saw
+// it): a Metadata update stamped between the two, read after the watch's ADDED, is still a write to the recreate.
+func TestAWriteBetweenTheCreatesAuditAndWatchTimesIsTheRecreates(t *testing.T) {
+	yes := true
+	ms := func(d int) time.Time { return t0.Add(time.Duration(d) * time.Millisecond) }
+	g := NewGaps(3 * time.Minute)
+	c := testCache()
+	c.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "10", map[string]any{"v": "1"}), t0, true)
+	g.Watched(finalizedDelete(c, "13", ms(1000)))
+	g.AuditedVerb("ConfigMap", "shop", "web-config", "", "create", ms(1100), ms(1150))
+	add, _ := c.Put("ConfigMap", "ADDED", configMap("shop", "web-config", "14", map[string]any{"v": "1"}), ms(1300), false)
+	g.Watched(add)
+	g.AuditedVerb("ConfigMap", "shop", "web-config", "", "update", ms(1200), ms(1400))
+	g.AuditedWrite("ConfigMap", "shop", "web-config", "12", "patch", &yes, ms(990), ms(1500))
+	mod, _ := c.Put("ConfigMap", "MODIFIED", configMap("shop", "web-config", "15", map[string]any{"v": "2"}), ms(1600), false)
+	g.Watched(mod)
+	if got := g.Expired(t0.Add(10*time.Minute), 0); len(got) != 0 {
+		t.Fatalf("gaps %+v", got)
+	}
+}

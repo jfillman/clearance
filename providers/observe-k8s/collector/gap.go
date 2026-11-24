@@ -22,7 +22,7 @@ type Gaps struct {
 
 	mu       sync.Mutex
 	pending  []*pend
-	created  map[cacheKey]time.Time // the newest create of each object, from its audit event or its watch change
+	created  map[cacheKey][]time.Time // each object's recent creates, from their audit events and watch changes, both kept
 	audits   []auditSeen
 	matched  int
 	reported int
@@ -86,7 +86,7 @@ const finalizeSkew = 2 * time.Second
 // (that write came before the deletion, and so before any recreate). This is what tells a Metadata-level write (no
 // response object to read deletionTimestamp from) to the recreate inside the skew from the garbage collector's patch,
 // in either arrival order: the create's audit event is read before the later write's (one API server's audit stream is
-// in order), and the watch's ADDED counts too. The caller holds g.mu.
+// in order), and the watch's ADDED counts too, each at its own time. The caller holds g.mu.
 func (g *Gaps) canEnd(a auditSeen, watchAt time.Time) bool {
 	if !endsDelete(a.verb) || (a.marked != nil && !*a.marked) {
 		return false
@@ -95,20 +95,22 @@ func (g *Gaps) canEnd(a auditSeen, watchAt time.Time) bool {
 	if d < -finalizeSkew || d > g.Match {
 		return false
 	}
-	if c, ok := g.created[a.key]; ok && !c.Before(watchAt.Add(-finalizeSkew)) && !a.at.Before(c) {
-		return false // a write to the object recreated after the deletion
+	for _, c := range g.created[a.key] {
+		if !c.Before(watchAt.Add(-finalizeSkew)) && !a.at.Before(c) {
+			return false // a write to the object recreated after the deletion
+		}
 	}
 	return true
 }
 
-// sawCreate notes a create of the object at `at`. The caller holds g.mu.
+// sawCreate notes a create of the object at `at`. Every time is kept, not the newest: the audit event's time (the API
+// server's) and the watch's (when the collector saw it) of one create differ, and a write between the two must still be
+// told from the write that ended the delete. The caller holds g.mu.
 func (g *Gaps) sawCreate(k cacheKey, at time.Time) {
 	if g.created == nil {
-		g.created = map[cacheKey]time.Time{}
+		g.created = map[cacheKey][]time.Time{}
 	}
-	if c, ok := g.created[k]; !ok || at.After(c) {
-		g.created[k] = at
-	}
+	g.created[k] = append(g.created[k], at)
 }
 
 func (g *Gaps) same(a auditSeen, watchRV string, watchAt time.Time, finalized bool) bool {
@@ -188,9 +190,17 @@ func (g *Gaps) Expired(now time.Time, lag time.Duration) []Change {
 		}
 	}
 	g.audits = ak
-	for k, c := range g.created {
-		if now.Sub(c) > limit+g.Match {
+	for k, cs := range g.created {
+		keep := cs[:0]
+		for _, c := range cs {
+			if now.Sub(c) <= limit+g.Match {
+				keep = append(keep, c)
+			}
+		}
+		if len(keep) == 0 {
 			delete(g.created, k)
+		} else {
+			g.created[k] = keep
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].At.Before(out[j].At) })
