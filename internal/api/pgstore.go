@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -24,6 +25,10 @@ import (
 // of its task: the person who opened it, and every session spawned under it shares its task and its principal.
 type PG struct {
 	R *pg.Reader
+
+	// healthSrc: clearance_evidence_health_src was seen valid. The core builds it in the background after a start that
+	// adds it; until then HealthBefore keeps its one-pass statement (see there). Once valid it stays valid.
+	healthSrc atomic.Bool
 }
 
 var _ Store = (*PG)(nil)
@@ -268,9 +273,60 @@ func scopesSQL(v *Viewer, since, until string, limit int) (string, []any) {
 // records it returns and the anchors, not the history before them. (A window function over the scope's whole health
 // history found the same anchors, and read every record to do it: it passed the statement timeout on two weeks of a lab.)
 // The anchor is proved against clearance_evidence_health_ok's predicate, so the core's provider name is a literal here.
+//
+// Until the core has built clearance_evidence_health_src, each step of the source skip scan would walk the scope's
+// health history, once per source; the one-pass statement (healthBeforeOnePassSQL) walks it once. So the per-source
+// statement is used only once the index is valid (pg_index.indisvalid, the build's own readiness), checked per call
+// until it is, then remembered.
 func (s *PG) HealthBefore(ctx context.Context, v *Viewer, scope, before string) ([]Record, error) {
+	if !s.healthSrcReady(ctx) {
+		sql, args := healthBeforeOnePassSQL(v, scope, before)
+		return s.records(ctx, sql, args)
+	}
 	sql, args := healthBeforeSQL(v, scope, before)
 	return s.records(ctx, sql, args)
+}
+
+// HealthSrcIndex is the index HealthBefore's per-source statement reads (store/pg MapIndexes).
+const HealthSrcIndex = "clearance_evidence_health_src"
+
+func (s *PG) healthSrcReady(ctx context.Context) bool {
+	if s.healthSrc.Load() {
+		return true
+	}
+	rows, done, err := s.R.Query(ctx, "SELECT COALESCE((SELECT i.indisvalid FROM pg_index i WHERE i.indexrelid = to_regclass($1)), false)", HealthSrcIndex)
+	if err != nil {
+		return false
+	}
+	defer done()
+	defer rows.Close()
+	var ok bool
+	if rows.Next() && rows.Scan(&ok) == nil && ok {
+		s.healthSrc.Store(true)
+	}
+	return ok
+}
+
+// healthBeforeOnePassSQL is HealthBefore before clearance_evidence_health_src exists: one pass over the scope's health
+// records before `before` on clearance_evidence_health, the per-source anchor found by a window function.
+func healthBeforeOnePassSQL(v *Viewer, scope, before string) (string, []any) {
+	b := &q{}
+	with := b.evidenceScope(v)
+	b.add(observedTools)
+	b.add("e.record->>'tool' = 'observation.health'")
+	b.add("e.record->>'scope' = " + b.arg(scope))
+	b.add("e.record->>'ts' < " + b.arg(before))
+	core := b.arg(evidence.CoreProviderName)
+	pre := "h AS (SELECT e.seq, e.record, e.assurance, " +
+		"max(CASE WHEN COALESCE(e.record->'provider'->>'name', '') <> " + core + " AND e.record->'health'->>'state' = 'healthy' " +
+		"THEN e.seq END) OVER (PARTITION BY COALESCE(e.record->'source'->>'name', '')) AS aseq " +
+		"FROM clearance_evidence e WHERE " + b.sql() + ") "
+	if with == "" {
+		with = "WITH "
+	} else {
+		with = strings.TrimRight(with, " ") + ", "
+	}
+	return with + pre + "SELECT h.record::text, h.assurance FROM h WHERE h.seq >= COALESCE(h.aseq, -1) ORDER BY h.seq", b.args
 }
 
 // healthBeforeSQL is the statement of HealthBefore.

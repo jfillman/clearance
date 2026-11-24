@@ -22,7 +22,8 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
   one anchor probe each and a range from it; both read what they return. Two partial indexes, built by the core in the
   background as the Map's are: `clearance_evidence_health_page` (scope, seq, ts) for the health pages and the Map's
   health tail, and `clearance_evidence_health_src` (scope, source, seq, ts) for `HealthBefore`. Until they are built
-  the reads are as slow as before. The answers are unchanged. See docs/clearance-api.md, "Budget".
+  `Scopes` is fast regardless and `HealthBefore` keeps its one-pass statement (as slow as before) until
+  `clearance_evidence_health_src` is valid, then switches. The answers are unchanged. See docs/clearance-api.md, "Budget".
 
 ## [0.57.2] - 2026-11-23
 

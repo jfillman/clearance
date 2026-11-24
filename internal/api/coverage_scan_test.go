@@ -118,4 +118,41 @@ func TestCoverageScopeListAndHealthBeforeDoNotReadTheHealthHistory(t *testing.T)
 	if n > int64(len(want))+50 {
 		t.Errorf("HealthBefore read %d records to return %d: it must not read the history before the anchors", n, len(want))
 	}
+
+	// Until clearance_evidence_health_src is valid, HealthBefore keeps the one-pass statement (the per-source one would
+	// walk the history once per source without it), with the same answer; it switches once the index is valid.
+	if _, err := conn.Exec(bg, "DROP INDEX "+HealthSrcIndex); err != nil {
+		t.Fatal(err)
+	}
+	rdr, err := pg.OpenReader(bg, dsn, pg.Options{MaxConns: 1, Logger: quiet})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rdr.Close()
+	rd := &PG{R: rdr}
+	again := func() []int64 {
+		rs, err := rd.HealthBefore(bg, aud, "scope-a", ts(19940))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []int64
+		for _, r := range rs {
+			s, _ := seqOf(r)
+			out = append(out, s)
+		}
+		return out
+	}
+	if got := again(); !reflect.DeepEqual(got, want) || rd.healthSrc.Load() {
+		t.Fatalf("without the index: seqs %v (per-source chosen %v)", got, rd.healthSrc.Load())
+	}
+	for _, ix := range pg.MapIndexes {
+		if ix.Name == HealthSrcIndex {
+			if _, err := conn.Exec(bg, ix.DDL); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if got := again(); !reflect.DeepEqual(got, want) || !rd.healthSrc.Load() {
+		t.Fatalf("with the index: seqs %v (per-source chosen %v)", got, rd.healthSrc.Load())
+	}
 }
