@@ -56,7 +56,9 @@ type corpusLine struct {
 func corpusCases() []corpusCase {
 	const label, tmpl, img = "/metadata/labels/app.kubernetes.io~1version", "/spec/template/metadata/labels/app.kubernetes.io~1version", "/spec/template/spec/containers/0/image"
 	const rid = "/metadata/annotations/hangar.io~1release-id"
-	stamped := func(kind, name, api string, fields ...string) map[string]any { return obj(kind, name, "changed", fields, nil, api) }
+	stamped := func(kind, name, api string, fields ...string) map[string]any {
+		return obj(kind, name, "changed", fields, nil, api)
+	}
 	unprotected := map[string]any{"protected": false}
 	replaceReq := res("aws_instance.b", "aws_instance", replace)
 	replaceReq["actionReason"] = "replace_by_request"
@@ -66,7 +68,9 @@ func corpusCases() []corpusCase {
 		"fields": strs([]string{"/data/x"})}
 	m := func(name string, over map[string]any) corpusCase { return corpusCase{name, "lab", change(over)} }
 	mb := func(name, base string, over map[string]any) corpusCase { return corpusCase{name, base, change(over)} }
-	p := func(name string, subject, over map[string]any) corpusCase { return corpusCase{name, "lab", tfChange(subject, over)} }
+	p := func(name string, subject, over map[string]any) corpusCase {
+		return corpusCase{name, "lab", tfChange(subject, over)}
+	}
 	return []corpusCase{
 		// manifest-tree
 		m("docs only", map[string]any{"paths": strs([]string{"docs/runbook.md", "README.md"})}),

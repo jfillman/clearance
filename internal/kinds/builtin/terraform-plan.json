@@ -1,0 +1,52 @@
+{
+  "apiVersion": "clearance.kind/v1",
+  "name": "terraform-plan",
+  "version": 1,
+  "description": "A saved Terraform plan (the Terraform gate, clearance hold). An item is a resource change: type the resource type, id its address, op create, update, delete or replace, fields the JSON pointers an update changes. No-op and read resources change nothing and are not items. The root is plan/1, the sha256 of the saved plan file. Its tiers are the core's Go until SDK-6 moves them into rules (docs/gate.md, The terraform-plan subject).",
+  "root": "plan/1",
+  "builtin": true,
+  "itemTypes": [
+    {
+      "type": "*",
+      "description": "Any Terraform resource type (aws_iam_role, google_compute_firewall).",
+      "attrs": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["actions"],
+        "properties": {
+          "actions": {
+            "description": "Terraform's action list for the resource.",
+            "enum": [["create"], ["update"], ["delete"], ["delete", "create"], ["create", "delete"]]
+          },
+          "actionReason": {"type": "string", "pattern": "^[a-z_]{1,64}$", "description": "Terraform's action_reason (replace_by_request: -replace)."}
+        }
+      }
+    }
+  ],
+  "subjectSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["workspace", "versions", "targeted", "planJsonDigest", "variableSetDigest"],
+    "properties": {
+      "workspace": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["backend", "key", "name"],
+        "properties": {"backend": {"type": "string"}, "key": {"type": "string"}, "name": {"type": "string"}}
+      },
+      "versions": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["terraform", "providers"],
+        "properties": {
+          "terraform": {"type": "string"},
+          "providers": {"type": "object", "additionalProperties": {"type": "string"}}
+        }
+      },
+      "targeted": {"type": "boolean", "description": "The plan was made with -target."},
+      "planJsonDigest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+      "variableSetDigest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    }
+  },
+  "defaultTier": 2
+}

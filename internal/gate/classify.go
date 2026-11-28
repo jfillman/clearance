@@ -206,13 +206,20 @@ func Classify(req ChangeRequest, baseline Policy, tools review.Registry, problem
 		}
 	}
 	if req.Kind() == KindTerraformPlan {
-		return classifyPlan(req, pol, reasons), nil
-	}
-	for _, ch := range req.Objects {
-		if ch.Op == "unchanged" { // listed so a grant covers the whole rendered tree; it adds no risk to the diff
-			continue
+		d, err := Describe(req)
+		if err != nil {
+			return Classification{}, err
 		}
-		reasons = append(reasons, objectTier(ch, pol))
+		return classifyPlan(req, d, pol, reasons), nil
+	}
+	// The objects the change touches are the description's items (describe.go). An object listed as unchanged (so a
+	// grant covers the whole rendered tree) is not an item: it adds no risk to the diff.
+	d, err := Describe(req)
+	if err != nil {
+		return Classification{}, err
+	}
+	for _, it := range d.Items {
+		reasons = append(reasons, objectTier(itemObject(it), pol))
 	}
 	tier := maxTier(reasons)
 	if tier == 1 && req.LinesChanged > int64(pol.MaxLinesTier1) {

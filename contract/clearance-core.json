@@ -1033,6 +1033,153 @@
         ],
         "type": "object"
       },
+      "DescribeDescribedBy": {
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider"
+        ],
+        "type": "object"
+      },
+      "DescribeDescription": {
+        "additionalProperties": false,
+        "properties": {
+          "describedBy": {
+            "$ref": "#/components/schemas/DescribeDescribedBy"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DescribeItem"
+            },
+            "type": "array"
+          },
+          "source": {
+            "$ref": "#/components/schemas/DescribeSource"
+          },
+          "subject": {
+            "$ref": "#/components/schemas/DescribeSubject"
+          },
+          "target": {
+            "$ref": "#/components/schemas/DescribeTarget"
+          }
+        },
+        "required": [
+          "describedBy",
+          "items",
+          "source",
+          "subject",
+          "target"
+        ],
+        "type": "object"
+      },
+      "DescribeItem": {
+        "additionalProperties": false,
+        "properties": {
+          "attrs": {
+            "additionalProperties": {},
+            "type": "object"
+          },
+          "fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "op": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "op",
+          "type"
+        ],
+        "type": "object"
+      },
+      "DescribeSource": {
+        "additionalProperties": false,
+        "properties": {
+          "base": {
+            "type": "string"
+          },
+          "commit": {
+            "type": "string"
+          },
+          "pr": {
+            "type": "integer"
+          },
+          "repo": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "commit",
+          "repo"
+        ],
+        "type": "object"
+      },
+      "DescribeSubject": {
+        "additionalProperties": false,
+        "properties": {
+          "facts": {
+            "additionalProperties": {},
+            "type": "object"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "root": {
+            "type": "string"
+          },
+          "rootFn": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "root",
+          "rootFn",
+          "version"
+        ],
+        "type": "object"
+      },
+      "DescribeTarget": {
+        "additionalProperties": false,
+        "properties": {
+          "app": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "environment"
+        ],
+        "type": "object"
+      },
       "Effect": {
         "additionalProperties": false,
         "properties": {
@@ -8044,6 +8191,9 @@
         "x-clearance-max-body": 65536
       }
     }
+  },
+  "x-clearance-published-schemas": {
+    "DescribeDescription": "https://clearance.hangarplatform.dev/schemas/change-description/v1.json"
   },
   "x-clearance-record-kinds": [
     "session.open",

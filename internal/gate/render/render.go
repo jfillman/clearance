@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jfillman/clearance/internal/describe"
 	"github.com/jfillman/clearance/internal/pycompat"
 )
 
@@ -307,15 +308,14 @@ func ObjectDigest(d Doc) string {
 // TreeDigest is the manifest-tree digest of a rendered directory (docs/gate.md, "The manifest-tree digest"): one
 // line per object, "apiVersion/kind/namespace/name:" and its ObjectDigest (namespace empty when the object has
 // none), the lines sorted byte-wise and joined with "\n" (no trailing newline), and the lowercase hex sha256 of that.
-// It is what Glidepath's clearance-gate check computes for the same render, and what the Argo CD plugin stamps.
+// It is what Glidepath's clearance-gate check computes for the same render, and what the Argo CD plugin stamps. It is
+// manifest-tree's root function, tree/1 (internal/describe Tree1).
 func TreeDigest(after Set) string {
-	lines := make([]string, 0, len(after))
+	entries := make([]describe.TreeEntry, 0, len(after))
 	for k, d := range after {
-		lines = append(lines, strings.Join(k[:], "/")+":"+ObjectDigest(d))
+		entries = append(entries, describe.TreeEntry{APIVersion: k[0], Kind: k[1], Namespace: k[2], Name: k[3], Digest: ObjectDigest(d)})
 	}
-	sort.Strings(lines)
-	sum := sha256.Sum256([]byte(strings.Join(lines, "\n")))
-	return hex.EncodeToString(sum[:])
+	return describe.Tree1(entries)
 }
 
 // ChangedFiles is register.changed_files: the files that differ between the two directories, by relative path.

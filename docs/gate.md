@@ -1763,6 +1763,10 @@ is `CLEARANCE_GATE_UNBOUND_TREE` (chart `gate.unboundTree`):
 
 `clearance register` itself refuses an `--after` that holds no manifests (exit 2) rather than send the empty tree.
 
+The manifest-tree digest is the `tree/1` root function of the [generic change description](change-description.md)
+(SDK-1): the definition above, unchanged, implemented once in `internal/describe` (`Tree1`) and called by
+`render.TreeDigest`.
+
 ## The terraform-plan subject (G-TF-1)
 
 Status: **Built** in the core (classification, the request and the record); the hold, release and outcome on the
@@ -1799,7 +1803,10 @@ OIDC token, which registers for its own repository only, `DG-REPO`):
   (`actionReason`; `replace_by_request` is a `-replace`). The card's shape names only the summary; the resources were
   added because the tier table needs each resource's type and attributes, and the classifier names their addresses.
 - `summary` must be exactly what `resources` says (the counts, and `destroyedAddresses` = the addresses with
-  `["delete"]`), or the request is refused; a verifier cannot show a destroy in one and hide it from the other.
+  `["delete"]`), or the request is refused; a verifier cannot show a destroy in one and hide it from the other. Since
+  SDK-1 the core keeps the summary it derives from `resources`, never the caller's: the caller's is only compared
+  with it (the stored `destroyedAddresses` are in resource order). See
+  [the generic change description](change-description.md).
 - `targeted` says the plan was made with `-target`.
 - With a plan subject, `cluster` and `treeDigest` may be omitted (a `treeDigest` that is not the plan's digest is
   refused), `objects` must be empty and `definition` absent. The change's `tree_digest` is `planDigest`, so the

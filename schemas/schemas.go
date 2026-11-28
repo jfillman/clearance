@@ -26,3 +26,14 @@ var ChangeAttestationV1 []byte
 //
 //go:embed statement.schema.json
 var StatementV1 []byte
+
+// ChangeDescriptionV1 is schemas/change-description.schema.json: the generic change description (SDK-1) that
+// internal/describe Parse decodes, and that the core maps the built-in kinds' requests onto.
+//
+//go:embed change-description.schema.json
+var ChangeDescriptionV1 []byte
+
+// KindV1 is schemas/kind.schema.json: clearance.kind/v1, a subject kind as data (internal/kinds Parse).
+//
+//go:embed kind.schema.json
+var KindV1 []byte

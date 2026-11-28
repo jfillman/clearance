@@ -11,13 +11,39 @@ import (
 	"time"
 
 	"github.com/jfillman/clearance/internal/decide"
+	"github.com/jfillman/clearance/internal/describe"
 	"github.com/jfillman/clearance/internal/gate"
+	"github.com/jfillman/clearance/schemas"
 )
 
 //go:generate go run ../../tools/contract -o ../../contract/clearance-core.json
 
 // ContractVersion is the contract's info.version: bumped by hand on a breaking change to a route.
 const ContractVersion = "1.0.0"
+
+// PublishedSchema is a type the contract carries as a component although no route takes it yet, because it is a
+// published schema (schemas/, by its $id) that providers and SDKs build against. Its components are strict, as a
+// request body's are, and TestPublishedSchemasMatchTheContract holds them equal to the schema file.
+type PublishedSchema struct {
+	Type   any
+	Schema []byte // the schema file's bytes (package schemas)
+}
+
+// ID is the schema file's $id.
+func (p PublishedSchema) ID() (string, error) {
+	var s struct {
+		ID string `json:"$id"`
+	}
+	if err := json.Unmarshal(p.Schema, &s); err != nil || s.ID == "" {
+		return "", fmt.Errorf("contract: a published schema has no $id: %v", err)
+	}
+	return s.ID, nil
+}
+
+// PublishedSchemas: the generic change description (SDK-1). SDK-9's explain route will take it as its body.
+var PublishedSchemas = []PublishedSchema{
+	{describe.Description{}, schemas.ChangeDescriptionV1},
+}
 
 // ContractPath is the committed contract, relative to the module root.
 const ContractPath = "contract/clearance-core.json"
@@ -33,6 +59,9 @@ func Contract() ([]byte, error) {
 		if rt.Request != nil {
 			g.markStrict(reflect.TypeOf(rt.Request))
 		}
+	}
+	for _, p := range PublishedSchemas {
+		g.markStrict(reflect.TypeOf(p.Type))
 	}
 	paths := map[string]any{}
 	for _, rt := range Routes() {
@@ -93,6 +122,15 @@ func Contract() ([]byte, error) {
 		}
 		item[strings.ToLower(rt.Method)] = op
 	}
+	published := map[string]any{}
+	for _, p := range PublishedSchemas {
+		ref := g.schema(reflect.TypeOf(p.Type))["$ref"].(string)
+		id, err := p.ID()
+		if err != nil {
+			return nil, err
+		}
+		published[strings.TrimPrefix(ref, "#/components/schemas/")] = id
+	}
 	if g.err != nil {
 		return nil, g.err
 	}
@@ -108,6 +146,8 @@ func Contract() ([]byte, error) {
 			"securitySchemes": map[string]any{"bearer": map[string]any{"type": "http", "scheme": "bearer"}},
 		},
 		"x-clearance-record-kinds": RecordKinds,
+		// The components that are a published schema of schemas/, by its $id; the drift test holds them equal.
+		"x-clearance-published-schemas": published,
 	}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
