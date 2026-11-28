@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"strings"
 )
@@ -58,16 +59,23 @@ type ForeignCluster struct {
 }
 
 // parseForeignClusters reads CLEARANCE_FOREIGN_CLUSTERS and refuses an entry that is incomplete, an issuer that is not
-// https, and two entries (or an entry and the single-cluster form, named by single) with the same issuer or cluster name.
+// https (a jwksURL too: keys fetched in cleartext can be swapped), an issuer another route already owns (reserved:
+// issuer to what owns it), trailing text after the list, and two entries (or an entry and the single-cluster form, named by single) with the same issuer or cluster name.
 // Issuers are returned without a trailing "/".
-func parseForeignClusters(raw string, single *ForeignCluster) ([]ForeignCluster, error) {
+func parseForeignClusters(raw string, single *ForeignCluster, reserved map[string]string) ([]ForeignCluster, error) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, nil
 	}
 	var list []ForeignCluster
 	dec := json.NewDecoder(bytes.NewReader([]byte(raw)))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&list); err != nil {
+	err := dec.Decode(&list)
+	if err == nil {
+		if _, e := dec.Token(); e != io.EOF {
+			err = errors.New("text after the list")
+		}
+	}
+	if err != nil {
 		return nil, fmt.Errorf("CLEARANCE_FOREIGN_CLUSTERS is not a JSON list of {cluster, issuer, serviceAccounts, jwksURL}: %w", err)
 	}
 	issuers, names := map[string]bool{}, map[string]bool{}
@@ -90,6 +98,14 @@ func parseForeignClusters(raw string, single *ForeignCluster) ([]ForeignCluster,
 		}
 		if u, err := url.Parse(c.Issuer); err != nil || u.Scheme != "https" || u.Host == "" {
 			return nil, fmt.Errorf("%s (%s): issuer %q is not an https URL", where, c.Cluster, c.Issuer)
+		}
+		if c.JWKSURL != "" {
+			if u, err := url.Parse(c.JWKSURL); err != nil || u.Scheme != "https" || u.Host == "" {
+				return nil, fmt.Errorf("%s (%s): jwksURL %q is not an https URL", where, c.Cluster, c.JWKSURL)
+			}
+		}
+		if what, ok := reserved[c.Issuer]; ok {
+			return nil, fmt.Errorf("%s (%s): issuer %q is already the %s issuer", where, c.Cluster, c.Issuer, what)
 		}
 		if issuers[c.Issuer] {
 			return nil, fmt.Errorf("%s (%s): issuer %q is already named by another foreign cluster", where, c.Cluster, c.Issuer)
@@ -134,7 +150,11 @@ func FromEnv(getenv func(string) string) (Authenticator, error) {
 	if towerIssuer != "" {
 		single = &ForeignCluster{Cluster: towerCluster, Issuer: towerIssuer}
 	}
-	foreign, err := parseForeignClusters(getenv("CLEARANCE_FOREIGN_CLUSTERS"), single)
+	reserved := map[string]string{GitHubActionsIssuer: "GitHub Actions"}
+	if issuer != "" {
+		reserved[issuer] = "CLEARANCE_OIDC_ISSUER"
+	}
+	foreign, err := parseForeignClusters(getenv("CLEARANCE_FOREIGN_CLUSTERS"), single, reserved)
 	if err != nil {
 		return nil, err
 	}
