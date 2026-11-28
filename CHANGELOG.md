@@ -9,6 +9,12 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+## [0.58.0] - 2026-11-28
+
+This release is **expand-only**: its one migration (1, the existing idempotent DDL) is an expand migration, `min_core` stays
+0.0.0 and the compatibility row is not no-rollback, so rolling back to the previous core on the upgraded schema works
+(a core before this release has no version guard and simply runs).
+
 ### Added
 
 - **The core trusts several foreign clusters (`CLEARANCE_FOREIGN_CLUSTERS`, chart `foreignClusters`).** A JSON list of
