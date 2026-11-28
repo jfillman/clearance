@@ -836,6 +836,10 @@ vocabulary (`vocabulary.*`): see [install.md](install.md).
   feed and the tokens it lists) and the index `clearance_evidence_app` (`((record->>'principal'), seq)` where the
   principal is `app:%`: the GitHub App installations' records, for clearance-api). The chart's reader role reads them through its default privileges. The gateway's
   tables (sessions, artifacts, inbox, events, holds, results) are not the core's and are left alone.
+- **Versioned migrations (N-6).** The DDL above is migration 1 (`baseline`); a database from before N-6 adopts it with no
+  DDL change (it is recorded in `clearance_schema`, and nothing else is touched), and later changes are further
+  migrations, each in one transaction under the writer lock, forward only. A core refuses to start, with the code
+  `schema_requires_newer_core`, when the schema needs a newer core than it is. See [Upgrading](upgrade.md).
 - **One writer.** Opening a writable store takes the advisory lock the Python core takes (`LockKey`, pg.py's
   `"clr0"`) on a dedicated connection and holds it for the store's life. Every write runs on that connection, and a
   second writer, Python or Go, fails to open, because two writers would fork the chain.

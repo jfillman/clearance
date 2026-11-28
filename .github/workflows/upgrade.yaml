@@ -1,0 +1,76 @@
+name: upgrade
+# The whole-install upgrade test (N-6f; tools/upgrade-test/run.sh): the previous release's chart and image on a fresh kind
+# cluster with a plain Postgres, traffic, the pre-upgrade backup, the upgrade to this checkout's chart and image (its
+# migrations run at core start), traffic and a chain verify, then either the rollback to the previous core on the upgraded
+# schema (an expand-only release) or the previous core's refusal and the restore from the backup (a no-rollback release,
+# which internal/compat/compat.json marks). release.yaml calls this workflow (workflow_call, `upgrade-gates`) on the tagged
+# commit before it builds anything, so a release that cannot be upgraded to, or rolled back from as it claims, is not tagged.
+on:
+  pull_request:
+    paths:
+      - "internal/store/**"
+      - "internal/compat/**"
+      - "internal/core/**"
+      - "charts/clearance/**"
+      - "tools/upgrade-test/**"
+      - ".github/workflows/upgrade.yaml"
+  push:
+    branches: [main]
+    paths:
+      - "internal/store/**"
+      - "internal/compat/**"
+      - "charts/clearance/**"
+      - "tools/upgrade-test/**"
+      - ".github/workflows/upgrade.yaml"
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  HELM_VERSION: v3.21.3
+  KIND_VERSION: v0.33.0
+  KIND_NODE_IMAGE: kindest/node:v1.35.8@sha256:07b2536e30b803ed61d1677a79df6115f798ce64c80f9e22f6ed45afd09323c0
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: azure/setup-helm@v4.3.0
+        with:
+          version: ${{ env.HELM_VERSION }}
+      - name: the previous release's checkout, and the candidate's version
+        run: |
+          set -euo pipefail
+          prev="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname --no-contains HEAD | head -1)"
+          test -n "$prev"
+          echo "previous release: $prev"
+          git worktree add --detach "$RUNNER_TEMP/prev" "$prev"
+          echo "PREV_TAG=$prev" >> "$GITHUB_ENV"
+          echo "VERSION=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_ENV"
+      # Both images are built here, for the runner's architecture, and never pushed (the install test does the same).
+      - name: build the previous and the candidate images, and the installtest client
+        run: |
+          set -euo pipefail
+          docker build --build-arg VERSION="${PREV_TAG}" -t clearance:prev "$RUNNER_TEMP/prev"
+          docker build --build-arg VERSION="${VERSION}" -t clearance:ci .
+          docker build --target installtest -t installtest:ci .
+        env:
+          DOCKER_BUILDKIT: "1"
+      - uses: helm/kind-action@v1.15.0
+        with:
+          version: ${{ env.KIND_VERSION }}
+          node_image: ${{ env.KIND_NODE_IMAGE }}
+          cluster_name: clearance
+      - run: kind load docker-image clearance:prev clearance:ci installtest:ci --name clearance
+      - name: upgrade test
+        env:
+          PREV_CHART: ${{ runner.temp }}/prev/charts/clearance
+          PREV_TAG: prev
+          NEW_CHART: charts/clearance
+          NEW_TAG: ci
+          INSTALLTEST_IMAGE: installtest:ci
+          COMPAT: internal/compat/compat.json
+        run: tools/upgrade-test/run.sh

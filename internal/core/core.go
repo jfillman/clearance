@@ -478,7 +478,7 @@ func Build(ctx context.Context, cfg Config, clock func() time.Time, log *slog.Lo
 	case cfg.DSN == "":
 		return nil, errors.New("core: CLEARANCE_DSN is required (or --memory for an in-memory store, tests only)")
 	default:
-		p, err := pg.Open(ctx, cfg.DSN, pg.Options{Logger: log})
+		p, err := pg.Open(ctx, cfg.DSN, pg.Options{Logger: log, CoreVersion: cfg.Version})
 		if err != nil {
 			return nil, fmt.Errorf("core: opening the store: %w", err)
 		}

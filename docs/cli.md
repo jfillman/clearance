@@ -126,6 +126,22 @@ noted. Events print as lines (`-o table`), or as the event's JSON per line.
 against one without them the command says so (exit 6) instead of failing obscurely. `inbox` and `whoami` need the api
 release that carries `awaiting=me` and `/v1/whoami`.
 
+## `clearance upgrade check`
+
+What upgrading to a release changes and what must go first (N-6d):
+
+```
+clearance upgrade check --to v0.60.0 --url https://clearance.example.com --token-file /path/to/token \
+  --provider argocd-agent=0.58.0 --provider observe-k8s=0.58.0
+```
+
+It reads the running core's `GET /v1/version` (or `--current-file` with a saved answer), the target release's
+`compat.json` and notes (release assets; `--compat` and `--notes` take a file or an https URL instead), and prints what the
+schema does, whether the release is **no-rollback**, which providers the target core would refuse (they go first), and the
+release-note lines about migrations and upgrade steps. Exit 1 when something blocks (a target older than the running core or
+the data, a core older than the schema's `min_core`). It does not run `clearance doctor`, which does not exist yet (N-3);
+it says so. See [Upgrading](upgrade.md).
+
 ## Exit codes
 
 | Code | Meaning |

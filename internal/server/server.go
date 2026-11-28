@@ -203,7 +203,7 @@ func New(ctx context.Context, opt Options) (*Server, error) {
 	if opt.DevRecords {
 		s.mux.HandleFunc("GET "+DevRecordsPath, s.devRecords)
 	}
-	s.handler = s.recoverer(s.accessLog(s.bodyCap(authn.Middleware(opt.Auth, unauthenticated)(notePrincipal(s.mux)))))
+	s.handler = s.recoverer(s.accessLog(s.providerVersion(s.bodyCap(authn.Middleware(opt.Auth, unauthenticated)(notePrincipal(s.mux))))))
 	return s, nil
 }
 
@@ -548,6 +548,8 @@ type Attestation struct {
 // ErrorResponse is every refusal of this package's routes.
 type ErrorResponse struct {
 	Error string `json:"error"`
+	// Code names the refusal when it has a stable name (provider_version_unsupported); absent otherwise.
+	Code string `json:"code,omitempty"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) { httpjson.Write(w, status, v) }
