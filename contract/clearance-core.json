@@ -57,6 +57,64 @@
         ],
         "type": "object"
       },
+      "CompatRange": {
+        "properties": {
+          "max": {
+            "type": "string"
+          },
+          "min": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "CompatRelease": {
+        "properties": {
+          "core": {
+            "type": "string"
+          },
+          "min_core": {
+            "type": "string"
+          },
+          "no_rollback": {
+            "type": "boolean"
+          },
+          "providers": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CompatRange"
+            },
+            "type": "object"
+          },
+          "schema_version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "core",
+          "min_core",
+          "no_rollback",
+          "schema_version"
+        ],
+        "type": "object"
+      },
+      "CompatTable": {
+        "properties": {
+          "format": {
+            "type": "integer"
+          },
+          "releases": {
+            "items": {
+              "$ref": "#/components/schemas/CompatRelease"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "format",
+          "releases"
+        ],
+        "type": "object"
+      },
       "Cost": {
         "additionalProperties": false,
         "properties": {
@@ -1215,6 +1273,9 @@
       },
       "ErrorResponse": {
         "properties": {
+          "code": {
+            "type": "string"
+          },
           "error": {
             "type": "string"
           }
@@ -4447,6 +4508,70 @@
         ],
         "type": "object"
       },
+      "StoreAppliedMigration": {
+        "properties": {
+          "adopted": {
+            "type": "boolean"
+          },
+          "applied_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "applied_by_core": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "min_core": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "release": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "applied_at",
+          "kind",
+          "min_core",
+          "name",
+          "release",
+          "version"
+        ],
+        "type": "object"
+      },
+      "StoreSchemaInfo": {
+        "properties": {
+          "migrations": {
+            "items": {
+              "$ref": "#/components/schemas/StoreAppliedMigration"
+            },
+            "type": "array"
+          },
+          "min_core": {
+            "type": "string"
+          },
+          "no_rollback": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "migrations",
+          "min_core",
+          "no_rollback",
+          "version"
+        ],
+        "type": "object"
+      },
       "TargetsGate": {
         "additionalProperties": false,
         "properties": {
@@ -4737,6 +4862,31 @@
         ],
         "type": "object"
       },
+      "VersionResponse": {
+        "properties": {
+          "compat": {
+            "$ref": "#/components/schemas/CompatTable"
+          },
+          "core": {
+            "type": "string"
+          },
+          "schema": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StoreSchemaInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "compat",
+          "core"
+        ],
+        "type": "object"
+      },
       "WaitAnswer": {
         "properties": {
           "app": {
@@ -4908,6 +5058,16 @@
               }
             },
             "description": "the caller may not do this"
+          },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the provider's Clearance-Provider version is outside the range this core accepts (code provider_version_unsupported)"
           },
           "413": {
             "content": {
@@ -5083,6 +5243,16 @@
               }
             },
             "description": "an as_of more than 24 hours back without backdate: true; says how many recorded receipts it would fail"
+          },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the provider's Clearance-Provider version is outside the range this core accepts (code provider_version_unsupported)"
           },
           "413": {
             "content": {
@@ -6074,6 +6244,16 @@
             },
             "description": "the request conflicts with what is recorded"
           },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the provider's Clearance-Provider version is outside the range this core accepts (code provider_version_unsupported)"
+          },
           "413": {
             "content": {
               "application/json": {
@@ -6169,6 +6349,16 @@
             },
             "description": "no such resource"
           },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the provider's Clearance-Provider version is outside the range this core accepts (code provider_version_unsupported)"
+          },
           "413": {
             "content": {
               "application/json": {
@@ -6254,6 +6444,16 @@
               }
             },
             "description": "the caller may not do this"
+          },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the provider's Clearance-Provider version is outside the range this core accepts (code provider_version_unsupported)"
           },
           "413": {
             "content": {
@@ -6372,6 +6572,16 @@
             },
             "description": "the key set"
           },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the provider's Clearance-Provider version is outside the range this core accepts (code provider_version_unsupported)"
+          },
           "503": {
             "content": {
               "application/json": {
@@ -6472,6 +6682,16 @@
               }
             },
             "description": "the request conflicts with what is recorded"
+          },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the provider's Clearance-Provider version is outside the range this core accepts (code provider_version_unsupported)"
           },
           "413": {
             "content": {
@@ -6759,6 +6979,16 @@
             },
             "description": "the request conflicts with what is recorded"
           },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the provider's Clearance-Provider version is outside the range this core accepts (code provider_version_unsupported)"
+          },
           "413": {
             "content": {
               "application/json": {
@@ -6969,6 +7199,16 @@
             },
             "description": "no such resource"
           },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the provider's Clearance-Provider version is outside the range this core accepts (code provider_version_unsupported)"
+          },
           "413": {
             "content": {
               "application/json": {
@@ -7082,6 +7322,16 @@
             },
             "description": "no such resource"
           },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the provider's Clearance-Provider version is outside the range this core accepts (code provider_version_unsupported)"
+          },
           "413": {
             "content": {
               "application/json": {
@@ -7177,6 +7427,16 @@
               }
             },
             "description": "no such resource"
+          },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the provider's Clearance-Provider version is outside the range this core accepts (code provider_version_unsupported)"
           },
           "413": {
             "content": {
@@ -7392,6 +7652,16 @@
             },
             "description": "no such resource"
           },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the provider's Clearance-Provider version is outside the range this core accepts (code provider_version_unsupported)"
+          },
           "503": {
             "content": {
               "application/json": {
@@ -7497,6 +7767,16 @@
             },
             "description": "the request conflicts with what is recorded"
           },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the provider's Clearance-Provider version is outside the range this core accepts (code provider_version_unsupported)"
+          },
           "413": {
             "content": {
               "application/json": {
@@ -7593,6 +7873,16 @@
             },
             "description": "the caller may not do this"
           },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the provider's Clearance-Provider version is outside the range this core accepts (code provider_version_unsupported)"
+          },
           "413": {
             "content": {
               "application/json": {
@@ -7667,6 +7957,16 @@
               }
             },
             "description": "the caller may not do this"
+          },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the provider's Clearance-Provider version is outside the range this core accepts (code provider_version_unsupported)"
           },
           "413": {
             "content": {
@@ -7785,6 +8085,16 @@
             },
             "description": "the caller may not do this"
           },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the provider's Clearance-Provider version is outside the range this core accepts (code provider_version_unsupported)"
+          },
           "503": {
             "content": {
               "application/json": {
@@ -7877,6 +8187,16 @@
               }
             },
             "description": "the request conflicts with what is recorded"
+          },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the provider's Clearance-Provider version is outside the range this core accepts (code provider_version_unsupported)"
           },
           "413": {
             "content": {
@@ -7983,6 +8303,16 @@
             },
             "description": "no such resource"
           },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the provider's Clearance-Provider version is outside the range this core accepts (code provider_version_unsupported)"
+          },
           "413": {
             "content": {
               "application/json": {
@@ -8077,6 +8407,16 @@
               }
             },
             "description": "the caller may not do this"
+          },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the provider's Clearance-Provider version is outside the range this core accepts (code provider_version_unsupported)"
           },
           "413": {
             "content": {
@@ -8188,6 +8528,61 @@
         "security": [],
         "summary": "An HCP Terraform run task (G-TF-6): verified by its HMAC-SHA512 signature (X-TFC-Task-Signature), the plan JSON is read with the run's access token, the plan is registered as a terraform-plan change, and the run task's result is reported to HCP Terraform (running, then passed or failed). Answered 200 at once.",
         "x-clearance-auth": "hcp-signature",
+        "x-clearance-max-body": 65536
+      }
+    },
+    "/v1/version": {
+      "get": {
+        "operationId": "getVersion",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionResponse"
+                }
+              }
+            },
+            "description": "the version, schema and table"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "no bearer token, or one the authenticator refused"
+          },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the provider's Clearance-Provider version is outside the range this core accepts (code provider_version_unsupported)"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the store could not record it: treat as unreachable (fail closed)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The core's release, its database schema (version, the oldest core that can run on it, the migrations applied: N-6) and the compatibility table: for each release, its schema, whether it is no-rollback, and the provider versions its core accepts. A provider sends its own as `Clearance-Provider: <program>/<version>` and a version outside the range is refused 412 with code provider_version_unsupported. `clearance upgrade check` and doctor read this.",
+        "x-clearance-auth": "bearer",
         "x-clearance-max-body": 65536
       }
     }

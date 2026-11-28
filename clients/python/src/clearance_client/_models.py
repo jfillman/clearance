@@ -18,7 +18,7 @@ CONTRACT_VERSION = "1.0.0"
 
 RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "run.finish", "human.answer", "session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome", "deploy.exception", "deploy.degraded", "federated.decision", "observation", "assessment", "resolution", "observation.health", "observation.verification", "grc.push", "grc.report")
 
-__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BackdateRefusal", "BreakglassList", "Budgets", "BundleRef", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Delivery", "DeliveryRequest", "DeliveryRevoked", "DeliveryWindow", "DescribeDescribedBy", "DescribeDescription", "DescribeItem", "DescribeSource", "DescribeSubject", "DescribeTarget", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBehind", "GateBreakglass", "GateBreakglassRequest", "GateBulkResolutionFailed", "GateBulkResolutionRecorded", "GateBulkResolutionRequest", "GateBulkResolutionResult", "GateBulkResolutionSkipped", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateProtectedPair", "GateReason", "GateRequirement", "GateResolutionRecorded", "GateResolutionRequest", "GateResource", "GateSourcePeople", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "IndexStatus", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PacketBundle", "PacketCheckpointRef", "PacketError", "PacketLinks", "PacketMeta", "PacketPublished", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProtectionCluster", "ProtectionRequest", "ProtectionResult", "ProtectionState", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProvidedDefinition", "ProviderEvent", "Ready", "ReceiptRecorded", "RecipientKeyRevokeRequest", "RecipientKeyRevoked", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "RevokeRequest", "SamplingCheckpoint", "SamplingDocument", "SamplingItem", "SamplingPacketRef", "SamplingParams", "SamplingPopulationDoc", "SamplingProof", "SamplingRecorded", "SamplingRow", "SamplingStratum", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "StatementIssued", "StatementLinks", "StatementList", "StatementListItem", "StatementRequest", "StatementRevokeRequest", "StatementRevoked", "Subject", "SubjectProperties", "TargetsGate", "TargetsObserver", "TargetsRequest", "TargetsResult", "TargetsTarget", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenKeyRevoked", "TokenSignature", "Usage", "WaitAnswer", "WebhookAnswer"]
+__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BackdateRefusal", "BreakglassList", "Budgets", "BundleRef", "CompatRange", "CompatRelease", "CompatTable", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Delivery", "DeliveryRequest", "DeliveryRevoked", "DeliveryWindow", "DescribeDescribedBy", "DescribeDescription", "DescribeItem", "DescribeSource", "DescribeSubject", "DescribeTarget", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBehind", "GateBreakglass", "GateBreakglassRequest", "GateBulkResolutionFailed", "GateBulkResolutionRecorded", "GateBulkResolutionRequest", "GateBulkResolutionResult", "GateBulkResolutionSkipped", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateProtectedPair", "GateReason", "GateRequirement", "GateResolutionRecorded", "GateResolutionRequest", "GateResource", "GateSourcePeople", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "IndexStatus", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PacketBundle", "PacketCheckpointRef", "PacketError", "PacketLinks", "PacketMeta", "PacketPublished", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProtectionCluster", "ProtectionRequest", "ProtectionResult", "ProtectionState", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProvidedDefinition", "ProviderEvent", "Ready", "ReceiptRecorded", "RecipientKeyRevokeRequest", "RecipientKeyRevoked", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "RevokeRequest", "SamplingCheckpoint", "SamplingDocument", "SamplingItem", "SamplingPacketRef", "SamplingParams", "SamplingPopulationDoc", "SamplingProof", "SamplingRecorded", "SamplingRow", "SamplingStratum", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "StatementIssued", "StatementLinks", "StatementList", "StatementListItem", "StatementRequest", "StatementRevokeRequest", "StatementRevoked", "StoreAppliedMigration", "StoreSchemaInfo", "Subject", "SubjectProperties", "TargetsGate", "TargetsObserver", "TargetsRequest", "TargetsResult", "TargetsTarget", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenKeyRevoked", "TokenSignature", "Usage", "VersionResponse", "WaitAnswer", "WebhookAnswer"]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -163,6 +163,54 @@ class BundleRef(Model):
     status: str
     unavailable: list[SourceFailure] | None = None
     version: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class CompatRange(Model):
+    """Contract schema CompatRange."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("max", "max", ("str",), False),
+        Field("min", "min", ("str",), False),
+    )
+
+    max: str | None = None
+    min: str | None = None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class CompatRelease(Model):
+    """Contract schema CompatRelease."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("core", "core", ("str",), True),
+        Field("min_core", "min_core", ("str",), True),
+        Field("no_rollback", "no_rollback", ("bool",), True),
+        Field("providers", "providers", ("map", ("ref", "CompatRange")), False),
+        Field("schema_version", "schema_version", ("int",), True),
+    )
+
+    core: str
+    min_core: str
+    no_rollback: bool
+    providers: dict[str, CompatRange] | None = None
+    schema_version: int
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class CompatTable(Model):
+    """Contract schema CompatTable."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("format", "format", ("int",), True),
+        Field("releases", "releases", ("list", ("ref", "CompatRelease")), True),
+    )
+
+    format: int
+    releases: list[CompatRelease]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -567,9 +615,11 @@ class ErrorResponse(Model):
 
     _STRICT: ClassVar[bool] = False
     _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("code", "code", ("str",), False),
         Field("error", "error", ("str",), True),
     )
 
+    code: str | None = None
     error: str
 
 
@@ -2938,6 +2988,50 @@ class StatementRevoked(Model):
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
+class StoreAppliedMigration(Model):
+    """Contract schema StoreAppliedMigration."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("adopted", "adopted", ("bool",), False),
+        Field("applied_at", "applied_at", ("datetime",), True),
+        Field("applied_by_core", "applied_by_core", ("str",), False),
+        Field("kind", "kind", ("str",), True),
+        Field("min_core", "min_core", ("str",), True),
+        Field("name", "name", ("str",), True),
+        Field("release", "release", ("str",), True),
+        Field("version", "version", ("int",), True),
+    )
+
+    adopted: bool | None = None
+    applied_at: datetime.datetime
+    applied_by_core: str | None = None
+    kind: str
+    min_core: str
+    name: str
+    release: str
+    version: int
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class StoreSchemaInfo(Model):
+    """Contract schema StoreSchemaInfo."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("migrations", "migrations", ("list", ("ref", "StoreAppliedMigration")), True),
+        Field("min_core", "min_core", ("str",), True),
+        Field("no_rollback", "no_rollback", ("bool",), True),
+        Field("version", "version", ("int",), True),
+    )
+
+    migrations: list[StoreAppliedMigration]
+    min_core: str
+    no_rollback: bool
+    version: int
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
 class Subject(Model):
     """Contract schema DecideSubject (a request type: unknown keys are refused by the core)."""
 
@@ -3176,6 +3270,22 @@ class Usage(Model):
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
+class VersionResponse(Model):
+    """Contract schema VersionResponse."""
+
+    _STRICT: ClassVar[bool] = False
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("compat", "compat", ("ref", "CompatTable"), True),
+        Field("core", "core", ("str",), True),
+        Field("schema", "schema", ("nullable", ("ref", "StoreSchemaInfo")), False),
+    )
+
+    compat: CompatTable
+    core: str
+    schema: StoreSchemaInfo | None = None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
 class WaitAnswer(Model):
     """Contract schema WaitAnswer."""
 
@@ -3238,6 +3348,9 @@ MODELS: dict[str, type[Model]] = {
     "BreakglassList": BreakglassList,
     "Budgets": Budgets,
     "BundleRef": BundleRef,
+    "CompatRange": CompatRange,
+    "CompatRelease": CompatRelease,
+    "CompatTable": CompatTable,
     "Context": Context,
     "Cost": Cost,
     "DecisionContext": DecisionContext,
@@ -3360,6 +3473,8 @@ MODELS: dict[str, type[Model]] = {
     "StatementRequest": StatementRequest,
     "StatementRevokeRequest": StatementRevokeRequest,
     "StatementRevoked": StatementRevoked,
+    "StoreAppliedMigration": StoreAppliedMigration,
+    "StoreSchemaInfo": StoreSchemaInfo,
     "Subject": Subject,
     "SubjectProperties": SubjectProperties,
     "TargetsGate": TargetsGate,
@@ -3373,6 +3488,7 @@ MODELS: dict[str, type[Model]] = {
     "TokenKeyRevoked": TokenKeyRevoked,
     "TokenSignature": TokenSignature,
     "Usage": Usage,
+    "VersionResponse": VersionResponse,
     "WaitAnswer": WaitAnswer,
     "WebhookAnswer": WebhookAnswer,
 }
@@ -3415,4 +3531,5 @@ OPERATIONS: dict[str, Operation] = {
     "revokeStatement": Operation("POST", "/v1/statements/{id}/revoke", "bearer", 4096, StatementRevokeRequest, StatementRevoked),
     "publishTargets": Operation("PUT", "/v1/targets/{source}", "provider", 4194304, TargetsRequest, TargetsResult),
     "hcpRunTask": Operation("POST", "/v1/terraform/run-task", "hcp-signature", 65536, None, HcprunAnswer),
+    "getVersion": Operation("GET", "/v1/version", "bearer", 65536, None, VersionResponse),
 }

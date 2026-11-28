@@ -5,6 +5,7 @@ nav:
   - Home: index.md
   - Installing (image and Helm chart): install.md
   - The Go core (clearance): core.md
+  - Upgrading, rolling back and version skew (N-6): upgrade.md
   - The read API and the write path (clearance-api): clearance-api.md
   - TLS to the core and the API: tls.md
   - The person CLI (clearance, clr): cli.md

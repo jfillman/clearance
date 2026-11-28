@@ -58,6 +58,16 @@ jobs:
       contents: read
     uses: ./.github/workflows/go.yaml
 
+  # The whole-install upgrade test (.github/workflows/upgrade.yaml, N-6f) on the tagged commit: previous release to this one,
+  # then the rollback this release's compatibility row promises (expand-only) or the refusal and the restore (no-rollback).
+  # Like the others, it gates every image and chart. The first release that ships it has no earlier guarded release to refuse
+  # a schema, so it runs the expand-only branch.
+  upgrade-gates:
+    needs: check
+    permissions:
+      contents: read
+    uses: ./.github/workflows/upgrade.yaml
+
   chart-gates:
     needs: check
     permissions:
@@ -94,7 +104,7 @@ jobs:
   # signed keyless with this workflow's GitHub OIDC identity, and a standalone SPDX SBOM is attested and attached to
   # the GitHub Release.
   image:
-    needs: [check, cmp-gates, go-gates, chart-gates]
+    needs: [check, cmp-gates, go-gates, chart-gates, upgrade-gates]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -157,7 +167,7 @@ jobs:
   # amd64 and arm64, SBOM and provenance on the index, the index signed keyless with this workflow's identity. Each
   # leg uploads its index digest as an artifact for the release notes.
   provider-images:
-    needs: [check, cmp-gates, go-gates, chart-gates]
+    needs: [check, cmp-gates, go-gates, chart-gates, upgrade-gates]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -455,7 +465,7 @@ jobs:
 
   release:
     # cmp-published: the pushed clearance-cmp image passed the smoke test on amd64 and on arm64.
-    needs: [check, cmp-gates, go-gates, chart-gates, wheel, image, chart, provider-images, cmp-published, observe-k8s-chart, agent-chart, observe-aws-chart, install-test]
+    needs: [check, cmp-gates, go-gates, chart-gates, upgrade-gates, wheel, image, chart, provider-images, cmp-published, observe-k8s-chart, agent-chart, observe-aws-chart, install-test]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -513,5 +523,7 @@ jobs:
           - GRC push image: \`ghcr.io/${owner}/clearance-grc:${GITHUB_REF_NAME}\`, index digest \`${grc_digest}\` (linux/amd64, linux/arm64; SPDX SBOM and keyless signature; deployed by the clearance chart's grc.enabled)
           - AWS collector chart: \`helm install clearance-observe-aws oci://ghcr.io/${owner}/charts/clearance-observe-aws --version ${VERSION}\`, digest \`${OBSERVE_AWS_CHART_DIGEST}\`
           EOF
+          # The compatibility table (N-6c) is a release asset: `clearance upgrade check --to $GITHUB_REF_NAME` reads it.
+          cp internal/compat/compat.json dist/compat.json
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag \
             --title "Clearance $GITHUB_REF_NAME" --notes-file notes.md

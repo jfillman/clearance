@@ -11,6 +11,32 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ### Added
 
+- **Boring upgrades (N-6).** The schema is versioned: an ordered, forward-only list of migrations with a `clearance_schema`
+  table recording each one (its kind, release, `min_core`, checksum and the core that applied it). Today's idempotent DDL
+  is migration 1. A database that already has every object migration 1 creates (one built by v0.57.3, say) adopts it with no
+  change to any existing object: the migration is recorded, its DDL is not run, and `clearance_schema` itself is the only
+  thing created. A database missing an object runs migration 1, whose idempotent statements add what is missing. Each later
+  migration runs in one transaction under the writer lock.
+- **The version guard.** A core refuses to start, with the code `schema_requires_newer_core`, only when it is older than
+  the schema's `min_core`; it accepts a newer schema whose `min_core` it meets, which is what makes a rollback across
+  expand migrations work. Other named refusals: `schema_migration_changed` (a released migration was edited),
+  `schema_history_invalid` (a hole in `clearance_schema`). Cores before this release have no guard and cannot refuse a
+  schema, so the first contract migration waits for a release that carries it.
+- **Compatibility as data.** `internal/compat/compat.json` (a release asset, and `GET /v1/version`, which also serves the
+  schema's version, `min_core` and migrations) gives each release's schema, whether it is no-rollback, and the provider
+  versions its core accepts. Providers send `Clearance-Provider: <program>/<version>` and the core answers a version outside
+  the range `412` with code `provider_version_unsupported` (`ErrorResponse` gains an optional `code`; the Go client sends the
+  header from `Options.ProviderVersion` and `argocd-agent`, `observe-k8s` and `observe-aws` set it).
+- **`clearance upgrade check`** lists what an upgrade changes and what must go first (docs/upgrade.md). It does not run
+  doctor, which is N-3 and not built.
+- **Expand, then contract, enforced in CI.** Every migration is classified from its DDL: a contract migration (a drop, a
+  rename, a type change, a new NOT NULL) must retire only shapes a release at least one version earlier already stopped
+  using, raises `min_core` to its own release and marks the release no-rollback; a migration that is neither expand nor
+  contract fails. `releasenotes -check-tag` runs the same rules at the tag and requires the notes of a contract release to
+  say no-rollback and name the migration.
+- **The whole-install upgrade test** (`.github/workflows/upgrade.yaml`, `tools/upgrade-test`) gates the tag: previous
+  release, traffic, backup, candidate, traffic, chain verify, then the rollback (expand-only) or the refusal and the restore
+  (no-rollback). The restore's gap is not yet recorded as an exception: that is `clearance restore verify` (N-11).
 - **The generic change description and `clearance.kind/v1` (SDK-1).** A change of any subject kind is now one shape,
   `subject{kind, version, rootFn, root, facts}`, `target{scope, environment, app}`,
   `items[]{type, id, op, fields, attrs, hash}`, `source`, `describedBy` (`internal/describe`,

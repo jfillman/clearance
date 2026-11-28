@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/jfillman/clearance/internal/decide"
@@ -94,12 +95,17 @@ var errs = func(codes ...int) []Response {
 		403: "the caller may not do this",
 		404: "no such resource",
 		409: "the request conflicts with what is recorded",
+		412: "the provider's Clearance-Provider version is outside the range this core accepts (code provider_version_unsupported)",
 		413: "the body is over the route's cap",
 		503: "the store could not record it: treat as unreachable (fail closed)",
 	}
-	out := make([]Response, 0, len(codes))
+	out := make([]Response, 0, len(codes)+1)
 	for _, c := range codes {
 		out = append(out, Response{c, text[c], ErrorResponse{}})
+	}
+	if !slices.Contains(codes, 412) {
+		// providerVersion wraps every route (N-6c): any call may carry Clearance-Provider.
+		out = append(out, Response{412, text[412], ErrorResponse{}})
 	}
 	return out
 }
@@ -130,6 +136,15 @@ var routeTable = []Route{
 		Summary:   "The process is up.",
 		Responses: []Response{{200, "up", Health{}}},
 		serve:     func(s *Server) http.HandlerFunc { return s.healthz },
+	},
+	{
+		Method: "GET", Path: "/v1/version", OperationID: "getVersion", Auth: AuthBearer, MaxBody: DefaultMaxBody,
+		Summary: "The core's release, its database schema (version, the oldest core that can run on it, the migrations applied: N-6) and " +
+			"the compatibility table: for each release, its schema, whether it is no-rollback, and the provider versions its core accepts. " +
+			"A provider sends its own as `Clearance-Provider: <program>/<version>` and a version outside the range is refused 412 with code " +
+			"provider_version_unsupported. `clearance upgrade check` and doctor read this.",
+		Responses: append([]Response{{200, "the version, schema and table", VersionResponse{}}}, errs(401, 503)...),
+		serve:     func(s *Server) http.HandlerFunc { return s.version },
 	},
 	{
 		Method: "GET", Path: "/readyz", OperationID: "readyz", Auth: AuthNone, MaxBody: DefaultMaxBody,
