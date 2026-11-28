@@ -127,7 +127,7 @@ func run() error {
 	}
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	tok := client.FileToken(*tokenFile)
-	cc, err := client.New(client.Options{BaseURL: *coreURL, Token: tok, Provider: collector.ProviderName, Timeout: 10 * time.Second,
+	cc, err := client.New(client.Options{BaseURL: *coreURL, Token: tok, Provider: collector.ProviderName, ProviderVersion: version, Timeout: 10 * time.Second,
 		UserAgent: collector.ProviderName + "/" + version, CAFile: *caFile})
 	if err != nil {
 		return err

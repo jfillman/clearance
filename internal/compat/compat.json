@@ -1,0 +1,22 @@
+{
+  "format": 1,
+  "releases": [
+    {
+      "core": "0.57.3",
+      "schema_version": 0,
+      "min_core": "0.0.0",
+      "no_rollback": false
+    },
+    {
+      "core": "0.58.0",
+      "schema_version": 1,
+      "min_core": "0.0.0",
+      "no_rollback": false,
+      "providers": {
+        "argocd-agent": {"min": "0.57.0"},
+        "observe-k8s": {"min": "0.57.0"},
+        "observe-aws": {"min": "0.57.0"}
+      }
+    }
+  ]
+}

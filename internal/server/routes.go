@@ -94,6 +94,7 @@ var errs = func(codes ...int) []Response {
 		403: "the caller may not do this",
 		404: "no such resource",
 		409: "the request conflicts with what is recorded",
+		412: "the provider's Clearance-Provider version is outside the range this core accepts (code provider_version_unsupported)",
 		413: "the body is over the route's cap",
 		503: "the store could not record it: treat as unreachable (fail closed)",
 	}
@@ -132,6 +133,15 @@ var routeTable = []Route{
 		serve:     func(s *Server) http.HandlerFunc { return s.healthz },
 	},
 	{
+		Method: "GET", Path: "/v1/version", OperationID: "getVersion", Auth: AuthBearer, MaxBody: DefaultMaxBody,
+		Summary: "The core's release, its database schema (version, the oldest core that can run on it, the migrations applied: N-6) and " +
+			"the compatibility table: for each release, its schema, whether it is no-rollback, and the provider versions its core accepts. " +
+			"A provider sends its own as `Clearance-Provider: <program>/<version>` and a version outside the range is refused 412 with code " +
+			"provider_version_unsupported. `clearance upgrade check` and doctor read this.",
+		Responses: append([]Response{{200, "the version, schema and table", VersionResponse{}}}, errs(401, 503)...),
+		serve:     func(s *Server) http.HandlerFunc { return s.version },
+	},
+	{
 		Method: "GET", Path: "/readyz", OperationID: "readyz", Auth: AuthNone, MaxBody: DefaultMaxBody,
 		Summary:   "The store answers and the policy is loaded.",
 		Responses: []Response{{200, "ready", Ready{}}, {503, "not ready", Ready{}}},
@@ -154,7 +164,7 @@ var routeTable = []Route{
 			"provider asked for. Recorded as the decision's tool, linked by outcome_of; the identity fields are copied " +
 			"from the decision record (verified), what the provider reports is claimed.",
 		Request:   OutcomeRequest{},
-		Responses: append([]Response{{200, "recorded", RecordRef{}}}, errs(400, 401, 403, 404, 409, 413, 503)...),
+		Responses: append([]Response{{200, "recorded", RecordRef{}}}, errs(400, 401, 403, 404, 409, 412, 413, 503)...),
 		serve:     func(s *Server) http.HandlerFunc { return s.outcome },
 	},
 	{

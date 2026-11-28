@@ -70,6 +70,16 @@ The core knows its providers from `CLEARANCE_PROVIDERS` (`server.Provider`):
 Every call carries `Authorization: Bearer <token>`: in a cluster an audience-bound projected service-account token,
 from a workflow a GitHub Actions OIDC token. A provider never logs it.
 
+## Version skew (N-6c)
+
+A provider sends its own program and version on every call as `Clearance-Provider: <program>/<version>` (the Go client
+does it when `Options.Provider` and `Options.ProviderVersion` are set; `argocd-agent`, `observe-k8s` and `observe-aws`
+do). The core holds a compatibility table, published as `compat.json` on each release and served at `GET /v1/version`,
+that gives per core release the provider versions it accepts (`min` inclusive, `max` exclusive). A version outside the
+range is refused before the route runs: `412` with `{"error": "...", "code": "provider_version_unsupported"}` (the Go
+client's `ErrProviderVersion`). Nothing is refused when the header is absent (a provider from before N-6), the program has
+no range in the table, or the version is not `X.Y.Z` (a development build). See [Upgrading](upgrade.md).
+
 ## The runtime role
 
 The gateway's loop, for every tool call, model call, session open and spawn:

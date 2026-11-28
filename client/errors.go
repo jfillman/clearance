@@ -58,8 +58,19 @@ type APIError struct {
 	Op      string
 	Status  int
 	Message string
-	Rule    string
-	Hint    string
+	// Code is the refusal's stable name when it has one (ErrProviderVersion's provider_version_unsupported).
+	Code string
+	Rule string
+	Hint string
+}
+
+// ErrProviderVersion is the core refusing this provider's version (Options.ProviderVersion) as outside the range its
+// compatibility table accepts: upgrade or roll back the provider. errors.Is(err, ErrProviderVersion).
+var ErrProviderVersion = errors.New("clearance core: provider version unsupported")
+
+// Is makes errors.Is(err, ErrProviderVersion) true for the core's provider_version_unsupported refusal.
+func (e *APIError) Is(target error) bool {
+	return target == ErrProviderVersion && e.Code == "provider_version_unsupported"
 }
 
 func (e *APIError) Error() string {
