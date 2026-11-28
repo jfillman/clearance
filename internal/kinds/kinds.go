@@ -152,6 +152,9 @@ var (
 	ruleNameRx = regexp.MustCompile(`^[a-z0-9][a-z0-9:._/-]{0,63}\z`)
 	classRx    = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}\z`)
 	refusalRx  = regexp.MustCompile(`^DG-[A-Z0-9-]+\z`)
+	// catchAllRx is a glob made only of wildcards (*, ?, bracket sets), with no literal character: it can match a type
+	// the kind's author never saw, so it needs a defaultTier of at least 2. The schema holds the same pattern.
+	catchAllRx = regexp.MustCompile(`^([*?]|\[[^\]]*\])*\z`)
 )
 
 // MaxCEL bounds one CEL expression's length in characters (code points, as the schema's maxLength counts); SDK-2
@@ -265,7 +268,7 @@ func compile(k Kind) (*Compiled, error) {
 			return nil, malformed("%s: %s is listed twice", where, it.Type)
 		}
 		seen[it.Type] = true
-		if strings.Trim(it.Type, "*") == "" && k.DefaultTier < 2 { // "*", "**": every type
+		if catchAllRx.MatchString(it.Type) && k.DefaultTier < 2 { // "*", "**", "?*", "[!x]*": no literal, so any type
 			return nil, malformed(`%s: "*" needs a defaultTier of at least 2, so an unexpected type is never cleared by policy`, where)
 		}
 		for _, op := range it.Ops {
@@ -427,24 +430,46 @@ func objectSchema(s map[string]any, where string) (*jsonschema.Schema, error) {
 
 const draft2020 = "https://json-schema.org/draft/2020-12/schema"
 
-// dialectKey names the first $schema other than draft 2020-12, or $id, anywhere in a schema.
+// dialectKey names the first $schema other than draft 2020-12, or $id, in a schema or any of its subschemas. It walks
+// schema positions only: a property named "$id", or "$id" inside const, default or enum data, declares nothing.
 func dialectKey(v any) string {
-	switch x := v.(type) {
-	case []any:
-		for _, e := range x {
-			if b := dialectKey(e); b != "" {
-				return b
+	x, ok := v.(map[string]any)
+	if !ok {
+		return ""
+	}
+	if d, ok := x["$schema"]; ok && d != draft2020 {
+		return fmt.Sprintf("$schema %v", d)
+	}
+	if _, ok := x["$id"]; ok {
+		return "$id"
+	}
+	for k, sub := range x {
+		switch k {
+		case "properties", "patternProperties", "$defs", "definitions", "dependentSchemas":
+			if m, ok := sub.(map[string]any); ok {
+				for _, e := range m {
+					if b := dialectKey(e); b != "" {
+						return b
+					}
+				}
 			}
-		}
-	case map[string]any:
-		if d, ok := x["$schema"]; ok && d != draft2020 {
-			return fmt.Sprintf("$schema %v", d)
-		}
-		if _, ok := x["$id"]; ok {
-			return "$id"
-		}
-		for _, e := range x {
-			if b := dialectKey(e); b != "" {
+		case "allOf", "anyOf", "oneOf", "prefixItems":
+			if l, ok := sub.([]any); ok {
+				for _, e := range l {
+					if b := dialectKey(e); b != "" {
+						return b
+					}
+				}
+			}
+		case "items", "additionalProperties", "additionalItems", "not", "if", "then", "else", "contains",
+			"propertyNames", "unevaluatedItems", "unevaluatedProperties", "contentSchema":
+			if l, ok := sub.([]any); ok { // items as a list, before 2020-12
+				for _, e := range l {
+					if b := dialectKey(e); b != "" {
+						return b
+					}
+				}
+			} else if b := dialectKey(sub); b != "" {
 				return b
 			}
 		}

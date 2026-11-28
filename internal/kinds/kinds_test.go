@@ -140,7 +140,13 @@ func TestTheKindSchemaMatchesTheParser(t *testing.T) {
 		"a null class":                   with(func(m map[string]any) { at(m, "itemRules", 0)["class"] = nil }),
 		"null itemRules":                 with(func(m map[string]any) { m["itemRules"] = nil }),
 		"a ** with defaultTier 1":        with(func(m map[string]any) { m["itemTypes"] = []any{map[string]any{"type": "**"}} }),
-		"a type with a space":            with(func(m map[string]any) { at(m, "itemTypes", 0)["type"] = "a table" }),
+		"a ?* with defaultTier 1":        with(func(m map[string]any) { m["itemTypes"] = []any{map[string]any{"type": "?*"}} }),
+		"a [!x]* with defaultTier 1":     with(func(m map[string]any) { m["itemTypes"] = []any{map[string]any{"type": "[!x]*"}} }),
+		"a ?* with defaultTier 2": with(func(m map[string]any) {
+			m["defaultTier"] = 2
+			m["itemTypes"] = []any{map[string]any{"type": "?*"}}
+		}),
+		"a type with a space": with(func(m map[string]any) { at(m, "itemTypes", 0)["type"] = "a table" }),
 	}
 	accepted := 0
 	for name, doc := range docs {
@@ -155,8 +161,8 @@ func TestTheKindSchemaMatchesTheParser(t *testing.T) {
 			accepted++
 		}
 	}
-	if accepted != 10 {
-		t.Errorf("%d of %d accepted, want 10 (the comparison would be vacuous)", accepted, len(docs))
+	if accepted != 11 {
+		t.Errorf("%d of %d accepted, want 11 (the comparison would be vacuous)", accepted, len(docs))
 	}
 	// What only the parser checks.
 	for name, doc := range map[string]map[string]any{
@@ -175,6 +181,9 @@ func TestTheKindSchemaMatchesTheParser(t *testing.T) {
 		}),
 		"an embedded $id": with(func(m map[string]any) {
 			m["subjectSchema"].(map[string]any)["properties"] = map[string]any{"engine": map[string]any{"$id": "urn:x", "type": "string"}}
+		}),
+		"an $id in a nested subschema": with(func(m map[string]any) {
+			m["subjectSchema"].(map[string]any)["properties"] = map[string]any{"engine": map[string]any{"anyOf": []any{map[string]any{"$id": "urn:y"}}}}
 		}),
 		"a remote $ref": with(func(m map[string]any) {
 			m["subjectSchema"].(map[string]any)["properties"] = map[string]any{"engine": map[string]any{"$ref": "https://example.com/s.json"}}
@@ -287,5 +296,17 @@ func TestParseTakesOneDocumentAndNullsOnlyInSchemas(t *testing.T) {
 	raw, _ = json.Marshal(m)
 	if _, err := Parse(raw); err != nil {
 		t.Fatalf("a null inside a schema: %v", err)
+	}
+}
+
+// A property named "$id", or "$id" in const data, is not a schema resource.
+func TestDollarIDAsDataIsNotAResource(t *testing.T) {
+	m := pack()
+	props := m["subjectSchema"].(map[string]any)["properties"].(map[string]any)
+	props["$id"] = map[string]any{"type": "string"}
+	props["engine"] = map[string]any{"const": map[string]any{"$id": "x"}}
+	raw, _ := json.Marshal(m)
+	if _, err := Parse(raw); err != nil {
+		t.Fatal(err)
 	}
 }
