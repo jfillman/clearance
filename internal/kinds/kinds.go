@@ -93,7 +93,7 @@ type ItemRule struct {
 	Name   string   `json:"name"`
 	Types  []string `json:"types,omitempty"`
 	When   string   `json:"when"`
-	Tier   int      `json:"tier"`
+	Tier   *int     `json:"tier"` // required: a pointer, so an absent tier is refused rather than read as 0
 	Class  []string `json:"class,omitempty"`
 	Reason string   `json:"reason,omitempty"`
 }
@@ -151,7 +151,8 @@ var (
 	refusalRx  = regexp.MustCompile(`^DG-[A-Z0-9-]+\z`)
 )
 
-// MaxCEL bounds one CEL expression's length; SDK-2 bounds its cost.
+// MaxCEL bounds one CEL expression's length in characters (code points, as the schema's maxLength counts); SDK-2
+// bounds its cost.
 const MaxCEL = 4096
 
 // Compiled is a parsed kind with its JSON Schemas compiled.
@@ -186,8 +187,8 @@ func compile(k Kind) (*Compiled, error) {
 	if !builtin && (!nameRx.MatchString(k.Name) || len(k.Name) > 253) {
 		return nil, malformed("name %s is reverse-DNS (io.acme.db-migration)", pycompat.Repr(k.Name))
 	}
-	if k.Version < 1 {
-		return nil, malformed("version is a positive integer")
+	if k.Version < 1 || k.Version > describe.MaxVersion {
+		return nil, malformed("version is 1 to %d", describe.MaxVersion)
 	}
 	switch {
 	case builtin && k.Version == 1 && k.Root != wantRoot:
@@ -213,7 +214,7 @@ func compile(k Kind) (*Compiled, error) {
 	seen := map[string]bool{}
 	for i, it := range k.ItemTypes {
 		where := fmt.Sprintf("itemTypes[%d]", i)
-		if it.Type == "" || len(it.Type) > describe.MaxTypeLen || strings.ContainsAny(it.Type, " \t\r\n") {
+		if it.Type == "" || pycompat.Len(it.Type) > describe.MaxTypeLen || strings.ContainsAny(it.Type, " \t\r\n") {
 			return nil, malformed("%s.type is a type or a glob", where)
 		}
 		if seen[it.Type] {
@@ -255,8 +256,8 @@ func compile(k Kind) (*Compiled, error) {
 		return nil
 	}
 	cel := func(e, where string) error {
-		if strings.TrimSpace(e) == "" || len(e) > MaxCEL {
-			return malformed("%s is a CEL expression of at most %d bytes", where, MaxCEL)
+		if strings.TrimSpace(e) == "" || pycompat.Len(e) > MaxCEL {
+			return malformed("%s is a CEL expression of at most %d characters", where, MaxCEL)
 		}
 		return nil
 	}
@@ -276,14 +277,14 @@ func compile(k Kind) (*Compiled, error) {
 		if err := cel(r.When, where+".when"); err != nil {
 			return nil, err
 		}
-		if r.Tier < 0 || r.Tier > 3 {
+		if r.Tier == nil || *r.Tier < 0 || *r.Tier > 3 {
 			return nil, malformed("%s.tier is 0 to 3", where)
 		}
 		if err := classes(r.Class, where); err != nil {
 			return nil, err
 		}
 		for _, g := range r.Types {
-			if g == "" || len(g) > describe.MaxTypeLen {
+			if g == "" || pycompat.Len(g) > describe.MaxTypeLen {
 				return nil, malformed("%s.types are item types or globs", where)
 			}
 		}

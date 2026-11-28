@@ -51,8 +51,12 @@ func ItemDigest(it Item) ([]byte, error) {
 	if attrs == nil {
 		attrs = map[string]any{}
 	}
+	w, err := wire(attrs)
+	if err != nil {
+		return nil, fmt.Errorf("describe: item %s %q: %w", it.Type, it.ID, err)
+	}
 	c, err := canon.Canonical(map[string]any{"type": it.Type, "id": it.ID, "op": it.Op, "fields": fields,
-		"attrs": attrs, "hash": it.Hash})
+		"attrs": w, "hash": it.Hash})
 	if err != nil {
 		return nil, fmt.Errorf("describe: item %s %q: %w", it.Type, it.ID, err)
 	}
@@ -65,7 +69,11 @@ func FactsDigest(facts map[string]any) ([]byte, error) {
 	if facts == nil {
 		facts = map[string]any{}
 	}
-	c, err := canon.Canonical(facts)
+	w, err := wire(facts)
+	if err != nil {
+		return nil, fmt.Errorf("describe: facts: %w", err)
+	}
+	c, err := canon.Canonical(w)
 	if err != nil {
 		return nil, fmt.Errorf("describe: facts: %w", err)
 	}
@@ -211,7 +219,8 @@ type Inclusion struct {
 	FactsDigest string   `json:"factsDigest"`
 }
 
-// ProveItem is the inclusion proof of d.Items[i] in d's merkle/1 root.
+// ProveItem is the inclusion proof of d.Items[i] in d's merkle/1 root. A description whose root is not its items' and
+// facts' is ErrRootMismatch: no proof is made against a root it would not verify against.
 func (d *Description) ProveItem(i int) (Inclusion, error) {
 	if d.Subject.RootFn != RootMerkle1 {
 		return Inclusion{}, bad("only a merkle/1 root has item inclusion proofs (this is %s)", d.Subject.RootFn)
@@ -231,6 +240,9 @@ func (d *Description) ProveItem(i int) (Inclusion, error) {
 	f, err := FactsDigest(d.Subject.Facts)
 	if err != nil {
 		return Inclusion{}, err
+	}
+	if subjectRoot(mth(leafHashes(ds)), f) != d.Subject.Root {
+		return Inclusion{}, ErrRootMismatch // the items or facts changed since the root was computed
 	}
 	path := auditPath(idx, leafHashes(ds))
 	inc := Inclusion{Index: uint64(idx), Size: uint64(len(ds)), Path: make([]string, len(path)), FactsDigest: hex.EncodeToString(f)}

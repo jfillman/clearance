@@ -21,9 +21,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -52,6 +54,8 @@ const (
 	MaxIDLen    = 1024
 	MaxTypeLen  = 256
 	MaxFieldLen = 1024
+	// MaxVersion is the largest kind version, in a description and in a kind (internal/kinds).
+	MaxVersion = 1 << 20
 )
 
 // CoreProvider is describedBy.provider when the core itself mapped a verifier's request of a built-in kind onto the
@@ -160,6 +164,8 @@ var (
 	repoRx     = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z`)
 	envRx      = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\z`)
 	attrKeyRx  = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,63}\z`)
+	// pointerRx is an RFC 6901 JSON pointer: "/" then tokens in which "~" is only "~0" or "~1".
+	pointerRx = regexp.MustCompile(`^/([^~]|~[01])*\z`)
 )
 
 // IsSHA256 says whether s is a bare lowercase hex sha256, the form every root and hash in a description takes.
@@ -210,7 +216,7 @@ func object(v any, where string, allowed map[string]bool) (map[string]any, error
 
 func str(m map[string]any, k string, required bool) (string, bool) {
 	v, present := m[k]
-	if !present || v == nil {
+	if !present {
 		return "", !required
 	}
 	s, ok := v.(string)
@@ -234,7 +240,7 @@ func Parse(v any) (*Description, error) {
 		return nil, bad("subject.kind is a subject kind's name")
 	}
 	ver, isInt := pycompat.AsInt(sub["version"])
-	if !isInt || ver < 1 || ver > 1<<20 {
+	if !isInt || ver < 1 || ver > MaxVersion {
 		return nil, bad("subject.version is the kind's version, a positive integer")
 	}
 	d.Subject.Version = int(ver)
@@ -244,7 +250,7 @@ func Parse(v any) (*Description, error) {
 	if d.Subject.Root, ok = str(sub, "root", true); !ok {
 		return nil, bad("subject.root is a sha256")
 	}
-	if f, present := sub["facts"]; present && f != nil {
+	if f, present := sub["facts"]; present {
 		fm, isMap := f.(map[string]any)
 		if !isMap {
 			return nil, bad("subject.facts is an object")
@@ -260,6 +266,9 @@ func Parse(v any) (*Description, error) {
 	app, ok3 := str(tg, "app", false)
 	if !ok1 || !ok2 || !ok3 {
 		return nil, bad("target is {scope, environment, app}: strings, environment required")
+	}
+	if v, present := tg["app"]; present && v == "" {
+		return nil, bad("target.app is an application name, or absent")
 	}
 	d.Target = Target{scope, env, app}
 	rawItems, isList := top["items"].([]any)
@@ -288,7 +297,7 @@ func Parse(v any) (*Description, error) {
 		return nil, bad("source is {repo, commit, base, pr}: repo and commit required")
 	}
 	d.Source = Source{Repo: repo, Commit: commit, Base: baseC}
-	if p, present := src["pr"]; present && p != nil {
+	if p, present := src["pr"]; present {
 		n, isInt := pycompat.AsInt(p)
 		if !isInt || n < 0 {
 			return nil, bad("source.pr is a non-negative integer (0: a pushed commit)")
@@ -303,6 +312,9 @@ func Parse(v any) (*Description, error) {
 	pver, ok2 := str(by, "version", false)
 	if !ok1 || !ok2 {
 		return nil, bad("describedBy is {provider, version}: provider required")
+	}
+	if v, present := by["version"]; present && v == "" {
+		return nil, bad("describedBy.version is the provider's version, or absent")
 	}
 	d.DescribedBy = DescribedBy{prov, pver}
 	if err := d.Validate(); err != nil {
@@ -331,7 +343,7 @@ func parseItem(raw any, i int) (Item, error) {
 	if it.Hash, ok = str(o, "hash", false); !ok {
 		return it, bad("%s.hash is a sha256", where)
 	}
-	if f, present := o["fields"]; present && f != nil {
+	if f, present := o["fields"]; present {
 		l, isList := f.([]any)
 		if !isList {
 			return it, bad("%s.fields is a list of JSON pointers", where)
@@ -344,7 +356,7 @@ func parseItem(raw any, i int) (Item, error) {
 			it.Fields = append(it.Fields, s)
 		}
 	}
-	if a, present := o["attrs"]; present && a != nil {
+	if a, present := o["attrs"]; present {
 		am, isMap := a.(map[string]any)
 		if !isMap {
 			return it, bad("%s.attrs is an object", where)
@@ -375,7 +387,7 @@ func (d *Description) Validate() error {
 		return bad("subject.facts has at most %d facts", MaxFacts)
 	}
 	if s.Facts != nil {
-		if _, err := canon.Canonical(s.Facts); err != nil {
+		if _, err := wire(s.Facts); err != nil {
 			return bad("subject.facts: %v", err)
 		}
 	}
@@ -412,7 +424,7 @@ func (d *Description) Validate() error {
 			return bad("%s.fields is a list of at most %d JSON pointers", where, MaxFields)
 		}
 		for _, f := range it.Fields {
-			if !strings.HasPrefix(f, "/") || !printable(f, MaxFieldLen) {
+			if !pointerRx.MatchString(f) || !printable(f, MaxFieldLen) {
 				return bad("%s.fields are JSON pointers (attribute names, never values)", where)
 			}
 		}
@@ -425,7 +437,7 @@ func (d *Description) Validate() error {
 			}
 		}
 		if it.Attrs != nil {
-			if _, err := canon.Canonical(it.Attrs); err != nil {
+			if _, err := wire(it.Attrs); err != nil {
 				return bad("%s.attrs: %v", where, err)
 			}
 		}
@@ -451,21 +463,74 @@ func (d *Description) Validate() error {
 	if d.DescribedBy.Version != "" && !printable(d.DescribedBy.Version, 128) {
 		return bad("describedBy.version is at most 128 printable characters")
 	}
+	// The whole description canonicalizes, with the nesting it has when serialized and hashed (an item's attrs sit
+	// deeper in the description than in its digest's envelope).
+	if _, err := d.MarshalCanonical(); err != nil {
+		return bad("the description does not canonicalize: %v", err)
+	}
 	return nil
 }
 
 // ErrRootMismatch is a description whose root is not what its root function gives over its items and facts.
 var ErrRootMismatch = errors.New("describe: subject.root is not the root of the items and facts")
 
-// MarshalCanonical is the description's canonical JSON (internal/canon).
+// MarshalCanonical is the description's canonical JSON (internal/canon). A nil Items is written as [], as the
+// schema requires.
 func (d *Description) MarshalCanonical() ([]byte, error) {
-	raw, err := json.Marshal(d)
-	if err != nil {
-		return nil, err
+	cp := *d
+	if cp.Items == nil {
+		cp.Items = []Item{}
 	}
-	v, err := canon.Parse(raw)
+	v, err := wire(&cp)
 	if err != nil {
 		return nil, err
 	}
 	return canon.Canonical(v)
+}
+
+// wire is v as it is serialized: encoding/json's output read back by canon.Parse (numbers as json.Number). Facts and
+// attrs are hashed in this form, so a Go caller's float64(1) hashes as the 1 it is written as, and the root a producer
+// computes is the root a reader recomputes. A number that is not finite (a literal such as 1e400) is refused: it has
+// no JSON form to read back.
+func wire(v any) (any, error) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	p, err := canon.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	if err := finite(p, 0); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+func finite(v any, depth int) error {
+	if depth > canon.MaxDepth {
+		return fmt.Errorf("nesting deeper than %d", canon.MaxDepth)
+	}
+	switch x := v.(type) {
+	case json.Number:
+		if canon.IsFloatLiteral(string(x)) {
+			f, err := strconv.ParseFloat(string(x), 64)
+			if err != nil || math.IsInf(f, 0) || math.IsNaN(f) {
+				return fmt.Errorf("%s is not a finite number", x)
+			}
+		}
+	case []any:
+		for _, e := range x {
+			if err := finite(e, depth+1); err != nil {
+				return err
+			}
+		}
+	case map[string]any:
+		for _, e := range x {
+			if err := finite(e, depth+1); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

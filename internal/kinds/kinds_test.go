@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -124,7 +125,18 @@ func TestTheKindSchemaMatchesTheParser(t *testing.T) {
 		"a test with a tier and a refusal":  with(func(m map[string]any) { at(m, "tests", 0)["expect"].(map[string]any)["refused"] = "DG-UNBOUND" }),
 		"a test expecting nothing":          with(func(m map[string]any) { at(m, "tests", 0)["expect"] = map[string]any{} }),
 		"a test refusing with no code":      with(func(m map[string]any) { at(m, "tests", 0)["expect"] = map[string]any{"refused": "nope"} }),
-		"a type with a space":               with(func(m map[string]any) { at(m, "itemTypes", 0)["type"] = "a table" }),
+		"an item rule without a tier":       with(func(m map[string]any) { delete(at(m, "itemRules", 0), "tier") }),
+		"the largest version":               with(func(m map[string]any) { m["version"] = 1048576 }),
+		"one past the largest version":      with(func(m map[string]any) { m["version"] = 1048577 }),
+		"a 4096-character multibyte when": with(func(m map[string]any) {
+			at(m, "itemRules", 0)["when"] = "'" + strings.Repeat("é", 4083) + "'.size() > 0"
+		}),
+		"a 4097-character when": with(func(m map[string]any) {
+			at(m, "itemRules", 0)["when"] = "'" + strings.Repeat("é", 4084) + "'.size() > 0"
+		}),
+		"a 256-character multibyte type": with(func(m map[string]any) { at(m, "itemTypes", 0)["type"] = strings.Repeat("é", 256) }),
+		"a 257-character type":           with(func(m map[string]any) { at(m, "itemTypes", 0)["type"] = strings.Repeat("é", 257) }),
+		"a type with a space":            with(func(m map[string]any) { at(m, "itemTypes", 0)["type"] = "a table" }),
 	}
 	accepted := 0
 	for name, doc := range docs {
@@ -139,8 +151,8 @@ func TestTheKindSchemaMatchesTheParser(t *testing.T) {
 			accepted++
 		}
 	}
-	if accepted != 7 {
-		t.Errorf("%d of %d accepted, want 7 (the comparison would be vacuous)", accepted, len(docs))
+	if accepted != 10 {
+		t.Errorf("%d of %d accepted, want 10 (the comparison would be vacuous)", accepted, len(docs))
 	}
 	// What only the parser checks.
 	for name, doc := range map[string]map[string]any{

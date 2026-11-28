@@ -45,7 +45,11 @@ contract as the `DescribeDescription` component (listed under `x-clearance-publi
 
 **The core derives every summary from the items** (create, update, delete and replace counts, and the ids deleted)
 and never takes one from a caller, so a summary cannot say something the items do not. Parsing is strict: unknown
-members are refused, and so is an item listed twice. Limits: 2000 items (a larger change will page its items;
+members are refused, and so is an item listed twice. An optional member is absent or has a value: `null` is refused,
+as the schema refuses it. `fields` are RFC 6901 JSON pointers (`~` only as `~0` or `~1`). A number with no finite
+value (`1e400`) is refused. Facts and attrs are hashed in the form they are written in (a Go `float64(1)` hashes as
+the `1` it serializes to), so the root a gate computes is the root the core recomputes. Kind versions run from 1 to
+1048576. Limits: 2000 items (a larger change will page its items;
 `merkle/1` makes that possible, paging is not built), 400 fields per item, 64 attrs and 64 facts.
 
 ## Root functions

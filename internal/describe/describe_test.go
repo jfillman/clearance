@@ -12,6 +12,7 @@ import (
 	"github.com/transparency-dev/merkle/compact"
 	"github.com/transparency-dev/merkle/rfc6962"
 
+	"github.com/jfillman/clearance/internal/canon"
 	"github.com/jfillman/clearance/internal/pycompat"
 	"github.com/jfillman/clearance/schemas"
 )
@@ -84,6 +85,18 @@ func TestTheDescriptionSchemaMatchesTheParser(t *testing.T) {
 		"facts not an object":    body(t, func(m map[string]any) { sub(m, "subject")["facts"] = []any{} }),
 		"an empty type":          body(t, func(m map[string]any) { item0(m)["type"] = "" }),
 		"a repo without a slash": body(t, func(m map[string]any) { sub(m, "source")["repo"] = "repo" }),
+		"a null app":             body(t, func(m map[string]any) { sub(m, "target")["app"] = nil }),
+		"an empty app":           body(t, func(m map[string]any) { sub(m, "target")["app"] = "" }),
+		"null facts":             body(t, func(m map[string]any) { sub(m, "subject")["facts"] = nil }),
+		"null attrs":             body(t, func(m map[string]any) { item0(m)["attrs"] = nil }),
+		"null fields":            body(t, func(m map[string]any) { item0(m)["fields"] = nil }),
+		"a null pr":              body(t, func(m map[string]any) { sub(m, "source")["pr"] = nil }),
+		"a null scope":           body(t, func(m map[string]any) { sub(m, "target")["scope"] = nil }),
+		"an empty version":       body(t, func(m map[string]any) { sub(m, "describedBy")["version"] = "" }),
+		"a bad pointer escape":   body(t, func(m map[string]any) { item0(m)["fields"] = []any{"/metadata/a~2b"} }),
+		"a good pointer escape":  body(t, func(m map[string]any) { item0(m)["fields"] = []any{"/metadata/labels/app.kubernetes.io~1name~0x"} }),
+		"the largest version":    body(t, func(m map[string]any) { sub(m, "subject")["version"] = json.Number("1048576") }),
+		"one past it":            body(t, func(m map[string]any) { sub(m, "subject")["version"] = json.Number("1048577") }),
 	}
 	accepted := 0
 	for name, b := range bodies {
@@ -96,8 +109,8 @@ func TestTheDescriptionSchemaMatchesTheParser(t *testing.T) {
 			accepted++
 		}
 	}
-	if accepted != 9 {
-		t.Errorf("%d of %d accepted, want 9 (the comparison would be vacuous)", accepted, len(bodies))
+	if accepted != 11 {
+		t.Errorf("%d of %d accepted, want 11 (the comparison would be vacuous)", accepted, len(bodies))
 	}
 	// What only the parser checks: an item twice.
 	twice := body(t, func(m map[string]any) { m["items"] = append(m["items"].([]any), item0(m)) })
@@ -139,12 +152,12 @@ func TestMerkle1BindsEveryMemberAndNoOrder(t *testing.T) {
 	for n, m := range mut {
 		cp := append([]Item(nil), items...)
 		m(&cp[0])
-		if r, _ := Merkle1(cp, facts); r == root {
-			t.Errorf("mutation %d does not change the root", n)
+		if r, err := Merkle1(cp, facts); err != nil || r == root {
+			t.Errorf("mutation %d does not change the root (%v)", n, err)
 		}
 	}
-	if r, _ := Merkle1(items, map[string]any{"engine": "mysql"}); r == root {
-		t.Error("the facts do not enter the root")
+	if r, err := Merkle1(items, map[string]any{"engine": "mysql"}); err != nil || r == root {
+		t.Errorf("the facts do not enter the root (%v)", err)
 	}
 	// No facts is {}: absent and empty facts are one root.
 	a, _ := Merkle1(items, nil)
@@ -248,7 +261,12 @@ func TestTree1IsTheManifestTreeDigest(t *testing.T) {
 }
 
 func FuzzParseDescription(f *testing.F) {
-	raw, _ := json.Marshal(vectorDescription(vectorItems(2), map[string]any{"a": true}))
+	seed := vectorDescription(vectorItems(2), map[string]any{"a": true})
+	seed.Subject.Root, _ = Merkle1(seed.Items, seed.Subject.Facts)
+	raw, _ := json.Marshal(seed)
+	if _, err := Parse(mustDecode(f, raw)); err != nil {
+		f.Fatal(err)
+	}
 	f.Add(raw)
 	f.Add([]byte(`{"subject":{},"items":[{"op":"create"}]}`))
 	f.Fuzz(func(t *testing.T, data []byte) {
@@ -268,4 +286,54 @@ func FuzzParseDescription(f *testing.F) {
 		}
 		_ = d.Summarize()
 	})
+}
+
+func mustDecode(tb testing.TB, raw []byte) any {
+	v, err := pycompat.Decode(bytes.NewReader(raw))
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return v
+}
+
+// A root is the same whether a Go caller hashes float64(1) or a reader hashes the 1 it was written as; a number with
+// no finite form is refused; a nil Items is written as []; and no proof is made against a stale root.
+func TestHashesUseTheSerializedForm(t *testing.T) {
+	d := vectorDescription([]Item{{Type: "t", ID: "a", Op: OpCreate, Attrs: map[string]any{"n": float64(1)}}}, map[string]any{"ratio": float64(2)})
+	d.Subject.Root, _ = Merkle1(d.Items, d.Subject.Facts)
+	raw, err := d.MarshalCanonical()
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := Parse(mustDecode(t, raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c, err := back.VerifyRoot(); !c || err != nil {
+		t.Fatalf("the reader's root differs from the producer's: %v", err)
+	}
+	big := body(t, func(m map[string]any) { sub(m, "subject")["facts"] = map[string]any{"ratio": json.Number("1e400")} })
+	if _, err := Parse(big); err == nil {
+		t.Fatal("a non-finite number is accepted")
+	}
+	empty := vectorDescription(nil, nil)
+	empty.Subject.Root, _ = Merkle1(nil, nil)
+	if c, err := empty.MarshalCanonical(); err != nil || !bytes.Contains(c, []byte(`"items":[]`)) {
+		t.Fatalf("%s %v", c, err)
+	}
+	stale := vectorDescription(vectorItems(3), map[string]any{"a": true})
+	stale.Subject.Root, _ = Merkle1(stale.Items, stale.Subject.Facts)
+	stale.Subject.Facts["a"] = false
+	if _, err := stale.ProveItem(0); !errors.Is(err, ErrRootMismatch) {
+		t.Fatalf("a proof against a stale root: %v", err)
+	}
+	deep := any("x")
+	for i := 0; i < canon.MaxDepth-1; i++ {
+		deep = []any{deep}
+	}
+	dd := vectorDescription([]Item{{Type: "t", ID: "a", Op: OpCreate, Attrs: map[string]any{"deep": deep}}}, nil)
+	dd.Subject.Root = strings.Repeat("0", 64)
+	if err := dd.Validate(); err == nil {
+		t.Fatal("attrs too deep to serialize in the description are accepted")
+	}
 }

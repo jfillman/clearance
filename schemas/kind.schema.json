@@ -36,7 +36,8 @@
     "version": {
       "type": "integer",
       "minimum": 1,
-      "description": "The kind's version. A kind changes its root function only through a new version."
+      "description": "The kind's version. A kind changes its root function only through a new version.",
+      "maximum": 1048576
     },
     "description": {
       "type": "string"

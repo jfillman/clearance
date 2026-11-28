@@ -41,6 +41,8 @@ def item_digest(it: dict) -> bytes:
 
 def root_from_proof(leaf: bytes, index: int, size: int, path: list[bytes]) -> bytes:
     """RFC 9162 section 2.1.3.2: the root an inclusion proof gives."""
+    if not 0 <= index < size:
+        raise ValueError("index out of range")
     fn, sn, r = index, size - 1, leaf
     for p in path:
         if sn == 0:
@@ -61,7 +63,7 @@ def root_from_proof(leaf: bytes, index: int, size: int, path: list[bytes]) -> by
 
 
 def test_canon_vectors():
-    cases = json.loads((VECTORS / "canon-v1.json").read_text())["cases"]
+    cases = json.loads((VECTORS / "canon-v1.json").read_text(encoding="utf-8"))["cases"]
     assert len(cases) >= 15
     for c in cases:
         out = canonical(json.loads(c["input"]))
@@ -70,7 +72,7 @@ def test_canon_vectors():
 
 
 def test_merkle_v1_vectors():
-    cases = json.loads((VECTORS / "merkle-v1.json").read_text())["cases"]
+    cases = json.loads((VECTORS / "merkle-v1.json").read_text(encoding="utf-8"))["cases"]
     assert len(cases) >= 8
     proofs = 0
     for c in cases:
@@ -82,8 +84,19 @@ def test_merkle_v1_vectors():
         root = sha256(b"clearance.subject/v1" + m + f).hex()
         assert (m.hex(), f.hex(), root) == (c["itemsRoot"], c["factsDigest"], c["root"]), c["name"]
         assert d["subject"]["root"] == root and d["subject"]["rootFn"] == "merkle/1", c["name"]
-        for dg, p in zip(digests, c["proofs"]):
+        for dg, p in zip(digests, c["proofs"], strict=True):
             got = root_from_proof(sha256(b"\x00" + dg), p["index"], p["size"], [bytes.fromhex(x) for x in p["path"]])
             assert sha256(b"clearance.subject/v1" + got + bytes.fromhex(p["factsDigest"])).hex() == root, c["name"]
             proofs += 1
     assert proofs >= 20
+
+
+def test_a_proof_index_out_of_range_is_refused():
+    leaf = sha256(b"\x00" + sha256(b"x"))
+    assert root_from_proof(leaf, 0, 1, []) == leaf
+    for index, size in ((1, 1), (-1, 1), (0, 0)):
+        try:
+            root_from_proof(leaf, index, size, [])
+        except ValueError:
+            continue
+        raise AssertionError(f"index {index} of {size} accepted")
