@@ -122,7 +122,7 @@ func run() error {
 		return err
 	}
 	tok := client.FileToken(*tokenFile)
-	cc, err := client.New(client.Options{BaseURL: *coreURL, Token: tok, Provider: agent.ProviderName, Timeout: 10 * time.Second,
+	cc, err := client.New(client.Options{BaseURL: *coreURL, Token: tok, Provider: agent.ProviderName, ProviderVersion: version, Timeout: 10 * time.Second,
 		UserAgent: agent.ProviderName + "/" + version, CAFile: *caFile})
 	if err != nil {
 		return err

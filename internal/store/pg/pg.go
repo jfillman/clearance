@@ -193,9 +193,19 @@ type Options struct {
 	VerifyBatch      int           // records per batch when verifying the chain (default 1000)
 	MaxConns         int32         // pool size (default pgxpool's)
 	Logger           *slog.Logger  // default slog.Default()
+	// CoreVersion is the running core's release (X.Y.Z, with or without a v). The schema version guard (N-6b) refuses to
+	// open a database whose schema needs a newer core; "" or a version that is not X.Y.Z (a development build) is not guarded.
+	CoreVersion string
+	// MigrateTimeout bounds one migration (default 5m).
+	MigrateTimeout time.Duration
+	// Migrations replaces the migration list; for tests of the upgrade path only.
+	Migrations []Migration
 }
 
 func (o Options) withDefaults() Options {
+	if o.MigrateTimeout <= 0 {
+		o.MigrateTimeout = 5 * time.Minute
+	}
 	if o.WriteTimeout <= 0 {
 		o.WriteTimeout = 5 * time.Second
 	}
@@ -276,6 +286,16 @@ func OpenReader(ctx context.Context, dsn string, opt Options) (*Reader, error) {
 		pool.Close()
 		return nil, fmt.Errorf("pg: %w", err)
 	}
+	if opt.CoreVersion != "" {
+		applied, _, err := readApplied(ctx, pool)
+		if err == nil {
+			err = Guard(opt.CoreVersion, applied)
+		}
+		if err != nil {
+			pool.Close()
+			return nil, err
+		}
+	}
 	return &Reader{pool: pool, opt: opt}, nil
 }
 
@@ -307,7 +327,7 @@ type Store struct {
 
 var _ store.Store = (*Store)(nil)
 
-// Open opens the writer: takes the lock (store.ErrWriterLocked if another writer has it), migrates, verifies
+// Open opens the writer: takes the lock (store.ErrWriterLocked if another writer has it), migrates (the versioned list, after the version guard), verifies
 // the chain from genesis and reads its head.
 func Open(ctx context.Context, dsn string, opt Options) (*Store, error) {
 	opt = opt.withDefaults()
@@ -321,9 +341,13 @@ func Open(ctx context.Context, dsn string, opt Options) (*Store, error) {
 	}
 	cctx, cancel := deadline(ctx, opt)
 	defer cancel()
-	if _, err := s.conn.Exec(cctx, Schema); err != nil {
+	list := opt.Migrations
+	if list == nil {
+		list = migrations
+	}
+	if err := s.migrate(ctx, list, opt.CoreVersion); err != nil {
 		s.conn.Close(context.Background())
-		return nil, fmt.Errorf("pg: migrate: %w", err)
+		return nil, err
 	}
 	if s.pool, err = pgxpool.NewWithConfig(cctx, cfg); err != nil {
 		s.conn.Close(context.Background())
@@ -520,6 +544,16 @@ func (s *Store) ensureWriter(ctx context.Context) error {
 		s.opt.Logger.Warn("clearance store: writer connection lost; reconnecting and retaking the lock")
 		if err := s.lock(ctx); err != nil {
 			return fmt.Errorf("%w: %w", ErrWriterLost, err)
+		}
+		// Another core may have applied a contract migration while this one had no lock: the version guard holds on a
+		// reconnect as it does at start, before anything is written.
+		applied, _, err := readApplied(ctx, s.conn)
+		if err == nil {
+			err = Guard(s.opt.CoreVersion, applied)
+		}
+		if err != nil {
+			s.conn.Close(context.Background())
+			return err
 		}
 		s.stale = true
 	}

@@ -38,6 +38,10 @@ type Options struct {
 	Token TokenSource
 	// Provider is the registered provider name RecordRequest.Provider defaults to.
 	Provider string
+	// ProviderVersion is this provider's release (X.Y.Z). With Provider set, every call carries it as
+	// `Clearance-Provider: <Provider>/<ProviderVersion>`, and a core whose compatibility table does not accept it refuses the
+	// call with 412 and code provider_version_unsupported (ErrProviderVersion). "" sends no header.
+	ProviderVersion string
 	// OnBehalfOfHeader is the header the core reads a delegate's person from; default DefaultOnBehalfOfHeader.
 	OnBehalfOfHeader string
 	// Timeout bounds each attempt (connect, send, the whole answer read). Default 250 ms.
@@ -507,6 +511,9 @@ func (c *Client) attempt(ctx context.Context, cl call, payload []byte, out any) 
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", c.opt.UserAgent)
+	if c.opt.Provider != "" && c.opt.ProviderVersion != "" {
+		req.Header.Set("Clearance-Provider", c.opt.Provider+"/"+c.opt.ProviderVersion)
+	}
 	if cl.onBehalfOf != "" {
 		req.Header.Set(c.opt.OnBehalfOfHeader, cl.onBehalfOf)
 	}
@@ -554,7 +561,7 @@ func (c *Client) attempt(ctx context.Context, cl call, payload []byte, out any) 
 		if json.Unmarshal(raw, &eb) == nil && eb.Error != "" {
 			msg = eb.Error
 		}
-		return attemptResult{err: &APIError{Op: cl.op, Status: s, Message: msg, Rule: eb.Rule, Hint: eb.Hint}}
+		return attemptResult{err: &APIError{Op: cl.op, Status: s, Message: msg, Code: eb.Code, Rule: eb.Rule, Hint: eb.Hint}}
 	case s >= 500:
 		retry := s == http.StatusServiceUnavailable ||
 			(cl.retry == retryAny && (s == http.StatusBadGateway || s == http.StatusGatewayTimeout))

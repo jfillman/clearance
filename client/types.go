@@ -1039,6 +1039,7 @@ type Attestation struct {
 // errorBody is every refusal's body: {"error"} and, from the gate, rule and hint.
 type errorBody struct {
 	Error string `json:"error"`
+	Code  string `json:"code"`
 	Rule  string `json:"rule"`
 	Hint  string `json:"hint"`
 }
