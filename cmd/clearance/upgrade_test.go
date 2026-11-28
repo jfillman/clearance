@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,4 +49,60 @@ func TestUpgradeCheckFromFiles(t *testing.T) {
 	if code := upgradeCheck(context.Background(), []string{"--to", "nope"}, &out, &errb); code != 2 {
 		t.Fatalf("usage: %d", code)
 	}
+}
+
+func TestUpgradeCheckLive(t *testing.T) {
+	dir := t.TempDir()
+	tab := filepath.Join(dir, "compat.json")
+	notes := filepath.Join(dir, "notes.md")
+	for p, s := range map[string]string{
+		tab:   `{"format":1,"releases":[{"core":"0.58.0","schema_version":1,"min_core":"0.0.0","no_rollback":false}]}`,
+		notes: "- migration 1 is the baseline\n",
+	} {
+		if err := os.WriteFile(p, []byte(s), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A core from before N-6 has no /v1/version: the operator names its release, and the schema reads as unversioned.
+	old := httptest.NewServer(http.NotFoundHandler())
+	defer old.Close()
+	var out, errb bytes.Buffer
+	args := []string{"--to", "0.58.0", "--url", old.URL, "--compat", tab, "--notes", notes}
+	if code := upgradeCheck(context.Background(), args, &out, &errb); code != 1 || !strings.Contains(errb.String(), "--current-core") {
+		t.Fatalf("no /v1/version, no --current-core: %d %s", code, errb.String())
+	}
+	out.Reset()
+	errb.Reset()
+	if code := upgradeCheck(context.Background(), append(args, "--current-core", "v0.57.3"), &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "schema 0 -> 1") || !strings.Contains(out.String(), "upgrade 0.57.3 -> 0.58.0") {
+		t.Fatalf("%d %s %s", code, out.String(), errb.String())
+	}
+	// A core that answers: the bearer token goes only over https or loopback.
+	var auth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{"core":"0.58.0","compat":{"format":1,"releases":[]}}`))
+	}))
+	defer srv.Close()
+	tok := filepath.Join(dir, "token")
+	if err := os.WriteFile(tok, []byte("secret-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errb.Reset()
+	if code := upgradeCheck(context.Background(), []string{"--to", "v0.58.0", "--url", srv.URL, "--token-file", tok, "--compat", tab, "--notes", notes}, &out, &errb); code != 0 || auth != "Bearer secret-token" {
+		t.Fatalf("loopback: %d %q %s", code, auth, errb.String())
+	}
+	// Not loopback, not https: refused before anything is sent.
+	auth = ""
+	plain := strings.Replace(srv.URL, "127.0.0.1", "example.com", 1)
+	errb.Reset()
+	if code := fetchErr(plain, tok); code == nil || auth != "" {
+		t.Fatalf("a token over plain http to a remote host was not refused (%v, %q)", code, auth)
+	}
+}
+
+func fetchErr(url, tokenFile string) error {
+	_, err := fetchVersion(context.Background(), url+"/v1/version", tokenFile)
+	return err
 }

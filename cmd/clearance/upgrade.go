@@ -7,7 +7,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -15,6 +17,7 @@ import (
 	"github.com/jfillman/clearance/internal/cli"
 	"github.com/jfillman/clearance/internal/compat"
 	"github.com/jfillman/clearance/internal/server"
+	"github.com/jfillman/clearance/internal/store"
 	"github.com/jfillman/clearance/internal/upgrade"
 )
 
@@ -40,6 +43,7 @@ func upgradeCheck(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	coreURL := fs.String("url", "", "the running core's base URL (reads GET /v1/version)")
 	tokenFile := fs.String("token-file", "", "a file holding a bearer token for --url")
 	current := fs.String("current-file", "", "a saved GET /v1/version answer, instead of --url")
+	currentCore := fs.String("current-core", "", "with --url, the running core's release (vX.Y.Z), for a core from before N-6 that has no GET /v1/version: its schema is read as unversioned")
 	compatSrc := fs.String("compat", "", "the target's compat.json: a file or https URL (default: the release's asset)")
 	notesSrc := fs.String("notes", "", "the target's release notes: a file or https URL (default: the release's GitHub notes)")
 	var provs multi
@@ -51,6 +55,7 @@ func upgradeCheck(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		fmt.Fprintln(stderr, "usage: clearance upgrade check --to vX.Y.Z (--url CORE_URL [--token-file F] | --current-file F) [--compat SRC] [--notes SRC] [--provider program=version]...")
 		return 2
 	}
+	tag := "v" + strings.TrimPrefix(*to, "v") // the release's tag and the URLs under it; the table and the report use the version without the v
 	in := upgrade.Input{Target: strings.TrimPrefix(*to, "v"), Providers: map[string]string{}}
 	for _, p := range provs {
 		name, v, ok := strings.Cut(p, "=")
@@ -71,7 +76,18 @@ func upgradeCheck(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		raw, err = fetchVersion(ctx, strings.TrimRight(*coreURL, "/")+"/v1/version", *tokenFile)
 	}
 	var cur server.VersionResponse
-	if err == nil {
+	var status *httpStatusError
+	switch {
+	case errors.As(err, &status) && status.code == http.StatusNotFound && *coreURL != "":
+		// A core from before N-6 has no GET /v1/version. The operator names its release; its schema is the unversioned one.
+		if _, ok := compat.Parse3(*currentCore); !ok {
+			fmt.Fprintln(stderr, "upgrade check: the core has no GET /v1/version (it predates N-6): pass its release as --current-core vX.Y.Z")
+			return 1
+		}
+		cur.Core = *currentCore
+		cur.Schema = &store.SchemaInfo{Version: 0, MinCore: "0.0.0", Migrations: []store.AppliedMigration{}}
+		err = nil
+	case err == nil:
 		err = json.Unmarshal(raw, &cur)
 	}
 	if err != nil {
@@ -82,7 +98,7 @@ func upgradeCheck(ctx context.Context, args []string, stdout, stderr io.Writer) 
 
 	src := *compatSrc
 	if src == "" {
-		src = releaseBase + *to + "/compat.json"
+		src = releaseBase + tag + "/compat.json"
 	}
 	if raw, err = readSource(ctx, src); err == nil {
 		in.Table, err = compat.Parse(raw)
@@ -94,7 +110,7 @@ func upgradeCheck(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	if *notesSrc != "" {
 		raw, err = readSource(ctx, *notesSrc)
 		in.Notes = string(raw)
-	} else if raw, err = readSource(ctx, "https://api.github.com/repos/jfillman/clearance/releases/tags/"+*to); err == nil {
+	} else if raw, err = readSource(ctx, "https://api.github.com/repos/jfillman/clearance/releases/tags/"+tag); err == nil {
 		var rel struct {
 			Body string `json:"body"`
 		}
@@ -144,7 +160,7 @@ func readSource(ctx context.Context, src string) ([]byte, error) {
 	return httpGet(ctx, src, "")
 }
 
-func fetchVersion(ctx context.Context, url, tokenFile string) ([]byte, error) {
+func fetchVersion(ctx context.Context, rawURL, tokenFile string) ([]byte, error) {
 	tok := ""
 	if tokenFile != "" {
 		b, err := os.ReadFile(tokenFile)
@@ -153,11 +169,33 @@ func fetchVersion(ctx context.Context, url, tokenFile string) ([]byte, error) {
 		}
 		tok = strings.TrimSpace(string(b))
 	}
-	return httpGet(ctx, url, tok)
+	// A bearer token goes over TLS, or to this machine (a port-forward): never in clear over a network.
+	if u, err := url.Parse(rawURL); err != nil {
+		return nil, err
+	} else if tok != "" && u.Scheme != "https" && !isLoopback(u.Hostname()) {
+		return nil, errors.New("--token-file needs an https --url (or a loopback address): the token is not sent in clear")
+	}
+	return httpGet(ctx, rawURL, tok)
 }
 
-func httpGet(ctx context.Context, url, token string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+func isLoopback(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// httpStatusError is a non-200 answer.
+type httpStatusError struct {
+	url  string
+	code int
+}
+
+func (e *httpStatusError) Error() string { return fmt.Sprintf("GET %s: HTTP %d", e.url, e.code) }
+
+func httpGet(ctx context.Context, rawURL, token string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -166,10 +204,7 @@ func httpGet(ctx context.Context, url, token string) ([]byte, error) {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	cl := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	if !strings.HasPrefix(url, "https://") {
-		// A core in the cluster is often plain http; the token only ever goes to the URL the operator named.
-		cl.Timeout = 15 * time.Second
-	}
+	cl.Timeout = 15 * time.Second
 	resp, err := cl.Do(req)
 	if err != nil {
 		return nil, err
@@ -184,7 +219,7 @@ func httpGet(ctx context.Context, url, token string) ([]byte, error) {
 		return httpGet(ctx, loc.String(), "")
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GET %s: HTTP %d", url, resp.StatusCode)
+		return nil, &httpStatusError{url: rawURL, code: resp.StatusCode}
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	return b, err

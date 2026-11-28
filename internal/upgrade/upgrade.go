@@ -86,8 +86,9 @@ func Check(in Input) Report {
 		if !known {
 			afterCurrent = true // an unknown running version: count every release up to the target
 		}
-		upToTarget, _ := compat.Less(rel.Core, in.Target)
-		if rel.NoRollback && afterCurrent && (upToTarget || rel.Core == in.Target) {
+		// Up to and including the target, compared as versions (0.60.0+build is 0.60.0).
+		beyondTarget, _ := compat.Less(in.Target, rel.Core)
+		if rel.NoRollback && afterCurrent && !beyondTarget {
 			nr = append(nr, rel.Core)
 		}
 	}

@@ -38,17 +38,23 @@ func checkMigrations(root, version string, list []pg.Migration) []string {
 		return []string{"internal/compat/compat.json: " + err.Error()}
 	}
 	problems = append(problems, pg.CheckMigrations(list, tab, pg.UnusedShapes())...)
-	var notes string
-	if cl, err := os.ReadFile(filepath.Join(root, release.ChangelogPath)); err == nil {
-		notes, _ = release.Notes(string(cl), version)
+	notes, notesErr := "", error(nil)
+	if cl, err := os.ReadFile(filepath.Join(root, release.ChangelogPath)); err != nil {
+		notesErr = err
+	} else if n, ok := release.Notes(string(cl), version); ok {
+		notes = n
+	} else {
+		notesErr = fmt.Errorf("%s has no section for %s", release.ChangelogPath, version)
 	}
 	for _, m := range list {
 		if later, ok := compat.Less(version, m.Release); ok && later {
 			problems = append(problems, fmt.Sprintf("migration %d (%s) is labelled for release %s, after %s", m.Version, m.Name, m.Release, version))
 		}
-		if m.Kind == pg.KindContract && m.Release == version && notes != "" {
+		if m.Kind == pg.KindContract && m.Release == version {
 			low := strings.ToLower(notes)
-			if !strings.Contains(low, "no-rollback") || !strings.Contains(low, strings.ToLower(m.Name)) {
+			if notesErr != nil {
+				problems = append(problems, fmt.Sprintf("release %s carries contract migration %d (%s) and its notes cannot be read: %v", version, m.Version, m.Name, notesErr))
+			} else if !strings.Contains(low, "no-rollback") || !strings.Contains(low, strings.ToLower(m.Name)) {
 				problems = append(problems, fmt.Sprintf(
 					"the notes for %s must say the release is no-rollback and name contract migration %d (%s): its only way back is the pre-upgrade backup",
 					version, m.Version, m.Name))

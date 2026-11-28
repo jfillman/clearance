@@ -86,6 +86,14 @@ func TestAContractReleaseMustNameItsMigrationInTheNotes(t *testing.T) {
 	if problems := strings.Join(checkMigrations(named, "0.58.0", list), "\n"); strings.Contains(problems, "must say") {
 		t.Fatalf("notes that name it failed:\n%s", problems)
 	}
+	// Notes that are missing are not an exemption.
+	empty := t.TempDir()
+	tab, _ := os.ReadFile("../../internal/compat/compat.json")
+	_ = os.MkdirAll(filepath.Join(empty, "internal", "compat"), 0o755)
+	_ = os.WriteFile(filepath.Join(empty, "internal", "compat", "compat.json"), tab, 0o644)
+	if problems := strings.Join(checkMigrations(empty, "0.58.0", list), "\n"); !strings.Contains(problems, "its notes cannot be read") {
+		t.Fatalf("a contract release with no changelog passed:\n%s", problems)
+	}
 	// And a migration labelled for a later release than the tag is refused.
 	if problems := strings.Join(checkMigrations(named, "0.57.3", list), "\n"); !strings.Contains(problems, "labelled for release 0.58.0, after 0.57.3") {
 		t.Fatalf("%s", problems)

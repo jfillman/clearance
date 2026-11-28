@@ -309,7 +309,8 @@ func scratchCopy(t *testing.T, dsn string) string {
 	src := strings.TrimPrefix(u.Path, "/")
 	name := fmt.Sprintf("%s_restored", src)
 	u.Path = "/postgres"
-	conn, err := pgx.Connect(bg, u.String())
+	maintenance := u.String() // the cleanup connects here: a database cannot be dropped from a connection to itself
+	conn, err := pgx.Connect(bg, maintenance)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,14 +319,15 @@ func scratchCopy(t *testing.T, dsn string) string {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		c, err := pgx.Connect(context.Background(), u.String())
+		c, err := pgx.Connect(context.Background(), maintenance)
 		if err == nil {
 			_, _ = c.Exec(context.Background(), "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)")
 			c.Close(context.Background())
 		}
 	})
-	u.Path = "/" + name
-	return u.String()
+	restored, _ := url.Parse(maintenance)
+	restored.Path = "/" + name
+	return restored.String()
 }
 
 // previous release -> candidate -> verify the chain; then either the previous core rolls back onto the upgraded schema
@@ -406,3 +408,29 @@ func TestANoRollbackUpgradeIsRefusedByThePreviousCoreAndRestoresFromBackup(t *te
 
 var _ store.SchemaReporter = (*Store)(nil)
 var _ = storetest.Writer
+
+// The guard holds on a reconnect too: a writer that lost its connection (and the lock) while another core applied a
+// contract migration refuses to write on the new schema.
+func TestTheGuardHoldsAfterTheWriterReconnects(t *testing.T) {
+	dsn := newDB(t)
+	s, err := openAt(t, dsn, "0.58.0", base())
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendN(t, s, 2)
+	exec(t, dsn, `INSERT INTO clearance_schema (version, name, kind, release, min_core, checksum, core)
+VALUES (2, 'drop-x', 'contract', '0.59.0', '0.59.0', 'x', '0.59.0')`)
+	pid := s.conn.PgConn().PID()
+	exec(t, dsn, fmt.Sprintf("SELECT pg_terminate_backend(%d)", pid))
+	var last error
+	for i := 0; i < 3; i++ {
+		last = s.Atomic(bg, func(tx store.Tx) error {
+			_, err := tx.Append(bg, store.Event{"tool": "after"}, storetest.Writer)
+			return err
+		})
+		if errors.Is(last, ErrCoreTooOld) {
+			return
+		}
+	}
+	t.Fatalf("the old core went on writing after the schema moved: %v", last)
+}

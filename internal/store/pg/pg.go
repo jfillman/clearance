@@ -545,6 +545,16 @@ func (s *Store) ensureWriter(ctx context.Context) error {
 		if err := s.lock(ctx); err != nil {
 			return fmt.Errorf("%w: %w", ErrWriterLost, err)
 		}
+		// Another core may have applied a contract migration while this one had no lock: the version guard holds on a
+		// reconnect as it does at start, before anything is written.
+		applied, _, err := readApplied(ctx, s.conn)
+		if err == nil {
+			err = Guard(s.opt.CoreVersion, applied)
+		}
+		if err != nil {
+			s.conn.Close(context.Background())
+			return err
+		}
 		s.stale = true
 	}
 	if !s.stale {

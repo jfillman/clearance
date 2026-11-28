@@ -78,7 +78,7 @@ do). The core holds a compatibility table, published as `compat.json` on each re
 that gives per core release the provider versions it accepts (`min` inclusive, `max` exclusive). A version outside the
 range is refused before the route runs: `412` with `{"error": "...", "code": "provider_version_unsupported"}` (the Go
 client's `ErrProviderVersion`). Nothing is refused when the header is absent (a provider from before N-6), the program has
-no range in the table, or the version is not `X.Y.Z` (a development build). See [Upgrading](upgrade.md).
+no range in the table, or the version is not exactly `X.Y.Z` (a development or pre-release build such as `0.58.0-rc1` or `dev`). Any route may answer the 412, since the check wraps the whole server. See [Upgrading](upgrade.md).
 
 ## The runtime role
 

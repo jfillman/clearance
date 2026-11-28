@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/jfillman/clearance/internal/decide"
@@ -98,9 +99,13 @@ var errs = func(codes ...int) []Response {
 		413: "the body is over the route's cap",
 		503: "the store could not record it: treat as unreachable (fail closed)",
 	}
-	out := make([]Response, 0, len(codes))
+	out := make([]Response, 0, len(codes)+1)
 	for _, c := range codes {
 		out = append(out, Response{c, text[c], ErrorResponse{}})
+	}
+	if !slices.Contains(codes, 412) {
+		// providerVersion wraps every route (N-6c): any call may carry Clearance-Provider.
+		out = append(out, Response{412, text[412], ErrorResponse{}})
 	}
 	return out
 }
@@ -164,7 +169,7 @@ var routeTable = []Route{
 			"provider asked for. Recorded as the decision's tool, linked by outcome_of; the identity fields are copied " +
 			"from the decision record (verified), what the provider reports is claimed.",
 		Request:   OutcomeRequest{},
-		Responses: append([]Response{{200, "recorded", RecordRef{}}}, errs(400, 401, 403, 404, 409, 412, 413, 503)...),
+		Responses: append([]Response{{200, "recorded", RecordRef{}}}, errs(400, 401, 403, 404, 409, 413, 503)...),
 		serve:     func(s *Server) http.HandlerFunc { return s.outcome },
 	},
 	{

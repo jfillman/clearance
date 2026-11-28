@@ -98,7 +98,16 @@ func Parse(b []byte) (Table, error) {
 	return t, nil
 }
 
-// Parse3 reads X.Y.Z.
+// ParseStrict reads exactly X.Y.Z, with an optional leading v and nothing after (no -pre or +build suffix).
+func ParseStrict(s string) ([3]int, bool) {
+	s = strings.TrimPrefix(strings.TrimSpace(s), "v")
+	if strings.ContainsAny(s, "-+") {
+		return [3]int{}, false
+	}
+	return Parse3(s)
+}
+
+// Parse3 reads X.Y.Z; a -pre or +build suffix is ignored.
 func Parse3(s string) ([3]int, bool) {
 	s = strings.TrimPrefix(strings.TrimSpace(s), "v")
 	if i := strings.IndexAny(s, "-+"); i >= 0 {
@@ -199,7 +208,7 @@ func (t Table) Accepts(core, program, version string) (ok bool, reason string) {
 	if !found {
 		return true, ""
 	}
-	pv, valid := Parse3(version)
+	pv, valid := ParseStrict(version) // a development or pre-release build is not checked
 	if !valid {
 		return true, ""
 	}

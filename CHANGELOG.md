@@ -13,8 +13,10 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 - **Boring upgrades (N-6).** The schema is versioned: an ordered, forward-only list of migrations with a `clearance_schema`
   table recording each one (its kind, release, `min_core`, checksum and the core that applied it). Today's idempotent DDL
-  is migration 1, so a database built by v0.57.3 or earlier adopts it with no DDL change (the migration is recorded; no
-  object is created or altered). Each later migration runs in one transaction under the writer lock.
+  is migration 1. A database that already has every object migration 1 creates (one built by v0.57.3, say) adopts it with no
+  change to any existing object: the migration is recorded, its DDL is not run, and `clearance_schema` itself is the only
+  thing created. A database missing an object runs migration 1, whose idempotent statements add what is missing. Each later
+  migration runs in one transaction under the writer lock.
 - **The version guard.** A core refuses to start, with the code `schema_requires_newer_core`, only when it is older than
   the schema's `min_core`; it accepts a newer schema whose `min_core` it meets, which is what makes a rollback across
   expand migrations work. Other named refusals: `schema_migration_changed` (a released migration was edited),

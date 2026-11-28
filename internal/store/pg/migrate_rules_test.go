@@ -161,3 +161,50 @@ func TestAReleasedMigrationMustBeInTheTable(t *testing.T) {
 		t.Fatalf("%v", bad)
 	}
 }
+
+// An ALTER TABLE is classified by every action in it, so a drop cannot ride behind an add.
+func TestAnAlterTableIsClassifiedByEveryAction(t *testing.T) {
+	cases := map[string]string{
+		`ALTER TABLE t ADD COLUMN a text, ADD COLUMN IF NOT EXISTS b jsonb`: KindExpand,
+		`ALTER TABLE t ADD COLUMN a numeric(10,2)`:                          KindExpand,
+		`ALTER TABLE t ADD COLUMN a text, DROP COLUMN b`:                    "",
+		`ALTER TABLE t DROP COLUMN a, DROP COLUMN b`:                        KindContract,
+		`ALTER TABLE t ADD COLUMN a text, ALTER COLUMN b TYPE bigint`:       "",
+		`ALTER TABLE t ADD COLUMN a text NOT NULL DEFAULT ''`:               KindContract,
+		`ALTER TABLE t ADD COLUMN a text UNIQUE`:                            KindContract,
+		`ALTER TABLE t SET SCHEMA other`:                                    "",
+		`CREATE INDEX CONCURRENTLY IF NOT EXISTS i ON t (a)`:                "",
+		`CREATE UNIQUE INDEX IF NOT EXISTS i ON t (a)`:                      KindExpand,
+		`TRUNCATE clearance_evidence`:                                       KindContract,
+	}
+	for st, want := range cases {
+		if got := ClassifyStatement(st); got != want {
+			t.Errorf("%s: %q, want %q", st, got, want)
+		}
+	}
+	m := Migration{Version: 2, Name: "sneaky", Kind: KindExpand, Release: "0.60.0", MinCore: "0.0.0",
+		DDL: `ALTER TABLE clearance_changes ADD COLUMN note text, DROP COLUMN head;`}
+	if bad := CheckMigrations([]Migration{baseAt058(), m}, rulesTable(), nil); !has(bad, "neither expand nor contract") {
+		t.Fatalf("an add that carries a drop passed: %v", bad)
+	}
+}
+
+// The declared Retires must cover what the DDL changes.
+func TestRetiresMustCoverWhatTheDDLChanges(t *testing.T) {
+	u := []Unused{{Shape: "clearance_changes.legacy", Since: "0.59.0"}}
+	c := contract("0.60.0", "clearance_changes.legacy")
+	c.DDL = `DROP TABLE clearance_evidence;`
+	if bad := CheckMigrations([]Migration{baseAt058(), c}, rulesTable(), u); !has(bad, "changes clearance_evidence, which its Retires does not name") {
+		t.Fatalf("a drop of another table passed: %v", bad)
+	}
+	c.DDL = `ALTER TABLE clearance_changes DROP COLUMN legacy, DROP COLUMN head;`
+	if bad := CheckMigrations([]Migration{baseAt058(), c}, rulesTable(), u); !has(bad, "clearance_changes.head") {
+		t.Fatalf("a second dropped column passed: %v", bad)
+	}
+	// A retired table covers its columns.
+	c = contract("0.60.0", "clearance_old")
+	c.DDL = `DROP TABLE clearance_old;`
+	if bad := CheckMigrations([]Migration{baseAt058(), c}, rulesTable(), []Unused{{Shape: "clearance_old", Since: "0.59.0"}}); len(bad) > 0 {
+		t.Fatalf("%v", bad)
+	}
+}

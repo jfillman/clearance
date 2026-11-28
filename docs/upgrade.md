@@ -79,7 +79,9 @@ clearance upgrade check --to v0.60.0 --url https://clearance.example.com --token
 It reads the target's `compat.json` and release notes and the running core's `GET /v1/version`, and lists: the schema change
 (`schema 1 -> 2`, which migrations run), whether any release up to the target is no-rollback (and that you need a backup
 first), the providers to upgrade first, and the notes' lines about migrations and upgrade steps. Exit 1 when it is blocked.
-It does not run doctor (not built); a line says so. See [the CLI](cli.md#clearance-upgrade-check).
+A core from before N-6 has no `GET /v1/version`: pass its release with `--current-core vX.Y.Z` and its schema is read as
+unversioned. A bearer token (`--token-file`) is sent only over https or to a loopback address. `--to` takes `v0.60.0` or
+`0.60.0`. It does not run doctor (not built); a line says so. See [the CLI](cli.md#clearance-upgrade-check).
 
 ## The whole-install upgrade test
 

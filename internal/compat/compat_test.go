@@ -23,11 +23,11 @@ func TestAcceptsAndRefuses(t *testing.T) {
 		{"0.58.4", "a", "0.56.9", false}, // a patch follows the 0.58.0 row
 		{"0.58.0", "b", "0.60.0", false}, // max is exclusive
 		{"0.58.0", "b", "0.59.9", true},
-		{"0.58.0", "zzz", "0.0.1", true},    // no range for the program
-		{"0.58.0", "a", "dev", true},        // a version that is not X.Y.Z is not checked
-		{"0.58.0", "a", "0.57.0-rc1", true}, // suffix ignored
-		{"dev", "a", "0.0.1", true},         // a core without a version checks nothing
-		{"0.57.0", "a", "0.0.1", true},      // older than every row
+		{"0.58.0", "zzz", "0.0.1", true},   // no range for the program
+		{"0.58.0", "a", "dev", true},       // a version that is not X.Y.Z is not checked
+		{"0.58.0", "a", "0.1.0-dev", true}, // a suffixed version is not X.Y.Z: not checked
+		{"dev", "a", "0.0.1", true},        // a core without a version checks nothing
+		{"0.57.0", "a", "0.0.1", true},     // older than every row
 	} {
 		if ok, why := tab.Accepts(c.core, c.prog, c.ver); ok != c.ok || (!ok && why == "") {
 			t.Errorf("%+v: ok=%v why=%q", c, ok, why)

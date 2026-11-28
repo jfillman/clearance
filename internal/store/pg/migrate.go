@@ -334,24 +334,111 @@ func Statements(ddl string) []string {
 }
 
 var (
-	expandRx   = regexp.MustCompile(`^(?i)(CREATE TABLE( IF NOT EXISTS)? |CREATE (UNIQUE )?INDEX( IF NOT EXISTS)? |ALTER TABLE \S+ ADD COLUMN( IF NOT EXISTS)? )`)
-	contractRx = regexp.MustCompile(`(?i)^(DROP |ALTER TABLE \S+ (DROP |RENAME |ALTER |ADD CONSTRAINT )|ALTER (TABLE|INDEX) \S+ RENAME |TRUNCATE )`)
-	notNullRx  = regexp.MustCompile(`(?i)\bNOT NULL\b|\bPRIMARY KEY\b`)
+	alterRx    = regexp.MustCompile(`(?i)^ALTER TABLE (?:IF EXISTS )?(?:ONLY )?(\S+) (.+)$`)
+	addColRx   = regexp.MustCompile(`(?i)^ADD COLUMN(?: IF NOT EXISTS)? `)
+	contractAc = regexp.MustCompile(`(?i)^(DROP |RENAME |ALTER |ADD CONSTRAINT )`)
+	notNullRx  = regexp.MustCompile(`(?i)\bNOT NULL\b|\bPRIMARY KEY\b|\bUNIQUE\b|\bREFERENCES\b|\bGENERATED\b`)
+	concurrRx  = regexp.MustCompile(`(?i)\bCONCURRENTLY\b`)
+	createRx   = regexp.MustCompile(`(?i)^(CREATE TABLE( IF NOT EXISTS)? |CREATE (UNIQUE )?INDEX( IF NOT EXISTS)? )`)
+	dropRx     = regexp.MustCompile(`(?i)^(DROP |TRUNCATE |ALTER INDEX \S+ RENAME )`)
 )
 
+// splitActions splits the actions of an ALTER TABLE on the commas outside parentheses.
+func splitActions(s string) []string {
+	var out []string
+	depth, from := 0, 0
+	for i, r := range s {
+		switch r {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case ',':
+			if depth == 0 {
+				out = append(out, strings.TrimSpace(s[from:i]))
+				from = i + 1
+			}
+		}
+	}
+	return append(out, strings.TrimSpace(s[from:]))
+}
+
 // ClassifyStatement says what one DDL statement is: KindExpand (a new table, a new index, a new nullable column),
-// KindContract (a drop, a rename, a type change, a new NOT NULL), or "" for anything else (a data change, a function, a
-// concurrent index build: neither, which fails CI).
+// KindContract (a drop, a rename, a type change, a new NOT NULL), or "" for anything else: a data change, a function, a
+// concurrent index build, or a statement that mixes expand and contract actions (an ALTER TABLE is classified by every
+// one of its actions). "" fails CI.
 func ClassifyStatement(st string) string {
 	switch {
-	case contractRx.MatchString(st):
+	case concurrRx.MatchString(st):
+		return ""
+	case dropRx.MatchString(st):
 		return KindContract
-	case regexp.MustCompile(`(?i)^ALTER TABLE \S+ ADD COLUMN`).MatchString(st) && notNullRx.MatchString(st):
-		return KindContract // a new NOT NULL column: the previous release's inserts would fail
-	case expandRx.MatchString(st) && !regexp.MustCompile(`(?i)\bCONCURRENTLY\b`).MatchString(st):
+	case createRx.MatchString(st):
 		return KindExpand
 	}
-	return ""
+	m := alterRx.FindStringSubmatch(st)
+	if m == nil {
+		return ""
+	}
+	kind := ""
+	for _, a := range splitActions(m[2]) {
+		var k string
+		switch {
+		case addColRx.MatchString(a) && notNullRx.MatchString(a):
+			k = KindContract // a new NOT NULL column: the previous release's inserts would fail
+		case addColRx.MatchString(a):
+			k = KindExpand
+		case contractAc.MatchString(a):
+			k = KindContract
+		default:
+			return ""
+		}
+		if kind != "" && kind != k {
+			return ""
+		}
+		kind = k
+	}
+	return kind
+}
+
+var (
+	dropTableRx  = regexp.MustCompile(`(?i)^DROP (?:TABLE|INDEX|VIEW|SEQUENCE)(?: IF EXISTS)? ([^\s,;]+)`)
+	truncateRx   = regexp.MustCompile(`(?i)^TRUNCATE (?:TABLE )?(?:ONLY )?([^\s,;]+)`)
+	alterColRx   = regexp.MustCompile(`(?i)^(?:DROP COLUMN(?: IF EXISTS)?|ALTER COLUMN|RENAME COLUMN|ADD COLUMN(?: IF NOT EXISTS)?) ([^\s,;]+)`)
+	alterIdxName = regexp.MustCompile(`(?i)^ALTER INDEX (?:IF EXISTS )?(\S+) RENAME `)
+)
+
+// Shapes are the shapes a contract statement drops or changes: "table" or "table.column" (an index is its own name; a
+// statement it cannot read column by column is the table). CheckMigrations requires each to be covered by the migration's
+// Retires, so the declaration cannot name one shape while the DDL changes another.
+func Shapes(st string) []string {
+	if m := dropTableRx.FindStringSubmatch(st); m != nil {
+		return []string{m[1]}
+	}
+	if m := truncateRx.FindStringSubmatch(st); m != nil {
+		return []string{m[1]}
+	}
+	if m := alterIdxName.FindStringSubmatch(st); m != nil {
+		return []string{m[1]}
+	}
+	m := alterRx.FindStringSubmatch(st)
+	if m == nil {
+		return nil
+	}
+	var out []string
+	for _, a := range splitActions(m[2]) {
+		if c := alterColRx.FindStringSubmatch(a); c != nil {
+			out = append(out, m[1]+"."+c[1])
+		} else {
+			out = append(out, m[1]) // RENAME TO, ADD/DROP CONSTRAINT: the table's shape
+		}
+	}
+	return out
+}
+
+// covers: a retired shape "t" covers "t.c".
+func covers(retired, shape string) bool {
+	return retired == shape || strings.HasPrefix(shape, retired+".")
 }
 
 // CheckMigrations is N-6e as a function: every violation of the list's rules, empty when it is sound. tab is the
@@ -419,6 +506,17 @@ func CheckMigrations(list []Migration, tab compat.Table, retired []Unused) []str
 			}
 			if len(m.Retires) == 0 {
 				add("%s: a contract migration names the shapes it retires", who)
+			}
+			for _, st := range Statements(m.DDL) {
+				for _, shape := range Shapes(st) {
+					covered := false
+					for _, r := range m.Retires {
+						covered = covered || covers(r, shape)
+					}
+					if !covered {
+						add("%s: the DDL changes %s, which its Retires does not name", who, shape)
+					}
+				}
 			}
 			prev, hasPrev := tab.Previous(m.Release)
 			if hasPrev && prev.SchemaVersion < 1 {
