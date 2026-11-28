@@ -337,7 +337,7 @@ var (
 	alterRx    = regexp.MustCompile(`(?i)^ALTER TABLE (?:IF EXISTS )?(?:ONLY )?(\S+) (.+)$`)
 	addColRx   = regexp.MustCompile(`(?i)^ADD COLUMN(?: IF NOT EXISTS)? `)
 	contractAc = regexp.MustCompile(`(?i)^(DROP |RENAME |ALTER |ADD CONSTRAINT )`)
-	notNullRx  = regexp.MustCompile(`(?i)\bNOT NULL\b|\bPRIMARY KEY\b|\bUNIQUE\b|\bREFERENCES\b|\bGENERATED\b`)
+	notNullRx  = regexp.MustCompile(`(?i)\bNOT NULL\b|\bPRIMARY KEY\b|\bUNIQUE\b|\bREFERENCES\b|\bGENERATED\b|\bCHECK\b|\bEXCLUDE\b`)
 	concurrRx  = regexp.MustCompile(`(?i)\bCONCURRENTLY\b`)
 	createRx   = regexp.MustCompile(`(?i)^(CREATE TABLE( IF NOT EXISTS)? |CREATE (UNIQUE )?INDEX( IF NOT EXISTS)? )`)
 	dropRx     = regexp.MustCompile(`(?i)^(DROP |TRUNCATE |ALTER INDEX \S+ RENAME )`)

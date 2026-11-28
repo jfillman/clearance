@@ -172,6 +172,7 @@ func TestAnAlterTableIsClassifiedByEveryAction(t *testing.T) {
 		`ALTER TABLE t ADD COLUMN a text, ALTER COLUMN b TYPE bigint`:       "",
 		`ALTER TABLE t ADD COLUMN a text NOT NULL DEFAULT ''`:               KindContract,
 		`ALTER TABLE t ADD COLUMN a text UNIQUE`:                            KindContract,
+		`ALTER TABLE t ADD COLUMN a text CHECK (a IS DISTINCT FROM NULL)`:   KindContract,
 		`ALTER TABLE t SET SCHEMA other`:                                    "",
 		`CREATE INDEX CONCURRENTLY IF NOT EXISTS i ON t (a)`:                "",
 		`CREATE UNIQUE INDEX IF NOT EXISTS i ON t (a)`:                      KindExpand,

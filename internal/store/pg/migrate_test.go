@@ -422,15 +422,19 @@ func TestTheGuardHoldsAfterTheWriterReconnects(t *testing.T) {
 VALUES (2, 'drop-x', 'contract', '0.59.0', '0.59.0', 'x', '0.59.0')`)
 	pid := s.conn.PgConn().PID()
 	exec(t, dsn, fmt.Sprintf("SELECT pg_terminate_backend(%d)", pid))
+	// The first attempts may fail on the dead connection; none may succeed, and the refusal must come.
 	var last error
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 5; i++ {
 		last = s.Atomic(bg, func(tx store.Tx) error {
 			_, err := tx.Append(bg, store.Event{"tool": "after"}, storetest.Writer)
 			return err
 		})
+		if last == nil {
+			t.Fatal("the old core wrote after the schema moved past it")
+		}
 		if errors.Is(last, ErrCoreTooOld) {
 			return
 		}
 	}
-	t.Fatalf("the old core went on writing after the schema moved: %v", last)
+	t.Fatalf("no refusal with %s after the schema moved: last error %v", CodeCoreTooOld, last)
 }
