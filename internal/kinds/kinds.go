@@ -17,6 +17,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"regexp"
 	"slices"
 	"sort"
@@ -175,10 +176,51 @@ func Parse(raw []byte) (*Compiled, error) {
 	if err := dec.Decode(&k); err != nil {
 		return nil, malformed("the kind does not decode: %v", err)
 	}
-	if dec.More() {
-		return nil, malformed("the kind is one JSON document")
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, malformed("the kind is one JSON document, with nothing after it")
+	}
+	// A null decodes as an absent member (an "ops": null would allow every op), so a null is refused wherever the
+	// format itself is, as the schema refuses it. The JSON Schemas a kind carries, and its fixtures, may hold nulls.
+	var doc any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, malformed("the kind does not decode: %v", err)
+	}
+	if where := nullAt(doc, "", false); where != "" {
+		return nil, malformed("%s is null: leave it out instead", where)
 	}
 	return compile(k)
+}
+
+// nullAt is the path of the first null in the kind's own members, skipping the schemas and fixture descriptions.
+func nullAt(v any, path string, inTests bool) string {
+	switch x := v.(type) {
+	case nil:
+		return path
+	case []any:
+		for i, e := range x {
+			if p := nullAt(e, fmt.Sprintf("%s[%d]", path, i), inTests); p != "" {
+				return p
+			}
+		}
+	case map[string]any:
+		keys := make([]string, 0, len(x))
+		for k := range x {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			if k == "subjectSchema" || k == "attrs" || (inTests && k == "description") {
+				if x[k] == nil {
+					return strings.TrimPrefix(path+"."+k, ".")
+				}
+				continue
+			}
+			if p := nullAt(x[k], strings.TrimPrefix(path+"."+k, "."), inTests || k == "tests"); p != "" {
+				return p
+			}
+		}
+	}
+	return ""
 }
 
 func compile(k Kind) (*Compiled, error) {
@@ -223,7 +265,7 @@ func compile(k Kind) (*Compiled, error) {
 			return nil, malformed("%s: %s is listed twice", where, it.Type)
 		}
 		seen[it.Type] = true
-		if it.Type == "*" && k.DefaultTier < 2 {
+		if strings.Trim(it.Type, "*") == "" && k.DefaultTier < 2 { // "*", "**": every type
 			return nil, malformed(`%s: "*" needs a defaultTier of at least 2, so an unexpected type is never cleared by policy`, where)
 		}
 		for _, op := range it.Ops {
@@ -356,6 +398,11 @@ func objectSchema(s map[string]any, where string) (*jsonschema.Schema, error) {
 	if s["type"] != "object" || s["additionalProperties"] != false {
 		return nil, malformed(`%s is an object schema with "additionalProperties": false (an undeclared member is refused)`, where)
 	}
+	// Draft 2020-12 only, one resource: another dialect can ignore the closure beside a $ref, and an embedded $id
+	// is another resource with its own dialect.
+	if bad := dialectKey(s); bad != "" {
+		return nil, malformed("%s: %s (a kind's schemas are draft 2020-12 and one resource)", where, bad)
+	}
 	raw, err := json.Marshal(s)
 	if err != nil {
 		return nil, malformed("%s: %v", where, err)
@@ -376,6 +423,33 @@ func objectSchema(s map[string]any, where string) (*jsonschema.Schema, error) {
 		return nil, malformed("%s does not compile: %v", where, err)
 	}
 	return sch, nil
+}
+
+const draft2020 = "https://json-schema.org/draft/2020-12/schema"
+
+// dialectKey names the first $schema other than draft 2020-12, or $id, anywhere in a schema.
+func dialectKey(v any) string {
+	switch x := v.(type) {
+	case []any:
+		for _, e := range x {
+			if b := dialectKey(e); b != "" {
+				return b
+			}
+		}
+	case map[string]any:
+		if d, ok := x["$schema"]; ok && d != draft2020 {
+			return fmt.Sprintf("$schema %v", d)
+		}
+		if _, ok := x["$id"]; ok {
+			return "$id"
+		}
+		for _, e := range x {
+			if b := dialectKey(e); b != "" {
+				return b
+			}
+		}
+	}
+	return ""
 }
 
 type noLoader struct{}

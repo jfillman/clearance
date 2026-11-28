@@ -136,6 +136,10 @@ func TestTheKindSchemaMatchesTheParser(t *testing.T) {
 		}),
 		"a 256-character multibyte type": with(func(m map[string]any) { at(m, "itemTypes", 0)["type"] = strings.Repeat("é", 256) }),
 		"a 257-character type":           with(func(m map[string]any) { at(m, "itemTypes", 0)["type"] = strings.Repeat("é", 257) }),
+		"null ops":                       with(func(m map[string]any) { at(m, "itemTypes", 1)["ops"] = nil }),
+		"a null class":                   with(func(m map[string]any) { at(m, "itemRules", 0)["class"] = nil }),
+		"null itemRules":                 with(func(m map[string]any) { m["itemRules"] = nil }),
+		"a ** with defaultTier 1":        with(func(m map[string]any) { m["itemTypes"] = []any{map[string]any{"type": "**"}} }),
 		"a type with a space":            with(func(m map[string]any) { at(m, "itemTypes", 0)["type"] = "a table" }),
 	}
 	accepted := 0
@@ -162,6 +166,15 @@ func TestTheKindSchemaMatchesTheParser(t *testing.T) {
 		}),
 		"a schema that does not compile": with(func(m map[string]any) {
 			at(m, "itemTypes", 0)["attrs"].(map[string]any)["properties"] = map[string]any{"rows": map[string]any{"type": 7}}
+		}),
+		"a draft-07 schema": with(func(m map[string]any) {
+			ss := m["subjectSchema"].(map[string]any)
+			ss["$schema"] = "http://json-schema.org/draft-07/schema#"
+			ss["$ref"] = "#/definitions/open"
+			ss["definitions"] = map[string]any{"open": map[string]any{"type": "object"}}
+		}),
+		"an embedded $id": with(func(m map[string]any) {
+			m["subjectSchema"].(map[string]any)["properties"] = map[string]any{"engine": map[string]any{"$id": "urn:x", "type": "string"}}
 		}),
 		"a remote $ref": with(func(m map[string]any) {
 			m["subjectSchema"].(map[string]any)["properties"] = map[string]any{"engine": map[string]any{"$ref": "https://example.com/s.json"}}
@@ -255,5 +268,24 @@ func TestBindRefusesWhatTheKindDoesNotDeclare(t *testing.T) {
 		if err := k.Bind(d); !errors.As(err, &e) || e.Code != "DG-UNBOUND" {
 			t.Errorf("%s: %v", name, err)
 		}
+	}
+}
+
+// A kind is one JSON document, nothing after it; a null in a JSON Schema the kind carries is the schema's business.
+func TestParseTakesOneDocumentAndNullsOnlyInSchemas(t *testing.T) {
+	raw, _ := json.Marshal(pack())
+	for _, tail := range []string{"]", "}", "{}", "x"} {
+		if _, err := Parse(append(append([]byte{}, raw...), tail...)); err == nil {
+			t.Errorf("trailing %q accepted", tail)
+		}
+	}
+	if _, err := Parse(append(append([]byte{}, raw...), " \n"...)); err != nil {
+		t.Fatalf("trailing whitespace: %v", err)
+	}
+	m := pack()
+	m["subjectSchema"].(map[string]any)["properties"].(map[string]any)["note"] = map[string]any{"const": nil}
+	raw, _ = json.Marshal(m)
+	if _, err := Parse(raw); err != nil {
+		t.Fatalf("a null inside a schema: %v", err)
 	}
 }
