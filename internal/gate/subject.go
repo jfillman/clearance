@@ -232,10 +232,13 @@ func parsePlanSubject(v any) (*Subject, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.Summary = sum
-	if err := checkSummary(*sum, s.Resources); err != nil {
+	// The core keeps the summary it derives from the resources (SDK-1), never the caller's: the caller's is only
+	// checked against it, so a summary cannot describe a change the resources do not.
+	derived := planSummary(planItems(s.Resources))
+	if err := checkSummary(*sum, derived); err != nil {
 		return nil, err
 	}
+	s.Summary = &derived
 	return s, nil
 }
 
@@ -300,32 +303,15 @@ func parseSummary(v any) (*PlanSummary, error) {
 	return s, nil
 }
 
-// checkSummary: the counts and the destroyed addresses are exactly what the resources say, so a verifier cannot
-// describe a destroy in the summary and leave it out of what the core tiers (or the other way round).
-func checkSummary(s PlanSummary, rs []Resource) error {
-	var n PlanSummary
-	var destroyed []string
-	for _, r := range rs {
-		if !r.Changes() {
-			continue
-		}
-		switch r.action() {
-		case "create":
-			n.Create++
-		case "update":
-			n.Update++
-		case "replace":
-			n.Replace++
-		case "destroy":
-			n.Destroy++
-			destroyed = append(destroyed, r.Address)
-		}
-	}
+// checkSummary: the caller's counts and destroyed addresses are exactly the ones derived from the resources, so a
+// verifier cannot describe a destroy in the summary and leave it out of what the core tiers (or the other way round).
+func checkSummary(s, n PlanSummary) error {
 	if n.Create != s.Create || n.Update != s.Update || n.Replace != s.Replace || n.Destroy != s.Destroy {
 		return bad("subject.summary (%d create, %d update, %d replace, %d destroy) is not what subject.resources says (%d, %d, %d, %d)",
 			s.Create, s.Update, s.Replace, s.Destroy, n.Create, n.Update, n.Replace, n.Destroy)
 	}
 	got := append([]string(nil), s.DestroyedAddresses...)
+	destroyed := append([]string(nil), n.DestroyedAddresses...)
 	sort.Strings(got)
 	sort.Strings(destroyed)
 	if !slices.Equal(got, destroyed) {

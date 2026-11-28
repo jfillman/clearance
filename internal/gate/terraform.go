@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/jfillman/clearance/internal/describe"
 )
 
 // TypeRule is one category of Terraform resource types the baseline makes tier 3, by fnmatch glob.
@@ -112,16 +114,15 @@ var checksPlanOK = checksOK[:2]
 
 // classifyPlan is Classify for a terraform-plan subject: the path rules, each resource change's tier, a plan that
 // changes nothing at tier 1, then -target or -replace one tier up with a floor of 2, then provenance and the checks.
-func classifyPlan(req ChangeRequest, pol Policy, reasons []Reason) Classification {
+// The resource changes are the description's items (describe.go): a no-op or a read is not one.
+func classifyPlan(req ChangeRequest, d *describe.Description, pol Policy, reasons []Reason) Classification {
 	s := req.Subject
 	pol.TTLDays = pol.planTTLDays() // a plan goes stale: it holds 24 hours, not the gitops week (G-TF-2)
 	protected := pol.WorkspaceProtected(*s.Workspace, req.Protected)
 	changed := 0
 	var replaced []string
-	for _, r := range s.Resources {
-		if !r.Changes() {
-			continue
-		}
+	for _, it := range d.Items {
+		r := itemResource(it)
 		changed++
 		reasons = append(reasons, resourceTier(r, protected, pol))
 		if r.ActionReason == replaceByRequest {

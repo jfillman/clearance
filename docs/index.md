@@ -31,6 +31,9 @@ Clearance is one Go module and one binary, `clearance` ([core.md](core.md)); han
 - **The deployment gate** (`internal/gate`, `clearance register`): changes to protected environments, tiered and
   cleared; definition releases reviewed through the same gate; protected environments, the outage policy, the
   state machine, exceptions and break-glass (C-6).
+- **The change description and subject kinds** (`internal/describe`, `internal/kinds`): one shape for a change of any
+  subject kind, `clearance.kind/v1` for a kind as data, the versioned root functions and the golden vectors
+  ([change-description.md](change-description.md), SDK-1). Loading third-party kinds is SDK-2, not built.
 - **The GitHub App** (`internal/githubapp`, `internal/provenance`): check runs on PRs and the deployment protection rule.
 - **The read API** (`clearance api`, `internal/api`, `contract/clearance-api.json`): clearance-api, a separate
   read-only process: evidence, counts, PR receipts and verdicts, clearances, the policy and its explainer,

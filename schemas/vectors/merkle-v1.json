@@ -1,0 +1,642 @@
+{
+  "cases": [
+    {
+      "name": "no items, no facts",
+      "description": {
+        "subject": {
+          "kind": "io.example.db-migration",
+          "version": 1,
+          "rootFn": "merkle/1",
+          "root": "877b7b241f84943f049c145d885ec89302256af3063fc011f2cfb8d1c97b448d"
+        },
+        "target": {
+          "scope": "db-main",
+          "environment": "prod"
+        },
+        "items": [],
+        "source": {
+          "repo": "example/migrations",
+          "commit": "0123456789abcdef0123456789abcdef01234567",
+          "pr": 3
+        },
+        "describedBy": {
+          "provider": "example-gate",
+          "version": "1.0.0"
+        }
+      },
+      "itemDigests": [],
+      "itemsRoot": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "factsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "root": "877b7b241f84943f049c145d885ec89302256af3063fc011f2cfb8d1c97b448d",
+      "proofs": []
+    },
+    {
+      "name": "no items, facts",
+      "description": {
+        "subject": {
+          "kind": "io.example.db-migration",
+          "version": 1,
+          "rootFn": "merkle/1",
+          "root": "349c3f9a02c2d6dec3cb951cf4ee0572a0bb4b93bfdceba4d967c95b104f488a",
+          "facts": {
+            "schemaVersion": 42,
+            "targeted": true
+          }
+        },
+        "target": {
+          "scope": "db-main",
+          "environment": "prod"
+        },
+        "items": [],
+        "source": {
+          "repo": "example/migrations",
+          "commit": "0123456789abcdef0123456789abcdef01234567",
+          "pr": 3
+        },
+        "describedBy": {
+          "provider": "example-gate",
+          "version": "1.0.0"
+        }
+      },
+      "itemDigests": [],
+      "itemsRoot": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "factsDigest": "06f712b31eab5eb82e106b344d27e2ea9e7a0325b407015a99e3130855b2301a",
+      "root": "349c3f9a02c2d6dec3cb951cf4ee0572a0bb4b93bfdceba4d967c95b104f488a",
+      "proofs": []
+    },
+    {
+      "name": "one item",
+      "description": {
+        "subject": {
+          "kind": "io.example.db-migration",
+          "version": 1,
+          "rootFn": "merkle/1",
+          "root": "1cae249701db7a9d1f7391579bdeed61bc4a44fd3cabcdac6672d101c8b22756"
+        },
+        "target": {
+          "scope": "db-main",
+          "environment": "prod"
+        },
+        "items": [
+          {
+            "type": "table",
+            "id": "public.users",
+            "op": "delete"
+          }
+        ],
+        "source": {
+          "repo": "example/migrations",
+          "commit": "0123456789abcdef0123456789abcdef01234567",
+          "pr": 3
+        },
+        "describedBy": {
+          "provider": "example-gate",
+          "version": "1.0.0"
+        }
+      },
+      "itemDigests": [
+        "99730e0b2e7c9e1f6477948013d6ae6b336b5115a7f9526510d937febb50e309"
+      ],
+      "itemsRoot": "de54e0e15c9d46e339b589bb5d8bcd138a42315e523d4d64ca9983d433716d28",
+      "factsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "root": "1cae249701db7a9d1f7391579bdeed61bc4a44fd3cabcdac6672d101c8b22756",
+      "proofs": [
+        {
+          "index": 0,
+          "size": 1,
+          "path": [],
+          "factsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        }
+      ]
+    },
+    {
+      "name": "one item with every member",
+      "description": {
+        "subject": {
+          "kind": "io.example.db-migration",
+          "version": 1,
+          "rootFn": "merkle/1",
+          "root": "97fe4b77cb63314e05602a3d6981812cecd41f76d5c7b22a4b025a32da455bd9",
+          "facts": {
+            "engine": "postgres"
+          }
+        },
+        "target": {
+          "scope": "db-main",
+          "environment": "prod"
+        },
+        "items": [
+          {
+            "type": "table",
+            "id": "public.users",
+            "op": "update",
+            "fields": [
+              "/columns/email",
+              "/columns/name"
+            ],
+            "attrs": {
+              "locks": "exclusive",
+              "online": false,
+              "rows": 1200
+            },
+            "hash": "a2dee47ba6268925da97750ab742baf67f02e2fb54ce23d499fb66a5b0222903"
+          }
+        ],
+        "source": {
+          "repo": "example/migrations",
+          "commit": "0123456789abcdef0123456789abcdef01234567",
+          "pr": 3
+        },
+        "describedBy": {
+          "provider": "example-gate",
+          "version": "1.0.0"
+        }
+      },
+      "itemDigests": [
+        "0711b46c5708dc19e1ed96a8a16c29235eb010ffaba13dbbaa4d0f86d67dbd86"
+      ],
+      "itemsRoot": "df63ccdec86fef1225864c0572ff39fe3b250f22c866a4c0307795a71c95bd65",
+      "factsDigest": "4d4a217209e40ab8e2d2024231f9daa83e37e1c82891b561956a7dd9f563b2ca",
+      "root": "97fe4b77cb63314e05602a3d6981812cecd41f76d5c7b22a4b025a32da455bd9",
+      "proofs": [
+        {
+          "index": 0,
+          "size": 1,
+          "path": [],
+          "factsDigest": "4d4a217209e40ab8e2d2024231f9daa83e37e1c82891b561956a7dd9f563b2ca"
+        }
+      ]
+    },
+    {
+      "name": "two items",
+      "description": {
+        "subject": {
+          "kind": "io.example.db-migration",
+          "version": 1,
+          "rootFn": "merkle/1",
+          "root": "70ed53bffea7eba52463d84698f3ca825c9b665d73abddb9effa649255aad8a8"
+        },
+        "target": {
+          "scope": "db-main",
+          "environment": "prod"
+        },
+        "items": [
+          {
+            "type": "table",
+            "id": "public.ta",
+            "op": "create",
+            "fields": [
+              "/columns/a"
+            ]
+          },
+          {
+            "type": "table",
+            "id": "public.tb",
+            "op": "update",
+            "fields": [
+              "/columns/b"
+            ]
+          }
+        ],
+        "source": {
+          "repo": "example/migrations",
+          "commit": "0123456789abcdef0123456789abcdef01234567",
+          "pr": 3
+        },
+        "describedBy": {
+          "provider": "example-gate",
+          "version": "1.0.0"
+        }
+      },
+      "itemDigests": [
+        "b70cb48399b2ac8fd6ebdffc0f52e76c3288226288c5f066aed9203efd918a04",
+        "a72d3e7b2c13e13421b906adb84c82fbf9564e5f83d5761dcc1084b7842a8ef8"
+      ],
+      "itemsRoot": "eaeb1a230b9fddab960613d3c37acaccd7c56c74d5fd115c8807b38ff24fa6c3",
+      "factsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "root": "70ed53bffea7eba52463d84698f3ca825c9b665d73abddb9effa649255aad8a8",
+      "proofs": [
+        {
+          "index": 1,
+          "size": 2,
+          "path": [
+            "bd8a36c9f44a17ae8964039e7e7ad6aacf9c3c5ec3fa7688da2049fa11e84105"
+          ],
+          "factsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "index": 0,
+          "size": 2,
+          "path": [
+            "742d1417b2a56013c21686a9c131999a746e64c9100ce4f2d01f71f8ac64ce0e"
+          ],
+          "factsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        }
+      ]
+    },
+    {
+      "name": "three items (an unbalanced tree)",
+      "description": {
+        "subject": {
+          "kind": "io.example.db-migration",
+          "version": 1,
+          "rootFn": "merkle/1",
+          "root": "9804af16b36f8122330a4592f0ec1d08d6973f860a42c7b45517d0badcf995b8"
+        },
+        "target": {
+          "scope": "db-main",
+          "environment": "prod"
+        },
+        "items": [
+          {
+            "type": "table",
+            "id": "public.ta",
+            "op": "create",
+            "fields": [
+              "/columns/a"
+            ]
+          },
+          {
+            "type": "table",
+            "id": "public.tb",
+            "op": "update",
+            "fields": [
+              "/columns/b"
+            ]
+          },
+          {
+            "type": "table",
+            "id": "public.tc",
+            "op": "delete",
+            "fields": [
+              "/columns/c"
+            ]
+          }
+        ],
+        "source": {
+          "repo": "example/migrations",
+          "commit": "0123456789abcdef0123456789abcdef01234567",
+          "pr": 3
+        },
+        "describedBy": {
+          "provider": "example-gate",
+          "version": "1.0.0"
+        }
+      },
+      "itemDigests": [
+        "b70cb48399b2ac8fd6ebdffc0f52e76c3288226288c5f066aed9203efd918a04",
+        "a72d3e7b2c13e13421b906adb84c82fbf9564e5f83d5761dcc1084b7842a8ef8",
+        "c46513bc10386b79a6540fc5b12a6d67f83fc2f56b4844b36f7f7a5d0ac1bf1d"
+      ],
+      "itemsRoot": "13da67bcac39e98cbc83e5941a4bc24f0911eb7134475147dd892656f6eb620f",
+      "factsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "root": "9804af16b36f8122330a4592f0ec1d08d6973f860a42c7b45517d0badcf995b8",
+      "proofs": [
+        {
+          "index": 1,
+          "size": 3,
+          "path": [
+            "bd8a36c9f44a17ae8964039e7e7ad6aacf9c3c5ec3fa7688da2049fa11e84105",
+            "87e5a0489c42f18f5482b935bef7a6ad18fd5b5e61cf41cd2da27fe8c0482765"
+          ],
+          "factsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "index": 0,
+          "size": 3,
+          "path": [
+            "742d1417b2a56013c21686a9c131999a746e64c9100ce4f2d01f71f8ac64ce0e",
+            "87e5a0489c42f18f5482b935bef7a6ad18fd5b5e61cf41cd2da27fe8c0482765"
+          ],
+          "factsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "index": 2,
+          "size": 3,
+          "path": [
+            "eaeb1a230b9fddab960613d3c37acaccd7c56c74d5fd115c8807b38ff24fa6c3"
+          ],
+          "factsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        }
+      ]
+    },
+    {
+      "name": "five items",
+      "description": {
+        "subject": {
+          "kind": "io.example.db-migration",
+          "version": 1,
+          "rootFn": "merkle/1",
+          "root": "47fbea9bcb9e3fd26931c9aa6439e9634cc17de572e6df5a6215b498e0a36a62",
+          "facts": {
+            "tool": {
+              "name": "flyway",
+              "version": "10.0.0"
+            }
+          }
+        },
+        "target": {
+          "scope": "db-main",
+          "environment": "prod"
+        },
+        "items": [
+          {
+            "type": "table",
+            "id": "public.ta",
+            "op": "create",
+            "fields": [
+              "/columns/a"
+            ]
+          },
+          {
+            "type": "table",
+            "id": "public.tb",
+            "op": "update",
+            "fields": [
+              "/columns/b"
+            ]
+          },
+          {
+            "type": "table",
+            "id": "public.tc",
+            "op": "delete",
+            "fields": [
+              "/columns/c"
+            ]
+          },
+          {
+            "type": "table",
+            "id": "public.td",
+            "op": "replace",
+            "fields": [
+              "/columns/d"
+            ]
+          },
+          {
+            "type": "table",
+            "id": "public.te",
+            "op": "create",
+            "fields": [
+              "/columns/e"
+            ]
+          }
+        ],
+        "source": {
+          "repo": "example/migrations",
+          "commit": "0123456789abcdef0123456789abcdef01234567",
+          "pr": 3
+        },
+        "describedBy": {
+          "provider": "example-gate",
+          "version": "1.0.0"
+        }
+      },
+      "itemDigests": [
+        "b70cb48399b2ac8fd6ebdffc0f52e76c3288226288c5f066aed9203efd918a04",
+        "a72d3e7b2c13e13421b906adb84c82fbf9564e5f83d5761dcc1084b7842a8ef8",
+        "c46513bc10386b79a6540fc5b12a6d67f83fc2f56b4844b36f7f7a5d0ac1bf1d",
+        "0700d20f174abecd84c1f807017ffa6cd426e961f22730452641248e6d5393c6",
+        "ee60aa9b32a91ad3bf9adcba42650359c8cf9e7ac61e0f3f22108584ef6a6ed2"
+      ],
+      "itemsRoot": "57e9d720af480bb5e6b840a473eec6cf13d407475c003d4b47567154ac471285",
+      "factsDigest": "46be5d0cb555ce5b26950310477a6b521ab587fe1c6c20371a24bc56e424036a",
+      "root": "47fbea9bcb9e3fd26931c9aa6439e9634cc17de572e6df5a6215b498e0a36a62",
+      "proofs": [
+        {
+          "index": 2,
+          "size": 5,
+          "path": [
+            "87e5a0489c42f18f5482b935bef7a6ad18fd5b5e61cf41cd2da27fe8c0482765",
+            "bc8f17bec75acc1fcc2e5d9fa6bf6385e603631c0c5e665d560af689ef124fed",
+            "f0d2b78f8d3c2053e74e1e0af978c0d13f9f3b86c588ef546cec406666678a9a"
+          ],
+          "factsDigest": "46be5d0cb555ce5b26950310477a6b521ab587fe1c6c20371a24bc56e424036a"
+        },
+        {
+          "index": 1,
+          "size": 5,
+          "path": [
+            "2785cc59da6c9a2e4cfb463d1a03bd14dbd619b80e57218b6a80e82b357ed7ab",
+            "6d3ea50c0f648a2e5a21002bd6870fcded5171d67547d88c13c6d62d60227b8c",
+            "f0d2b78f8d3c2053e74e1e0af978c0d13f9f3b86c588ef546cec406666678a9a"
+          ],
+          "factsDigest": "46be5d0cb555ce5b26950310477a6b521ab587fe1c6c20371a24bc56e424036a"
+        },
+        {
+          "index": 3,
+          "size": 5,
+          "path": [
+            "742d1417b2a56013c21686a9c131999a746e64c9100ce4f2d01f71f8ac64ce0e",
+            "bc8f17bec75acc1fcc2e5d9fa6bf6385e603631c0c5e665d560af689ef124fed",
+            "f0d2b78f8d3c2053e74e1e0af978c0d13f9f3b86c588ef546cec406666678a9a"
+          ],
+          "factsDigest": "46be5d0cb555ce5b26950310477a6b521ab587fe1c6c20371a24bc56e424036a"
+        },
+        {
+          "index": 0,
+          "size": 5,
+          "path": [
+            "bd8a36c9f44a17ae8964039e7e7ad6aacf9c3c5ec3fa7688da2049fa11e84105",
+            "6d3ea50c0f648a2e5a21002bd6870fcded5171d67547d88c13c6d62d60227b8c",
+            "f0d2b78f8d3c2053e74e1e0af978c0d13f9f3b86c588ef546cec406666678a9a"
+          ],
+          "factsDigest": "46be5d0cb555ce5b26950310477a6b521ab587fe1c6c20371a24bc56e424036a"
+        },
+        {
+          "index": 4,
+          "size": 5,
+          "path": [
+            "7a7e8c9bb4bb5dcafa09e3bacc2f586f16febe3f78f13e0a34addd35b06d2004"
+          ],
+          "factsDigest": "46be5d0cb555ce5b26950310477a6b521ab587fe1c6c20371a24bc56e424036a"
+        }
+      ]
+    },
+    {
+      "name": "eight items (a full tree)",
+      "description": {
+        "subject": {
+          "kind": "io.example.db-migration",
+          "version": 1,
+          "rootFn": "merkle/1",
+          "root": "c9b22ef2941975109376a5e3b8511ca73f2934068a0de1cd113908877ee5cc4e"
+        },
+        "target": {
+          "scope": "db-main",
+          "environment": "prod"
+        },
+        "items": [
+          {
+            "type": "table",
+            "id": "public.ta",
+            "op": "create",
+            "fields": [
+              "/columns/a"
+            ]
+          },
+          {
+            "type": "table",
+            "id": "public.tb",
+            "op": "update",
+            "fields": [
+              "/columns/b"
+            ]
+          },
+          {
+            "type": "table",
+            "id": "public.tc",
+            "op": "delete",
+            "fields": [
+              "/columns/c"
+            ]
+          },
+          {
+            "type": "table",
+            "id": "public.td",
+            "op": "replace",
+            "fields": [
+              "/columns/d"
+            ]
+          },
+          {
+            "type": "table",
+            "id": "public.te",
+            "op": "create",
+            "fields": [
+              "/columns/e"
+            ]
+          },
+          {
+            "type": "table",
+            "id": "public.tf",
+            "op": "update",
+            "fields": [
+              "/columns/f"
+            ]
+          },
+          {
+            "type": "table",
+            "id": "public.tg",
+            "op": "delete",
+            "fields": [
+              "/columns/g"
+            ]
+          },
+          {
+            "type": "table",
+            "id": "public.th",
+            "op": "replace",
+            "fields": [
+              "/columns/h"
+            ]
+          }
+        ],
+        "source": {
+          "repo": "example/migrations",
+          "commit": "0123456789abcdef0123456789abcdef01234567",
+          "pr": 3
+        },
+        "describedBy": {
+          "provider": "example-gate",
+          "version": "1.0.0"
+        }
+      },
+      "itemDigests": [
+        "b70cb48399b2ac8fd6ebdffc0f52e76c3288226288c5f066aed9203efd918a04",
+        "a72d3e7b2c13e13421b906adb84c82fbf9564e5f83d5761dcc1084b7842a8ef8",
+        "c46513bc10386b79a6540fc5b12a6d67f83fc2f56b4844b36f7f7a5d0ac1bf1d",
+        "0700d20f174abecd84c1f807017ffa6cd426e961f22730452641248e6d5393c6",
+        "ee60aa9b32a91ad3bf9adcba42650359c8cf9e7ac61e0f3f22108584ef6a6ed2",
+        "54bbc79d37e48dc8e8a54535933d22ec74c714c4fd4b0634bf8d2b4dba941a83",
+        "290a6e0c95be6d9bde2e434b04b004d109a7bd458d6727279c12fb5ff6dcfebe",
+        "5faede3a866c5d2ea9d7aa3a03a0e7688d621dd76a5704769995739c2452114b"
+      ],
+      "itemsRoot": "ed612baec32a7c2e58e73b9ca412e6e7d2e9d040325f17b7e7882a962258472d",
+      "factsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "root": "c9b22ef2941975109376a5e3b8511ca73f2934068a0de1cd113908877ee5cc4e",
+      "proofs": [
+        {
+          "index": 5,
+          "size": 8,
+          "path": [
+            "bd8a36c9f44a17ae8964039e7e7ad6aacf9c3c5ec3fa7688da2049fa11e84105",
+            "f004cabc5c45e12db8c8497784d8df10f6211ddcd873548a24795afd1afccad7",
+            "8b0a9fd318aa659f8db60628fd225fc7133316fa7e95360ce287d119010d8c05"
+          ],
+          "factsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "index": 4,
+          "size": 8,
+          "path": [
+            "742d1417b2a56013c21686a9c131999a746e64c9100ce4f2d01f71f8ac64ce0e",
+            "f004cabc5c45e12db8c8497784d8df10f6211ddcd873548a24795afd1afccad7",
+            "8b0a9fd318aa659f8db60628fd225fc7133316fa7e95360ce287d119010d8c05"
+          ],
+          "factsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "index": 6,
+          "size": 8,
+          "path": [
+            "f0d2b78f8d3c2053e74e1e0af978c0d13f9f3b86c588ef546cec406666678a9a",
+            "eaeb1a230b9fddab960613d3c37acaccd7c56c74d5fd115c8807b38ff24fa6c3",
+            "8b0a9fd318aa659f8db60628fd225fc7133316fa7e95360ce287d119010d8c05"
+          ],
+          "factsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "index": 0,
+          "size": 8,
+          "path": [
+            "39cc945a58336f0657137e7b1b65105195aa101c148ce489d9a67560a8982325",
+            "edf1e254d95b89d35275bf48c7eeaab828eb1c5858d156ce4e240bd53d783941",
+            "b37fd19e1f081812ad5fdb83b584d0f4a3c314c10d1ea833f539988b0b223a3d"
+          ],
+          "factsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "index": 7,
+          "size": 8,
+          "path": [
+            "87e5a0489c42f18f5482b935bef7a6ad18fd5b5e61cf41cd2da27fe8c0482765",
+            "eaeb1a230b9fddab960613d3c37acaccd7c56c74d5fd115c8807b38ff24fa6c3",
+            "8b0a9fd318aa659f8db60628fd225fc7133316fa7e95360ce287d119010d8c05"
+          ],
+          "factsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "index": 2,
+          "size": 8,
+          "path": [
+            "4ace5917f979cb632756876043505d719e8d0e58f1512fcf4bd4677bedcbd676",
+            "921d0788098ce89ff3b6903b1a86b939eeb4c50c9eeab76da27b19b21a3ca079",
+            "b37fd19e1f081812ad5fdb83b584d0f4a3c314c10d1ea833f539988b0b223a3d"
+          ],
+          "factsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "index": 1,
+          "size": 8,
+          "path": [
+            "2785cc59da6c9a2e4cfb463d1a03bd14dbd619b80e57218b6a80e82b357ed7ab",
+            "edf1e254d95b89d35275bf48c7eeaab828eb1c5858d156ce4e240bd53d783941",
+            "b37fd19e1f081812ad5fdb83b584d0f4a3c314c10d1ea833f539988b0b223a3d"
+          ],
+          "factsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
+          "index": 3,
+          "size": 8,
+          "path": [
+            "811b00689403594e0326337f698b98af2fd027e3e37e922a839c8c843a146d5b",
+            "921d0788098ce89ff3b6903b1a86b939eeb4c50c9eeab76da27b19b21a3ca079",
+            "b37fd19e1f081812ad5fdb83b584d0f4a3c314c10d1ea833f539988b0b223a3d"
+          ],
+          "factsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        }
+      ]
+    }
+  ],
+  "suite": "merkle/1"
+}

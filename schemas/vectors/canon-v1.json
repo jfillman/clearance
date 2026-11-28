@@ -1,0 +1,95 @@
+{
+  "cases": [
+    {
+      "name": "empty object",
+      "input": "{}",
+      "canonical": "{}",
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "name": "empty list",
+      "input": "[]",
+      "canonical": "[]",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "name": "scalars",
+      "input": "[null,true,false,0,-1,\"s\"]",
+      "canonical": "[null,true,false,0,-1,\"s\"]",
+      "sha256": "c57bda29c497db41bb2962e613a3fa6b4e4420ec3539ed918e786f080d1835ff"
+    },
+    {
+      "name": "keys sort by code point",
+      "input": "{\"b\":1,\"a\":2,\"B\":3,\"aa\":4,\"\":5,\"\\u00e9\":6,\"e\\u0301\":7}",
+      "canonical": "{\"\":5,\"B\":3,\"a\":2,\"aa\":4,\"b\":1,\"é\":7,\"é\":6}",
+      "sha256": "3135b17aefea422813d95685a9cc499255a7000983217737fd6afa75ccec3b1b"
+    },
+    {
+      "name": "keys beyond the BMP sort after U+FFFF",
+      "input": "{\"￿\":1,\"𐀀\":2,\"\":3}",
+      "canonical": "{\"\":3,\"￿\":1,\"𐀀\":2}",
+      "sha256": "8da5a040fd0d161a4723a055ce57a12072583e8d517d7b927ee5aebad1a0f4ea"
+    },
+    {
+      "name": "nesting keeps list order",
+      "input": "{\"z\":[3,1,2],\"a\":{\"y\":null,\"x\":[{\"b\":1,\"a\":0}]}}",
+      "canonical": "{\"a\":{\"x\":[{\"a\":0,\"b\":1}],\"y\":null},\"z\":[3,1,2]}",
+      "sha256": "76fca3b683a4827dbc3dcfe904d99dab68a4f13d1b29b0eb782a54f8ff03c5db"
+    },
+    {
+      "name": "whitespace is dropped",
+      "input": "{ \"a\" : [ 1 , 2 ] ,\n\t\"b\" : { } }",
+      "canonical": "{\"a\":[1,2],\"b\":{}}",
+      "sha256": "8c547cce7ccb1b89359479c0b71a0a4b62acfc54a2b2780fd34aaeb75f9e44b7"
+    },
+    {
+      "name": "escapes: only quote, backslash and controls",
+      "input": "\"q\\\" b\\\\ nl\\n cr\\r tab\\t bs\\b ff\\f nul\\u0000 us\\u001f del <>&\"",
+      "canonical": "\"q\\\" b\\\\ nl\\n cr\\r tab\\t bs\\b ff\\f nul\\u0000 us\\u001f del <>&\"",
+      "sha256": "452ab414859c94b2753a130e282f006893a261866ab72b0ac58d29e5d7a51a1b"
+    },
+    {
+      "name": "non-ASCII is written raw",
+      "input": "\"é ü ✓ 😀 \u2028\u2029\"",
+      "canonical": "\"é ü ✓ 😀 \u2028\u2029\"",
+      "sha256": "7b3b482c33a8c111c293f084f9eee4beee01f04a1507a468b0ae0f52665823d2"
+    },
+    {
+      "name": "solidus is not escaped",
+      "input": "\"a\\/b\"",
+      "canonical": "\"a/b\"",
+      "sha256": "f5effa31772a3689cb116700c569f4b72d765290968f099016a899ab6c1e4ee3"
+    },
+    {
+      "name": "integers keep their digits",
+      "input": "[0,-0,7,-42,12345678901234567890123456789]",
+      "canonical": "[0,0,7,-42,12345678901234567890123456789]",
+      "sha256": "169d59c511e6a5b98a255b78cc1f60c008a014bf690fe740560ed4d46e9055d7"
+    },
+    {
+      "name": "floats are Python's repr",
+      "input": "[1.0,1.5,-0.0,0.1,1e-05,0.0001,1e16,1e+16,1.5e300,123456789012345678.0,1E2]",
+      "canonical": "[1.0,1.5,-0.0,0.1,1e-05,0.0001,1e+16,1e+16,1.5e+300,1.2345678901234568e+17,100.0]",
+      "sha256": "eb15e5ba50a6a8cb4f5fc56adb75469ba5ea6267849d61f7bd03d35f11281398"
+    },
+    {
+      "name": "an integer-valued float stays a float",
+      "input": "[2.0,100.0,1e2]",
+      "canonical": "[2.0,100.0,100.0]",
+      "sha256": "5798b8b94a0fbf599a550cab520ce4b7146292ac02c83b28a127d8bea72e25cd"
+    },
+    {
+      "name": "duplicate keys keep the last",
+      "input": "{\"a\":1,\"a\":2}",
+      "canonical": "{\"a\":2}",
+      "sha256": "7e8059f495589fcd981232cc11d00b00da3802c01d688fa1cf1f6bed6e5bb33c"
+    },
+    {
+      "name": "an item, as merkle/1 hashes it",
+      "input": "{\"type\":\"v1/ConfigMap\",\"id\":\"ns/cm\",\"op\":\"update\",\"fields\":[\"/data/x\"],\"attrs\":{},\"hash\":\"\"}",
+      "canonical": "{\"attrs\":{},\"fields\":[\"/data/x\"],\"hash\":\"\",\"id\":\"ns/cm\",\"op\":\"update\",\"type\":\"v1/ConfigMap\"}",
+      "sha256": "e6b95edaac5c7a4dad8182f1025c6bb5c1073f51869df15786f2f18c4dd603bf"
+    }
+  ],
+  "suite": "clearance.canon/v1"
+}

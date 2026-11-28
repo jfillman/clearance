@@ -1,0 +1,243 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clearance.hangarplatform.dev/schemas/change-description/v1.json",
+  "title": "clearance.change-description/v1",
+  "description": "The generic change description (SDK-1, docs/change-description.md): one change of any subject kind, as the core tiers it. internal/describe Parse decodes the same shape strictly and checks what a schema cannot: unique (type, id) items and canonical facts and attrs; internal/kinds Bind checks a description against its kind (DG-UNBOUND). The core derives every summary from items and never takes one from a caller.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "subject",
+    "target",
+    "items",
+    "source",
+    "describedBy"
+  ],
+  "properties": {
+    "subject": {
+      "$ref": "#/$defs/subject"
+    },
+    "target": {
+      "$ref": "#/$defs/target"
+    },
+    "items": {
+      "type": "array",
+      "maxItems": 2000,
+      "items": {
+        "$ref": "#/$defs/item"
+      }
+    },
+    "source": {
+      "$ref": "#/$defs/source"
+    },
+    "describedBy": {
+      "$ref": "#/$defs/describedBy"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "A bare lowercase hex sha256."
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+    },
+    "printable": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^\u0000-\u001f\u007f-\u009f]+$"
+    },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "version",
+        "rootFn",
+        "root"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "maxLength": 253,
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?)*$",
+          "description": "The subject kind: reverse-DNS (io.acme.db-migration), or a built-in kind (manifest-tree, terraform-plan)."
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576,
+          "description": "The kind's version."
+        },
+        "rootFn": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,31}/[1-9][0-9]{0,3}$",
+          "description": "The root function the kind declares: merkle/1 for new kinds, tree/1 (manifest-tree) and plan/1 (terraform-plan) for the built-in kinds."
+        },
+        "root": {
+          "$ref": "#/$defs/sha256"
+        },
+        "facts": {
+          "type": "object",
+          "maxProperties": 64,
+          "description": "Change-level facts, as the kind's subjectSchema declares them."
+        }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "environment"
+      ],
+      "properties": {
+        "scope": {
+          "type": "string",
+          "maxLength": 253,
+          "pattern": "^[^\u0000-\u001f\u007f-\u009f]*$",
+          "description": "A cluster, an account, a database; empty when the change has none."
+        },
+        "environment": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+        },
+        "app": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+          "description": "The application the change belongs to, whose owner group clears it."
+        }
+      }
+    },
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "id",
+        "op"
+      ],
+      "properties": {
+        "type": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/printable"
+            },
+            {
+              "maxLength": 256
+            }
+          ]
+        },
+        "id": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/printable"
+            },
+            {
+              "maxLength": 1024
+            }
+          ]
+        },
+        "op": {
+          "enum": [
+            "create",
+            "update",
+            "delete",
+            "replace"
+          ]
+        },
+        "fields": {
+          "type": "array",
+          "maxItems": 400,
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/printable"
+              },
+              {
+                "maxLength": 1024,
+                "pattern": "^/([^~]|~[01])*$"
+              }
+            ]
+          },
+          "description": "JSON pointers of what an update changes: names, never values."
+        },
+        "attrs": {
+          "type": "object",
+          "maxProperties": 64,
+          "propertyNames": {
+            "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$"
+          },
+          "description": "Only what the kind's itemTypes declare for the type."
+        },
+        "hash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "const": ""
+            }
+          ],
+          "description": "The item's content hash, when the gate has one."
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repo",
+        "commit"
+      ],
+      "properties": {
+        "repo": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+        },
+        "commit": {
+          "$ref": "#/$defs/commit"
+        },
+        "base": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/commit"
+            },
+            {
+              "const": ""
+            }
+          ]
+        },
+        "pr": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The pull request; 0 or absent: a pushed commit."
+        }
+      }
+    },
+    "describedBy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider"
+      ],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,255}$",
+          "description": "The provider that described the change (clearance-core: the core mapped a built-in kind's request)."
+        },
+        "version": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/printable"
+            },
+            {
+              "maxLength": 128
+            }
+          ]
+        }
+      }
+    }
+  }
+}

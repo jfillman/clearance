@@ -1,0 +1,488 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clearance.hangarplatform.dev/schemas/kind/v1.json",
+  "title": "clearance.kind/v1",
+  "description": "A subject kind as data (SDK-1, docs/change-description.md): its item types, the schema of its facts, its root function, its default tier, and the CEL that tiers its items and its whole change and checks that a description is consistent. A kind is a schema and CEL, never an executable. internal/kinds Parse decodes the same shape strictly and checks what a schema cannot: unique rule names, the item and fact schemas compile, a built-in kind's root. Loading kinds from a signed policy bundle and compiling the CEL is SDK-2.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "name",
+    "version",
+    "root",
+    "itemTypes",
+    "defaultTier"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "clearance.kind/v1"
+    },
+    "name": {
+      "type": "string",
+      "maxLength": 253,
+      "description": "Reverse-DNS (io.acme.db-migration). dev.clearance.* is reserved for first-party kinds (a placeholder for the product domain). manifest-tree and terraform-plan are the built-in kinds' names.",
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?)+$"
+        },
+        {
+          "enum": [
+            "manifest-tree",
+            "terraform-plan"
+          ]
+        }
+      ]
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The kind's version. A kind changes its root function only through a new version.",
+      "maximum": 1048576
+    },
+    "description": {
+      "type": "string"
+    },
+    "root": {
+      "enum": [
+        "merkle/1",
+        "tree/1",
+        "plan/1"
+      ],
+      "description": "The root function: merkle/1 for every kind but the built-ins (tree/1 is manifest-tree's, plan/1 terraform-plan's)."
+    },
+    "builtin": {
+      "type": "boolean",
+      "description": "The kind's tiers are the core's own code: only a built-in kind, and then it has no rules."
+    },
+    "itemTypes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1000,
+      "items": {
+        "$ref": "#/$defs/itemType"
+      }
+    },
+    "subjectSchema": {
+      "$ref": "#/$defs/objectSchema",
+      "description": "The JSON Schema (2020-12) of subject.facts."
+    },
+    "defaultTier": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3,
+      "description": "The tier of a known item no item rule fires on. Never 0."
+    },
+    "itemRules": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/itemRule"
+      }
+    },
+    "changeRules": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/changeRule"
+      }
+    },
+    "consistency": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/check"
+      }
+    },
+    "tests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/test"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "builtin"
+        ],
+        "properties": {
+          "builtin": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "name": {
+            "enum": [
+              "manifest-tree",
+              "terraform-plan"
+            ]
+          },
+          "itemRules": {
+            "maxItems": 0
+          },
+          "changeRules": {
+            "maxItems": 0
+          },
+          "consistency": {
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "name": {
+            "not": {
+              "enum": [
+                "manifest-tree",
+                "terraform-plan"
+              ]
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "root": {
+            "const": "merkle/1"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "name",
+          "version"
+        ],
+        "properties": {
+          "name": {
+            "const": "manifest-tree"
+          },
+          "version": {
+            "const": 1
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "root": {
+            "const": "tree/1"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "name",
+          "version"
+        ],
+        "properties": {
+          "name": {
+            "const": "terraform-plan"
+          },
+          "version": {
+            "const": 1
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "root": {
+            "const": "plan/1"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "defaultTier": {
+            "const": 1
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "itemTypes": {
+            "items": {
+              "properties": {
+                "type": {
+                  "not": {
+                    "pattern": "^([*?]|\\[[^\\]]*\\])*$"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "ruleName": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9:._/-]{0,63}$"
+    },
+    "cel": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "\\S",
+      "description": "A CEL expression (SDK-2 compiles it, with SDK-9's library)."
+    },
+    "classes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9-]{0,63}$"
+      },
+      "description": "Operational classes, from I-1's versioned list."
+    },
+    "op": {
+      "enum": [
+        "create",
+        "update",
+        "delete",
+        "replace"
+      ]
+    },
+    "objectSchema": {
+      "type": "object",
+      "required": [
+        "type",
+        "additionalProperties"
+      ],
+      "properties": {
+        "type": {
+          "const": "object"
+        },
+        "additionalProperties": {
+          "const": false
+        }
+      },
+      "description": "A JSON Schema (2020-12) of an object that refuses undeclared members. It references nothing outside itself."
+    },
+    "itemType": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\s]+$",
+          "description": "An item type, or an fnmatch glob of them (aws_iam_*). \"*\" needs a defaultTier of at least 2."
+        },
+        "description": {
+          "type": "string"
+        },
+        "ops": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/op"
+          },
+          "description": "The ops the type may have; absent: all four."
+        },
+        "attrs": {
+          "$ref": "#/$defs/objectSchema",
+          "description": "The JSON Schema of the type's attrs; absent: the type takes none."
+        }
+      }
+    },
+    "itemRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "when",
+        "tier"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/ruleName"
+        },
+        "types": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "description": "The item types (globs) the rule applies to; absent: all."
+        },
+        "when": {
+          "$ref": "#/$defs/cel"
+        },
+        "tier": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "class": {
+          "$ref": "#/$defs/classes"
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "changeRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "when"
+      ],
+      "oneOf": [
+        {
+          "required": [
+            "tier"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "raise"
+                ]
+              },
+              {
+                "required": [
+                  "floor"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "required": [
+            "raise"
+          ],
+          "not": {
+            "required": [
+              "tier"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/ruleName"
+        },
+        "when": {
+          "$ref": "#/$defs/cel"
+        },
+        "tier": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "raise": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "floor": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "class": {
+          "$ref": "#/$defs/classes"
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "expr",
+        "message"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/ruleName"
+        },
+        "expr": {
+          "$ref": "#/$defs/cel"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        }
+      }
+    },
+    "test": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "description",
+        "expect"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "object",
+          "description": "A clearance.change-description/v1 of this kind."
+        },
+        "expect": {
+          "type": "object",
+          "additionalProperties": false,
+          "oneOf": [
+            {
+              "required": [
+                "tier"
+              ],
+              "not": {
+                "required": [
+                  "refused"
+                ]
+              }
+            },
+            {
+              "required": [
+                "refused"
+              ],
+              "not": {
+                "required": [
+                  "tier"
+                ]
+              }
+            }
+          ],
+          "properties": {
+            "tier": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 3
+            },
+            "rules": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ruleName"
+              }
+            },
+            "refused": {
+              "type": "string",
+              "pattern": "^DG-[A-Z0-9-]+$"
+            }
+          }
+        }
+      }
+    }
+  }
+}

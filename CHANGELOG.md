@@ -48,6 +48,28 @@ This release is **expand-only**: its one migration (1, the existing idempotent D
 - **The whole-install upgrade test** (`.github/workflows/upgrade.yaml`, `tools/upgrade-test`) gates the tag: previous
   release, traffic, backup, candidate, traffic, chain verify, then the rollback (expand-only) or the refusal and the restore
   (no-rollback). The restore's gap is not yet recorded as an exception: that is `clearance restore verify` (N-11).
+- **The generic change description and `clearance.kind/v1` (SDK-1).** A change of any subject kind is now one shape,
+  `subject{kind, version, rootFn, root, facts}`, `target{scope, environment, app}`,
+  `items[]{type, id, op, fields, attrs, hash}`, `source`, `describedBy` (`internal/describe`,
+  `schemas/change-description.schema.json`, and in the core's contract as `DescribeDescription`, drift-tested). A
+  subject kind is data: `clearance.kind/v1` (`internal/kinds`, `schemas/kind.schema.json`) names its item types
+  (globs; `"*"` only with a default tier of at least 2), the JSON Schema of its facts and of each type's attrs, its
+  root function, a default tier (never 0), item rules, change rules (only raise: `tier`, or `raise` with a `floor`),
+  consistency checks and fixture tests. An item whose type or op the kind does not declare is refused `DG-UNBOUND`.
+  Roots are versioned functions named in the description: `merkle/1` for new kinds (an RFC 6962 tree over the item
+  digests, with per-item inclusion proofs), `tree/1` (the manifest-tree digest, unchanged) and `plan/1` (the saved
+  plan's sha256, unchanged) for the built-in kinds. Golden vectors for the canonicalization and `merkle/1` are in
+  `schemas/vectors`, checked in Go and, independently, in Python. Loading kinds from policy bundles and running their
+  CEL is SDK-2 (not built). See docs/change-description.md.
+
+### Changed
+
+- **manifest-tree and terraform-plan are tiered through the description, with no change in behaviour (SDK-1).** The
+  core maps each request onto the description and tiers its items. `testdata/golden/subjects.jsonl`, 56
+  registrations recorded at v0.57.3 before the change, replays with identical tiers, decisions, reasons, change ids,
+  subjects and token subjects. A terraform-plan change now stores the summary the core derives from its resources;
+  a caller's summary is still required and still refused when it differs, and its `destroyedAddresses` are stored
+  in resource order rather than the order the caller sent.
 
 ## [0.57.3] - 2026-11-23
 

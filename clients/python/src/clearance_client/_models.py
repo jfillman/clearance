@@ -18,7 +18,7 @@ CONTRACT_VERSION = "1.0.0"
 
 RECORD_KINDS: tuple[str, ...] = ("session.open", "run.launch", "run.delete", "run.finish", "human.answer", "session.freeze", "session.end", "trigger.hold", "trigger.release", "tool.call", "deploy.outcome", "deploy.exception", "deploy.degraded", "federated.decision", "observation", "assessment", "resolution", "observation.health", "observation.verification", "grc.push", "grc.report")
 
-__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BackdateRefusal", "BreakglassList", "Budgets", "BundleRef", "CompatRange", "CompatRelease", "CompatTable", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Delivery", "DeliveryRequest", "DeliveryRevoked", "DeliveryWindow", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBehind", "GateBreakglass", "GateBreakglassRequest", "GateBulkResolutionFailed", "GateBulkResolutionRecorded", "GateBulkResolutionRequest", "GateBulkResolutionResult", "GateBulkResolutionSkipped", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateProtectedPair", "GateReason", "GateRequirement", "GateResolutionRecorded", "GateResolutionRequest", "GateResource", "GateSourcePeople", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "IndexStatus", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PacketBundle", "PacketCheckpointRef", "PacketError", "PacketLinks", "PacketMeta", "PacketPublished", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProtectionCluster", "ProtectionRequest", "ProtectionResult", "ProtectionState", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProvidedDefinition", "ProviderEvent", "Ready", "ReceiptRecorded", "RecipientKeyRevokeRequest", "RecipientKeyRevoked", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "RevokeRequest", "SamplingCheckpoint", "SamplingDocument", "SamplingItem", "SamplingPacketRef", "SamplingParams", "SamplingPopulationDoc", "SamplingProof", "SamplingRecorded", "SamplingRow", "SamplingStratum", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "StatementIssued", "StatementLinks", "StatementList", "StatementListItem", "StatementRequest", "StatementRevokeRequest", "StatementRevoked", "StoreAppliedMigration", "StoreSchemaInfo", "Subject", "SubjectProperties", "TargetsGate", "TargetsObserver", "TargetsRequest", "TargetsResult", "TargetsTarget", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenKeyRevoked", "TokenSignature", "Usage", "VersionResponse", "WaitAnswer", "WebhookAnswer"]
+__all__ = ["CONTRACT_VERSION", "MODELS", "OPERATIONS", "RECORD_KINDS", "Action", "ActionProperties", "AgentDef", "Attestation", "BackdateRefusal", "BreakglassList", "Budgets", "BundleRef", "CompatRange", "CompatRelease", "CompatTable", "Context", "Cost", "DecisionContext", "DefinitionsRejectedView", "DefinitionsRequest", "DefinitionsResult", "DefinitionsSourceView", "Delivery", "DeliveryRequest", "DeliveryRevoked", "DeliveryWindow", "DescribeDescribedBy", "DescribeDescription", "DescribeItem", "DescribeSource", "DescribeSubject", "DescribeTarget", "Effect", "ErrorResponse", "EvaluationRequest", "EvaluationResult", "GateAdmission", "GateAppliedChange", "GateApproval", "GateBehind", "GateBreakglass", "GateBreakglassRequest", "GateBulkResolutionFailed", "GateBulkResolutionRecorded", "GateBulkResolutionRequest", "GateBulkResolutionResult", "GateBulkResolutionSkipped", "GateChange", "GateChangeWithAuditSeq", "GateClearanceAnswer", "GateDeployment", "GateEnded", "GateErrorBody", "GateEvidenceWait", "GateObjectChange", "GateOutcome", "GateOutcomeRequest", "GateOutcomeResult", "GatePlanSummary", "GateProtectedPair", "GateReason", "GateRequirement", "GateResolutionRecorded", "GateResolutionRequest", "GateResource", "GateSourcePeople", "GateSubject", "GateTokenView", "GateVersions", "GateWorkspace", "Grant", "HcprunAnswer", "Health", "Hold", "IndexStatus", "LedgerStatus", "LedgerWitnessStatus", "Limits", "Models", "OutcomeRequest", "PacketBundle", "PacketCheckpointRef", "PacketError", "PacketLinks", "PacketMeta", "PacketPublished", "PinSource", "PinnedDefinition", "PolicyRef", "Preflight", "Problem", "ProtectionCluster", "ProtectionRequest", "ProtectionResult", "ProtectionState", "ProvenanceCheck", "ProvenanceCoauthorTrailer", "ProvenanceRecordSummary", "ProvenanceVerdict", "ProvenanceViolation", "ProvidedDefinition", "ProviderEvent", "Ready", "ReceiptRecorded", "RecipientKeyRevokeRequest", "RecipientKeyRevoked", "RecordRef", "RecordRequest", "Refusal", "RejectedPin", "Resource", "ReviewChange", "ReviewProblem", "ReviewResult", "RevokeRequest", "SamplingCheckpoint", "SamplingDocument", "SamplingItem", "SamplingPacketRef", "SamplingParams", "SamplingPopulationDoc", "SamplingProof", "SamplingRecorded", "SamplingRow", "SamplingStratum", "Scope", "SessionState", "SourceFailure", "SourceRef", "Spend", "StatementIssued", "StatementLinks", "StatementList", "StatementListItem", "StatementRequest", "StatementRevokeRequest", "StatementRevoked", "StoreAppliedMigration", "StoreSchemaInfo", "Subject", "SubjectProperties", "TargetsGate", "TargetsObserver", "TargetsRequest", "TargetsResult", "TargetsTarget", "TokenEnvelope", "TokenJWK", "TokenJWKS", "TokenKeyRevoked", "TokenSignature", "Usage", "VersionResponse", "WaitAnswer", "WebhookAnswer"]
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -473,6 +473,116 @@ class DeliveryWindow(Model):
 
     from_: str | None = None
     to: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class DescribeDescribedBy(Model):
+    """Contract schema DescribeDescribedBy (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("provider", "provider", ("str",), True),
+        Field("version", "version", ("str",), False),
+    )
+
+    provider: str
+    version: str | None = None
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class DescribeDescription(Model):
+    """Contract schema DescribeDescription (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("describedBy", "describedBy", ("ref", "DescribeDescribedBy"), True),
+        Field("items", "items", ("list", ("ref", "DescribeItem")), True),
+        Field("source", "source", ("ref", "DescribeSource"), True),
+        Field("subject", "subject", ("ref", "DescribeSubject"), True),
+        Field("target", "target", ("ref", "DescribeTarget"), True),
+    )
+
+    describedBy: DescribeDescribedBy
+    items: list[DescribeItem]
+    source: DescribeSource
+    subject: DescribeSubject
+    target: DescribeTarget
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class DescribeItem(Model):
+    """Contract schema DescribeItem (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("attrs", "attrs", ("map", ("any",)), False),
+        Field("fields", "fields", ("list", ("str",)), False),
+        Field("hash", "hash", ("str",), False),
+        Field("id", "id", ("str",), True),
+        Field("op", "op", ("str",), True),
+        Field("type", "type", ("str",), True),
+    )
+
+    attrs: dict[str, Any] | None = None
+    fields: list[str] | None = None
+    hash: str | None = None
+    id: str
+    op: str
+    type: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class DescribeSource(Model):
+    """Contract schema DescribeSource (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("base", "base", ("str",), False),
+        Field("commit", "commit", ("str",), True),
+        Field("pr", "pr", ("int",), False),
+        Field("repo", "repo", ("str",), True),
+    )
+
+    base: str | None = None
+    commit: str
+    pr: int | None = None
+    repo: str
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class DescribeSubject(Model):
+    """Contract schema DescribeSubject (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("facts", "facts", ("map", ("any",)), False),
+        Field("kind", "kind", ("str",), True),
+        Field("root", "root", ("str",), True),
+        Field("rootFn", "rootFn", ("str",), True),
+        Field("version", "version", ("int",), True),
+    )
+
+    facts: dict[str, Any] | None = None
+    kind: str
+    root: str
+    rootFn: str
+    version: int
+
+
+@dataclasses.dataclass(kw_only=True, slots=True)
+class DescribeTarget(Model):
+    """Contract schema DescribeTarget (a request type: unknown keys are refused by the core)."""
+
+    _STRICT: ClassVar[bool] = True
+    _FIELDS: ClassVar[tuple[Field, ...]] = (
+        Field("app", "app", ("str",), False),
+        Field("environment", "environment", ("str",), True),
+        Field("scope", "scope", ("str",), False),
+    )
+
+    app: str | None = None
+    environment: str
+    scope: str | None = None
 
 
 @dataclasses.dataclass(kw_only=True, slots=True)
@@ -3252,6 +3362,12 @@ MODELS: dict[str, type[Model]] = {
     "DeliveryRequest": DeliveryRequest,
     "DeliveryRevoked": DeliveryRevoked,
     "DeliveryWindow": DeliveryWindow,
+    "DescribeDescribedBy": DescribeDescribedBy,
+    "DescribeDescription": DescribeDescription,
+    "DescribeItem": DescribeItem,
+    "DescribeSource": DescribeSource,
+    "DescribeSubject": DescribeSubject,
+    "DescribeTarget": DescribeTarget,
     "Effect": Effect,
     "ErrorResponse": ErrorResponse,
     "EvaluationRequest": EvaluationRequest,

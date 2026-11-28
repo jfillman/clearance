@@ -1,0 +1,25 @@
+{
+  "apiVersion": "clearance.kind/v1",
+  "name": "manifest-tree",
+  "version": 1,
+  "description": "A rendered Kubernetes manifest tree (the Argo CD plugin, a CI check, clearance register). An item is an object the change adds, changes or removes: type apiVersion/Kind, id namespace/name (name alone when cluster-scoped; a '/' or '~' inside a part is escaped as in a JSON pointer, ~1 and ~0). Objects listed as unchanged are in the tree, not the change, and are not items. The root is tree/1, the manifest-tree digest of the whole render, which the items do not determine. Its tiers are the core's Go (docs/gate.md, How a change is tiered).",
+  "root": "tree/1",
+  "builtin": true,
+  "itemTypes": [
+    {
+      "type": "*",
+      "description": "Any Kubernetes object, as apiVersion/Kind (apps/v1/Deployment, v1/Secret).",
+      "ops": ["create", "update", "delete"],
+      "attrs": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "images": {"type": "array", "items": {"type": "string"}, "description": "The images the object runs."},
+          "digest": {"type": "string", "description": "The verifier's object digest when it is not a bare sha256 (a sha256 is the item's hash)."}
+        }
+      }
+    }
+  ],
+  "subjectSchema": {"type": "object", "additionalProperties": false, "properties": {}},
+  "defaultTier": 2
+}
