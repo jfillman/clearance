@@ -327,6 +327,14 @@ func TestHashesUseTheSerializedForm(t *testing.T) {
 	if _, err := stale.ProveItem(0); !errors.Is(err, ErrRootMismatch) {
 		t.Fatalf("a proof against a stale root: %v", err)
 	}
+	for v, ok := range map[int]bool{1: true, MaxVersion: true, MaxVersion + 1: false, 0: false} {
+		dv := vectorDescription(nil, nil)
+		dv.Subject.Version = v
+		dv.Subject.Root, _ = Merkle1(nil, nil)
+		if err := dv.Validate(); (err == nil) != ok {
+			t.Errorf("version %d: %v", v, err)
+		}
+	}
 	deep := any("x")
 	for i := 0; i < canon.MaxDepth-1; i++ {
 		deep = []any{deep}

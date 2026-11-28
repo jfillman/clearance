@@ -374,8 +374,8 @@ func (d *Description) Validate() error {
 	if !kindNameRx.MatchString(s.Kind) || len(s.Kind) > 253 {
 		return bad("subject.kind %s is not a subject kind's name (reverse-DNS, such as io.acme.db-migration, or a built-in kind)", pycompat.Repr(s.Kind))
 	}
-	if s.Version < 1 {
-		return bad("subject.version is a positive integer")
+	if s.Version < 1 || s.Version > MaxVersion {
+		return bad("subject.version is 1 to %d", MaxVersion)
 	}
 	if !rootFnRx.MatchString(s.RootFn) {
 		return bad("subject.rootFn %s is not a root function (name/version, such as merkle/1)", pycompat.Repr(s.RootFn))
