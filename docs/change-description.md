@@ -13,6 +13,20 @@ page means subject kinds throughout.) Until SDK-1 the subject kinds were a close
 makes a change one shape whatever its subject kind, and a subject kind a document: a schema and CEL, never an
 executable.
 
+## Placeholder names
+
+Two names in this format wait for Clearance's own product domain (Y-55; N-7 renames the API group and predicate
+domain), and both are set in one file, `schemas/naming.go`:
+
+- **The schema base URL**, `SchemaBase`, now `https://clearance.hangarplatform.dev/schemas/`. It is a **placeholder**.
+  The `$id` of `change-description.schema.json` and `kind.schema.json` is `SchemaBase + name + "/v1.json"`, and the
+  contract's `x-clearance-published-schemas` is read from those files. `TestTheSchemaIDsComeFromTheBase` and
+  `TestContractIsCurrent` fail when either drifts from the constant.
+- **The first-party kind prefix**, `FirstPartyPrefix`, now `dev.clearance.`. It is a **placeholder**.
+
+The switch: edit `schemas/naming.go`, run `go test ./schemas -update` (it rewrites the two `$id`s), then
+`go generate ./internal/server`. The schemas published before SDK-1 keep their own `$id` until N-7.
+
 ## The description
 
 `schemas/change-description.schema.json` (`clearance.change-description/v1`), `internal/describe`, and in the core's
@@ -128,7 +142,8 @@ standard library alone, written from this page. A vector is added, never changed
 ```
 
 - **`name`** is reverse-DNS. `dev.clearance.*` is reserved for first-party kinds. **It is a placeholder** for the
-  reversed product domain, which the owner has not decided yet (`kinds.FirstPartyPrefix`, one line to change).
+  reversed product domain, which the owner has not decided yet (`kinds.FirstPartyPrefix`, set in
+  `schemas/naming.go`).
   `manifest-tree` and `terraform-plan` are the built-in kinds' names.
 - **`root`** is `merkle/1` for every kind but the built-ins: `manifest-tree` version 1 declares `tree/1`, and
   `terraform-plan` version 1 declares `plan/1`.

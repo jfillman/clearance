@@ -55,7 +55,7 @@ func kindSchema(t *testing.T) *jsonschema.Schema {
 		t.Fatal(err)
 	}
 	c := jsonschema.NewCompiler()
-	const url = "https://clearance.hangarplatform.dev/schemas/kind/v1.json"
+	url := schemas.SchemaID("kind", 1)
 	if err := c.AddResource(url, doc); err != nil {
 		t.Fatal(err)
 	}

@@ -44,7 +44,7 @@ func TestTheDescriptionSchemaMatchesTheParser(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := jsonschema.NewCompiler()
-	const url = "https://clearance.hangarplatform.dev/schemas/change-description/v1.json"
+	url := schemas.SchemaID("change-description", 1)
 	if err := c.AddResource(url, doc); err != nil {
 		t.Fatal(err)
 	}

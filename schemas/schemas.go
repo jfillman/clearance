@@ -37,3 +37,11 @@ var ChangeDescriptionV1 []byte
 //
 //go:embed kind.schema.json
 var KindV1 []byte
+
+// SDK1Schemas are the schemas whose $id comes from internal/naming (SchemaBase), by name and version:
+// TestTheSchemaIDsComeFromTheBase holds each file's $id to naming.SchemaID, and -update rewrites it.
+var SDK1Schemas = []struct {
+	File    string
+	Name    string
+	Version int
+}{{"change-description.schema.json", "change-description", 1}, {"kind.schema.json", "kind", 1}}

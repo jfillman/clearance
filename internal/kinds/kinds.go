@@ -27,14 +27,16 @@ import (
 	"github.com/jfillman/clearance/internal/canon"
 	"github.com/jfillman/clearance/internal/describe"
 	"github.com/jfillman/clearance/internal/pycompat"
+	"github.com/jfillman/clearance/schemas"
 )
 
 // APIVersion is the kind format's version.
 const APIVersion = "clearance.kind/v1"
 
 // FirstPartyPrefix is the reverse-DNS prefix reserved for first-party kinds (refinement 2): the reversed form of the
-// product domain. It is a PLACEHOLDER until the owner decides the domain (N-Q2, Y-55); changing it is this one line.
-const FirstPartyPrefix = "dev.clearance."
+// product domain. It is a PLACEHOLDER until the owner decides the domain (N-Q2, Y-55); it is set in schemas/naming.go,
+// beside the schema base URL, so the switch is one edit.
+const FirstPartyPrefix = schemas.FirstPartyPrefix
 
 // The built-in kinds: named before kinds were data, so their names are not reverse-DNS, and reserved.
 const (
