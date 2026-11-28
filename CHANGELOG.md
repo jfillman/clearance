@@ -9,6 +9,14 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ## [Unreleased]
 
+### Added
+
+- **The core trusts several foreign clusters (`CLEARANCE_FOREIGN_CLUSTERS`, chart `foreignClusters`).** A JSON list of
+  `{cluster, issuer, serviceAccounts, jwksURL}`, beside the single `CLEARANCE_FOREIGN_*` form, which is unchanged. Each
+  cluster's issuer admits only the service accounts its own entry lists, as `<cluster>/<namespace>/<sa>`. The core
+  refuses to start on an incomplete entry, a non-https issuer, or a repeated issuer or cluster name (in the list, or
+  against the single form).
+
 ## [0.57.3] - 2026-11-23
 
 ### Fixed

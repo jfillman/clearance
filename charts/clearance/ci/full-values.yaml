@@ -96,6 +96,10 @@ foreignCluster:
   cluster: hangar-prod
   serviceAccounts: ["backstage/backstage"]
   jwksURL: https://tower.example.test/openid/v1/jwks
+foreignClusters:
+  - cluster: eks-prod
+    issuer: https://prod.example.test
+    serviceAccounts: ["clearance-system/clearance-argocd-agent", "argocd-apps/argocd-apps-repo-server"]
 githubActions:
   audience: clearance
   allowed: ["repo:jfillman/*"]
