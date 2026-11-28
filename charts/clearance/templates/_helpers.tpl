@@ -260,6 +260,16 @@ app.kubernetes.io/component: {{ .component }}
   value: {{ . | quote }}
 {{- end }}
 {{- end }}
+{{- with .Values.foreignClusters }}
+{{- range $i, $c := . }}
+{{- if not $c.cluster }}{{ fail (printf "foreignClusters[%d].cluster is required" $i) }}{{ end }}
+{{- if not $c.issuer }}{{ fail (printf "foreignClusters[%d].issuer is required" $i) }}{{ end }}
+{{- if not (hasPrefix "https://" $c.issuer) }}{{ fail (printf "foreignClusters[%d].issuer must be an https URL" $i) }}{{ end }}
+{{- if not $c.serviceAccounts }}{{ fail (printf "foreignClusters[%d].serviceAccounts is required" $i) }}{{ end }}
+{{- end }}
+- name: CLEARANCE_FOREIGN_CLUSTERS
+  value: {{ toJson . | quote }}
+{{- end }}
 {{- with .Values.githubActions.audience }}
 - name: CLEARANCE_GITHUB_OIDC_AUDIENCE
   value: {{ . | quote }}

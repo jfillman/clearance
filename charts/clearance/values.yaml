@@ -249,6 +249,16 @@ foreignCluster:
   serviceAccounts: []
   jwksURL: ""
 
+# Several other clusters' workloads (CLEARANCE_FOREIGN_CLUSTERS, a JSON list); use it beside or instead of foreignCluster
+# above, which names one. Each entry: cluster (its name, in the caller's principal <cluster>/<namespace>/<sa>), issuer
+# (https), serviceAccounts (<namespace>/<sa> globs), and optionally jwksURL (default <issuer>/jwks.json). No two entries,
+# and none and foreignCluster, share an issuer or a cluster name: the core refuses to start otherwise.
+# foreignClusters:
+#   - cluster: eks-prod
+#     issuer: https://oidc.example.com/eks-prod
+#     serviceAccounts: ["clearance-system/clearance-argocd-agent", "argocd-apps/argocd-apps-repo-server"]
+foreignClusters: []
+
 # GitHub Actions callers (clearance register in a customer's CI): off while audience is empty.
 githubActions:
   # CLEARANCE_GITHUB_OIDC_AUDIENCE

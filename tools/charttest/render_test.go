@@ -194,7 +194,7 @@ func TestMinimal(t *testing.T) {
 	if e["CLEARANCE_DSN"] != "secret:clearance-db/uri" {
 		t.Errorf("core: CLEARANCE_DSN %q", e["CLEARANCE_DSN"])
 	}
-	for _, unset := range []string{"CLEARANCE_PROVIDERS", "CLEARANCE_OIDC_ISSUER", "CLEARANCE_GITHUB_APP_ID",
+	for _, unset := range []string{"CLEARANCE_PROVIDERS", "CLEARANCE_OIDC_ISSUER", "CLEARANCE_FOREIGN_CLUSTERS", "CLEARANCE_GITHUB_APP_ID",
 		"BACKSTAGE_URL", "CLEARANCE_TRUSTED_REGISTRIES", "CLEARANCE_BUNDLES", "CLEARANCE_BUNDLE_SOURCES",
 		"CLEARANCE_PROTECTED_ENVIRONMENTS", "CLEARANCE_BREAKGLASS_MAX_TTL"} {
 		if _, ok := e[unset]; ok {
@@ -279,6 +279,9 @@ func TestFullCoversEveryCoreVariable(t *testing.T) {
 	}
 	if e["CLEARANCE_ON_BEHALF_OF_HEADER"] != "X-Hangar-On-Behalf-Of" || e["CLEARANCE_ENV_LOWER_PREFIXES"] != "pr-,agent-" {
 		t.Errorf("vocabulary %q, environments %q", e["CLEARANCE_ON_BEHALF_OF_HEADER"], e["CLEARANCE_ENV_LOWER_PREFIXES"])
+	}
+	if want := `[{"cluster":"eks-prod","issuer":"https://prod.example.test","serviceAccounts":["clearance-system/clearance-argocd-agent","argocd-apps/argocd-apps-repo-server"]}]`; e["CLEARANCE_FOREIGN_CLUSTERS"] != want || e["CLEARANCE_FOREIGN_CLUSTER"] != "hangar-prod" {
+		t.Errorf("CLEARANCE_FOREIGN_CLUSTERS %s (single form %q kept)", e["CLEARANCE_FOREIGN_CLUSTERS"], e["CLEARANCE_FOREIGN_CLUSTER"])
 	}
 	if e["CLEARANCE_AI_COAUTHORS"] != "<noreply@anthropic.com>,Acme Agent <agent@acme.dev>" {
 		t.Errorf("CLEARANCE_AI_COAUTHORS %q", e["CLEARANCE_AI_COAUTHORS"])
@@ -406,24 +409,27 @@ func TestRefused(t *testing.T) {
 		args []string
 		want string
 	}{
-		"no database":                      {nil, "the core needs a database"},
-		"core replicas":                    {[]string{"--set", "database.existingSecret=x", "--set", "core.replicas=2"}, "always one replica"},
-		"oidc without users":               {[]string{"--set", "database.existingSecret=x", "--set", "oidc.issuer=https://i", "--set", "oidc.audience=a"}, "oidc.allowedUsers is required"},
-		"oidc half":                        {[]string{"--set", "database.existingSecret=x", "--set", "oidc.issuer=https://i"}, "oidc.audience is set together"},
-		"foreign cluster without accounts": {[]string{"--set", "database.existingSecret=x", "--set", "foreignCluster.issuer=https://t", "--set", "foreignCluster.cluster=c"}, "foreignCluster.serviceAccounts is required"},
-		"app without secret":               {[]string{"--set", "database.existingSecret=x", "--set", "githubApp.enabled=true", "--set", "githubApp.appId=1"}, "githubApp.enabled needs"},
-		"app without id":                   {[]string{"--set", "database.existingSecret=x", "--set", "githubApp.enabled=true", "--set", "githubApp.existingSecret=s"}, "githubApp.appId is required"},
-		"bad comments":                     {[]string{"--set", "database.existingSecret=x", "--set", "githubApp.comments=all"}, "githubApp.comments is off or agent-failures"},
-		"flight registry slash":            {[]string{"--set", "database.existingSecret=x", "--set", "gate.trustedRegistries[0]=ghcr.io/x"}, `must end in "/"`},
-		"protected env shape":              {[]string{"--set", "database.existingSecret=x", "--set", "gate.protectedEnvironments[0]=prod"}, `is not <cluster>/<env>`},
-		"bad digest":                       {[]string{"--set", "database.existingSecret=x", "--set", "image.digest=latest"}, "image.digest is sha256"},
-		"route without parent":             {[]string{"--set", "database.existingSecret=x", "--set", "httpRoutes.core.enabled=true"}, "parentRefs is required"},
-		"attestation both backends":        {[]string{"--set", "database.existingSecret=x", "--set", "attestation.existingSecret=k", "--set", "attestation.keyless.fulcioUrl=https://f"}, "not both"},
-		"web without secret":               {[]string{"--set", "database.existingSecret=x", "--set", "web.enabled=true", "--set", "web.publicURL=https://c", "--set", "web.issuer=https://i"}, "web.clientSecret.existingSecret is required"},
-		"web without issuer":               {[]string{"--set", "database.existingSecret=x", "--set", "web.enabled=true", "--set", "web.publicURL=https://c", "--set", "web.clientSecret.existingSecret=s"}, "web.issuer is required"},
-		"web replicas":                     {[]string{"--set", "database.existingSecret=x", "--set", "web.enabled=true", "--set", "web.publicURL=https://c", "--set", "web.issuer=https://i", "--set", "web.clientSecret.existingSecret=s", "--set", "web.replicas=2"}, "web.replicas must be 1"},
-		"web route without parent":         {[]string{"--set", "database.existingSecret=x", "--set", "web.enabled=true", "--set", "web.publicURL=https://c", "--set", "web.issuer=https://i", "--set", "web.clientSecret.existingSecret=s", "--set", "httpRoutes.web.enabled=true"}, "httpRoutes.web.parentRefs is required"},
-		"eso without store":                {[]string{"--set", "database.existingSecret=x", "--set", "externalSecrets.enabled=true"}, "secretStoreRef.name is required"},
+		"no database":                       {nil, "the core needs a database"},
+		"core replicas":                     {[]string{"--set", "database.existingSecret=x", "--set", "core.replicas=2"}, "always one replica"},
+		"oidc without users":                {[]string{"--set", "database.existingSecret=x", "--set", "oidc.issuer=https://i", "--set", "oidc.audience=a"}, "oidc.allowedUsers is required"},
+		"oidc half":                         {[]string{"--set", "database.existingSecret=x", "--set", "oidc.issuer=https://i"}, "oidc.audience is set together"},
+		"foreign cluster without accounts":  {[]string{"--set", "database.existingSecret=x", "--set", "foreignCluster.issuer=https://t", "--set", "foreignCluster.cluster=c"}, "foreignCluster.serviceAccounts is required"},
+		"foreign clusters without issuer":   {[]string{"--set", "database.existingSecret=x", "--set", "foreignClusters[0].cluster=c", "--set", "foreignClusters[0].serviceAccounts[0]=a/b"}, "foreignClusters[0].issuer is required"},
+		"foreign clusters http issuer":      {[]string{"--set", "database.existingSecret=x", "--set", "foreignClusters[0].cluster=c", "--set", "foreignClusters[0].issuer=http://t", "--set", "foreignClusters[0].serviceAccounts[0]=a/b"}, "must be an https URL"},
+		"foreign clusters without accounts": {[]string{"--set", "database.existingSecret=x", "--set", "foreignClusters[0].cluster=c", "--set", "foreignClusters[0].issuer=https://t"}, "foreignClusters[0].serviceAccounts is required"},
+		"app without secret":                {[]string{"--set", "database.existingSecret=x", "--set", "githubApp.enabled=true", "--set", "githubApp.appId=1"}, "githubApp.enabled needs"},
+		"app without id":                    {[]string{"--set", "database.existingSecret=x", "--set", "githubApp.enabled=true", "--set", "githubApp.existingSecret=s"}, "githubApp.appId is required"},
+		"bad comments":                      {[]string{"--set", "database.existingSecret=x", "--set", "githubApp.comments=all"}, "githubApp.comments is off or agent-failures"},
+		"flight registry slash":             {[]string{"--set", "database.existingSecret=x", "--set", "gate.trustedRegistries[0]=ghcr.io/x"}, `must end in "/"`},
+		"protected env shape":               {[]string{"--set", "database.existingSecret=x", "--set", "gate.protectedEnvironments[0]=prod"}, `is not <cluster>/<env>`},
+		"bad digest":                        {[]string{"--set", "database.existingSecret=x", "--set", "image.digest=latest"}, "image.digest is sha256"},
+		"route without parent":              {[]string{"--set", "database.existingSecret=x", "--set", "httpRoutes.core.enabled=true"}, "parentRefs is required"},
+		"attestation both backends":         {[]string{"--set", "database.existingSecret=x", "--set", "attestation.existingSecret=k", "--set", "attestation.keyless.fulcioUrl=https://f"}, "not both"},
+		"web without secret":                {[]string{"--set", "database.existingSecret=x", "--set", "web.enabled=true", "--set", "web.publicURL=https://c", "--set", "web.issuer=https://i"}, "web.clientSecret.existingSecret is required"},
+		"web without issuer":                {[]string{"--set", "database.existingSecret=x", "--set", "web.enabled=true", "--set", "web.publicURL=https://c", "--set", "web.clientSecret.existingSecret=s"}, "web.issuer is required"},
+		"web replicas":                      {[]string{"--set", "database.existingSecret=x", "--set", "web.enabled=true", "--set", "web.publicURL=https://c", "--set", "web.issuer=https://i", "--set", "web.clientSecret.existingSecret=s", "--set", "web.replicas=2"}, "web.replicas must be 1"},
+		"web route without parent":          {[]string{"--set", "database.existingSecret=x", "--set", "web.enabled=true", "--set", "web.publicURL=https://c", "--set", "web.issuer=https://i", "--set", "web.clientSecret.existingSecret=s", "--set", "httpRoutes.web.enabled=true"}, "httpRoutes.web.parentRefs is required"},
+		"eso without store":                 {[]string{"--set", "database.existingSecret=x", "--set", "externalSecrets.enabled=true"}, "secretStoreRef.name is required"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			out, err := helm(t, tc.args...)

@@ -1,7 +1,12 @@
 package authn
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"net/url"
 	"strings"
 )
 
@@ -19,6 +24,10 @@ import (
 //	CLEARANCE_FOREIGN_CLUSTER                   that cluster's name; required with CLEARANCE_FOREIGN_ISSUER
 //	CLEARANCE_FOREIGN_SERVICE_ACCOUNTS          comma-separated <namespace>/<sa> globs; required with CLEARANCE_FOREIGN_ISSUER
 //	CLEARANCE_FOREIGN_JWKS_URL                  default <issuer>/jwks.json
+//	CLEARANCE_FOREIGN_CLUSTERS                  several other clusters, as a JSON list (the CLEARANCE_PROVIDERS form):
+//	                                [{"cluster":"c","issuer":"https://...","serviceAccounts":["ns/sa"],"jwksURL":"optional"}];
+//	                                each needs cluster, an https issuer and serviceAccounts; no two share an issuer or a
+//	                                cluster name, and none repeats the CLEARANCE_FOREIGN_ISSUER one. The single form above stays.
 //	CLEARANCE_GITHUB_OIDC_AUDIENCE  GitHub Actions tokens' audience; GitHub Actions callers are off when unset
 //	CLEARANCE_GITHUB_OIDC_ALLOWED   comma-separated globs on the sub by name (default "repo:*")
 var EnvVars = []string{
@@ -26,6 +35,7 @@ var EnvVars = []string{
 	"CLEARANCE_OIDC_ISSUER", "CLEARANCE_OIDC_AUDIENCE", "CLEARANCE_OIDC_JWKS_URL", "CLEARANCE_OIDC_USER_CLAIM",
 	"CLEARANCE_OIDC_ALLOWED_USERS",
 	"CLEARANCE_FOREIGN_ISSUER", "CLEARANCE_FOREIGN_CLUSTER", "CLEARANCE_FOREIGN_SERVICE_ACCOUNTS", "CLEARANCE_FOREIGN_JWKS_URL",
+	"CLEARANCE_FOREIGN_CLUSTERS",
 	"CLEARANCE_GITHUB_OIDC_AUDIENCE", "CLEARANCE_GITHUB_OIDC_ALLOWED",
 }
 
@@ -38,6 +48,74 @@ func splitList(v string) []string {
 		}
 	}
 	return out
+}
+
+// ForeignCluster is one entry of CLEARANCE_FOREIGN_CLUSTERS.
+type ForeignCluster struct {
+	Cluster         string   `json:"cluster"`
+	Issuer          string   `json:"issuer"`
+	ServiceAccounts []string `json:"serviceAccounts"`
+	JWKSURL         string   `json:"jwksURL"`
+}
+
+// parseForeignClusters reads CLEARANCE_FOREIGN_CLUSTERS and refuses an entry that is incomplete, an issuer that is not
+// https (a jwksURL too: keys fetched in cleartext can be swapped), an issuer another route already owns (reserved:
+// issuer to what owns it), trailing text after the list, and two entries (or an entry and the single-cluster form, named by single) with the same issuer or cluster name.
+// Issuers are returned without a trailing "/".
+func parseForeignClusters(raw string, single *ForeignCluster, reserved map[string]string) ([]ForeignCluster, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	var list []ForeignCluster
+	dec := json.NewDecoder(bytes.NewReader([]byte(raw)))
+	dec.DisallowUnknownFields()
+	err := dec.Decode(&list)
+	if err == nil {
+		if _, e := dec.Token(); e != io.EOF {
+			err = errors.New("text after the list")
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("CLEARANCE_FOREIGN_CLUSTERS is not a JSON list of {cluster, issuer, serviceAccounts, jwksURL}: %w", err)
+	}
+	issuers, names := map[string]bool{}, map[string]bool{}
+	if single != nil {
+		issuers[single.Issuer], names[single.Cluster] = true, true
+	}
+	for i := range list {
+		c := &list[i]
+		c.Cluster, c.Issuer = strings.TrimSpace(c.Cluster), strings.TrimRight(strings.TrimSpace(c.Issuer), "/")
+		sas := []string{}
+		for _, sa := range c.ServiceAccounts {
+			if sa = strings.TrimSpace(sa); sa != "" {
+				sas = append(sas, sa)
+			}
+		}
+		c.ServiceAccounts = sas
+		where := fmt.Sprintf("CLEARANCE_FOREIGN_CLUSTERS[%d]", i)
+		if c.Cluster == "" || c.Issuer == "" || len(c.ServiceAccounts) == 0 {
+			return nil, fmt.Errorf("%s needs cluster, issuer and serviceAccounts (namespace/name globs): the issuer signs a token for every pod of that cluster", where)
+		}
+		if u, err := url.Parse(c.Issuer); err != nil || u.Scheme != "https" || u.Host == "" {
+			return nil, fmt.Errorf("%s (%s): issuer %q is not an https URL", where, c.Cluster, c.Issuer)
+		}
+		if c.JWKSURL != "" {
+			if u, err := url.Parse(c.JWKSURL); err != nil || u.Scheme != "https" || u.Host == "" {
+				return nil, fmt.Errorf("%s (%s): jwksURL %q is not an https URL", where, c.Cluster, c.JWKSURL)
+			}
+		}
+		if what, ok := reserved[c.Issuer]; ok {
+			return nil, fmt.Errorf("%s (%s): issuer %q is already the %s issuer", where, c.Cluster, c.Issuer, what)
+		}
+		if issuers[c.Issuer] {
+			return nil, fmt.Errorf("%s (%s): issuer %q is already named by another foreign cluster", where, c.Cluster, c.Issuer)
+		}
+		if names[c.Cluster] {
+			return nil, fmt.Errorf("%s: cluster name %q is already used by another foreign cluster", where, c.Cluster)
+		}
+		issuers[c.Issuer], names[c.Cluster] = true, true
+	}
+	return list, nil
 }
 
 // FromEnv builds the authenticator serve.py's build_auth builds: a CachingAuthenticator over a
@@ -68,6 +146,18 @@ func FromEnv(getenv func(string) string) (Authenticator, error) {
 		return nil, errors.New("CLEARANCE_FOREIGN_ISSUER needs CLEARANCE_FOREIGN_CLUSTER and CLEARANCE_FOREIGN_SERVICE_ACCOUNTS (namespace/name globs): the " +
 			"issuer signs a token for every pod of that cluster")
 	}
+	var single *ForeignCluster
+	if towerIssuer != "" {
+		single = &ForeignCluster{Cluster: towerCluster, Issuer: towerIssuer}
+	}
+	reserved := map[string]string{GitHubActionsIssuer: "GitHub Actions"}
+	if issuer != "" {
+		reserved[issuer] = "CLEARANCE_OIDC_ISSUER"
+	}
+	foreign, err := parseForeignClusters(getenv("CLEARANCE_FOREIGN_CLUSTERS"), single, reserved)
+	if err != nil {
+		return nil, err
+	}
 	byIssuer := map[string]Authenticator{}
 	if issuer != "" {
 		o := NewOIDCAuthenticator(issuer, oidcAud, NewJWKS(get("CLEARANCE_OIDC_JWKS_URL", issuer+"/keys")), allowed)
@@ -77,6 +167,13 @@ func FromEnv(getenv func(string) string) (Authenticator, error) {
 	if towerIssuer != "" {
 		byIssuer[towerIssuer] = NewForeignWorkloadAuthenticator(towerCluster, towerIssuer, audience,
 			NewJWKS(get("CLEARANCE_FOREIGN_JWKS_URL", towerIssuer+"/jwks.json")), towerSAs)
+	}
+	for _, c := range foreign {
+		jwks := c.JWKSURL
+		if jwks == "" {
+			jwks = c.Issuer + "/jwks.json"
+		}
+		byIssuer[c.Issuer] = NewForeignWorkloadAuthenticator(c.Cluster, c.Issuer, audience, NewJWKS(jwks), c.ServiceAccounts)
 	}
 	if ghAud := get("CLEARANCE_GITHUB_OIDC_AUDIENCE", ""); ghAud != "" {
 		byIssuer[GitHubActionsIssuer] = NewGitHubActionsAuthenticator(ghAud, NewJWKS(GitHubActionsJWKS),

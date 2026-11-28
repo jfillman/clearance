@@ -130,6 +130,7 @@ unset, so the core's default applies. Lists are joined with commas.
 | `oidc.allowedUsers` | `CLEARANCE_OIDC_ALLOWED_USERS` | Required with an issuer: an issuer that federates GitHub signs in anyone. |
 | `oidc.jwksURL`, `oidc.userClaim` | `CLEARANCE_OIDC_JWKS_URL`, `CLEARANCE_OIDC_USER_CLAIM` | Defaults `<issuer>/keys`, `email`. |
 | `foreignCluster.issuer`, `foreignCluster.cluster`, `foreignCluster.serviceAccounts`, `foreignCluster.jwksURL` | `CLEARANCE_FOREIGN_*` | Another cluster's workloads (a portal on another cluster); cluster and service accounts are required with an issuer. |
+| `foreignClusters[]` (`cluster`, `issuer`, `serviceAccounts`, `jwksURL`) | `CLEARANCE_FOREIGN_CLUSTERS` | Several other clusters, as a list (JSON in the variable); each needs all but `jwksURL`, the issuer must be `https`, and no two share an issuer or a name, nor repeat `foreignCluster`. |
 | `githubActions.audience`, `githubActions.allowed` | `CLEARANCE_GITHUB_OIDC_AUDIENCE`, `CLEARANCE_GITHUB_OIDC_ALLOWED` | GitHub Actions callers (`clearance register` in CI); off while the audience is empty. |
 | `githubApp.enabled`, `githubApp.appId` | `CLEARANCE_GITHUB_APP_ID` | The Clearance GitHub App. |
 | `githubApp.existingSecret`, `githubApp.privateKeyKey`, `githubApp.webhookSecretKey` | `CLEARANCE_GITHUB_APP_KEY_FILE`, `..._WEBHOOK_SECRET_FILE` | The Secret and its keys, mounted read-only (mode 0400) at `/etc/clearance/github-app/`. |

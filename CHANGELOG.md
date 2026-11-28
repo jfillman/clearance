@@ -11,6 +11,11 @@ Entries before v0.26.1 were reconstructed on 2026-11-02 from the commits between
 
 ### Added
 
+- **The core trusts several foreign clusters (`CLEARANCE_FOREIGN_CLUSTERS`, chart `foreignClusters`).** A JSON list of
+  `{cluster, issuer, serviceAccounts, jwksURL}`, beside the single `CLEARANCE_FOREIGN_*` form, which is unchanged. Each
+  cluster's issuer admits only the service accounts its own entry lists, as `<cluster>/<namespace>/<sa>`. The core
+  refuses to start on an incomplete entry, a non-https issuer, or a repeated issuer or cluster name (in the list, or
+  against the single form).
 - **Boring upgrades (N-6).** The schema is versioned: an ordered, forward-only list of migrations with a `clearance_schema`
   table recording each one (its kind, release, `min_core`, checksum and the core that applied it). Today's idempotent DDL
   is migration 1. A database that already has every object migration 1 creates (one built by v0.57.3, say) adopts it with no
